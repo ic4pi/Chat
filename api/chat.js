@@ -15,9 +15,9 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Server is missing OPENROUTER_API_KEY' });
   }
 
-  // Free, unmoderated/uncensored-leaning model on OpenRouter.
+  // Free uncensored model on OpenRouter (Venice edition).
   // Swap this string to try other free models — see https://openrouter.ai/models?max_price=0
-  const selectedModel = model || 'cognitivecomputations/dolphin3.0-mistral-24b:free';
+  const selectedModel = model || 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free';
 
   try {
     const upstream = await fetch('https://openrouter.ai/api/v1/chat/completions', {
