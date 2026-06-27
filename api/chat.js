@@ -17,9 +17,13 @@ export default async function handler(req, res) {
 
   // Free uncensored model on OpenRouter (Venice edition).
   // Swap this string to try other free models — see https://openrouter.ai/models?max_price=0
-  const selectedModel = model || 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free';
+  const primaryModel = model || 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free';
 
-  try {
+  // If the primary model's provider is down, fall back to OpenRouter's auto-router which
+  // picks whatever free model is currently available.
+  const fallbackModel = 'openrouter/auto';
+
+  async function callOpenRouter(selectedModel) {
     const upstream = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -35,15 +39,47 @@ export default async function handler(req, res) {
         stream: false,
       }),
     });
-
     const data = await upstream.json();
+    return { upstream, data };
+  }
+
+  function isProviderError(status, data) {
+    if (status === 502 || status === 503 || status === 529) return true;
+    const msg = data?.error?.message || '';
+    return msg.includes('Provider returned error') || msg.includes('No endpoints');
+  }
+
+  try {
+    let { upstream, data } = await callOpenRouter(primaryModel);
+
+    // If the primary provider is down, transparently retry with the fallback.
+    if (!upstream.ok && isProviderError(upstream.status, data) && primaryModel !== fallbackModel) {
+      const fallback = await callOpenRouter(fallbackModel);
+      upstream = fallback.upstream;
+      data = fallback.data;
+
+      if (!upstream.ok) {
+        return res.status(upstream.status).json({
+          error: data.error?.message || 'OpenRouter request failed',
+          tried: [primaryModel, fallbackModel],
+          raw: data,
+        });
+      }
+
+      const reply = data.choices?.[0]?.message?.content ?? '';
+      return res.status(200).json({ reply, model: fallbackModel, fallback: true, originalModel: primaryModel });
+    }
 
     if (!upstream.ok) {
-      return res.status(upstream.status).json({ error: data.error?.message || 'OpenRouter request failed', raw: data });
+      return res.status(upstream.status).json({
+        error: data.error?.message || 'OpenRouter request failed',
+        tried: [primaryModel],
+        raw: data,
+      });
     }
 
     const reply = data.choices?.[0]?.message?.content ?? '';
-    return res.status(200).json({ reply, model: selectedModel });
+    return res.status(200).json({ reply, model: primaryModel });
   } catch (err) {
     return res.status(500).json({ error: err.message || 'Unknown server error' });
   }

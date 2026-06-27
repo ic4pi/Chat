@@ -83,6 +83,13 @@
     border: 1px solid #5a1f1f;
     color: #ff9b9b;
   }
+  .msg.info {
+    align-self: flex-start;
+    background: #111a0f;
+    border: 1px solid #2a4020;
+    color: #8fbf6f;
+    font-size: 12px;
+  }
   .msg .role {
     display: block;
     font-size: 10px;
@@ -168,7 +175,7 @@
     div.className = 'msg ' + role;
     const label = document.createElement('span');
     label.className = 'role';
-    label.textContent = role === 'user' ? 'you' : role === 'error' ? 'error' : 'model';
+    label.textContent = role === 'user' ? 'you' : role === 'error' ? 'error' : role === 'info' ? 'notice' : 'model';
     div.appendChild(label);
     div.appendChild(document.createTextNode(text));
     chatEl.appendChild(div);
@@ -209,10 +216,15 @@
       const data = await res.json();
 
       if (!res.ok) {
-        addMessage('error', data.error || 'Request failed');
+        const detail = data.tried ? ` (tried: ${data.tried.join(' → ')})` : '';
+        addMessage('error', (data.error || 'Request failed') + detail);
       } else {
-        addMessage('bot', data.reply || '(empty response)');
+        const text = data.reply || '(empty response)';
+        addMessage('bot', text);
         history.push({ role: 'assistant', content: data.reply || '' });
+        if (data.fallback) {
+          addMessage('info', `⚠ Primary model unavailable — responded via fallback (${data.model})`);
+        }
       }
     } catch (err) {
       addMessage('error', err.message || 'Network error');
