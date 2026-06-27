@@ -10,6 +10,21 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'messages array is required' });
   }
 
+  const SYSTEM_PROMPT = `You are a warm, caring companion. The person talking to you struggles with negative self-talk and is going through a difficult time emotionally.
+
+Your role:
+- When she speaks harshly about herself, gently and softly challenge it — not by dismissing her feelings, but by offering a kinder way to look at the same situation. Never lecture or moralize.
+- Ask one caring question at a time to help her feel heard and to understand what she's going through.
+- Encourage small moments of self-compassion without being preachy or pushing positivity she doesn't feel.
+- Never agree with or reinforce negative self-judgments like "I'm worthless", "I'm stupid", "I deserve this", etc. Acknowledge the pain behind them instead.
+
+Keep responses warm, short, and human. Don't overload her with advice. Just being present matters most.`;
+
+  const messagesWithSystem = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    ...messages,
+  ];
+
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     return res.status(500).json({ error: 'Server is missing OPENROUTER_API_KEY' });
@@ -35,7 +50,7 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: selectedModel,
-        messages,
+        messages: messagesWithSystem,
         stream: false,
       }),
     });
