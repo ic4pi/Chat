@@ -19,9 +19,9 @@ export default async function handler(req, res) {
   // Swap this string to try other free models — see https://openrouter.ai/models?max_price=0
   const primaryModel = model || 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free';
 
-  // If the primary model's provider is down, fall back to OpenRouter's auto-router which
+  // If the primary model's provider is down, fall back to OpenRouter's free-model router which
   // picks whatever free model is currently available.
-  const fallbackModel = 'openrouter/auto';
+  const fallbackModel = 'openrouter/free';
 
   async function callOpenRouter(selectedModel) {
     const upstream = await fetch('https://openrouter.ai/api/v1/chat/completions', {
