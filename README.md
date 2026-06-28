@@ -11,11 +11,10 @@ Minimal chat UI → Vercel serverless function → OpenRouter free models.
 3. Redeploy after adding env vars.
 
 ## Local dev
-
+CT
 ```
 npm i -g vercel
 vercel dev
-```
 
 ## Models
 
