@@ -1,0 +1,46 @@
+{
+  "name": "capixelate",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.17.4",
+    "@prisma/adapter-libsql": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/multer": "^2.2.0",
+    "@types/stats.js": "^0.17.4",
+    "@types/three": "^0.185.0",
+    "@types/uuid": "^10.0.0",
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^17.4.2",
+    "framer-motion": "^12.42.2",
+    "jose": "^6.2.3",
+    "lil-gui": "^0.21.0",
+    "multer": "^2.2.0",
+    "next": "16.2.10",
+    "next-auth": "^4.24.14",
+    "prisma": "^7.8.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "stats.js": "^0.17.0",
+    "three": "^0.185.1",
+    "uuid": "^14.0.1",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.10",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
