@@ -1,4 +1,5 @@
-// Vercel serverless function — proxies to OpenRouter so the API key never hits the browser.
+// Vercel serverless function — proxies to OpenRouter or Venice API so API keys never hit the browser.
+// Venice model IDs contain no slash. OpenRouter slugs always contain a slash.
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -27,34 +28,106 @@ Do not default to talking about programming unless the human specifically asks a
     ...messages,
   ];
 
-  const apiKey = process.env.OPENROUTER_API_KEY;
+  const selectedModel = model || 'venice-uncensored';
+
+  // Venice model IDs never contain a slash; OpenRouter slugs always do.
+  const isVenice = !selectedModel.includes('/');
+
+  if (isVenice) {
+    return handleVenice(res, selectedModel, messagesWithSystem);
+  } else {
+    return handleOpenRouter(res, selectedModel, messagesWithSystem);
+  }
+}
+
+async function handleVenice(res, selectedModel, messages) {
+  const apiKey = process.env.VENICE_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: 'Server is missing OPENROUTER_API_KEY' });
+    return res.status(500).json({
+      error: 'Server is missing VENICE_API_KEY — add it in your Vercel project environment variables.',
+    });
   }
 
-  // Free uncensored model on OpenRouter (Venice edition).
-  // Swap this string to try other free models — see https://openrouter.ai/models?max_price=0
-  const primaryModel = model || 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free';
+  async function callVenice(modelId) {
+    const upstream = await fetch('https://api.venice.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ model: modelId, messages, stream: false }),
+    });
+    const data = await upstream.json();
+    return { upstream, data };
+  }
 
-  // If the primary model's provider is down, fall back to OpenRouter's free-model router which
-  // picks whatever free model is currently available.
-  const fallbackModel = 'openrouter/free';
+  function isServiceError(status, data) {
+    if (status === 502 || status === 503 || status === 529) return true;
+    const msg = data?.error?.message || '';
+    return msg.includes('unavailable') || msg.includes('No endpoints') || msg.includes('overloaded');
+  }
 
-  async function callOpenRouter(selectedModel) {
+  try {
+    let { upstream, data } = await callVenice(selectedModel);
+
+    // If the specific model is down, fall back to the core uncensored model.
+    if (!upstream.ok && isServiceError(upstream.status, data) && selectedModel !== 'venice-uncensored') {
+      const fallback = await callVenice('venice-uncensored');
+      upstream = fallback.upstream;
+      data = fallback.data;
+
+      if (!upstream.ok) {
+        return res.status(upstream.status).json({
+          error: data.error?.message || 'Venice API request failed',
+          tried: [selectedModel, 'venice-uncensored'],
+          raw: data,
+        });
+      }
+
+      const reply = data.choices?.[0]?.message?.content ?? '';
+      return res.status(200).json({ reply, model: 'venice-uncensored', provider: 'venice', fallback: true, originalModel: selectedModel });
+    }
+
+    if (!upstream.ok) {
+      return res.status(upstream.status).json({
+        error: data.error?.message || 'Venice API request failed',
+        tried: [selectedModel],
+        raw: data,
+      });
+    }
+
+    const reply = data.choices?.[0]?.message?.content ?? '';
+    return res.status(200).json({ reply, model: selectedModel, provider: 'venice' });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || 'Unknown server error' });
+  }
+}
+
+async function handleOpenRouter(res, selectedModel, messages) {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({
+      error: 'Server is missing OPENROUTER_API_KEY — add it in your Vercel project environment variables.',
+    });
+  }
+
+  const isFree = selectedModel.endsWith(':free');
+  // For paid models, fall back to a reliable paid uncensored model.
+  // For free models, fall back to OpenRouter's free-model router.
+  const fallbackModel = isFree
+    ? 'openrouter/free'
+    : 'cognitivecomputations/dolphin-mistral-24b-venice-edition';
+
+  async function callOpenRouter(model) {
     const upstream = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
-        // OpenRouter wants these for free-tier routing/leaderboards; set to your real deployment.
         'HTTP-Referer': process.env.SITE_URL || 'https://example.vercel.app',
-        'X-Title': 'Simple OpenRouter Chat',
+        'X-Title': 'NEXUS Chat',
       },
-      body: JSON.stringify({
-        model: selectedModel,
-        messages: messagesWithSystem,
-        stream: false,
-      }),
+      body: JSON.stringify({ model, messages, stream: false }),
     });
     const data = await upstream.json();
     return { upstream, data };
@@ -63,14 +136,13 @@ Do not default to talking about programming unless the human specifically asks a
   function isProviderError(status, data) {
     if (status === 502 || status === 503 || status === 529) return true;
     const msg = data?.error?.message || '';
-    return msg.includes('Provider returned error') || msg.includes('No endpoints');
+    return msg.includes('Provider returned error') || msg.includes('No endpoints') || msg.includes('overloaded');
   }
 
   try {
-    let { upstream, data } = await callOpenRouter(primaryModel);
+    let { upstream, data } = await callOpenRouter(selectedModel);
 
-    // If the primary provider is down, transparently retry with the fallback.
-    if (!upstream.ok && isProviderError(upstream.status, data) && primaryModel !== fallbackModel) {
+    if (!upstream.ok && isProviderError(upstream.status, data) && selectedModel !== fallbackModel) {
       const fallback = await callOpenRouter(fallbackModel);
       upstream = fallback.upstream;
       data = fallback.data;
@@ -78,25 +150,25 @@ Do not default to talking about programming unless the human specifically asks a
       if (!upstream.ok) {
         return res.status(upstream.status).json({
           error: data.error?.message || 'OpenRouter request failed',
-          tried: [primaryModel, fallbackModel],
+          tried: [selectedModel, fallbackModel],
           raw: data,
         });
       }
 
       const reply = data.choices?.[0]?.message?.content ?? '';
-      return res.status(200).json({ reply, model: fallbackModel, fallback: true, originalModel: primaryModel });
+      return res.status(200).json({ reply, model: fallbackModel, provider: 'openrouter', fallback: true, originalModel: selectedModel });
     }
 
     if (!upstream.ok) {
       return res.status(upstream.status).json({
         error: data.error?.message || 'OpenRouter request failed',
-        tried: [primaryModel],
+        tried: [selectedModel],
         raw: data,
       });
     }
 
     const reply = data.choices?.[0]?.message?.content ?? '';
-    return res.status(200).json({ reply, model: primaryModel });
+    return res.status(200).json({ reply, model: selectedModel, provider: 'openrouter' });
   } catch (err) {
     return res.status(500).json({ error: err.message || 'Unknown server error' });
   }

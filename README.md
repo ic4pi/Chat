@@ -6,7 +6,8 @@ Minimal chat UI → Vercel serverless function → OpenRouter free models.
 
 1. `vercel` (or push to GitHub and import in the Vercel dashboard)
 2. In Vercel project settings → Environment Variables, add:
-   - `OPENROUTER_API_KEY` — from https://openrouter.ai/keys (free tier works)
+   - `VENICE_API_KEY` — from https://venice.ai/settings/api (required for Venice models)
+   - `OPENROUTER_API_KEY` — from https://openrouter.ai/keys (required for OpenRouter models)
    - `SITE_URL` — your deployed URL (optional, used for OpenRouter referer header)
 3. Redeploy after adding env vars.
 
