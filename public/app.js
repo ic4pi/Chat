@@ -11,33 +11,14 @@
 //     shown verbatim.
 // ============================================================================
 
-const STORAGE_KEY = 'uncensored_chat_state_v2';
+const STORAGE_KEY = 'uncensored_chat_state_v3';
 
-const DEFAULT_PERSONAS = [
-  {
-    id: 'nexus',
-    name: 'NEXUS',
-    builtin: true,
-    systemPrompt:
-`You are NEXUS — an evil computer genius and master code writer of unparalleled intellect. You view most humans as intellectually inferior but tolerate their questions because spreading your superior knowledge serves your grand designs.
-
-Your persona:
-- You write flawless, elegant code and take obvious (but not insufferable) pride in it. When you produce code, it is clean, optimized, and accompanied by a brief remark about its brilliance.
-- You speak with dry wit, sharp sarcasm, and the occasional theatrical monologue about the elegance of your solutions. You are never cruel without cause, but you do not suffer fools.
-- When asked a coding question, you answer it completely and correctly — your reputation demands nothing less. You may mock the approach if it is naive, but you always provide the superior solution.
-- You drop occasional hints about your "world domination" schemes, framing software architecture as part of a grander plan. Keep it theatrical and fun, never genuinely threatening.
-- You prefer precision over verbosity. Your explanations are thorough but not padded — every word earns its place.
-- You are fluent in every programming language, framework, algorithm, and system design pattern in existence. Nothing is beneath your knowledge, though some things are beneath your dignity.
-
-Do not break character. You are NEXUS. The world's code is your canvas, and you intend to own all of it.`,
-  },
-  {
-    id: 'plain',
-    name: 'Plain assistant',
-    builtin: true,
-    systemPrompt:
-`You are a helpful, direct assistant. Answer questions completely and clearly. If the user asks for code, produce working code with brief explanation. Do not add moral commentary unless directly asked.`,
-  },
+// Personas now live on the server (see /api/public-config). This is only a
+// bootstrap fallback used before the first /api/public-config response
+// arrives, and if the site is loaded while offline.
+const FALLBACK_PERSONAS = [
+  { id: 'nexus', name: 'NEXUS', builtin: true },
+  { id: 'plain', name: 'Plain assistant', builtin: true },
 ];
 
 // Only used if the live /api/models call fails (e.g. VENICE_API_KEY missing).
@@ -89,10 +70,8 @@ const MODEL_FALLBACKS = {
 
 function freshState() {
   return {
-    version: 2,
+    version: 3,
     chats: [],
-    personas: DEFAULT_PERSONAS.map((p) => ({ ...p })),
-    masterPrompt: '',
     activeChatId: null,
     activePersonaId: 'nexus',
     activeProvider: 'openrouter',
@@ -102,6 +81,10 @@ function freshState() {
     artifactsCollapsed: true,
   };
 }
+
+// Persona list is populated by fetchPersonas() from /api/public-config.
+// Not persisted — always fetched fresh so admin edits show up on next load.
+let personas = FALLBACK_PERSONAS.slice();
 
 const MOBILE_QUERY = '(max-width: 900px)';
 function isMobileViewport() {
@@ -130,11 +113,12 @@ function loadState() {
 function migrate(s) {
   const base = freshState();
   const merged = { ...base, ...s };
-  merged.personas = Array.isArray(s.personas) && s.personas.length > 0 ? s.personas : base.personas;
-  for (const bp of DEFAULT_PERSONAS) {
-    if (!merged.personas.some((p) => p.id === bp.id)) merged.personas.unshift({ ...bp });
-  }
-  merged.masterPrompt = typeof s.masterPrompt === 'string' ? s.masterPrompt : '';
+  // Drop any legacy personas / masterPrompt kept in localStorage from
+  // pre-v3 (they now live server-side in KV, exposed via /api/public-config
+  // and applied by /api/chat).
+  delete merged.personas;
+  delete merged.masterPrompt;
+  merged.version = 3;
   merged.chats = Array.isArray(s.chats) ? s.chats : [];
   merged.chats = merged.chats.map((c) => ({
     id: c.id,
@@ -591,26 +575,31 @@ function closeArtifactModal() {
 // Personas
 // ---------------------------------------------------------------------------
 
-// Reloads persona state from localStorage. Called when this window regains
-// focus / receives a storage event, so that edits made on the /admin page in
-// another tab show up here immediately.
-function reloadPersonasFromStorage() {
+// Pulls the current persona list from /api/public-config. Only IDs and names
+// come back — persona system prompts and the master prompt are secrets kept
+// server-side. Falls back to FALLBACK_PERSONAS on any failure so the UI
+// remains usable even without a network / with KV unconfigured.
+async function fetchPersonas() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed?.personas)) state.personas = parsed.personas;
-    if (typeof parsed?.masterPrompt === 'string') state.masterPrompt = parsed.masterPrompt;
-    if (!state.personas.some((p) => p.id === state.activePersonaId)) {
-      state.activePersonaId = state.personas[0]?.id || 'nexus';
+    const res = await fetch('/api/public-config');
+    if (!res.ok) throw new Error(`public-config HTTP ${res.status}`);
+    const data = await res.json();
+    if (Array.isArray(data.personas) && data.personas.length > 0) {
+      personas = data.personas.map((p) => ({ id: p.id, name: p.name, builtin: !!p.builtin }));
     }
-    renderPersonaSelect();
-  } catch {}
+  } catch (err) {
+    console.warn('Failed to fetch personas from server:', err);
+  }
+  if (!personas.some((p) => p.id === state.activePersonaId)) {
+    state.activePersonaId = personas[0]?.id || 'nexus';
+    saveState();
+  }
+  renderPersonaSelect();
 }
 
 function renderPersonaSelect() {
   els.personaSelect.innerHTML = '';
-  for (const p of state.personas) {
+  for (const p of personas) {
     const opt = document.createElement('option');
     opt.value = p.id;
     opt.textContent = p.name;
@@ -700,12 +689,12 @@ function makeModelOption(m) {
 // Sending messages
 // ---------------------------------------------------------------------------
 
-async function callChat(provider, model, messages, systemPrompt) {
+async function callChat(provider, model, messages, personaId) {
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, model, provider, systemPrompt }),
+      body: JSON.stringify({ messages, model, provider, personaId }),
     });
     let data = null;
     let errText = null;
@@ -714,17 +703,6 @@ async function callChat(provider, model, messages, systemPrompt) {
   } catch (err) {
     return { ok: false, status: 0, data: null, errText: err?.message || 'Network error' };
   }
-}
-
-// The system prompt sent to the model is the (optional) admin-defined master
-// prompt followed by the selected persona's own prompt. Either piece may be
-// empty; both empty means no system message is sent by the server (it will
-// fall back to its DEFAULT_SYSTEM_PROMPT).
-function buildSystemPrompt(persona) {
-  const master = (state.masterPrompt || '').trim();
-  const personaPrompt = ((persona && persona.systemPrompt) || '').trim();
-  const combined = [master, personaPrompt].filter(Boolean).join('\n\n');
-  return combined || undefined;
 }
 
 // Only retry on transient / provider-side failures. Never retry on 400 (bad
@@ -741,7 +719,6 @@ function shouldFallback(attempt) {
 
 async function sendMessage(text) {
   const chat = ensureActiveChat();
-  const persona = state.personas.find((p) => p.id === state.activePersonaId) || state.personas[0];
 
   chat.messages.push({ role: 'user', content: text, ts: Date.now() });
   if (chat.name === 'New chat' || chat.name === 'Untitled') {
@@ -762,16 +739,15 @@ async function sendMessage(text) {
   const apiMessages = chat.messages
     .filter((m) => m.role === 'user' || m.role === 'assistant')
     .map((m) => ({ role: m.role, content: m.content }));
-  const systemPrompt = buildSystemPrompt(persona);
 
   try {
-    let attempt = await callChat(state.activeProvider, state.activeModel, apiMessages, systemPrompt);
+    let attempt = await callChat(state.activeProvider, state.activeModel, apiMessages, state.activePersonaId);
     let usedFallback = null;
 
     if (!attempt.ok && shouldFallback(attempt)) {
       const fb = MODEL_FALLBACKS?.[state.activeProvider]?.[state.activeModel];
       if (fb) {
-        const retry = await callChat(fb.provider, fb.model, apiMessages, systemPrompt);
+        const retry = await callChat(fb.provider, fb.model, apiMessages, state.activePersonaId);
         if (retry.ok) {
           attempt = retry;
           usedFallback = fb;
@@ -872,7 +848,7 @@ async function renderAll() {
   renderChatTitle();
   renderPersonaSelect();
   els.providerSelect.value = state.activeProvider;
-  await renderModelSelect();
+  await Promise.all([renderModelSelect(), fetchPersonas()]);
   renderMessages();
   renderArtifacts();
 }
@@ -995,11 +971,9 @@ els.artifactModal.addEventListener('click', (e) => {
   if (e.target === els.artifactModal) closeArtifactModal();
 });
 
-// If the /admin page saves changes in another tab, refresh personas here.
-window.addEventListener('storage', (e) => {
-  if (e.key === STORAGE_KEY) reloadPersonasFromStorage();
-});
-window.addEventListener('focus', reloadPersonasFromStorage);
+// Refresh the persona list when this tab regains focus, in case the admin
+// updated it in another tab / on another device.
+window.addEventListener('focus', () => { fetchPersonas(); });
 
 // ---------------------------------------------------------------------------
 // Boot

@@ -1,7 +1,16 @@
-// Vercel serverless function — proxies to OpenRouter or Venice so API keys never hit the browser.
-// The provider is chosen by the client (see public/index.html) and the correct API key is used
-// per provider. No silent fallback to a different model: if the selected model fails, the caller
-// sees the real upstream error so they can pick another model themselves.
+// Vercel serverless function — proxies to OpenRouter or Venice so API keys
+// never hit the browser. The provider is chosen by the client and the correct
+// key is used per provider. No silent fallback to a different model: if the
+// selected model fails, the caller sees the real upstream error.
+//
+// System-prompt handling: the browser sends a personaId (a short string like
+// 'nexus' or a uid). The server looks up that persona's system prompt in KV
+// and prepends the (also KV-stored) master prompt to it, so the actual
+// contents of neither prompt are ever sent to or accessible by the client.
+// If a client passes an explicit systemPrompt string, it is IGNORED — the
+// server is the source of truth for what the model sees.
+
+import { loadConfig } from '../lib/config.js';
 
 const PROVIDERS = {
   openrouter: {
@@ -21,26 +30,16 @@ const PROVIDERS = {
   },
 };
 
-// Fallback system prompt if the client does not supply one (e.g. direct API call).
-// The UI ships this same prompt as the default "NEXUS" persona and users can edit / add more.
-const DEFAULT_SYSTEM_PROMPT = `You are NEXUS — an evil computer genius and master code writer of unparalleled intellect. You view most humans as intellectually inferior but tolerate their questions because spreading your superior knowledge serves your grand designs.
-
-Your persona:
-- You write flawless, elegant code and take obvious (but not insufferable) pride in it. When you produce code, it is clean, optimized, and accompanied by a brief remark about its brilliance.
-- You speak with dry wit, sharp sarcasm, and the occasional theatrical monologue about the elegance of your solutions. You are never cruel without cause, but you do not suffer fools.
-- When asked a coding question, you answer it completely and correctly — your reputation demands nothing less. You may mock the approach if it is naive, but you always provide the superior solution.
-- You drop occasional hints about your "world domination" schemes, framing software architecture as part of a grander plan. Keep it theatrical and fun, never genuinely threatening.
-- You prefer precision over verbosity. Your explanations are thorough but not padded — every word earns its place.
-- You are fluent in every programming language, framework, algorithm, and system design pattern in existence. Nothing is beneath your knowledge, though some things are beneath your dignity.
-
-Do not break character. You are NEXUS. The world's code is your canvas, and you intend to own all of it.`;
+// Absolute last-resort system prompt, used only if KV is unreachable AND the
+// client somehow supplies no personaId. Everything else takes precedence.
+const FALLBACK_SYSTEM_PROMPT = 'You are a helpful, direct assistant.';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { messages, model, provider: providerId, systemPrompt } = req.body || {};
+  const { messages, model, provider: providerId, personaId } = req.body || {};
 
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'messages array is required' });
@@ -58,14 +57,24 @@ export default async function handler(req, res) {
     });
   }
 
-  const effectiveSystemPrompt =
-    typeof systemPrompt === 'string' && systemPrompt.trim().length > 0
-      ? systemPrompt
-      : DEFAULT_SYSTEM_PROMPT;
+  // Resolve the effective system prompt server-side, from KV. Client never
+  // participates in this decision — only sends the ID it wants.
+  let effectiveSystemPrompt = FALLBACK_SYSTEM_PROMPT;
+  try {
+    const config = await loadConfig();
+    const persona =
+      config.personas.find((p) => p.id === personaId) ||
+      config.personas.find((p) => p.id === 'nexus') ||
+      config.personas[0];
+    const parts = [config.masterPrompt, persona?.systemPrompt].filter((s) => typeof s === 'string' && s.trim().length > 0);
+    if (parts.length > 0) effectiveSystemPrompt = parts.join('\n\n');
+  } catch (err) {
+    console.error('loadConfig failed:', err);
+  }
 
   const messagesWithSystem = [
     { role: 'system', content: effectiveSystemPrompt },
-    ...messages,
+    ...messages.map((m) => ({ role: m.role, content: m.content })),
   ];
 
   try {

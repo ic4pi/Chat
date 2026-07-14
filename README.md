@@ -1,28 +1,74 @@
 # Uncensored Chat
 
-Minimal single-user chat UI → Vercel serverless functions → OpenRouter *or* Venice.
+Chat UI backed by Vercel serverless functions with two providers (Venice + OpenRouter), a password-gated admin page for personas and a site-wide master prompt, and Vercel KV as the storage backend.
 
-- Two providers side-by-side (Venice direct + OpenRouter).
-- The Venice model list is fetched **live** from Venice's own catalog, so every
-  uncensored fine-tune they ship is available in the dropdown without any
-  code change on your side.
-- Persistent local chats, editable personas, and auto-extracted code/document
-  artifacts — all stored in your browser's `localStorage`.
-- No silent model swapping. If your selected model errors, you see *that*
-  model's real error message.
+- Personas + master prompt live **server-side** in Vercel KV.
+- The master prompt and each persona's system prompt are **never sent to the browser** — the client only sees persona IDs and names, and `/api/chat` resolves them at request time.
+- `/admin` is HTTP Basic-auth-gated at the serverless-function layer, so the URL cannot be accessed without valid credentials.
+- No silent model swapping. The one exception is a targeted, visible fallback from the OpenRouter free Dolphin-Venice model to Venice's own `venice-uncensored` — same model spirit, funded by your Venice credits.
 
 ## Deploy
 
-1. `vercel` (or push to GitHub and import in the Vercel dashboard).
-2. In Vercel project settings → Environment Variables, add whichever key(s) you use:
-   - `VENICE_API_KEY` — from https://venice.ai/settings/api  *(required for Venice models and for the live model list)*
-   - `OPENROUTER_API_KEY` — from https://openrouter.ai/keys  *(required for OpenRouter models)*
-   - `SITE_URL` — optional; used as the OpenRouter `HTTP-Referer` header.
-3. Redeploy after adding env vars (Vercel only injects env vars into new builds).
+### 1. Push to Vercel
 
-Only add the key(s) for the provider(s) you actually plan to use. If a key is
-missing when a request needs it, the server responds with a clear error naming
-the missing env var — it will not fall back to a different model.
+`vercel` (or connect the repo in the Vercel dashboard).
+
+### 2. Environment variables
+
+In **Vercel → Project → Settings → Environment Variables** add:
+
+| Name | Value | Purpose |
+|------|-------|---------|
+| `OPENROUTER_API_KEY` | from https://openrouter.ai/keys | OpenRouter models |
+| `VENICE_API_KEY` | from https://venice.ai/settings/api | Venice models + live catalog |
+| `ADMIN_USERNAME` | anything you want | Gate for `/admin` |
+| `ADMIN_PASSWORD` | anything you want | Gate for `/admin` |
+| `SITE_URL` | *(optional)* your deployment URL | Sent as OpenRouter's `HTTP-Referer` |
+
+If any of `OPENROUTER_API_KEY` / `VENICE_API_KEY` is missing, the app still runs — the missing provider just returns a clear error. If `ADMIN_USERNAME` or `ADMIN_PASSWORD` is missing, `/admin` refuses to serve — never falls open.
+
+### 3. Attach Vercel KV (required for admin edits to persist)
+
+1. **Vercel Dashboard → Storage → Create → KV** (or attach an existing store).
+2. Attach it to this project for all environments (Production / Preview / Development).
+3. Vercel automatically populates `KV_REST_API_URL` and `KV_REST_API_TOKEN` in the project's env vars.
+4. Redeploy — Vercel only injects new env vars into deployments built after they were added.
+
+If KV isn't attached the app still runs: the site falls back to the built-in `NEXUS` + `Plain assistant` personas with no master prompt. The admin page will accept a login and load, but `Save` will return a 503 with instructions to connect KV.
+
+### 4. Redeploy
+
+Every env var change requires a fresh deployment — Vercel only injects env vars into new builds.
+
+## What lives where
+
+### On the server (Vercel KV, key `uncensored-chat:config:v1`)
+
+```json
+{
+  "masterPrompt": "…text prepended to every persona…",
+  "personas": [
+    { "id": "abc123", "name": "Terse code reviewer", "systemPrompt": "…" }
+  ]
+}
+```
+
+Built-in personas (`nexus`, `plain`) are **not** stored — they are re-added at read time so a poisoned or empty KV cannot silently break the chat.
+
+### In the browser (`localStorage`, key `uncensored_chat_state_v3`)
+
+Chat history, active chat / persona / model selection, sidebar preferences, and generated artifacts. **No** system prompts or master prompt — those never leave the server.
+
+## URLs
+
+| Path | Purpose | Auth |
+|------|---------|------|
+| `/` | Main chat UI | none |
+| `/admin` | Persona + master-prompt editor | HTTP Basic auth (`ADMIN_USERNAME` / `ADMIN_PASSWORD`) |
+| `/api/chat` | Chat completions proxy | none (relies on API keys server-side) |
+| `/api/models?provider=venice` | Live Venice model catalog | none |
+| `/api/public-config` | Persona IDs and names (no prompts) | none |
+| `/api/admin-config` | Full config incl. system prompts | HTTP Basic auth |
 
 ## Local dev
 
@@ -31,50 +77,17 @@ npm i -g vercel
 vercel dev
 ```
 
-## Features
-
-### Providers and models
-- **Provider select** in the header picks Venice or OpenRouter.
-- **Model select** is rebuilt when you change provider:
-  - **Venice** — fetched live from `GET /api/models?provider=venice` at load time. Models are grouped into "Uncensored" and "Other Venice models" (based on Venice's `most_uncensored` trait and known uncensored fine-tunes like Dolphin / Hermes). Hover a model to see its Venice description.
-  - **OpenRouter** — small hard-coded free-tier list. Edit the `OPENROUTER_MODELS` array in `public/app.js` to add more.
-
-### Personas
-- Header has a **persona** dropdown. Selecting a persona uses its system prompt for the current chat.
-- Click **⚙** (or press **⌘/Ctrl + K**) to open the hidden Persona Manager screen. There you can:
-  - Create new personas with any system prompt you want.
-  - Rename or delete your custom personas.
-  - Apply a persona to the current chat with one click.
-- Two built-in personas ship by default: **NEXUS** (the evil-genius coder) and **Plain assistant**. Built-ins can't be edited or deleted, but you can freely add your own.
-
-### Chats
-- **Left sidebar** lists every saved chat. Click to switch, hover for the ×-delete button.
-- **New chat** button in the sidebar header.
-- The chat title in the top bar is inline-editable (click on it, edit, press Enter or click away). New chats auto-title from the first message.
-- Chats are saved to `localStorage` immediately after every message. They persist across reloads.
-
-### Artifacts
-- **Right sidebar** shows artifacts extracted from the current chat.
-- Any fenced code block of at least 3 lines in a model response becomes an artifact automatically. Titles are inferred from `File: name.ext` hints or from a leading `# path/to/file.ext` comment; otherwise `snippet-N.<ext>`.
-- Each artifact has **View**, **Copy**, and **Download** buttons.
-- The artifacts panel auto-opens the first time the model produces one in a chat, and can be toggled with the 📎 button in the header.
-
-### Data
-- **Export** — dump all chats + personas + settings as a JSON file.
-- **Import** — restore from an exported JSON file.
-- **Clear all** — wipe every chat, persona, and setting from this browser.
+`vercel dev` reads env vars from Vercel (or from a local `.env` file). Without a real KV connection you'll see the fallback behavior described above.
 
 ## Files
 
-- `api/chat.js` — chat-completions proxy. Accepts `{messages, model, provider, systemPrompt}`.
-- `api/models.js` — lists Venice text models from `https://api.venice.ai/api/v1/models?type=text` (cached at the edge for 5 minutes).
-- `public/index.html` — layout only.
-- `public/styles.css` — all styling.
-- `public/app.js` — application logic (state, rendering, storage, personas, artifacts).
-
-## Errors
-
-If the selected model fails (rate limit, provider outage, content refusal, …),
-the UI shows the actual upstream error message tagged with `[Provider · model]`.
-Switch models manually and try again — the app never quietly re-runs your
-prompt against a different model.
+- `api/chat.js` — chat proxy; resolves persona + master prompt from KV every request.
+- `api/models.js` — live Venice text-model list.
+- `api/public-config.js` — persona IDs/names for the selector.
+- `api/admin.js` — serves the admin HTML behind Basic auth.
+- `api/admin-config.js` — GET/PUT the full config; Basic-auth-gated.
+- `lib/kv.js` — thin REST client for Vercel KV / Upstash.
+- `lib/config.js` — persona schema, load/save from KV, built-in defaults.
+- `lib/auth.js` — shared Basic-auth check.
+- `public/index.html`, `public/app.js`, `public/styles.css` — main chat UI.
+- `public/admin.js`, `public/admin.css` — admin UI logic + styles (referenced by the inlined admin HTML in `api/admin.js`).

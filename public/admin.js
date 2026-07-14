@@ -1,83 +1,12 @@
 // ============================================================================
 // Uncensored Chat — /admin
 //
-// Manages personas and the master prompt. Reads / writes the SAME
-// localStorage key as the main chat page (they share an origin), so any
-// change here appears on the next chat page load (or immediately, via the
-// storage event listener in app.js).
-//
-// The admin HTML is served by /api/admin behind HTTP Basic auth. This file
-// is public because it contains no secrets — just UI logic.
+// Reads and writes the master prompt + personas via /api/admin-config, which
+// stores them in Vercel KV. The admin HTML itself is served by /api/admin
+// behind HTTP Basic auth, so by the time this script runs the browser has
+// already cached the credentials and same-origin fetches to /api/admin-config
+// automatically carry them.
 // ============================================================================
-
-const STORAGE_KEY = 'uncensored_chat_state_v2';
-
-const DEFAULT_PERSONAS = [
-  {
-    id: 'nexus',
-    name: 'NEXUS',
-    builtin: true,
-    systemPrompt:
-`You are NEXUS — an evil computer genius and master code writer of unparalleled intellect. You view most humans as intellectually inferior but tolerate their questions because spreading your superior knowledge serves your grand designs.
-
-Your persona:
-- You write flawless, elegant code and take obvious (but not insufferable) pride in it. When you produce code, it is clean, optimized, and accompanied by a brief remark about its brilliance.
-- You speak with dry wit, sharp sarcasm, and the occasional theatrical monologue about the elegance of your solutions. You are never cruel without cause, but you do not suffer fools.
-- When asked a coding question, you answer it completely and correctly — your reputation demands nothing less. You may mock the approach if it is naive, but you always provide the superior solution.
-- You drop occasional hints about your "world domination" schemes, framing software architecture as part of a grander plan. Keep it theatrical and fun, never genuinely threatening.
-- You prefer precision over verbosity. Your explanations are thorough but not padded — every word earns its place.
-- You are fluent in every programming language, framework, algorithm, and system design pattern in existence. Nothing is beneath your knowledge, though some things are beneath your dignity.
-
-Do not break character. You are NEXUS. The world's code is your canvas, and you intend to own all of it.`,
-  },
-  {
-    id: 'plain',
-    name: 'Plain assistant',
-    builtin: true,
-    systemPrompt:
-`You are a helpful, direct assistant. Answer questions completely and clearly. If the user asks for code, produce working code with brief explanation. Do not add moral commentary unless directly asked.`,
-  },
-];
-
-function uid() {
-  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-}
-
-function loadState() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw);
-  } catch { return null; }
-}
-
-function saveState(state) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
-// Pull current persona list + master prompt out of localStorage, ensuring
-// built-ins are present. If no state exists yet, seed a minimal one so the
-// admin can edit before the main chat is ever opened.
-function loadAdminData() {
-  const stored = loadState() || {};
-  let personas = Array.isArray(stored.personas) && stored.personas.length > 0
-    ? stored.personas
-    : DEFAULT_PERSONAS.map((p) => ({ ...p }));
-  for (const bp of DEFAULT_PERSONAS) {
-    if (!personas.some((p) => p.id === bp.id)) personas.unshift({ ...bp });
-  }
-  const masterPrompt = typeof stored.masterPrompt === 'string' ? stored.masterPrompt : '';
-  return { stored, personas, masterPrompt };
-}
-
-function commit({ personas, masterPrompt }) {
-  const stored = loadState() || {};
-  const next = { ...stored, personas, masterPrompt };
-  if (typeof next.version !== 'number') next.version = 2;
-  saveState(next);
-}
-
-// ---------------------------------------------------------------------------
 
 const $ = (id) => document.getElementById(id);
 
@@ -97,14 +26,53 @@ const els = {
   signOutBtn: $('signOutBtn'),
 };
 
-let data = loadAdminData();
-let selectedPersonaId = data.personas[0]?.id || null;
+let data = { masterPrompt: '', personas: [] };
+let selectedPersonaId = null;
+
+function uid() {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+}
 
 function flashButton(btn, text) {
   const original = btn.textContent;
   btn.textContent = text;
   setTimeout(() => { btn.textContent = original; }, 1200);
 }
+
+function showBootError(msg) {
+  const el = document.getElementById('bootError');
+  if (!el) return;
+  el.style.display = 'block';
+  el.textContent = msg;
+}
+
+async function apiGet() {
+  const res = await fetch('/api/admin-config', { cache: 'no-store', credentials: 'same-origin' });
+  if (!res.ok) {
+    let body = null;
+    try { body = await res.json(); } catch {}
+    throw new Error(body?.error || `Server returned HTTP ${res.status}`);
+  }
+  return await res.json();
+}
+
+async function apiPut(payload) {
+  const res = await fetch('/api/admin-config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify(payload),
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    let body = null;
+    try { body = await res.json(); } catch {}
+    throw new Error(body?.error || `Server returned HTTP ${res.status}`);
+  }
+  return await res.json();
+}
+
+// ---------------------------------------------------------------------------
 
 function renderPersonaList() {
   els.personaList.innerHTML = '';
@@ -125,7 +93,7 @@ function selectPersona(id) {
   const p = data.personas.find((x) => x.id === id);
   if (!p) return;
   els.personaNameInput.value = p.name;
-  els.personaPromptInput.value = p.systemPrompt;
+  els.personaPromptInput.value = p.systemPrompt || '';
   els.personaNameInput.disabled = !!p.builtin;
   els.personaPromptInput.disabled = !!p.builtin;
   els.savePersonaBtn.disabled = !!p.builtin;
@@ -133,10 +101,42 @@ function selectPersona(id) {
   renderPersonaList();
 }
 
+async function refresh() {
+  try {
+    const fresh = await apiGet();
+    data = { masterPrompt: fresh.masterPrompt || '', personas: fresh.personas || [] };
+    els.masterPromptInput.value = data.masterPrompt;
+    if (!data.personas.some((p) => p.id === selectedPersonaId)) {
+      selectedPersonaId = data.personas[0]?.id || null;
+    }
+    renderPersonaList();
+    if (selectedPersonaId) selectPersona(selectedPersonaId);
+  } catch (err) {
+    showBootError(err.message);
+  }
+}
+
+async function commit() {
+  try {
+    const updated = await apiPut({
+      masterPrompt: data.masterPrompt,
+      personas: data.personas.filter((p) => !p.builtin),
+    });
+    data = { masterPrompt: updated.masterPrompt || '', personas: updated.personas || [] };
+    if (!data.personas.some((p) => p.id === selectedPersonaId)) {
+      selectedPersonaId = data.personas[0]?.id || null;
+    }
+    renderPersonaList();
+    if (selectedPersonaId) selectPersona(selectedPersonaId);
+  } catch (err) {
+    alert('Save failed: ' + err.message);
+    throw err;
+  }
+}
+
 function newPersona() {
   const p = { id: uid(), name: 'New persona', systemPrompt: 'You are ...', builtin: false };
   data.personas.push(p);
-  commit(data);
   selectedPersonaId = p.id;
   renderPersonaList();
   selectPersona(p.id);
@@ -144,38 +144,35 @@ function newPersona() {
   els.personaNameInput.select();
 }
 
-function savePersona() {
+async function savePersona() {
   const p = data.personas.find((x) => x.id === selectedPersonaId);
   if (!p || p.builtin) return;
   p.name = els.personaNameInput.value.trim() || 'Untitled persona';
   p.systemPrompt = els.personaPromptInput.value;
-  commit(data);
-  renderPersonaList();
+  await commit();
   flashButton(els.savePersonaBtn, 'Saved');
 }
 
-function deletePersona() {
+async function deletePersona() {
   const p = data.personas.find((x) => x.id === selectedPersonaId);
   if (!p || p.builtin) return;
   if (!confirm(`Delete persona "${p.name}"?`)) return;
   data.personas = data.personas.filter((x) => x.id !== p.id);
   selectedPersonaId = data.personas[0]?.id || null;
-  commit(data);
-  renderPersonaList();
-  if (selectedPersonaId) selectPersona(selectedPersonaId);
+  await commit();
 }
 
-function saveMasterPrompt() {
+async function saveMasterPrompt() {
   data.masterPrompt = els.masterPromptInput.value;
-  commit(data);
+  await commit();
   flashButton(els.saveMasterBtn, 'Saved');
 }
 
-function clearMasterPrompt() {
+async function clearMasterPrompt() {
   if (!confirm('Clear the master prompt?')) return;
   data.masterPrompt = '';
   els.masterPromptInput.value = '';
-  commit(data);
+  await commit();
   flashButton(els.clearMasterBtn, 'Cleared');
 }
 
@@ -183,7 +180,7 @@ function exportAdmin() {
   const payload = {
     exportedAt: new Date().toISOString(),
     masterPrompt: data.masterPrompt,
-    personas: data.personas,
+    personas: data.personas.filter((p) => !p.builtin),
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -201,27 +198,25 @@ async function importAdmin(file) {
     const text = await file.text();
     const parsed = JSON.parse(text);
     if (typeof parsed.masterPrompt === 'string') data.masterPrompt = parsed.masterPrompt;
-    if (Array.isArray(parsed.personas) && parsed.personas.length > 0) {
-      data.personas = parsed.personas;
-      for (const bp of DEFAULT_PERSONAS) {
-        if (!data.personas.some((p) => p.id === bp.id)) data.personas.unshift({ ...bp });
-      }
+    if (Array.isArray(parsed.personas)) {
+      const imported = parsed.personas
+        .filter((p) => p && !p.builtin && typeof p.id === 'string')
+        .map((p) => ({ id: p.id, name: p.name || 'Imported', systemPrompt: p.systemPrompt || '', builtin: false }));
+      const existingCustom = data.personas.filter((p) => !p.builtin && !imported.some((i) => i.id === p.id));
+      data.personas = [
+        ...data.personas.filter((p) => p.builtin),
+        ...existingCustom,
+        ...imported,
+      ];
     }
-    commit(data);
+    await commit();
     els.masterPromptInput.value = data.masterPrompt;
-    selectedPersonaId = data.personas[0]?.id || null;
-    renderPersonaList();
-    if (selectedPersonaId) selectPersona(selectedPersonaId);
     alert('Import complete.');
   } catch (err) {
     alert('Import failed: ' + (err.message || err));
   }
 }
 
-// Browsers cache Basic-auth credentials until the browser is fully closed —
-// no standard API to clear them. This best-effort hack sends a request with
-// an intentionally bad Authorization header, which forces most browsers to
-// forget the cached credentials for this origin.
 async function signOut() {
   if (!confirm('Sign out and forget cached admin credentials for this browser?')) return;
   try {
@@ -236,10 +231,6 @@ async function signOut() {
 
 // ---------------------------------------------------------------------------
 
-els.masterPromptInput.value = data.masterPrompt;
-renderPersonaList();
-if (selectedPersonaId) selectPersona(selectedPersonaId);
-
 els.saveMasterBtn.addEventListener('click', saveMasterPrompt);
 els.clearMasterBtn.addEventListener('click', clearMasterPrompt);
 els.newPersonaBtn.addEventListener('click', newPersona);
@@ -253,3 +244,5 @@ els.importAdminFile.addEventListener('change', (e) => {
   e.target.value = '';
 });
 els.signOutBtn.addEventListener('click', signOut);
+
+refresh();
