@@ -145,10 +145,19 @@
 <header>
   <h1>// uncensored_chat</h1>
   <select id="modelSelect">
-    <option value="cognitivecomputations/dolphin-mistral-24b-venice-edition:free">Venice: Uncensored 24B (free)</option>
-    <option value="nousresearch/hermes-3-llama-3.1-405b:free">Nous: Hermes 3 405B (free)</option>
-    <option value="google/gemma-4-26b-a4b-it:free">Gemma 4 26B A4B — 3.8B active, punches above weight (free)</option>
-    <option value="meta-llama/llama-3.3-70b-instruct:free">Llama 3.3 70B Instruct (free)</option>
+    <optgroup label="Venice (direct — uses VENICE_API_KEY)">
+      <option data-provider="venice" value="venice-uncensored">Venice: Uncensored (Dolphin-Mistral 24B)</option>
+      <option data-provider="venice" value="llama-3.3-70b">Venice: Llama 3.3 70B</option>
+      <option data-provider="venice" value="mistral-31-24b">Venice: Mistral 3.1 24B (vision)</option>
+      <option data-provider="venice" value="qwen3-235b-a22b-instruct-2507">Venice: Qwen3 235B Instruct</option>
+      <option data-provider="venice" value="hermes-3-llama-3.1-405b">Venice: Hermes 3 Llama 3.1 405B</option>
+    </optgroup>
+    <optgroup label="OpenRouter (uses OPENROUTER_API_KEY)">
+      <option data-provider="openrouter" value="cognitivecomputations/dolphin-mistral-24b-venice-edition:free">OR: Venice Uncensored 24B (free)</option>
+      <option data-provider="openrouter" value="nousresearch/hermes-3-llama-3.1-405b:free">OR: Hermes 3 405B (free)</option>
+      <option data-provider="openrouter" value="google/gemma-4-26b-a4b-it:free">OR: Gemma 4 26B A4B (free)</option>
+      <option data-provider="openrouter" value="meta-llama/llama-3.3-70b-instruct:free">OR: Llama 3.3 70B Instruct (free)</option>
+    </optgroup>
   </select>
 </header>
 
@@ -208,23 +217,22 @@
     typingEl.style.display = 'block';
 
     try {
+      const selected = modelSelect.options[modelSelect.selectedIndex];
+      const provider = selected?.dataset?.provider || 'openrouter';
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: history, model: modelSelect.value }),
+        body: JSON.stringify({ messages: history, model: modelSelect.value, provider }),
       });
       const data = await res.json();
 
       if (!res.ok) {
-        const detail = data.tried ? ` (tried: ${data.tried.join(' → ')})` : '';
-        addMessage('error', (data.error || 'Request failed') + detail);
+        const where = data.provider ? ` [${data.provider} · ${data.model || modelSelect.value}]` : '';
+        addMessage('error', (data.error || 'Request failed') + where);
       } else {
         const text = data.reply || '(empty response)';
         addMessage('bot', text);
         history.push({ role: 'assistant', content: data.reply || '' });
-        if (data.fallback) {
-          addMessage('info', `⚠ Primary model unavailable — responded via fallback (${data.model})`);
-        }
       }
     } catch (err) {
       addMessage('error', err.message || 'Network error');
