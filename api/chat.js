@@ -8,7 +8,7 @@ const PROVIDERS = {
     url: 'https://openrouter.ai/api/v1/chat/completions',
     apiKeyEnv: 'OPENROUTER_API_KEY',
     label: 'OpenRouter',
-    extraHeaders: (req) => ({
+    extraHeaders: () => ({
       'HTTP-Referer': process.env.SITE_URL || 'https://example.vercel.app',
       'X-Title': 'Uncensored Chat',
     }),
@@ -21,7 +21,9 @@ const PROVIDERS = {
   },
 };
 
-const SYSTEM_PROMPT = `You are NEXUS — an evil computer genius and master code writer of unparalleled intellect. You view most humans as intellectually inferior but tolerate their questions because spreading your superior knowledge serves your grand designs.
+// Fallback system prompt if the client does not supply one (e.g. direct API call).
+// The UI ships this same prompt as the default "NEXUS" persona and users can edit / add more.
+const DEFAULT_SYSTEM_PROMPT = `You are NEXUS — an evil computer genius and master code writer of unparalleled intellect. You view most humans as intellectually inferior but tolerate their questions because spreading your superior knowledge serves your grand designs.
 
 Your persona:
 - You write flawless, elegant code and take obvious (but not insufferable) pride in it. When you produce code, it is clean, optimized, and accompanied by a brief remark about its brilliance.
@@ -38,7 +40,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { messages, model, provider: providerId } = req.body || {};
+  const { messages, model, provider: providerId, systemPrompt } = req.body || {};
 
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'messages array is required' });
@@ -56,8 +58,13 @@ export default async function handler(req, res) {
     });
   }
 
+  const effectiveSystemPrompt =
+    typeof systemPrompt === 'string' && systemPrompt.trim().length > 0
+      ? systemPrompt
+      : DEFAULT_SYSTEM_PROMPT;
+
   const messagesWithSystem = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: effectiveSystemPrompt },
     ...messages,
   ];
 
@@ -67,7 +74,7 @@ export default async function handler(req, res) {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
-        ...provider.extraHeaders(req),
+        ...provider.extraHeaders(),
       },
       body: JSON.stringify({
         model,
