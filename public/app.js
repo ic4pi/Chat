@@ -1091,4 +1091,14 @@ els.artifactModal.addEventListener('click', (e) => {
 // Boot
 // ---------------------------------------------------------------------------
 
-renderAll();
+function showBootError(msg) {
+  const el = document.getElementById('bootError');
+  if (!el) return;
+  el.style.display = 'block';
+  el.textContent = 'Boot error: ' + msg + '\n\nTry a hard refresh, or open the ⚙ menu → Clear all to reset local state.';
+}
+
+renderAll().catch((err) => {
+  console.error('renderAll failed:', err);
+  showBootError(err?.stack || err?.message || String(err));
+});

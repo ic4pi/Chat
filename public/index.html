@@ -13,8 +13,9 @@
   <!-- Backdrop shown behind sidebars on mobile; tap to dismiss. -->
   <div id="backdrop" class="backdrop hidden"></div>
 
-  <!-- Left sidebar: chat list -->
-  <aside id="chatsSidebar" class="sidebar left">
+  <!-- Left sidebar: chat list. Starts collapsed by default; JS opens it on
+       desktop viewports so mobile doesn't flash an overlay before JS runs. -->
+  <aside id="chatsSidebar" class="sidebar left collapsed">
     <div class="sidebar-header">
       <span class="sidebar-title">Chats</span>
       <div class="sidebar-header-actions">
@@ -126,6 +127,33 @@
   </div>
 </div>
 
+<!-- Visible boot-time error banner shown if the JS module fails to run. -->
+<div id="bootError" style="display:none;position:fixed;left:0;right:0;top:0;padding:14px 18px;background:#2a1010;color:#ff9b9b;border-bottom:1px solid #5a1f1f;font-family:monospace;font-size:12px;z-index:200;white-space:pre-wrap;"></div>
+
+<noscript>
+  <div style="padding:20px;color:#ff9b9b;background:#2a1010;font-family:monospace;font-size:13px;">
+    This chat UI requires JavaScript. Enable it in your browser's settings and reload.
+  </div>
+</noscript>
+
+<script>
+  // Report any uncaught script errors before / during module boot in a
+  // human-visible way — never leave the user staring at a blank screen.
+  (function () {
+    function show(msg) {
+      var el = document.getElementById('bootError');
+      if (!el) return;
+      el.style.display = 'block';
+      el.textContent = 'Boot error: ' + msg + '\n\nTry a hard refresh (⌘/Ctrl+Shift+R) or clear this site\'s data.';
+    }
+    window.addEventListener('error', function (e) {
+      show((e.error && (e.error.stack || e.error.message)) || e.message || String(e));
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      show((e.reason && (e.reason.stack || e.reason.message)) || String(e.reason));
+    });
+  })();
+</script>
 <script src="/app.js" type="module"></script>
 </body>
 </html>
