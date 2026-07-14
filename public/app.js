@@ -97,8 +97,21 @@ function freshState() {
     activeProvider: 'openrouter',
     activeModel: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
     chatsCollapsed: false,
+    chatsCollapsedExplicit: false,
     artifactsCollapsed: true,
   };
+}
+
+const MOBILE_QUERY = '(max-width: 900px)';
+function isMobileViewport() {
+  return typeof window !== 'undefined' && window.matchMedia && window.matchMedia(MOBILE_QUERY).matches;
+}
+
+// If the user has never touched the chats-sidebar toggle, its collapsed state
+// is decided by the viewport: collapsed on mobile, open on desktop. Once the
+// user clicks the toggle even once, their choice is remembered.
+function effectiveChatsCollapsed() {
+  return state.chatsCollapsedExplicit ? !!state.chatsCollapsed : isMobileViewport();
 }
 
 function loadState() {
@@ -241,9 +254,10 @@ const els = {
 // ---------------------------------------------------------------------------
 
 function applySidebarState() {
-  els.app.classList.toggle('chats-collapsed', !!state.chatsCollapsed);
+  const chatsCollapsed = effectiveChatsCollapsed();
+  els.app.classList.toggle('chats-collapsed', chatsCollapsed);
   els.app.classList.toggle('artifacts-collapsed', !!state.artifactsCollapsed);
-  els.chatsSidebar.classList.toggle('collapsed', !!state.chatsCollapsed);
+  els.chatsSidebar.classList.toggle('collapsed', chatsCollapsed);
   els.artifactsSidebar.classList.toggle('collapsed', !!state.artifactsCollapsed);
 }
 
@@ -262,6 +276,10 @@ function renderChatList() {
       state.activeProvider = c.provider;
       state.activeModel = c.model;
       state.activePersonaId = c.personaId;
+      if (isMobileViewport()) {
+        state.chatsCollapsed = true;
+        state.chatsCollapsedExplicit = true;
+      }
       saveState();
       renderAll();
     });
@@ -940,14 +958,29 @@ els.input.addEventListener('keydown', (e) => {
 
 els.newChatBtn.addEventListener('click', () => {
   createChat();
+  if (isMobileViewport()) {
+    state.chatsCollapsed = true;
+    state.chatsCollapsedExplicit = true;
+    saveState();
+  }
   renderAll();
 });
 
 els.toggleChats.addEventListener('click', () => {
-  state.chatsCollapsed = !state.chatsCollapsed;
+  state.chatsCollapsed = !effectiveChatsCollapsed();
+  state.chatsCollapsedExplicit = true;
   saveState();
   applySidebarState();
 });
+
+if (typeof window !== 'undefined' && window.matchMedia) {
+  const mql = window.matchMedia(MOBILE_QUERY);
+  const onChange = () => {
+    if (!state.chatsCollapsedExplicit) applySidebarState();
+  };
+  if (mql.addEventListener) mql.addEventListener('change', onChange);
+  else if (mql.addListener) mql.addListener(onChange);
+}
 els.toggleArtifacts.addEventListener('click', () => {
   state.artifactsCollapsed = !state.artifactsCollapsed;
   saveState();
