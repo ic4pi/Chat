@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>Uncensored Chat</title>
 <link rel="stylesheet" href="/styles.css" />
 </head>
@@ -10,11 +10,17 @@
 
 <div id="app">
 
+  <!-- Backdrop shown behind sidebars on mobile; tap to dismiss. -->
+  <div id="backdrop" class="backdrop hidden"></div>
+
   <!-- Left sidebar: chat list -->
   <aside id="chatsSidebar" class="sidebar left">
     <div class="sidebar-header">
       <span class="sidebar-title">Chats</span>
-      <button id="newChatBtn" class="icon-btn" title="New chat">+</button>
+      <div class="sidebar-header-actions">
+        <button id="newChatBtn" class="icon-btn" title="New chat">+</button>
+        <button id="closeChats" class="icon-btn" title="Hide">×</button>
+      </div>
     </div>
     <ul id="chatList" class="chat-list"></ul>
     <div class="sidebar-footer">
