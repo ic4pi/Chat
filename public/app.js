@@ -56,10 +56,13 @@ const VENICE_FALLBACK_MODELS = [
 ];
 
 // Static OpenRouter model list. Venice models come from /api/models live.
+// Only uncensored fine-tunes are listed — the previous Gemma entry was pulled
+// because google/gemma is safety-tuned and refuses on-topic prompts, which is
+// exactly the behavior this app exists to avoid. Add more slugs here if you
+// want; anything from https://openrouter.ai/models works.
 const OPENROUTER_MODELS = [
-  { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free', name: 'Venice Uncensored 24B (free)' },
+  { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free', name: 'Dolphin-Mistral 24B Venice Edition (free)' },
   { id: 'nousresearch/hermes-3-llama-3.1-405b:free', name: 'Hermes 3 405B (free)' },
-  { id: 'google/gemma-4-26b-a4b-it:free', name: 'Gemma 4 26B A4B (free)' },
   { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B Instruct (free)' },
 ];
 
