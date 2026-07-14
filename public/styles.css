@@ -108,10 +108,17 @@ select:focus, input[type="text"]:focus, textarea:focus {
 
 .sidebar-header {
   padding: 12px 14px;
+  padding-top: max(12px, env(safe-area-inset-top));
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+}
+.sidebar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 .sidebar-title {
   font-size: 11px;
@@ -121,6 +128,7 @@ select:focus, input[type="text"]:focus, textarea:focus {
 }
 .sidebar-footer {
   padding: 10px 12px;
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
   border-top: 1px solid var(--border);
   display: flex;
   gap: 6px;
@@ -191,11 +199,17 @@ select:focus, input[type="text"]:focus, textarea:focus {
 
 #topbar {
   padding: 10px 16px;
+  padding-top: max(10px, env(safe-area-inset-top));
+  padding-left: max(16px, env(safe-area-inset-left));
+  padding-right: max(16px, env(safe-area-inset-right));
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  background: var(--bg);
+  position: relative;
+  z-index: 60;
 }
 #chatTitle {
   font-size: 13px;
@@ -321,9 +335,21 @@ select:focus, input[type="text"]:focus, textarea:focus {
 #inputForm {
   border-top: 1px solid var(--border);
   padding: 12px 16px;
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+  padding-left: max(16px, env(safe-area-inset-left));
+  padding-right: max(16px, env(safe-area-inset-right));
   display: flex;
   gap: 10px;
 }
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 45;
+  display: none;
+}
+.backdrop.visible { display: block; }
 textarea#input {
   flex: 1;
   resize: none;
@@ -554,8 +580,9 @@ button#sendBtn:hover:not(:disabled) { background: var(--accent-dim); }
     position: fixed;
     top: 0;
     bottom: 0;
-    width: 280px;
+    width: min(85vw, 320px);
     z-index: 50;
+    background: var(--panel-2);
   }
   .sidebar.left { left: 0; }
   .sidebar.right { right: 0; }
@@ -564,4 +591,10 @@ button#sendBtn:hover:not(:disabled) { background: var(--accent-dim); }
   .sidebar.collapsed { display: none; }
   .persona-manager { grid-template-columns: 1fr; }
   .persona-list-pane { border-right: none; border-bottom: 1px solid var(--border); min-height: unset; }
+  /* Cap textarea height so the input stays visible above the on-screen keyboard */
+  textarea#input { max-height: 120px; }
+}
+/* Hide the mobile close button on desktop where it isn't needed */
+@media (min-width: 901px) {
+  #closeChats { display: none; }
 }

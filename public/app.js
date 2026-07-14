@@ -212,6 +212,8 @@ const els = {
   app: $('app'),
   chatsSidebar: $('chatsSidebar'),
   artifactsSidebar: $('artifactsSidebar'),
+  closeChats: $('closeChats'),
+  backdrop: $('backdrop'),
   chatList: $('chatList'),
   newChatBtn: $('newChatBtn'),
   toggleChats: $('toggleChats'),
@@ -255,10 +257,29 @@ const els = {
 
 function applySidebarState() {
   const chatsCollapsed = effectiveChatsCollapsed();
+  const artifactsCollapsed = !!state.artifactsCollapsed;
   els.app.classList.toggle('chats-collapsed', chatsCollapsed);
-  els.app.classList.toggle('artifacts-collapsed', !!state.artifactsCollapsed);
+  els.app.classList.toggle('artifacts-collapsed', artifactsCollapsed);
   els.chatsSidebar.classList.toggle('collapsed', chatsCollapsed);
-  els.artifactsSidebar.classList.toggle('collapsed', !!state.artifactsCollapsed);
+  els.artifactsSidebar.classList.toggle('collapsed', artifactsCollapsed);
+  const anySidebarOpen = !chatsCollapsed || !artifactsCollapsed;
+  els.backdrop.classList.toggle('visible', isMobileViewport() && anySidebarOpen);
+}
+
+function closeChatsSidebar() {
+  state.chatsCollapsed = true;
+  state.chatsCollapsedExplicit = true;
+  saveState();
+  applySidebarState();
+}
+function closeArtifactsSidebar() {
+  state.artifactsCollapsed = true;
+  saveState();
+  applySidebarState();
+}
+function closeAllSidebars() {
+  closeChatsSidebar();
+  closeArtifactsSidebar();
 }
 
 function renderChatList() {
@@ -986,11 +1007,9 @@ els.toggleArtifacts.addEventListener('click', () => {
   saveState();
   applySidebarState();
 });
-els.closeArtifacts.addEventListener('click', () => {
-  state.artifactsCollapsed = true;
-  saveState();
-  applySidebarState();
-});
+els.closeArtifacts.addEventListener('click', closeArtifactsSidebar);
+els.closeChats.addEventListener('click', closeChatsSidebar);
+els.backdrop.addEventListener('click', closeAllSidebars);
 
 els.chatTitle.addEventListener('blur', () => {
   const chat = activeChat();
