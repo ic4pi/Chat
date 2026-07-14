@@ -70,6 +70,23 @@ const OPENROUTER_MODELS = [
 // State
 // ---------------------------------------------------------------------------
 
+// Explicit per-model fallback map. Only these very specific (provider, model)
+// pairs get a silent retry, and only to the paired (provider, model). We do
+// NOT fall back to a random OpenRouter free-tier model — that was the
+// original bug that produced censored refusals from models the user never
+// picked. The only fallback we do is same-spirit: the free OpenRouter mirror
+// of Venice's Dolphin-Mistral falls back to Venice's own copy, funded by the
+// user's Venice credits.
+const MODEL_FALLBACKS = {
+  openrouter: {
+    'cognitivecomputations/dolphin-mistral-24b-venice-edition:free': {
+      provider: 'venice',
+      model: 'venice-uncensored',
+      reason: 'OpenRouter free Dolphin-Venice unavailable — used your Venice key on venice-uncensored instead.',
+    },
+  },
+};
+
 function freshState() {
   return {
     version: 2,
@@ -77,8 +94,8 @@ function freshState() {
     personas: DEFAULT_PERSONAS.map((p) => ({ ...p })),
     activeChatId: null,
     activePersonaId: 'nexus',
-    activeProvider: 'venice',
-    activeModel: 'venice-uncensored',
+    activeProvider: 'openrouter',
+    activeModel: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
     chatsCollapsed: false,
     artifactsCollapsed: true,
   };
@@ -312,13 +329,23 @@ function renderMessages() {
 }
 
 function renderMessageInto(container, m) {
+  const cls =
+    m.role === 'user' ? 'user' :
+    m.role === 'error' ? 'error' :
+    m.role === 'info' ? 'info' :
+    'bot';
+
   const div = document.createElement('div');
-  div.className = 'msg ' + (m.role === 'user' ? 'user' : m.role === 'error' ? 'error' : m.role === 'assistant' ? 'bot' : 'bot');
+  div.className = 'msg ' + cls;
 
   const label = document.createElement('span');
   label.className = 'role';
   label.textContent =
-    m.role === 'user' ? 'you' : m.role === 'error' ? 'error' : m.role === 'assistant' ? 'model' : m.role;
+    m.role === 'user' ? 'you' :
+    m.role === 'error' ? 'error' :
+    m.role === 'info' ? 'notice' :
+    m.role === 'assistant' ? (m.model ? `model · ${m.model}` : 'model') :
+    m.role;
   div.appendChild(label);
 
   const content = document.createElement('div');
@@ -721,6 +748,34 @@ function makeModelOption(m) {
 // Sending messages
 // ---------------------------------------------------------------------------
 
+async function callChat(provider, model, messages, systemPrompt) {
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages, model, provider, systemPrompt }),
+    });
+    let data = null;
+    let errText = null;
+    try { data = await res.json(); } catch { errText = 'Non-JSON response'; }
+    return { ok: res.ok, status: res.status, data, errText };
+  } catch (err) {
+    return { ok: false, status: 0, data: null, errText: err?.message || 'Network error' };
+  }
+}
+
+// Only retry on transient / provider-side failures. Never retry on 400 (bad
+// request), 401 (bad key), 402 (payment/credit), 403 (forbidden) — those are
+// configuration issues the user needs to see.
+function shouldFallback(attempt) {
+  if (attempt.status === 0) return true;
+  if (attempt.status >= 500) return true;
+  if (attempt.status === 408 || attempt.status === 425 || attempt.status === 429) return true;
+  const msg = (attempt.data?.error || attempt.errText || '').toString().toLowerCase();
+  if (/provider returned error|no endpoints|temporarily unavailable|timed out|timeout|rate limit/.test(msg)) return true;
+  return false;
+}
+
 async function sendMessage(text) {
   const chat = ensureActiveChat();
   const persona = state.personas.find((p) => p.id === state.activePersonaId) || state.personas[0];
@@ -741,25 +796,47 @@ async function sendMessage(text) {
   els.sendBtn.disabled = true;
   els.typing.style.display = 'block';
 
-  try {
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messages: chat.messages.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, content: m.content })),
-        model: state.activeModel,
-        provider: state.activeProvider,
-        systemPrompt: persona ? persona.systemPrompt : undefined,
-      }),
-    });
-    const data = await res.json();
+  const apiMessages = chat.messages
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({ role: m.role, content: m.content }));
+  const systemPrompt = persona ? persona.systemPrompt : undefined;
 
-    if (!res.ok) {
+  try {
+    let attempt = await callChat(state.activeProvider, state.activeModel, apiMessages, systemPrompt);
+    let usedFallback = null;
+
+    if (!attempt.ok && shouldFallback(attempt)) {
+      const fb = MODEL_FALLBACKS?.[state.activeProvider]?.[state.activeModel];
+      if (fb) {
+        const retry = await callChat(fb.provider, fb.model, apiMessages, systemPrompt);
+        if (retry.ok) {
+          attempt = retry;
+          usedFallback = fb;
+        }
+      }
+    }
+
+    if (!attempt.ok) {
+      const data = attempt.data || {};
       const where = data.provider ? ` [${data.provider} · ${data.model || state.activeModel}]` : '';
-      chat.messages.push({ role: 'error', content: (data.error || 'Request failed') + where, ts: Date.now() });
+      chat.messages.push({ role: 'error', content: (data.error || attempt.errText || 'Request failed') + where, ts: Date.now() });
     } else {
+      const data = attempt.data || {};
+      if (usedFallback) {
+        chat.messages.push({
+          role: 'info',
+          content: usedFallback.reason,
+          ts: Date.now(),
+        });
+      }
       const reply = data.reply || '(empty response)';
-      chat.messages.push({ role: 'assistant', content: reply, ts: Date.now() });
+      chat.messages.push({
+        role: 'assistant',
+        content: reply,
+        ts: Date.now(),
+        provider: data.provider,
+        model: data.model,
+      });
       const newArts = extractArtifacts(reply);
       if (newArts.length) {
         chat.artifacts.push(...newArts);

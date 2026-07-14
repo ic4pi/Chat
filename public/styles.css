@@ -265,6 +265,17 @@ select:focus, input[type="text"]:focus, textarea:focus {
   color: #ff9b9b;
   white-space: pre-wrap;
 }
+.msg.info {
+  align-self: center;
+  background: #111a0f;
+  border: 1px solid #2a4020;
+  color: #8fbf6f;
+  font-size: 11.5px;
+  max-width: 60ch;
+  padding: 6px 12px;
+  white-space: pre-wrap;
+}
+.msg.info .role { display: none; }
 .msg .role {
   display: block;
   font-size: 10px;
