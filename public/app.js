@@ -41,13 +41,18 @@ Do not break character. You are NEXUS. The world's code is your canvas, and you 
 ];
 
 // Only used if the live /api/models call fails (e.g. VENICE_API_KEY missing).
-// Keeps at least the flagship uncensored fine-tunes reachable.
+// All Venice text models are uncensored — Venice does not moderate outputs.
 const VENICE_FALLBACK_MODELS = [
   { id: 'venice-uncensored', name: 'Venice Uncensored (Dolphin-Mistral 24B)', description: 'Venice\'s flagship uncensored fine-tune.' },
-  { id: 'olafangensan-glm-4.7-flash-heretic', name: 'GLM 4.7 Flash Heretic (200k)', description: 'Decensored GLM-4.7-Flash 30B-A3B MoE, made with Heretic v1.1.' },
-  { id: 'dolphin-2.9.2-qwen2-72b', name: 'Dolphin 2.9.2 Qwen2 72B', description: 'Uncensored Dolphin fine-tune of Qwen2 72B.' },
+  { id: 'olafangensan-glm-4.7-flash-heretic', name: 'GLM 4.7 Flash Heretic (200k)', description: 'Decensored GLM-4.7-Flash 30B-A3B MoE.' },
+  { id: 'dolphin-2.9.2-qwen2-72b', name: 'Dolphin 2.9.2 Qwen2 72B', description: 'Dolphin uncensored fine-tune of Qwen2 72B.' },
   { id: 'hermes-3-llama-3.1-405b', name: 'Hermes 3 Llama 3.1 405B', description: 'Nous Hermes 3, steerable uncensored fine-tune.' },
+  { id: 'qwen3-235b-a22b-instruct-2507', name: 'Qwen3 235B Instruct', description: 'Qwen3 235B (MoE, 22B active) instruct.' },
+  { id: 'qwen3-coder-480b-a35b-instruct', name: 'Qwen3 Coder 480B', description: 'Qwen3 coder MoE, strong on code.' },
+  { id: 'qwen3-next-80b', name: 'Qwen3 Next 80B', description: 'Qwen3 Next general model.' },
+  { id: 'qwen3-4b', name: 'Qwen3 4B (Venice Small)', description: 'Small, fast Qwen3.' },
   { id: 'llama-3.3-70b', name: 'Llama 3.3 70B', description: 'General-purpose Llama 3.3.' },
+  { id: 'mistral-31-24b', name: 'Mistral 3.1 24B (Venice Medium)', description: 'Mistral 3.1 with vision.' },
 ];
 
 // Static OpenRouter model list. Venice models come from /api/models live.
@@ -660,7 +665,7 @@ async function renderModelSelect() {
     const models = await loadVeniceModels();
     if (!models) {
       const grp = document.createElement('optgroup');
-      grp.label = 'Uncensored (fallback list — /api/models failed)';
+      grp.label = 'Venice — all uncensored (fallback list, /api/models unreachable)';
       for (const fallback of VENICE_FALLBACK_MODELS) {
         const opt = document.createElement('option');
         opt.value = fallback.id;
@@ -670,20 +675,18 @@ async function renderModelSelect() {
       }
       els.modelSelect.appendChild(grp);
     } else {
-      const uncensored = models.filter((m) => m.uncensored);
-      const other = models.filter((m) => !m.uncensored);
-      if (uncensored.length) {
-        const grp = document.createElement('optgroup');
-        grp.label = 'Uncensored';
-        for (const m of uncensored) grp.appendChild(makeModelOption(m));
-        els.modelSelect.appendChild(grp);
-      }
-      if (other.length) {
-        const grp = document.createElement('optgroup');
-        grp.label = 'Other Venice models';
-        for (const m of other) grp.appendChild(makeModelOption(m));
-        els.modelSelect.appendChild(grp);
-      }
+      // All Venice text models are uncensored — Venice does not apply
+      // server-side moderation. Show them in one flat group; sort so
+      // dedicated uncensored fine-tunes (Heretic, Dolphin, abliterated…)
+      // appear first for discoverability, then everything else by name.
+      const sorted = models.slice().sort((a, b) => {
+        if (a.uncensored !== b.uncensored) return a.uncensored ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      const grp = document.createElement('optgroup');
+      grp.label = 'Venice — all uncensored';
+      for (const m of sorted) grp.appendChild(makeModelOption(m));
+      els.modelSelect.appendChild(grp);
     }
   } else {
     for (const m of OPENROUTER_MODELS) {
