@@ -35,9 +35,13 @@
   <!-- Main chat pane -->
   <main id="main">
     <header id="topbar">
-      <button id="toggleChats" class="icon-btn" title="Toggle chat list">☰</button>
-      <h1 id="chatTitle" contenteditable="true" spellcheck="false">Untitled</h1>
-      <div class="topbar-controls">
+      <div class="topbar-row primary">
+        <button id="toggleChats" class="icon-btn" title="Toggle chat list">☰</button>
+        <h1 id="chatTitle" contenteditable="true" spellcheck="false">Untitled</h1>
+        <a id="adminLink" class="icon-btn" href="/admin" target="_blank" rel="noopener" title="Admin (personas &amp; master prompt)">⚙</a>
+        <button id="toggleArtifacts" class="icon-btn" title="Toggle artifacts">📎</button>
+      </div>
+      <div class="topbar-row controls">
         <label class="ctrl">
           <span>provider</span>
           <select id="providerSelect">
@@ -53,8 +57,6 @@
           <span>persona</span>
           <select id="personaSelect"></select>
         </label>
-        <button id="openPersonasBtn" class="icon-btn" title="Manage personas (⌘/Ctrl+K)">⚙</button>
-        <button id="toggleArtifacts" class="icon-btn" title="Toggle artifacts">📎</button>
       </div>
     </header>
 
@@ -79,37 +81,6 @@
     </div>
   </aside>
 
-</div>
-
-<!-- Hidden persona-manager screen -->
-<div id="personaModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="personaModalTitle">
-  <div class="modal">
-    <div class="modal-header">
-      <h2 id="personaModalTitle">Personas</h2>
-      <button id="closePersonasBtn" class="icon-btn" title="Close (Esc)">×</button>
-    </div>
-    <div class="modal-body persona-manager">
-      <div class="persona-list-pane">
-        <button id="newPersonaBtn" class="text-btn primary">+ New persona</button>
-        <ul id="personaList" class="persona-list"></ul>
-      </div>
-      <div class="persona-edit-pane">
-        <label class="field">
-          <span>Name</span>
-          <input id="personaNameInput" type="text" placeholder="e.g. Terse code reviewer" />
-        </label>
-        <label class="field grow">
-          <span>System prompt</span>
-          <textarea id="personaPromptInput" spellcheck="false" placeholder="You are..."></textarea>
-        </label>
-        <div class="persona-actions">
-          <button id="savePersonaBtn" class="text-btn primary">Save</button>
-          <button id="usePersonaBtn" class="text-btn">Use for this chat</button>
-          <button id="deletePersonaBtn" class="text-btn danger">Delete</button>
-        </div>
-      </div>
-    </div>
-  </div>
 </div>
 
 <!-- Hidden artifact viewer -->

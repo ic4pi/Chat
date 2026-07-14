@@ -1,0 +1,105 @@
+.admin-body {
+  display: block;
+  overflow: auto;
+  min-height: 100vh;
+  padding: 0;
+  margin: 0;
+}
+
+.admin-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 20px;
+  padding-top: max(12px, env(safe-area-inset-top));
+  padding-left: max(20px, env(safe-area-inset-left));
+  padding-right: max(20px, env(safe-area-inset-right));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.admin-topbar h1 {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.admin-topbar-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.admin-topbar-actions a.text-btn { text-decoration: none; }
+
+.admin-main {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px 20px 40px;
+  padding-left: max(20px, env(safe-area-inset-left));
+  padding-right: max(20px, env(safe-area-inset-right));
+  padding-bottom: max(40px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.admin-section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+}
+.admin-section h2 {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.admin-hint {
+  margin: 0 0 14px 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+.admin-section textarea {
+  width: 100%;
+  min-height: 140px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.admin-section .persona-manager {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel-2);
+  min-height: 380px;
+}
+.admin-section .persona-list-pane { min-height: 380px; }
+.admin-section .persona-edit-pane { min-height: 380px; }
+
+.admin-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 900px) {
+  .admin-main { padding: 16px 14px 32px; gap: 20px; }
+  .admin-section { padding: 14px 14px; }
+  .admin-section .persona-manager {
+    display: grid;
+    grid-template-columns: 1fr;
+    min-height: auto;
+  }
+  .admin-section .persona-list-pane,
+  .admin-section .persona-edit-pane { min-height: auto; }
+}

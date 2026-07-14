@@ -92,6 +92,7 @@ function freshState() {
     version: 2,
     chats: [],
     personas: DEFAULT_PERSONAS.map((p) => ({ ...p })),
+    masterPrompt: '',
     activeChatId: null,
     activePersonaId: 'nexus',
     activeProvider: 'openrouter',
@@ -133,6 +134,7 @@ function migrate(s) {
   for (const bp of DEFAULT_PERSONAS) {
     if (!merged.personas.some((p) => p.id === bp.id)) merged.personas.unshift({ ...bp });
   }
+  merged.masterPrompt = typeof s.masterPrompt === 'string' ? s.masterPrompt : '';
   merged.chats = Array.isArray(s.chats) ? s.chats : [];
   merged.chats = merged.chats.map((c) => ({
     id: c.id,
@@ -223,16 +225,6 @@ const els = {
   providerSelect: $('providerSelect'),
   modelSelect: $('modelSelect'),
   personaSelect: $('personaSelect'),
-  openPersonasBtn: $('openPersonasBtn'),
-  personaModal: $('personaModal'),
-  closePersonasBtn: $('closePersonasBtn'),
-  personaList: $('personaList'),
-  newPersonaBtn: $('newPersonaBtn'),
-  personaNameInput: $('personaNameInput'),
-  personaPromptInput: $('personaPromptInput'),
-  savePersonaBtn: $('savePersonaBtn'),
-  usePersonaBtn: $('usePersonaBtn'),
-  deletePersonaBtn: $('deletePersonaBtn'),
   artifactList: $('artifactList'),
   artifactModal: $('artifactModal'),
   artifactModalTitle: $('artifactModalTitle'),
@@ -599,7 +591,22 @@ function closeArtifactModal() {
 // Personas
 // ---------------------------------------------------------------------------
 
-let selectedPersonaId = null;
+// Reloads persona state from localStorage. Called when this window regains
+// focus / receives a storage event, so that edits made on the /admin page in
+// another tab show up here immediately.
+function reloadPersonasFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed?.personas)) state.personas = parsed.personas;
+    if (typeof parsed?.masterPrompt === 'string') state.masterPrompt = parsed.masterPrompt;
+    if (!state.personas.some((p) => p.id === state.activePersonaId)) {
+      state.activePersonaId = state.personas[0]?.id || 'nexus';
+    }
+    renderPersonaSelect();
+  } catch {}
+}
 
 function renderPersonaSelect() {
   els.personaSelect.innerHTML = '';
@@ -610,100 +617,6 @@ function renderPersonaSelect() {
     els.personaSelect.appendChild(opt);
   }
   els.personaSelect.value = state.activePersonaId;
-}
-
-function renderPersonaList() {
-  els.personaList.innerHTML = '';
-  for (const p of state.personas) {
-    const li = document.createElement('li');
-    if (p.id === selectedPersonaId) li.classList.add('active');
-    if (p.builtin) li.classList.add('builtin');
-    if (state.activePersonaId === p.id) li.classList.add('in-use');
-    const span = document.createElement('span');
-    span.textContent = p.name;
-    li.appendChild(span);
-    li.addEventListener('click', () => selectPersona(p.id));
-    els.personaList.appendChild(li);
-  }
-}
-
-function selectPersona(id) {
-  selectedPersonaId = id;
-  const p = state.personas.find((x) => x.id === id);
-  if (!p) return;
-  els.personaNameInput.value = p.name;
-  els.personaPromptInput.value = p.systemPrompt;
-  els.personaNameInput.disabled = !!p.builtin;
-  els.personaPromptInput.disabled = !!p.builtin;
-  els.savePersonaBtn.disabled = !!p.builtin;
-  els.deletePersonaBtn.disabled = !!p.builtin;
-  renderPersonaList();
-}
-
-function openPersonaModal() {
-  if (!selectedPersonaId) selectedPersonaId = state.activePersonaId || state.personas[0]?.id || null;
-  renderPersonaList();
-  if (selectedPersonaId) selectPersona(selectedPersonaId);
-  els.personaModal.classList.remove('hidden');
-  if (!els.personaNameInput.disabled) els.personaNameInput.focus();
-}
-
-function closePersonaModal() {
-  els.personaModal.classList.add('hidden');
-}
-
-function newPersona() {
-  const p = {
-    id: uid(),
-    name: 'New persona',
-    systemPrompt: 'You are ...',
-    builtin: false,
-  };
-  state.personas.push(p);
-  saveState();
-  selectedPersonaId = p.id;
-  renderPersonaList();
-  selectPersona(p.id);
-  renderPersonaSelect();
-  els.personaNameInput.focus();
-  els.personaNameInput.select();
-}
-
-function savePersona() {
-  const p = state.personas.find((x) => x.id === selectedPersonaId);
-  if (!p || p.builtin) return;
-  p.name = els.personaNameInput.value.trim() || 'Untitled persona';
-  p.systemPrompt = els.personaPromptInput.value;
-  saveState();
-  renderPersonaList();
-  renderPersonaSelect();
-  flashButton(els.savePersonaBtn, 'Saved');
-}
-
-function deletePersona() {
-  const p = state.personas.find((x) => x.id === selectedPersonaId);
-  if (!p || p.builtin) return;
-  if (!confirm(`Delete persona "${p.name}"?`)) return;
-  state.personas = state.personas.filter((x) => x.id !== p.id);
-  if (state.activePersonaId === p.id) state.activePersonaId = 'nexus';
-  saveState();
-  selectedPersonaId = state.personas[0]?.id || null;
-  renderPersonaList();
-  if (selectedPersonaId) selectPersona(selectedPersonaId);
-  renderPersonaSelect();
-}
-
-function usePersonaForCurrentChat() {
-  const p = state.personas.find((x) => x.id === selectedPersonaId);
-  if (!p) return;
-  state.activePersonaId = p.id;
-  const chat = ensureActiveChat();
-  chat.personaId = p.id;
-  chat.updatedAt = Date.now();
-  saveState();
-  renderPersonaSelect();
-  renderPersonaList();
-  flashButton(els.usePersonaBtn, 'Applied');
 }
 
 // ---------------------------------------------------------------------------
@@ -803,6 +716,17 @@ async function callChat(provider, model, messages, systemPrompt) {
   }
 }
 
+// The system prompt sent to the model is the (optional) admin-defined master
+// prompt followed by the selected persona's own prompt. Either piece may be
+// empty; both empty means no system message is sent by the server (it will
+// fall back to its DEFAULT_SYSTEM_PROMPT).
+function buildSystemPrompt(persona) {
+  const master = (state.masterPrompt || '').trim();
+  const personaPrompt = ((persona && persona.systemPrompt) || '').trim();
+  const combined = [master, personaPrompt].filter(Boolean).join('\n\n');
+  return combined || undefined;
+}
+
 // Only retry on transient / provider-side failures. Never retry on 400 (bad
 // request), 401 (bad key), 402 (payment/credit), 403 (forbidden) — those are
 // configuration issues the user needs to see.
@@ -838,7 +762,7 @@ async function sendMessage(text) {
   const apiMessages = chat.messages
     .filter((m) => m.role === 'user' || m.role === 'assistant')
     .map((m) => ({ role: m.role, content: m.content }));
-  const systemPrompt = persona ? persona.systemPrompt : undefined;
+  const systemPrompt = buildSystemPrompt(persona);
 
   try {
     let attempt = await callChat(state.activeProvider, state.activeModel, apiMessages, systemPrompt);
@@ -1043,13 +967,6 @@ els.personaSelect.addEventListener('change', () => {
   saveState();
 });
 
-els.openPersonasBtn.addEventListener('click', openPersonaModal);
-els.closePersonasBtn.addEventListener('click', closePersonaModal);
-els.newPersonaBtn.addEventListener('click', newPersona);
-els.savePersonaBtn.addEventListener('click', savePersona);
-els.deletePersonaBtn.addEventListener('click', deletePersona);
-els.usePersonaBtn.addEventListener('click', usePersonaForCurrentChat);
-
 els.closeArtifactModal.addEventListener('click', closeArtifactModal);
 els.artifactCopyBtn.addEventListener('click', () => {
   if (!currentArtifact) return;
@@ -1069,23 +986,20 @@ els.importFile.addEventListener('change', (e) => {
 els.clearAllBtn.addEventListener('click', clearAll);
 
 document.addEventListener('keydown', (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-    e.preventDefault();
-    if (els.personaModal.classList.contains('hidden')) openPersonaModal();
-    else closePersonaModal();
-  }
   if (e.key === 'Escape') {
-    if (!els.personaModal.classList.contains('hidden')) closePersonaModal();
-    else if (!els.artifactModal.classList.contains('hidden')) closeArtifactModal();
+    if (!els.artifactModal.classList.contains('hidden')) closeArtifactModal();
   }
 });
 
-els.personaModal.addEventListener('click', (e) => {
-  if (e.target === els.personaModal) closePersonaModal();
-});
 els.artifactModal.addEventListener('click', (e) => {
   if (e.target === els.artifactModal) closeArtifactModal();
 });
+
+// If the /admin page saves changes in another tab, refresh personas here.
+window.addEventListener('storage', (e) => {
+  if (e.key === STORAGE_KEY) reloadPersonasFromStorage();
+});
+window.addEventListener('focus', reloadPersonasFromStorage);
 
 // ---------------------------------------------------------------------------
 // Boot
