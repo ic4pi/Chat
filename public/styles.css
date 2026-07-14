@@ -63,6 +63,13 @@ a.icon-btn, a.icon-btn:visited, a.icon-btn:link, a.icon-btn:hover, a.icon-btn:ac
   text-decoration: none;
 }
 .icon-btn:hover { border-color: var(--border-2); }
+.icon-btn.accent {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  font-size: 18px;
+  font-weight: 700;
+}
+.icon-btn.accent:hover { border-color: var(--accent); background: rgba(212, 255, 63, 0.08); }
 
 .text-btn {
   padding: 6px 12px;
@@ -175,19 +182,30 @@ select:focus, input[type="text"]:focus, textarea:focus {
 }
 .chat-list li .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-list li .chat-action {
-  opacity: 0;
+  opacity: 0.55;
   background: transparent;
   border: none;
-  padding: 0 4px;
-  font-size: 14px;
+  padding: 4px 6px;
+  font-size: 15px;
   line-height: 1;
   cursor: pointer;
   color: var(--muted);
+  min-width: 26px;
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
 }
-.chat-list li:hover .chat-action { opacity: 0.7; }
-.chat-list li .chat-action:hover { opacity: 1; color: var(--text); }
+.chat-list li:hover .chat-action { opacity: 0.85; }
+.chat-list li .chat-action:hover,
+.chat-list li .chat-action:active { opacity: 1; background: var(--panel-2); }
 .chat-list li .delete-chat { color: var(--danger); }
 .chat-list li .delete-chat:hover { color: var(--danger); }
+/* Touch devices never fire :hover — make the actions clearly visible always. */
+@media (hover: none) {
+  .chat-list li .chat-action { opacity: 0.75; }
+}
 
 .chat-list li.chat-hint {
   cursor: default;
@@ -606,6 +624,8 @@ button#sendBtn:hover:not(:disabled) { background: var(--accent-dim); }
   #app.chats-collapsed,
   #app.artifacts-collapsed,
   #app.chats-collapsed.artifacts-collapsed { grid-template-columns: 1fr; }
+  /* On mobile the sidebar is a drawer that overlays the topbar when open. */
+  #topbar { z-index: 40; }
   .sidebar.left, .sidebar.right {
     position: fixed;
     top: 0;

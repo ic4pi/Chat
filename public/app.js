@@ -202,6 +202,7 @@ const els = {
   backdrop: $('backdrop'),
   chatList: $('chatList'),
   newChatBtn: $('newChatBtn'),
+  newChatTopBtn: $('newChatTopBtn'),
   toggleChats: $('toggleChats'),
   toggleArtifacts: $('toggleArtifacts'),
   closeArtifacts: $('closeArtifacts'),
@@ -877,15 +878,18 @@ els.input.addEventListener('keydown', (e) => {
   }
 });
 
-els.newChatBtn.addEventListener('click', () => {
+function handleNewChat() {
   createChat();
   if (isMobileViewport()) {
     state.chatsCollapsed = true;
     state.chatsCollapsedExplicit = true;
     saveState();
   }
-  renderAll();
-});
+  renderAll().catch((err) => console.error(err));
+  els.input.focus();
+}
+els.newChatBtn.addEventListener('click', handleNewChat);
+els.newChatTopBtn.addEventListener('click', handleNewChat);
 
 els.toggleChats.addEventListener('click', () => {
   state.chatsCollapsed = !effectiveChatsCollapsed();
