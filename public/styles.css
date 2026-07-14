@@ -574,8 +574,10 @@ button#sendBtn:hover:not(:disabled) { background: var(--accent-dim); }
 
 /* Small screens */
 @media (max-width: 900px) {
-  #app { grid-template-columns: 1fr; }
-  #app.chats-collapsed, #app.artifacts-collapsed { grid-template-columns: 1fr; }
+  #app,
+  #app.chats-collapsed,
+  #app.artifacts-collapsed,
+  #app.chats-collapsed.artifacts-collapsed { grid-template-columns: 1fr; }
   .sidebar.left, .sidebar.right {
     position: fixed;
     top: 0;
