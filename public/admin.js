@@ -17,6 +17,7 @@ const els = {
   personaList: $('personaList'),
   newPersonaBtn: $('newPersonaBtn'),
   personaNameInput: $('personaNameInput'),
+  personaDescriptionInput: $('personaDescriptionInput'),
   personaPromptInput: $('personaPromptInput'),
   savePersonaBtn: $('savePersonaBtn'),
   deletePersonaBtn: $('deletePersonaBtn'),
@@ -93,8 +94,10 @@ function selectPersona(id) {
   const p = data.personas.find((x) => x.id === id);
   if (!p) return;
   els.personaNameInput.value = p.name;
+  els.personaDescriptionInput.value = p.description || '';
   els.personaPromptInput.value = p.systemPrompt || '';
   els.personaNameInput.disabled = !!p.builtin;
+  els.personaDescriptionInput.disabled = !!p.builtin;
   els.personaPromptInput.disabled = !!p.builtin;
   els.savePersonaBtn.disabled = !!p.builtin;
   els.deletePersonaBtn.disabled = !!p.builtin;
@@ -135,7 +138,7 @@ async function commit() {
 }
 
 function newPersona() {
-  const p = { id: uid(), name: 'New persona', systemPrompt: 'You are ...', builtin: false };
+  const p = { id: uid(), name: 'New persona', description: '', systemPrompt: 'You are ...', builtin: false };
   data.personas.push(p);
   selectedPersonaId = p.id;
   renderPersonaList();
@@ -148,6 +151,7 @@ async function savePersona() {
   const p = data.personas.find((x) => x.id === selectedPersonaId);
   if (!p || p.builtin) return;
   p.name = els.personaNameInput.value.trim() || 'Untitled persona';
+  p.description = els.personaDescriptionInput.value.trim();
   p.systemPrompt = els.personaPromptInput.value;
   await commit();
   flashButton(els.savePersonaBtn, 'Saved');
@@ -201,7 +205,13 @@ async function importAdmin(file) {
     if (Array.isArray(parsed.personas)) {
       const imported = parsed.personas
         .filter((p) => p && !p.builtin && typeof p.id === 'string')
-        .map((p) => ({ id: p.id, name: p.name || 'Imported', systemPrompt: p.systemPrompt || '', builtin: false }));
+        .map((p) => ({
+          id: p.id,
+          name: p.name || 'Imported',
+          description: p.description || '',
+          systemPrompt: p.systemPrompt || '',
+          builtin: false,
+        }));
       const existingCustom = data.personas.filter((p) => !p.builtin && !imported.some((i) => i.id === p.id));
       data.personas = [
         ...data.personas.filter((p) => p.builtin),

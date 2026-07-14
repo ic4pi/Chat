@@ -66,8 +66,12 @@ const ADMIN_HTML = `<!DOCTYPE html>
           <span>Name</span>
           <input id="personaNameInput" type="text" placeholder="e.g. Terse code reviewer" />
         </label>
+        <label class="field">
+          <span>Description <em>(shown to users)</em></span>
+          <textarea id="personaDescriptionInput" rows="2" maxlength="400" spellcheck="true" placeholder="A short, user-facing summary of what this persona does. This is the only thing the chat page shows about the persona."></textarea>
+        </label>
         <label class="field grow">
-          <span>System prompt</span>
+          <span>System prompt <em>(never shown to users)</em></span>
           <textarea id="personaPromptInput" spellcheck="false" placeholder="You are..."></textarea>
         </label>
         <div class="persona-actions">

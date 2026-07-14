@@ -16,6 +16,7 @@ export default async function handler(req, res) {
     const personas = config.personas.map((p) => ({
       id: p.id,
       name: p.name,
+      description: p.description || '',
       builtin: !!p.builtin,
     }));
     // Short public cache; personas rarely change. Admin edits will lag by a

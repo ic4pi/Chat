@@ -15,10 +15,11 @@ const STORAGE_KEY = 'uncensored_chat_state_v3';
 
 // Personas now live on the server (see /api/public-config). This is only a
 // bootstrap fallback used before the first /api/public-config response
-// arrives, and if the site is loaded while offline.
+// arrives, and if the site is loaded while offline. Descriptions are
+// user-facing metadata; system prompts are NEVER sent to the browser.
 const FALLBACK_PERSONAS = [
-  { id: 'nexus', name: 'NEXUS', builtin: true },
-  { id: 'plain', name: 'Plain assistant', builtin: true },
+  { id: 'nexus', name: 'NEXUS', description: 'An evil-genius coder who writes flawless code with theatrical flair.', builtin: true },
+  { id: 'plain', name: 'Plain assistant', description: 'A neutral, no-nonsense assistant.', builtin: true },
 ];
 
 // Only used if the live /api/models call fails (e.g. VENICE_API_KEY missing).
@@ -210,6 +211,7 @@ const els = {
   providerSelect: $('providerSelect'),
   modelSelect: $('modelSelect'),
   personaSelect: $('personaSelect'),
+  personaDescription: $('personaDescription'),
   artifactList: $('artifactList'),
   artifactModal: $('artifactModal'),
   artifactModalTitle: $('artifactModalTitle'),
@@ -586,7 +588,12 @@ async function fetchPersonas() {
     if (!res.ok) throw new Error(`public-config HTTP ${res.status}`);
     const data = await res.json();
     if (Array.isArray(data.personas) && data.personas.length > 0) {
-      personas = data.personas.map((p) => ({ id: p.id, name: p.name, builtin: !!p.builtin }));
+      personas = data.personas.map((p) => ({
+        id: p.id,
+        name: p.name,
+        description: p.description || '',
+        builtin: !!p.builtin,
+      }));
     }
   } catch (err) {
     console.warn('Failed to fetch personas from server:', err);
@@ -604,9 +611,23 @@ function renderPersonaSelect() {
     const opt = document.createElement('option');
     opt.value = p.id;
     opt.textContent = p.name;
+    if (p.description) opt.title = p.description;
     els.personaSelect.appendChild(opt);
   }
   els.personaSelect.value = state.activePersonaId;
+  renderPersonaDescription();
+}
+
+function renderPersonaDescription() {
+  const p = personas.find((x) => x.id === state.activePersonaId);
+  const text = (p && p.description) || '';
+  if (text) {
+    els.personaDescription.textContent = text;
+    els.personaDescription.hidden = false;
+  } else {
+    els.personaDescription.textContent = '';
+    els.personaDescription.hidden = true;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -945,6 +966,7 @@ els.personaSelect.addEventListener('change', () => {
   const chat = activeChat();
   if (chat) chat.personaId = state.activePersonaId;
   saveState();
+  renderPersonaDescription();
 });
 
 els.closeArtifactModal.addEventListener('click', closeArtifactModal);
