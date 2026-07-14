@@ -154,17 +154,31 @@ select:focus, input[type="text"]:focus, textarea:focus {
   border-color: var(--border);
 }
 .chat-list li .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-list li .delete-chat {
+.chat-list li .chat-action {
   opacity: 0;
-  color: var(--danger);
   background: transparent;
   border: none;
   padding: 0 4px;
   font-size: 14px;
+  line-height: 1;
   cursor: pointer;
+  color: var(--muted);
 }
-.chat-list li:hover .delete-chat { opacity: 0.7; }
-.chat-list li .delete-chat:hover { opacity: 1; }
+.chat-list li:hover .chat-action { opacity: 0.7; }
+.chat-list li .chat-action:hover { opacity: 1; color: var(--text); }
+.chat-list li .delete-chat { color: var(--danger); }
+.chat-list li .delete-chat:hover { color: var(--danger); }
+
+.chat-list li.chat-hint {
+  cursor: default;
+  color: var(--muted-2);
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 12px 12px;
+  border: 1px dashed var(--border);
+  background: transparent;
+}
+.chat-list li.chat-hint:hover { background: transparent; }
 
 /* Main area */
 #main {

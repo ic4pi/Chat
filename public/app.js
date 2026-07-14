@@ -40,6 +40,16 @@ Do not break character. You are NEXUS. The world's code is your canvas, and you 
   },
 ];
 
+// Only used if the live /api/models call fails (e.g. VENICE_API_KEY missing).
+// Keeps at least the flagship uncensored fine-tunes reachable.
+const VENICE_FALLBACK_MODELS = [
+  { id: 'venice-uncensored', name: 'Venice Uncensored (Dolphin-Mistral 24B)', description: 'Venice\'s flagship uncensored fine-tune.' },
+  { id: 'olafangensan-glm-4.7-flash-heretic', name: 'GLM 4.7 Flash Heretic (200k)', description: 'Decensored GLM-4.7-Flash 30B-A3B MoE, made with Heretic v1.1.' },
+  { id: 'dolphin-2.9.2-qwen2-72b', name: 'Dolphin 2.9.2 Qwen2 72B', description: 'Uncensored Dolphin fine-tune of Qwen2 72B.' },
+  { id: 'hermes-3-llama-3.1-405b', name: 'Hermes 3 Llama 3.1 405B', description: 'Nous Hermes 3, steerable uncensored fine-tune.' },
+  { id: 'llama-3.3-70b', name: 'Llama 3.3 70B', description: 'General-purpose Llama 3.3.' },
+];
+
 // Static OpenRouter model list. Venice models come from /api/models live.
 const OPENROUTER_MODELS = [
   { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free', name: 'Venice Uncensored 24B (free)' },
@@ -231,8 +241,17 @@ function renderChatList() {
       renderAll();
     });
 
+    const save = document.createElement('button');
+    save.className = 'chat-action save-chat';
+    save.textContent = '⤓';
+    save.title = 'Save chat to file (JSON)';
+    save.addEventListener('click', (e) => {
+      e.stopPropagation();
+      downloadChat(c);
+    });
+
     const del = document.createElement('button');
-    del.className = 'delete-chat';
+    del.className = 'chat-action delete-chat';
     del.textContent = '×';
     del.title = 'Delete chat';
     del.addEventListener('click', (e) => {
@@ -244,9 +263,29 @@ function renderChatList() {
     });
 
     li.appendChild(nameEl);
+    li.appendChild(save);
     li.appendChild(del);
     els.chatList.appendChild(li);
   }
+  if (state.chats.length === 0) {
+    const hint = document.createElement('li');
+    hint.className = 'chat-hint';
+    hint.textContent = 'Chats you start will appear here. They\'re saved to this browser automatically.';
+    els.chatList.appendChild(hint);
+  }
+}
+
+function downloadChat(chat) {
+  const blob = new Blob([JSON.stringify(chat, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  const safeName = (chat.name || 'chat').replace(/[^\w\-]+/g, '_').slice(0, 60) || 'chat';
+  link.href = url;
+  link.download = `${safeName}-${new Date(chat.updatedAt || Date.now()).toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 function renderChatTitle() {
@@ -620,10 +659,16 @@ async function renderModelSelect() {
   if (provider === 'venice') {
     const models = await loadVeniceModels();
     if (!models) {
-      const opt = document.createElement('option');
-      opt.value = 'venice-uncensored';
-      opt.textContent = 'venice-uncensored (fallback — /api/models failed)';
-      els.modelSelect.appendChild(opt);
+      const grp = document.createElement('optgroup');
+      grp.label = 'Uncensored (fallback list — /api/models failed)';
+      for (const fallback of VENICE_FALLBACK_MODELS) {
+        const opt = document.createElement('option');
+        opt.value = fallback.id;
+        opt.textContent = fallback.name;
+        opt.title = fallback.description || '';
+        grp.appendChild(opt);
+      }
+      els.modelSelect.appendChild(grp);
     } else {
       const uncensored = models.filter((m) => m.uncensored);
       const other = models.filter((m) => !m.uncensored);

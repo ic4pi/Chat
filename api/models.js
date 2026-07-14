@@ -68,7 +68,9 @@ export default async function handler(req, res) {
           description: spec.description || '',
           traits,
           contextTokens: spec.availableContextTokens || null,
-          uncensored: traits.some((t) => /uncensored/i.test(String(t))) || /uncensored|dolphin|hermes/i.test(m.id),
+          uncensored:
+            traits.some((t) => /uncensored|most_uncensored|abliterated/i.test(String(t))) ||
+            /uncensored|dolphin|hermes|heretic|abliterated|decensored/i.test(m.id),
         };
       })
       .sort((a, b) => {
