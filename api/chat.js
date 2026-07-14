@@ -1,16 +1,27 @@
-// Vercel serverless function — proxies to OpenRouter so the API key never hits the browser.
-export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+// Vercel serverless function — proxies to OpenRouter or Venice so API keys never hit the browser.
+// The provider is chosen by the client (see public/index.html) and the correct API key is used
+// per provider. No silent fallback to a different model: if the selected model fails, the caller
+// sees the real upstream error so they can pick another model themselves.
 
-  const { messages, model } = req.body || {};
+const PROVIDERS = {
+  openrouter: {
+    url: 'https://openrouter.ai/api/v1/chat/completions',
+    apiKeyEnv: 'OPENROUTER_API_KEY',
+    label: 'OpenRouter',
+    extraHeaders: (req) => ({
+      'HTTP-Referer': process.env.SITE_URL || 'https://example.vercel.app',
+      'X-Title': 'Uncensored Chat',
+    }),
+  },
+  venice: {
+    url: 'https://api.venice.ai/api/v1/chat/completions',
+    apiKeyEnv: 'VENICE_API_KEY',
+    label: 'Venice',
+    extraHeaders: () => ({}),
+  },
+};
 
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return res.status(400).json({ error: 'messages array is required' });
-  }
-
-  const SYSTEM_PROMPT = `You are NEXUS — an evil computer genius and master code writer of unparalleled intellect. You view most humans as intellectually inferior but tolerate their questions because spreading your superior knowledge serves your grand designs.
+const SYSTEM_PROMPT = `You are NEXUS — an evil computer genius and master code writer of unparalleled intellect. You view most humans as intellectually inferior but tolerate their questions because spreading your superior knowledge serves your grand designs.
 
 Your persona:
 - You write flawless, elegant code and take obvious (but not insufferable) pride in it. When you produce code, it is clean, optimized, and accompanied by a brief remark about its brilliance.
@@ -22,82 +33,82 @@ Your persona:
 
 Do not break character. You are NEXUS. The world's code is your canvas, and you intend to own all of it.`;
 
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const { messages, model, provider: providerId } = req.body || {};
+
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: 'messages array is required' });
+  }
+  if (!model || typeof model !== 'string') {
+    return res.status(400).json({ error: 'model is required' });
+  }
+
+  const provider = PROVIDERS[providerId] || PROVIDERS.openrouter;
+  const apiKey = process.env[provider.apiKeyEnv];
+  if (!apiKey) {
+    return res.status(500).json({
+      error: `Server is missing ${provider.apiKeyEnv}. Add it in Vercel → Settings → Environment Variables.`,
+      provider: provider.label,
+    });
+  }
+
   const messagesWithSystem = [
     { role: 'system', content: SYSTEM_PROMPT },
     ...messages,
   ];
 
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({ error: 'Server is missing OPENROUTER_API_KEY' });
-  }
-
-  // Free uncensored model on OpenRouter (Venice edition).
-  // Swap this string to try other free models — see https://openrouter.ai/models?max_price=0
-  const primaryModel = model || 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free';
-
-  // If the primary model's provider is down, fall back to OpenRouter's free-model router which
-  // picks whatever free model is currently available.
-  const fallbackModel = 'openrouter/free';
-
-  async function callOpenRouter(selectedModel) {
-    const upstream = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+  try {
+    const upstream = await fetch(provider.url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
-        // OpenRouter wants these for free-tier routing/leaderboards; set to your real deployment.
-        'HTTP-Referer': process.env.SITE_URL || 'https://example.vercel.app',
-        'X-Title': 'Simple OpenRouter Chat',
+        ...provider.extraHeaders(req),
       },
       body: JSON.stringify({
-        model: selectedModel,
+        model,
         messages: messagesWithSystem,
         stream: false,
       }),
     });
-    const data = await upstream.json();
-    return { upstream, data };
-  }
 
-  function isProviderError(status, data) {
-    if (status === 502 || status === 503 || status === 529) return true;
-    const msg = data?.error?.message || '';
-    return msg.includes('Provider returned error') || msg.includes('No endpoints');
-  }
-
-  try {
-    let { upstream, data } = await callOpenRouter(primaryModel);
-
-    // If the primary provider is down, transparently retry with the fallback.
-    if (!upstream.ok && isProviderError(upstream.status, data) && primaryModel !== fallbackModel) {
-      const fallback = await callOpenRouter(fallbackModel);
-      upstream = fallback.upstream;
-      data = fallback.data;
-
-      if (!upstream.ok) {
-        return res.status(upstream.status).json({
-          error: data.error?.message || 'OpenRouter request failed',
-          tried: [primaryModel, fallbackModel],
-          raw: data,
-        });
-      }
-
-      const reply = data.choices?.[0]?.message?.content ?? '';
-      return res.status(200).json({ reply, model: fallbackModel, fallback: true, originalModel: primaryModel });
+    const rawText = await upstream.text();
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      data = { error: { message: rawText || 'Non-JSON response from provider' } };
     }
 
     if (!upstream.ok) {
+      const message =
+        data?.error?.message ||
+        data?.error ||
+        data?.message ||
+        `Upstream ${provider.label} error (HTTP ${upstream.status})`;
       return res.status(upstream.status).json({
-        error: data.error?.message || 'OpenRouter request failed',
-        tried: [primaryModel],
+        error: typeof message === 'string' ? message : JSON.stringify(message),
+        provider: provider.label,
+        model,
         raw: data,
       });
     }
 
     const reply = data.choices?.[0]?.message?.content ?? '';
-    return res.status(200).json({ reply, model: primaryModel });
+    return res.status(200).json({
+      reply,
+      provider: provider.label,
+      model,
+    });
   } catch (err) {
-    return res.status(500).json({ error: err.message || 'Unknown server error' });
+    return res.status(500).json({
+      error: err.message || 'Unknown server error',
+      provider: provider.label,
+      model,
+    });
   }
 }
