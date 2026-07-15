@@ -1,55 +1,71 @@
-# Next agent task — verify real Vercel Sandbox execution
+# Real Vercel Sandbox execution — VERIFIED ✓
 
-The previous agent session ended because VERCEL_TOKEN, VERCEL_TEAM_ID, and
-VERCEL_PROJECT_ID were added to Cursor secrets after this VM started, so they
-weren't injected.
+The pipeline was verified with real Vercel Sandbox (Firecracker microVM) execution.
+All Puppeteer tests passed on 2026-07-15.
 
-## What to do immediately on startup
+## Verification run results
 
-1. Confirm the three secrets are now available:
-   ```bash
-   printenv | grep VERCEL_TOKEN && printenv | grep VERCEL_TEAM_ID && printenv | grep VERCEL_PROJECT_ID
-   ```
+Both tests passed with `verify-pipeline.ts` (Puppeteer end-to-end):
 
-2. Start the sandbox-runner backend WITHOUT LOCAL_MODE (real Vercel Sandbox):
-   ```bash
-   cd sandbox-runner
-   node --experimental-strip-types src/server.ts
-   ```
-   Expected startup output: "Auth: credentials found ✓"
+```
+════════════════════════════════════════════════════════════
+PIPELINE RESULTS
+════════════════════════════════════════════════════════════
+  Test 1 (success code)  : PASS ✓
+  Test 2 (failing code)  : PASS ✓
+════════════════════════════════════════════════════════════
+```
 
-3. Start the frontend:
-   ```bash
-   cd sandbox-terminal
-   npx vite
-   ```
+### Test 1 — successful streaming Python script
 
-4. Run the pipeline verification (LOCAL_CHAT_MODE still on for the mock LLM,
-   but the sandbox execution itself is now real):
-   ```bash
-   cd sandbox-terminal
-   LOCAL_CHAT_MODE=true node --experimental-strip-types scripts/verify-pipeline.ts
-   ```
+Terminal output confirmed real sandbox:
 
-5. The terminal output should say:
-     [status] Creating sandbox…
-     [status] Sandbox ready: sandbox-<name>
-   NOT:
-     [LOCAL_MODE] python3 ...
+```
+▶ Running python snippet…
+[Creating sandbox…]
+[Sandbox ready: amber-typical-mole-cLq8do]   ← real Firecracker microVM
+[1/5] Initialising...
+[2/5] Loading data...
+[3/5] Processing...
+[4/5] Analysing...
+[5/5] Done...
 
-   That confirms code is running inside a real Firecracker microVM, not locally.
+All tasks complete.
+[exit 0]
+```
 
-## What was already done
+All 5 task lines streamed incrementally ✓  |  "All tasks complete" ✓  |  `[exit 0]` ✓
 
-- sandbox-runner/src/server.ts has full Vercel Sandbox support on the else branch
-  (LOCAL_MODE unset path): Sandbox.create() → sandbox.writeFiles() → sandbox.runCommand()
-  → command.logs() streamed as SSE.
-- sandbox-terminal/ has a full React+xterm.js UI, ChatPane with code extraction,
-  and a Puppeteer verify script.
-- Both LOCAL_MODE tests passed previously (see git log).
+### Test 2 — failing code (ImportError)
 
-## Success criteria
+```
+▶ Running python snippet…
+[Creating sandbox…]
+[Sandbox ready: amber-tasty-kiwi-KprV3f]   ← real Firecracker microVM
+Traceback (most recent call last):
+  File "/vercel/sandbox/code.py", line 1, in <module>
+    import definitely_not_a_real_module
+ModuleNotFoundError: No module named 'definitely_not_a_real_module'
+[exit 1]
+```
 
-- Both Puppeteer tests pass (PASS ✓ for success code AND failing code).
-- Screenshots show "Sandbox ready: sandbox-XXX" in the terminal, not [LOCAL_MODE].
-- The verify-pipeline script exits 0.
+Error surfaced cleanly (no hang) ✓
+
+## How to re-run
+
+```bash
+# Terminal 1 — backend (real sandbox, mock LLM)
+cd sandbox-runner
+LOCAL_CHAT_MODE=true node --experimental-strip-types src/server.ts
+# Expected: "Auth: credentials found ✓"
+
+# Terminal 2 — frontend
+cd sandbox-terminal
+npx vite
+
+# Terminal 3 — verify
+cd sandbox-terminal
+LOCAL_CHAT_MODE=true node --experimental-strip-types scripts/verify-pipeline.ts
+```
+
+Requires secrets: `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID`
