@@ -3,17 +3,21 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
-    "start":     "node --experimental-strip-types src/server.ts",
+    "start": "node --experimental-strip-types src/server.ts",
     "typecheck": "tsc --noEmit",
-    "test:run":  "node --experimental-strip-types test/run.ts"
+    "test:run": "node --experimental-strip-types test/run.ts"
   },
   "dependencies": {
     "@vercel/sandbox": "^2.6.0",
+    "cors": "^2.8.6",
     "express": "^5.0.1"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.0",
     "@types/node": "^22.0.0",
     "typescript": "^5.8.3"

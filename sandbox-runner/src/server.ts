@@ -21,9 +21,9 @@
  */
 
 import express, { type Request, type Response } from 'express';
+import cors from 'cors';
 import { Sandbox } from '@vercel/sandbox';
 import { spawn } from 'child_process';
-import { PassThrough } from 'stream';
 
 const DEFAULT_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
 
@@ -76,6 +76,9 @@ function setupSSE(res: Response): void {
 // ---------------------------------------------------------------------------
 
 const app = express();
+// Allow any localhost port (Vite, CRA, etc.) plus any origin in production.
+// Credentials are not used here; tighten this in prod if needed.
+app.use(cors());
 app.use(express.json());
 
 app.post('/run', async (req: Request, res: Response): Promise<void> => {
