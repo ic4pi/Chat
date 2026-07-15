@@ -9,6 +9,6 @@
   "dependencies": {
     "@vercel/sandbox": "^2.6.0",
     "cors": "^2.8.5",
-    "ignore": "^6.0.2"
+    "ignore": "^7.0.6"
   }
 }
