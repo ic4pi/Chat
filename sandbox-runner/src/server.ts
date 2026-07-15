@@ -224,6 +224,58 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, defaultTimeoutMs: DEFAULT_TIMEOUT_MS });
 });
 
+import { getFileTree, readFile, writeFiles as writeFilesHelper, countFiles } from './repo.ts';
+
+// ---------------------------------------------------------------------------
+// /files  GET ?root=<absolute-path>
+// ---------------------------------------------------------------------------
+app.get('/files', (req: Request, res: Response): void => {
+  const root = req.query['root'];
+  if (typeof root !== 'string' || !root) {
+    res.status(400).json({ error: 'root query param required' }); return;
+  }
+  try {
+    const tree = getFileTree(root);
+    res.json({ root, tree, totalFiles: countFiles(tree) });
+  } catch (err: unknown) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// /file  GET ?root=<root>&path=<relative-path>
+// ---------------------------------------------------------------------------
+app.get('/file', (req: Request, res: Response): void => {
+  const root = req.query['root'];
+  const relPath = req.query['path'];
+  if (typeof root !== 'string' || typeof relPath !== 'string') {
+    res.status(400).json({ error: 'root and path query params required' }); return;
+  }
+  try {
+    const content = readFile(root, relPath);
+    res.json({ path: relPath, content, lines: content.split('\n').length });
+  } catch (err: unknown) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// /write-files  POST { root, files: [{ path, content }] }
+// ---------------------------------------------------------------------------
+app.post('/write-files', (req: Request, res: Response): void => {
+  const { root, files } = req.body as { root?: unknown; files?: unknown };
+  if (typeof root !== 'string' || !Array.isArray(files) || files.length === 0) {
+    res.status(400).json({ error: 'root (string) and files (array) required' }); return;
+  }
+  try {
+    const results = writeFilesHelper(root, files as Array<{ path: string; content: string }>);
+    const allOk = results.every(r => r.written);
+    res.status(allOk ? 200 : 207).json({ results });
+  } catch (err: unknown) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // /run-code — like /run but accepts { code, language } instead of a raw shell
 // command string. Writes the code to a temp file and runs with the right
@@ -404,7 +456,10 @@ print(f"Result: {result}")
 The error should appear immediately in the terminal with a clean traceback.`;
 
 app.post('/chat', async (req: Request, res: Response): Promise<void> => {
-  const { messages } = req.body as { messages?: Array<{ role: string; content: string }> };
+  const { messages, systemPrompt } = req.body as {
+    messages?: Array<{ role: string; content: string }>;
+    systemPrompt?: string;
+  };
   const lastUserMsg = [...(messages ?? [])].reverse()
     .find(m => m.role === 'user')?.content ?? '';
 
@@ -430,6 +485,11 @@ app.post('/chat', async (req: Request, res: Response): Promise<void> => {
   }
 
   try {
+    // Prepend the client-supplied system prompt (file context, agent instructions)
+    const messagesWithSystem = systemPrompt
+      ? [{ role: 'system', content: systemPrompt }, ...(messages ?? [])]
+      : (messages ?? []);
+
     const upstream = await fetch(provider.url, {
       method: 'POST',
       headers: {
@@ -437,7 +497,11 @@ app.post('/chat', async (req: Request, res: Response): Promise<void> => {
         'Authorization': `Bearer ${provider.key}`,
         ...(providerId !== 'venice' ? { 'HTTP-Referer': 'http://localhost:5173', 'X-Title': 'Sandbox Chat' } : {}),
       },
-      body: JSON.stringify({ model: model ?? 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free', messages, stream: false }),
+      body: JSON.stringify({
+        model: model ?? 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
+        messages: messagesWithSystem,
+        stream: false,
+      }),
     });
     const data = await upstream.json() as { choices?: Array<{ message?: { content?: string } }> };
     const reply = data.choices?.[0]?.message?.content ?? '';
