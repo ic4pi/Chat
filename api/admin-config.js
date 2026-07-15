@@ -14,11 +14,17 @@ export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
 
   if (!KV_ENABLED) {
+    // Report which KV-related env vars actually exist so the user can
+    // diagnose prefix mismatches without needing to open Vercel dashboard.
+    const found = Object.keys(process.env)
+      .filter((k) => /KV_|UPSTASH_|STORAGE_/i.test(k))
+      .sort();
     return res.status(503).json({
       error:
-        'Storage not connected. In the Vercel dashboard: Storage → Create → KV, ' +
-        'attach it to this project (all environments), then redeploy. Vercel will ' +
-        'populate KV_REST_API_URL and KV_REST_API_TOKEN automatically.',
+        'Storage not connected. In the Vercel dashboard → Storage tab → open your KV store → ' +
+        'Projects subtab — make sure this project is connected, then redeploy (Deployments → ⋯ → Redeploy). ' +
+        'Expected env vars: KV_REST_API_URL + KV_REST_API_TOKEN (or UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN).',
+      foundEnvVars: found.length ? found : ['none matching KV_|UPSTASH_|STORAGE_'],
     });
   }
 

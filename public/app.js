@@ -211,7 +211,6 @@ const els = {
   providerSelect: $('providerSelect'),
   modelSelect: $('modelSelect'),
   personaSelect: $('personaSelect'),
-  personaDescription: $('personaDescription'),
   artifactList: $('artifactList'),
   artifactModal: $('artifactModal'),
   artifactModalTitle: $('artifactModalTitle'),
@@ -615,20 +614,8 @@ function renderPersonaSelect() {
     els.personaSelect.appendChild(opt);
   }
   els.personaSelect.value = state.activePersonaId;
-  renderPersonaDescription();
 }
 
-function renderPersonaDescription() {
-  const p = personas.find((x) => x.id === state.activePersonaId);
-  const text = (p && p.description) || '';
-  if (text) {
-    els.personaDescription.textContent = text;
-    els.personaDescription.hidden = false;
-  } else {
-    els.personaDescription.textContent = '';
-    els.personaDescription.hidden = true;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Models
@@ -966,7 +953,6 @@ els.personaSelect.addEventListener('change', () => {
   const chat = activeChat();
   if (chat) chat.personaId = state.activePersonaId;
   saveState();
-  renderPersonaDescription();
 });
 
 els.closeArtifactModal.addEventListener('click', closeArtifactModal);
