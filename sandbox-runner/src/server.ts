@@ -24,6 +24,9 @@ import express, { type Request, type Response } from 'express';
 import cors from 'cors';
 import { Sandbox } from '@vercel/sandbox';
 import { spawn } from 'child_process';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 const DEFAULT_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
 
@@ -219,6 +222,229 @@ app.post('/run', async (req: Request, res: Response): Promise<void> => {
 // Health check — useful to confirm the server is up before running tests.
 app.get('/health', (_req, res) => {
   res.json({ ok: true, defaultTimeoutMs: DEFAULT_TIMEOUT_MS });
+});
+
+// ---------------------------------------------------------------------------
+// /run-code — like /run but accepts { code, language } instead of a raw shell
+// command string. Writes the code to a temp file and runs with the right
+// interpreter, which avoids heredoc / shell-quoting nightmares with multi-line
+// code. SSE format is identical to /run.
+// ---------------------------------------------------------------------------
+
+const LANG_CONFIG: Record<string, { ext: string; runner: string[] }> = {
+  python:     { ext: '.py',  runner: ['python3'] },
+  py:         { ext: '.py',  runner: ['python3'] },
+  javascript: { ext: '.js',  runner: ['node'] },
+  js:         { ext: '.js',  runner: ['node'] },
+  typescript: { ext: '.ts',  runner: ['npx', 'ts-node', '--skipProject'] },
+  ts:         { ext: '.ts',  runner: ['npx', 'ts-node', '--skipProject'] },
+  bash:       { ext: '.sh',  runner: ['bash'] },
+  sh:         { ext: '.sh',  runner: ['bash'] },
+  shell:      { ext: '.sh',  runner: ['bash'] },
+  ruby:       { ext: '.rb',  runner: ['ruby'] },
+  rb:         { ext: '.rb',  runner: ['ruby'] },
+};
+
+const DEFAULT_LANG_CONFIG = { ext: '.sh', runner: ['bash'] };
+
+app.post('/run-code', async (req: Request, res: Response): Promise<void> => {
+  const { code, language, timeoutMs } = req.body as {
+    code?: unknown; language?: unknown; timeoutMs?: unknown;
+  };
+
+  if (typeof code !== 'string' || !code.trim()) {
+    res.status(400).json({ error: '"code" must be a non-empty string' });
+    return;
+  }
+
+  const lang     = (typeof language === 'string' ? language : '').toLowerCase().trim();
+  const config   = LANG_CONFIG[lang] ?? DEFAULT_LANG_CONFIG;
+  const timeout  = typeof timeoutMs === 'number' && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
+
+  setupSSE(res);
+
+  const abort = new AbortController();
+  const timeoutHandle = setTimeout(() => {
+    abort.abort(new Error(`Code execution timed out after ${timeout / 1000}s`));
+  }, timeout);
+
+  let streamDone = false;
+  res.on('close', () => {
+    if (!streamDone && !abort.signal.aborted) abort.abort(new Error('Client disconnected'));
+  });
+
+  let tmpFile: string | null = null;
+  let sandbox: Sandbox | null = null;
+
+  try {
+    if (process.env['LOCAL_MODE'] === 'true') {
+      // Write code to a temp file then spawn the interpreter directly.
+      tmpFile = path.join(os.tmpdir(), `sb-code-${Date.now()}${config.ext}`);
+      fs.writeFileSync(tmpFile, code, 'utf8');
+
+      sseEvent(res, 'status',
+        `[LOCAL_MODE] ${config.runner[0]} ${path.basename(tmpFile)}`);
+
+      await new Promise<void>((resolve, reject) => {
+        const [cmd, ...args] = config.runner;
+        const child = spawn(cmd!, [...args, tmpFile!], { stdio: 'pipe' });
+
+        const abortListener = () => {
+          child.kill('SIGTERM');
+          sseEvent(res, 'timeout',
+            abort.signal.reason instanceof Error ? abort.signal.reason.message : 'Aborted');
+          resolve();
+        };
+        abort.signal.addEventListener('abort', abortListener, { once: true });
+
+        child.stdout.on('data', (c: Buffer) => sseEvent(res, 'stdout', c.toString()));
+        child.stderr.on('data', (c: Buffer) => sseEvent(res, 'stderr', c.toString()));
+        child.on('error', (err) => {
+          abort.signal.removeEventListener('abort', abortListener);
+          reject(err);
+        });
+        child.on('close', (code) => {
+          abort.signal.removeEventListener('abort', abortListener);
+          if (!abort.signal.aborted) sseEvent(res, 'exit', String(code ?? 0));
+          resolve();
+        });
+      });
+
+    } else {
+      // Vercel Sandbox: write file, then runCommand.
+      const auth = resolveSandboxAuth();
+      sseEvent(res, 'status', 'Creating sandbox…');
+
+      sandbox = await Sandbox.create({ ...auth, runtime: 'node24', timeout });
+      sseEvent(res, 'status', `Sandbox ready: ${sandbox.name}`);
+
+      const filename = `code${config.ext}`;
+      await sandbox.writeFiles([{ path: filename, content: Buffer.from(code, 'utf8') }]);
+
+      const [cmd, ...args] = config.runner;
+      const sdxCmd = await sandbox.runCommand({
+        cmd: cmd!,
+        args: [...args, filename],
+        detached: true,
+      });
+
+      try {
+        for await (const log of sdxCmd.logs({ signal: abort.signal })) {
+          sseEvent(res, log.stream, log.data);
+        }
+      } catch (logErr: unknown) {
+        if (abort.signal.aborted) {
+          await sdxCmd.kill('SIGTERM').catch(() => {});
+          sseEvent(res, 'timeout',
+            abort.signal.reason instanceof Error ? abort.signal.reason.message : 'Aborted');
+          return;
+        }
+        throw logErr;
+      }
+
+      const finished = await sdxCmd.wait();
+      sseEvent(res, 'exit', String(finished.exitCode ?? 0));
+    }
+
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[sandbox-runner] /run-code error:', message);
+    sseEvent(res, 'error', message);
+  } finally {
+    streamDone = true;
+    clearTimeout(timeoutHandle);
+    if (tmpFile) {
+      try { fs.unlinkSync(tmpFile); } catch { /* best effort */ }
+    }
+    if (sandbox) sandbox.stop().catch(() => {});
+    res.end();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// /chat — LLM proxy, or LOCAL_CHAT_MODE mock for testing the full pipeline.
+//
+// LOCAL_CHAT_MODE responses vary by the first keyword in the user message:
+//   contains "error" / "fail" / "broken"  → code block that raises an error
+//   anything else                          → working streaming Python code
+//
+// Format matches the Vercel chat app:
+//   { reply: string, model: string, provider: string }
+// ---------------------------------------------------------------------------
+
+const MOCK_SUCCESS_REPLY = `\
+Sure — here's a Python script that outputs several lines with a short \
+delay between each, so you can watch the streaming in real time:
+
+\`\`\`python
+import time
+import sys
+
+tasks = ["Initialising", "Loading data", "Processing", "Analysing", "Done"]
+for i, task in enumerate(tasks, 1):
+    print(f"[{i}/{len(tasks)}] {task}...")
+    sys.stdout.flush()
+    time.sleep(0.5)
+
+print("\\nAll tasks complete.")
+\`\`\`
+
+Each line arrives as it is printed — no buffering.`;
+
+const MOCK_ERROR_REPLY = `\
+Here is a script that will fail — it imports a module that does not exist:
+
+\`\`\`python
+import definitely_not_a_real_module
+
+result = definitely_not_a_real_module.compute(42)
+print(f"Result: {result}")
+\`\`\`
+
+The error should appear immediately in the terminal with a clean traceback.`;
+
+app.post('/chat', async (req: Request, res: Response): Promise<void> => {
+  const { messages } = req.body as { messages?: Array<{ role: string; content: string }> };
+  const lastUserMsg = [...(messages ?? [])].reverse()
+    .find(m => m.role === 'user')?.content ?? '';
+
+  if (process.env['LOCAL_CHAT_MODE'] === 'true') {
+    const lower = lastUserMsg.toLowerCase();
+    const isError = /error|fail|broken|bad|crash|wrong/i.test(lower);
+    const reply = isError ? MOCK_ERROR_REPLY : MOCK_SUCCESS_REPLY;
+    // Small simulated delay so the UI doesn't feel instant.
+    await new Promise(r => setTimeout(r, 600));
+    res.json({ reply, model: 'mock-local', provider: 'LOCAL_CHAT_MODE' });
+    return;
+  }
+
+  // ── Real mode: proxy to OpenRouter or Venice ──
+  const { model, provider: providerId } = req.body as { model?: string; provider?: string };
+  const provider = (providerId === 'venice')
+    ? { url: 'https://api.venice.ai/api/v1/chat/completions', key: process.env['VENICE_API_KEY'], label: 'Venice' }
+    : { url: 'https://openrouter.ai/api/v1/chat/completions', key: process.env['OPENROUTER_API_KEY'], label: 'OpenRouter' };
+
+  if (!provider.key) {
+    res.status(500).json({ error: `${provider.label} API key not configured. Set LOCAL_CHAT_MODE=true to use mock responses.` });
+    return;
+  }
+
+  try {
+    const upstream = await fetch(provider.url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${provider.key}`,
+        ...(providerId !== 'venice' ? { 'HTTP-Referer': 'http://localhost:5173', 'X-Title': 'Sandbox Chat' } : {}),
+      },
+      body: JSON.stringify({ model: model ?? 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free', messages, stream: false }),
+    });
+    const data = await upstream.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const reply = data.choices?.[0]?.message?.content ?? '';
+    res.json({ reply, model, provider: provider.label });
+  } catch (err: unknown) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 // ---------------------------------------------------------------------------

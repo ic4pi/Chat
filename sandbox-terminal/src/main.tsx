@@ -1,9 +1,9 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { SandboxTerminal } from './Terminal.js';
+import { App } from './App.js';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <SandboxTerminal />
+    <App />
   </React.StrictMode>
 );

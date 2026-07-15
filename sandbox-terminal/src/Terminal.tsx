@@ -1,20 +1,24 @@
 /**
- * SandboxTerminal — React component that connects to the sandbox-runner
- * SSE endpoint, streams stdout/stderr into xterm.js in real time, and
- * lets the user type commands manually.
+ * SandboxTerminal — xterm.js terminal wired to the sandbox-runner SSE backend.
  *
- * Backend contract (POST http://localhost:3001/run):
- *   Body:    { command: string }
- *   Stream:  text/event-stream, each message is:
- *              event: status|stdout|stderr|exit|timeout|error
- *              data: "<JSON-encoded string>"
+ * Two calling modes:
+ *   1. Manual:  user types a raw shell command in the built-in input bar → POST /run
+ *   2. Imperative: parent calls terminalRef.current.runCode(code, language) → POST /run-code
  *
- * The data field is always JSON.parse()-able to a plain string.
+ * SSE contract (both /run and /run-code):
+ *   event: status   data: "<msg>"   — status lines (dim cyan)
+ *   event: stdout   data: "<chunk>" — raw stdout (white)
+ *   event: stderr   data: "<chunk>" — raw stderr (bright red)
+ *   event: exit     data: "<code>"  — process exit code (green=0, red≠0)
+ *   event: timeout  data: "<msg>"   — timeout banner (yellow)
+ *   event: error    data: "<msg>"   — error banner (red), NOT a silent hang
  */
 
 import React, {
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
 } from 'react';
@@ -23,64 +27,57 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 
-// ---------------------------------------------------------------------------
-// Config — override with VITE_API_URL env var
-// ---------------------------------------------------------------------------
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 type RunStatus = 'idle' | 'connecting' | 'streaming' | 'done' | 'error' | 'cancelled';
 
-// Expose the Terminal instance on window so the Puppeteer verify script can
-// read the buffer programmatically without relying on visual screenshots alone.
 declare global {
-  interface Window {
-    __sandboxTerm?: Terminal;
-  }
+  interface Window { __sandboxTerm?: Terminal; }
 }
 
-// ---------------------------------------------------------------------------
-// SSE parser
-// ---------------------------------------------------------------------------
-// Parses the raw SSE byte stream from a fetch response body into typed events.
-// Format: each message is "event: <type>\ndata: <json-string>\n\n"
+export interface TerminalHandle {
+  /** Run a code snippet by language — calls POST /run-code */
+  runCode: (code: string, language: string) => void;
+  /** Kill any running command */
+  cancel: () => void;
+}
 
+// ── xterm theme ──────────────────────────────────────────────────────────────
+const THEME = {
+  background: '#0a0a0a', foreground: '#e8e8e8',
+  cursor: '#d4ff3f', cursorAccent: '#0a0a0a',
+  selectionBackground: 'rgba(212,255,63,.2)',
+  black: '#0a0a0a', red: '#ff6a6a', green: '#8fbf6f', yellow: '#d4ff3f',
+  blue: '#5b8dee', magenta: '#c792ea', cyan: '#89ddff', white: '#e8e8e8',
+  brightBlack: '#555', brightRed: '#ff9b9b', brightGreen: '#b5d89b',
+  brightYellow: '#e8ff8a', brightBlue: '#82aaff', brightMagenta: '#dbb0f0',
+  brightCyan: '#aadeff', brightWhite: '#ffffff',
+};
+
+// ── SSE parser ───────────────────────────────────────────────────────────────
 async function* parseSse(
   body: ReadableStream<Uint8Array>,
 ): AsyncGenerator<{ type: string; text: string }> {
   const decoder = new TextDecoder();
   const reader = body.getReader();
   let buf = '';
-
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       buf += decoder.decode(value, { stream: true });
-
-      // SSE messages are delimited by blank lines (\n\n).
       const messages = buf.split('\n\n');
-      buf = messages.pop() ?? ''; // keep the incomplete trailing fragment
-
+      buf = messages.pop() ?? '';
       for (const msg of messages) {
-        let type = 'message';
-        let rawData = '';
+        let type = 'message'; let raw = '';
         for (const line of msg.split('\n')) {
           if (line.startsWith('event: ')) type = line.slice(7).trim();
-          else if (line.startsWith('data: ')) rawData = line.slice(6).trim();
+          else if (line.startsWith('data: ')) raw = line.slice(6).trim();
         }
-        if (!rawData) continue;
-
+        if (!raw) continue;
         let text: string;
-        try {
-          text = JSON.parse(rawData) as string;
-        } catch {
-          text = rawData;
-        }
-
+        try { text = JSON.parse(raw) as string; } catch { text = raw; }
         yield { type, text };
       }
     }
@@ -89,98 +86,60 @@ async function* parseSse(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Xterm theme — matches the chat app's dark palette
-// ---------------------------------------------------------------------------
-const XTERM_THEME = {
-  background:          '#0a0a0a',
-  foreground:          '#e8e8e8',
-  cursor:              '#d4ff3f',
-  cursorAccent:        '#0a0a0a',
-  selectionBackground: 'rgba(212,255,63,0.2)',
-  black:               '#0a0a0a',
-  red:                 '#ff6a6a',
-  green:               '#8fbf6f',
-  yellow:              '#d4ff3f',
-  blue:                '#5b8dee',
-  magenta:             '#c792ea',
-  cyan:                '#89ddff',
-  white:               '#e8e8e8',
-  brightBlack:         '#555',
-  brightRed:           '#ff9b9b',
-  brightGreen:         '#b5d89b',
-  brightYellow:        '#e8ff8a',
-  brightBlue:          '#82aaff',
-  brightMagenta:       '#dbb0f0',
-  brightCyan:          '#aadeff',
-  brightWhite:         '#ffffff',
-};
-
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
-export function SandboxTerminal() {
+// ── component ────────────────────────────────────────────────────────────────
+export const SandboxTerminal = forwardRef<TerminalHandle>((_, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef      = useRef<Terminal | null>(null);
   const fitRef       = useRef<FitAddon | null>(null);
   const abortRef     = useRef<AbortController | null>(null);
 
-  const [command,     setCommand]     = useState('');
-  const [status,      setStatus]      = useState<RunStatus>('idle');
-  const [exitCode,    setExitCode]    = useState<number | null>(null);
-  const [historyIdx,  setHistoryIdx]  = useState(-1);
-  const [history,     setHistory]     = useState<string[]>([]);
+  const [command,   setCommand]   = useState('');
+  const [status,    setStatus]    = useState<RunStatus>('idle');
+  const [exitCode,  setExitCode]  = useState<number | null>(null);
+  const [history,   setHistory]   = useState<string[]>([]);
+  const [histIdx,   setHistIdx]   = useState(-1);
 
-  // ---- xterm mount --------------------------------------------------------
+  // ── xterm mount ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!containerRef.current || termRef.current) return;
 
     const term = new Terminal({
-      theme:        XTERM_THEME,
-      fontFamily:   '"JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace',
-      fontSize:     14,
-      lineHeight:   1.45,
-      cursorBlink:  true,
-      convertEol:   true,   // \n → \r\n so output renders on correct lines
-      scrollback:   3000,
-      allowProposedApi: true,
+      theme: THEME,
+      fontFamily: '"JetBrains Mono","Fira Code",ui-monospace,monospace',
+      fontSize: 14, lineHeight: 1.45, cursorBlink: true,
+      convertEol: true, scrollback: 3000, allowProposedApi: true,
     });
-
     const fit   = new FitAddon();
     const links = new WebLinksAddon();
     term.loadAddon(fit);
     term.loadAddon(links);
     term.open(containerRef.current);
-    // Defer fit() by one frame so the container has been laid out.
-    // Also guards against React StrictMode's double-invoke of effects.
-    setTimeout(() => { try { fit.fit(); } catch { /* not yet laid out */ } }, 0);
+    setTimeout(() => { try { fit.fit(); } catch { /* not laid out yet */ } }, 0);
 
     term.writeln('\x1b[2;36m// Sandbox Terminal\x1b[0m');
-    term.writeln('\x1b[2;90m// Type a command in the bar above, press Enter or click Run.\x1b[0m');
+    term.writeln('\x1b[2;90m// Type a command above, or code blocks from chat run here automatically.\x1b[0m');
     term.writeln('');
 
     termRef.current = term;
     fitRef.current  = fit;
-    // Expose for the Puppeteer verify script
     window.__sandboxTerm = term;
 
-    const obs = new ResizeObserver(() => fit.fit());
+    const obs = new ResizeObserver(() => { try { fit.fit(); } catch { /* ok */ } });
     obs.observe(containerRef.current);
 
     return () => {
-      obs.disconnect();
-      term.dispose();
-      termRef.current  = null;
-      fitRef.current   = null;
+      obs.disconnect(); term.dispose();
+      termRef.current = null; fitRef.current = null;
       delete window.__sandboxTerm;
     };
   }, []);
 
-  // ---- run ----------------------------------------------------------------
-  const run = useCallback(async (cmd: string) => {
-    cmd = cmd.trim();
-    if (!cmd) return;
-
+  // ── shared SSE consumer ───────────────────────────────────────────────────
+  const streamToTerminal = useCallback(async (
+    endpoint: string,
+    body: Record<string, unknown>,
+    label: string,
+  ) => {
     abortRef.current?.abort();
     const abort = new AbortController();
     abortRef.current = abort;
@@ -190,76 +149,72 @@ export function SandboxTerminal() {
 
     setStatus('connecting');
     setExitCode(null);
-    setHistory(h => [cmd, ...h.filter(x => x !== cmd)].slice(0, 50));
-    setHistoryIdx(-1);
-
-    term.writeln(`\x1b[2;37m$ \x1b[0;37m${cmd}\x1b[0m`);
+    term.writeln(`\x1b[2;37m${label}\x1b[0m`);
 
     try {
-      const res = await fetch(`${API_URL}/run`, {
-        method:  'POST',
+      const res = await fetch(`${API_URL}${endpoint}`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ command: cmd }),
-        signal:  abort.signal,
+        body: JSON.stringify(body),
+        signal: abort.signal,
       });
-
-      if (!res.ok || !res.body) {
-        throw new Error(`Server returned HTTP ${res.status}`);
-      }
+      if (!res.ok || !res.body) throw new Error(`Server returned HTTP ${res.status}`);
 
       setStatus('streaming');
 
       for await (const { type, text } of parseSse(res.body)) {
         switch (type) {
-          case 'status':
-            // dim cyan — operational messages, not user output
-            term.writeln(`\x1b[2;36m[${text}]\x1b[0m`);
-            break;
-
-          case 'stdout':
-            term.write(text);
-            break;
-
-          case 'stderr':
-            // stderr in bright red so it's distinguishable
-            term.write(`\x1b[91m${text}\x1b[0m`);
-            break;
-
+          case 'status': term.writeln(`\x1b[2;36m[${text}]\x1b[0m`); break;
+          case 'stdout': term.write(text); break;
+          case 'stderr': term.write(`\x1b[91m${text}\x1b[0m`); break;
           case 'exit': {
             const code = Number(text);
             setExitCode(code);
-            const color = code === 0 ? '\x1b[32m' : '\x1b[31m';
-            term.writeln(`\n${color}[exit ${code}]\x1b[0m`);
+            term.writeln(`\n${code === 0 ? '\x1b[32m' : '\x1b[31m'}[exit ${code}]\x1b[0m`);
             setStatus('done');
             break;
           }
-
           case 'timeout':
-            term.writeln(`\n\x1b[33m[timeout: ${text}]\x1b[0m`);
+            term.writeln(`\n\x1b[33m⏱  Timeout: ${text}\x1b[0m`);
             setStatus('done');
             break;
-
           case 'error':
-            term.writeln(`\n\x1b[31m[error: ${text}]\x1b[0m`);
+            // Explicit error — never a silent hang. Always shown in red.
+            term.writeln(`\n\x1b[1;31m✗  Error: ${text}\x1b[0m`);
             setStatus('error');
             break;
         }
       }
-
     } catch (err: unknown) {
       if ((err as Error).name === 'AbortError') {
         term.writeln('\n\x1b[2;90m[cancelled]\x1b[0m');
         setStatus('cancelled');
       } else {
         const msg = err instanceof Error ? err.message : String(err);
-        term.writeln(`\n\x1b[31m[connection error: ${msg}]\x1b[0m`);
+        // Surface connection errors clearly — server unreachable, timeout, etc.
+        term.writeln(`\n\x1b[1;31m✗  Connection error: ${msg}\x1b[0m`);
+        term.writeln('\x1b[2;31m   Is sandbox-runner running on port 3001?\x1b[0m');
         setStatus('error');
       }
     } finally {
-      // Safety net: if stream ended without an explicit exit/error/timeout event
       setStatus(s => (s === 'streaming' || s === 'connecting') ? 'done' : s);
     }
   }, []);
+
+  // ── run shell command (manual input bar) ──────────────────────────────────
+  const runCommand = useCallback(async () => {
+    const cmd = command.trim();
+    if (!cmd || status === 'connecting' || status === 'streaming') return;
+    setHistory(h => [cmd, ...h.filter(x => x !== cmd)].slice(0, 50));
+    setHistIdx(-1);
+    await streamToTerminal('/run', { command: cmd }, `$ ${cmd}`);
+  }, [command, status, streamToTerminal]);
+
+  // ── run code snippet (called by parent via ref) ────────────────────────────
+  const runCode = useCallback((code: string, language: string) => {
+    const lang = language || 'bash';
+    streamToTerminal('/run-code', { code, language: lang }, `▶ Running ${lang} snippet…`);
+  }, [streamToTerminal]);
 
   const cancel = useCallback(() => {
     abortRef.current?.abort(new Error('Cancelled by user'));
@@ -272,200 +227,68 @@ export function SandboxTerminal() {
     setStatus('idle');
   }, []);
 
-  const submit = useCallback(() => {
-    if (command.trim()) run(command);
-  }, [command, run]);
+  // ── expose imperative handle ───────────────────────────────────────────────
+  useImperativeHandle(ref, () => ({ runCode, cancel }), [runCode, cancel]);
 
   const isRunning = status === 'connecting' || status === 'streaming';
 
-  // ---- keyboard navigation in command input --------------------------------
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
+  const handleKey = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') { e.preventDefault(); runCommand(); }
+    else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      submit();
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setHistoryIdx(i => {
-        const next = Math.min(i + 1, history.length - 1);
-        setCommand(history[next] ?? '');
-        return next;
-      });
+      setHistIdx(i => { const n = Math.min(i + 1, history.length - 1); setCommand(history[n] ?? ''); return n; });
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setHistoryIdx(i => {
-        const next = Math.max(i - 1, -1);
-        setCommand(next === -1 ? '' : (history[next] ?? ''));
-        return next;
-      });
+      setHistIdx(i => { const n = Math.max(i - 1, -1); setCommand(n === -1 ? '' : (history[n] ?? '')); return n; });
     }
-  }, [submit, history]);
+  }, [runCommand, history]);
 
-  // ---- status indicator colours -------------------------------------------
-  const statusColor: Record<RunStatus, string> = {
-    idle:       '#555',
-    connecting: '#5b8dee',
-    streaming:  '#8fbf6f',
-    done:       exitCode === 0 ? '#8fbf6f' : exitCode !== null ? '#ff6a6a' : '#8fbf6f',
-    error:      '#ff6a6a',
-    cancelled:  '#888',
-  };
-  const dotColor = statusColor[status];
+  const dotColor = {
+    idle: '#555', connecting: '#5b8dee', streaming: '#8fbf6f',
+    done: exitCode === 0 ? '#8fbf6f' : exitCode !== null ? '#ff6a6a' : '#8fbf6f',
+    error: '#ff6a6a', cancelled: '#888',
+  }[status];
 
-  // ---- render -------------------------------------------------------------
   return (
-    <div style={{
-      display:        'flex',
-      flexDirection:  'column',
-      height:         '100vh',
-      background:     '#0a0a0a',
-      color:          '#e8e8e8',
-      fontFamily:     '"JetBrains Mono", ui-monospace, monospace',
-      overflow:       'hidden',
-    }}>
-
-      {/* ── toolbar ── */}
-      <div style={{
-        display:        'flex',
-        alignItems:     'center',
-        gap:            '8px',
-        padding:        '8px 12px',
-        borderBottom:   '1px solid #1e1e1e',
-        background:     '#0f0f0f',
-        flexShrink:     0,
-      }}>
-
-        {/* wordmark */}
-        <span style={{
-          color:          '#d4ff3f',
-          fontSize:       '11px',
-          letterSpacing:  '0.1em',
-          textTransform:  'uppercase',
-          whiteSpace:     'nowrap',
-          userSelect:     'none',
-        }}>
-          &#47;&#47;&nbsp;sandbox
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0a0a0a' }}>
+      {/* toolbar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+        borderBottom: '1px solid #1e1e1e', background: '#0f0f0f', flexShrink: 0 }}>
+        <span style={{ color: '#d4ff3f', fontSize: 11, letterSpacing: '0.1em',
+          textTransform: 'uppercase', whiteSpace: 'nowrap', userSelect: 'none' }}>
+          // shell
         </span>
-
-        {/* command input */}
-        <input
-          id="cmd-input"
-          value={command}
-          onChange={e => { setCommand(e.target.value); setHistoryIdx(-1); }}
-          onKeyDown={handleKeyDown}
-          placeholder="echo 'hello' && sleep 1 && echo 'world'"
-          disabled={isRunning}
-          autoFocus
-          style={{
-            flex:           1,
-            minWidth:       0,
-            background:     '#151515',
-            color:          '#e8e8e8',
-            border:         '1px solid #2a2a2a',
-            borderRadius:   '4px',
-            padding:        '5px 10px',
-            fontFamily:     'inherit',
-            fontSize:       '13px',
-            outline:        'none',
-            opacity:        isRunning ? 0.6 : 1,
-            transition:     'border-color 0.15s',
-          }}
-          onFocus={e => (e.target.style.borderColor = '#3a3a3a')}
-          onBlur={e  => (e.target.style.borderColor = '#2a2a2a')}
-        />
-
-        {/* run / cancel */}
-        {isRunning ? (
-          <button
-            onClick={cancel}
-            title="Cancel (sends abort to server)"
-            style={{
-              background:   '#2a1010',
-              color:        '#ff6a6a',
-              border:       '1px solid #5a2020',
-              borderRadius: '4px',
-              padding:      '5px 14px',
-              cursor:       'pointer',
-              fontFamily:   'inherit',
-              fontSize:     '12px',
-              fontWeight:   700,
-              whiteSpace:   'nowrap',
-            }}
-          >
-            Cancel
-          </button>
-        ) : (
-          <button
-            onClick={submit}
-            disabled={!command.trim()}
-            title="Run command (Enter)"
-            style={{
-              background:   command.trim() ? '#d4ff3f' : '#1a1a1a',
-              color:        command.trim() ? '#0a0a0a' : '#444',
-              border:       'none',
-              borderRadius: '4px',
-              padding:      '5px 16px',
-              cursor:       command.trim() ? 'pointer' : 'default',
-              fontFamily:   'inherit',
-              fontSize:     '12px',
-              fontWeight:   700,
-              whiteSpace:   'nowrap',
-              transition:   'background 0.15s',
-            }}
-          >
-            Run
-          </button>
-        )}
-
-        {/* clear */}
-        <button
-          onClick={clear}
-          title="Clear terminal"
-          style={{
-            background:   'transparent',
-            color:        '#555',
-            border:       '1px solid #222',
-            borderRadius: '4px',
-            padding:      '5px 10px',
-            cursor:       'pointer',
-            fontFamily:   'inherit',
-            fontSize:     '12px',
-          }}
-        >
-          Clear
-        </button>
-
-        {/* status dot */}
-        <div
-          title={`Status: ${status}${exitCode !== null ? ` (exit ${exitCode})` : ''}`}
-          style={{
-            display:    'flex',
-            alignItems: 'center',
-            gap:        '5px',
-            color:      dotColor,
-            fontSize:   '11px',
-            minWidth:   '90px',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          <div style={{
-            width:      '7px',
-            height:     '7px',
-            borderRadius: '50%',
-            background: dotColor,
-            boxShadow:  isRunning ? `0 0 5px ${dotColor}` : 'none',
-          }} />
+        <input id="cmd-input" value={command}
+          onChange={e => { setCommand(e.target.value); setHistIdx(-1); }}
+          onKeyDown={handleKey} disabled={isRunning}
+          placeholder="bash -c '…'" autoFocus
+          style={{ flex: 1, minWidth: 0, background: '#151515', color: '#e8e8e8',
+            border: '1px solid #2a2a2a', borderRadius: 4, padding: '5px 10px',
+            fontFamily: 'inherit', fontSize: 13, outline: 'none', opacity: isRunning ? .6 : 1 }} />
+        {isRunning
+          ? <button onClick={cancel} data-testid="cancel-btn"
+              style={{ background: '#2a1010', color: '#ff6a6a', border: '1px solid #5a2020',
+                borderRadius: 4, padding: '5px 14px', cursor: 'pointer',
+                fontFamily: 'inherit', fontSize: 12, fontWeight: 700 }}>Cancel</button>
+          : <button onClick={runCommand} disabled={!command.trim()} data-testid="run-btn"
+              style={{ background: command.trim() ? '#d4ff3f' : '#1a1a1a',
+                color: command.trim() ? '#0a0a0a' : '#444', border: 'none',
+                borderRadius: 4, padding: '5px 16px', cursor: command.trim() ? 'pointer' : 'default',
+                fontFamily: 'inherit', fontSize: 12, fontWeight: 700 }}>Run</button>}
+        <button onClick={clear} style={{ background: 'transparent', color: '#555',
+          border: '1px solid #222', borderRadius: 4, padding: '5px 10px',
+          cursor: 'pointer', fontFamily: 'inherit', fontSize: 12 }}>Clear</button>
+        <div title={`${status}${exitCode !== null ? ` (exit ${exitCode})` : ''}`}
+          style={{ display: 'flex', alignItems: 'center', gap: 5, color: dotColor,
+            fontSize: 11, minWidth: 90, whiteSpace: 'nowrap' }}>
+          <div style={{ width: 7, height: 7, borderRadius: '50%', background: dotColor,
+            boxShadow: isRunning ? `0 0 5px ${dotColor}` : 'none' }} />
           {status}{exitCode !== null && status === 'done' ? ` (${exitCode})` : ''}
         </div>
-
       </div>
-
-      {/* ── xterm terminal ── */}
-      <div
-        ref={containerRef}
-        data-testid="terminal"
-        style={{ flex: 1, overflow: 'hidden' }}
-      />
-
+      {/* xterm */}
+      <div ref={containerRef} data-testid="terminal" style={{ flex: 1, overflow: 'hidden' }} />
     </div>
   );
-}
+});
+SandboxTerminal.displayName = 'SandboxTerminal';
