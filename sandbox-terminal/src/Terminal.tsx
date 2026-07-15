@@ -39,6 +39,9 @@ declare global {
 export interface TerminalHandle {
   /** Run a code snippet by language — calls POST /run-code */
   runCode: (code: string, language: string) => void;
+  /** Run a raw shell command — calls POST /run; streams to xterm AND resolves
+   *  with the captured output + exit code when the process finishes. */
+  runCommand: (command: string) => Promise<{ exitCode: number; output: string }>;
   /** Kill any running command */
   cancel: () => void;
 }
@@ -202,13 +205,94 @@ export const SandboxTerminal = forwardRef<TerminalHandle>((_, ref) => {
   }, []);
 
   // ── run shell command (manual input bar) ──────────────────────────────────
-  const runCommand = useCallback(async () => {
+  const runShellInput = useCallback(async () => {
     const cmd = command.trim();
     if (!cmd || status === 'connecting' || status === 'streaming') return;
     setHistory(h => [cmd, ...h.filter(x => x !== cmd)].slice(0, 50));
     setHistIdx(-1);
     await streamToTerminal('/run', { command: cmd }, `$ ${cmd}`);
   }, [command, status, streamToTerminal]);
+
+  // ── runCommand (imperative, called by verify loop) ─────────────────────────
+  // Streams to xterm exactly like the manual path but ALSO resolves with the
+  // captured stdout+stderr and exit code so the caller can decide what to do.
+  const runCommandImperative = useCallback((command: string): Promise<{ exitCode: number; output: string }> => {
+    return new Promise(resolve => {
+      abortRef.current?.abort();
+      const abort = new AbortController();
+      abortRef.current = abort;
+
+      const term = termRef.current;
+      if (!term) { resolve({ exitCode: -1, output: '' }); return; }
+
+      setStatus('connecting');
+      setExitCode(null);
+      const captured: string[] = [];
+
+      term.writeln(`\x1b[2;37m$ ${command}\x1b[0m`);
+
+      (async () => {
+        try {
+          const res = await fetch(`${API_URL}/run`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ command }),
+            signal: abort.signal,
+          });
+
+          if (!res.ok || !res.body) throw new Error(`Server HTTP ${res.status}`);
+          setStatus('streaming');
+
+          for await (const { type, text } of parseSse(res.body)) {
+            switch (type) {
+              case 'status': term.writeln(`\x1b[2;36m[${text}]\x1b[0m`); break;
+              case 'stdout':
+                term.write(text);
+                captured.push(text);
+                break;
+              case 'stderr':
+                term.write(`\x1b[91m${text}\x1b[0m`);
+                captured.push(text);
+                break;
+              case 'exit': {
+                const code = Number(text);
+                setExitCode(code);
+                term.writeln(`\n${code === 0 ? '\x1b[32m' : '\x1b[31m'}[exit ${code}]\x1b[0m`);
+                setStatus('done');
+                resolve({ exitCode: code, output: captured.join('') });
+                return;
+              }
+              case 'timeout':
+                term.writeln(`\n\x1b[33m⏱  Timeout: ${text}\x1b[0m`);
+                setStatus('done');
+                resolve({ exitCode: 124, output: captured.join('') });
+                return;
+              case 'error':
+                term.writeln(`\n\x1b[1;31m✗  Error: ${text}\x1b[0m`);
+                setStatus('error');
+                resolve({ exitCode: -1, output: captured.join('') + text });
+                return;
+            }
+          }
+          // Stream ended without explicit exit — treat as success
+          setStatus(s => (s === 'streaming' || s === 'connecting') ? 'done' : s);
+          resolve({ exitCode: 0, output: captured.join('') });
+
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if ((err as Error).name === 'AbortError') {
+            term.writeln('\n\x1b[2;90m[cancelled]\x1b[0m');
+            setStatus('cancelled');
+            resolve({ exitCode: -2, output: captured.join('') });
+          } else {
+            term.writeln(`\n\x1b[1;31m✗  Connection error: ${msg}\x1b[0m`);
+            setStatus('error');
+            resolve({ exitCode: -1, output: captured.join('') });
+          }
+        }
+      })();
+    });
+  }, []);
 
   // ── run code snippet (called by parent via ref) ────────────────────────────
   const runCode = useCallback((code: string, language: string) => {
@@ -228,12 +312,16 @@ export const SandboxTerminal = forwardRef<TerminalHandle>((_, ref) => {
   }, []);
 
   // ── expose imperative handle ───────────────────────────────────────────────
-  useImperativeHandle(ref, () => ({ runCode, cancel }), [runCode, cancel]);
+  useImperativeHandle(ref, () => ({
+    runCode,
+    cancel,
+    runCommand: runCommandImperative,
+  }), [runCode, cancel, runCommandImperative]);
 
   const isRunning = status === 'connecting' || status === 'streaming';
 
   const handleKey = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') { e.preventDefault(); runCommand(); }
+    if (e.key === 'Enter') { e.preventDefault(); runShellInput(); }
     else if (e.key === 'ArrowUp') {
       e.preventDefault();
       setHistIdx(i => { const n = Math.min(i + 1, history.length - 1); setCommand(history[n] ?? ''); return n; });
@@ -241,7 +329,7 @@ export const SandboxTerminal = forwardRef<TerminalHandle>((_, ref) => {
       e.preventDefault();
       setHistIdx(i => { const n = Math.max(i - 1, -1); setCommand(n === -1 ? '' : (history[n] ?? '')); return n; });
     }
-  }, [runCommand, history]);
+  }, [runShellInput, history]);
 
   const dotColor = {
     idle: '#555', connecting: '#5b8dee', streaming: '#8fbf6f',
@@ -266,11 +354,11 @@ export const SandboxTerminal = forwardRef<TerminalHandle>((_, ref) => {
             border: '1px solid #2a2a2a', borderRadius: 4, padding: '5px 10px',
             fontFamily: 'inherit', fontSize: 13, outline: 'none', opacity: isRunning ? .6 : 1 }} />
         {isRunning
-          ? <button onClick={cancel} data-testid="cancel-btn"
+          ? <button onClick={cancel}  data-testid="cancel-btn"
               style={{ background: '#2a1010', color: '#ff6a6a', border: '1px solid #5a2020',
                 borderRadius: 4, padding: '5px 14px', cursor: 'pointer',
                 fontFamily: 'inherit', fontSize: 12, fontWeight: 700 }}>Cancel</button>
-          : <button onClick={runCommand} disabled={!command.trim()} data-testid="run-btn"
+          : <button onClick={runShellInput} disabled={!command.trim()} data-testid="run-btn"
               style={{ background: command.trim() ? '#d4ff3f' : '#1a1a1a',
                 color: command.trim() ? '#0a0a0a' : '#444', border: 'none',
                 borderRadius: 4, padding: '5px 16px', cursor: command.trim() ? 'pointer' : 'default',

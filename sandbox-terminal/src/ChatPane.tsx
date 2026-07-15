@@ -21,9 +21,16 @@
  * are rendered as runnable snippets with "▶ Run in Sandbox".
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { PendingChange } from './useRepoContext.js';
 import type { FileNode } from './types.js';
+
+// Imperative handle exposed to parent (used by auto-verify loop)
+export interface ChatHandle {
+  /** Send a message programmatically (e.g. from the verify loop injecting test
+   *  failure output). Returns the file changes the model proposed, if any. */
+  programmaticSend: (text: string, role?: 'retry-inject' | 'user') => Promise<PendingChange[]>;
+}
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
@@ -198,10 +205,11 @@ function CodeBlock({ lang, content, onRun }: {
 // ---------------------------------------------------------------------------
 
 interface Message {
-  id:       string;
-  role:     'user' | 'assistant';
-  content:  string;
-  segments?: Segment[];
+  id:          string;
+  role:        'user' | 'assistant';
+  content:     string;
+  kind?:       'user' | 'retry-inject';   // retry-inject = auto-sent by verify loop
+  segments?:   Segment[];
   fileChanges?: PendingChange[];
 }
 
@@ -213,19 +221,22 @@ const uid = () => String(++_id);
 // ---------------------------------------------------------------------------
 
 interface Props {
-  repoRoot:       string;
-  tree:           FileNode[];
-  contextFiles:   Map<string, string>;
-  autoRun:        boolean;
-  appliedPaths:   Set<string>;
-  onRunCode:      (code: string, lang: string)        => void;
-  onFileChanges:  (changes: PendingChange[])          => void;
+  repoRoot:          string;
+  tree:              FileNode[];
+  contextFiles:      Map<string, string>;
+  autoRun:           boolean;
+  appliedPaths:      Set<string>;
+  autoSelectedFiles: string[];
+  onRunCode:         (code: string, lang: string)    => void;
+  onFileChanges:     (changes: PendingChange[])      => void;
+  /** Called before each user-initiated send so the parent can auto-load context */
+  onBeforeSend?:     (query: string) => Promise<void>;
 }
 
-export function ChatPane({
-  repoRoot, tree, contextFiles, autoRun, appliedPaths,
-  onRunCode, onFileChanges,
-}: Props) {
+export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
+  repoRoot, tree, contextFiles, autoRun, appliedPaths, autoSelectedFiles,
+  onRunCode, onFileChanges, onBeforeSend,
+}, ref) {
   const [messages,  setMessages]  = useState<Message[]>([
     { id: uid(), role: 'assistant', content:
       "Open a repo in the left panel and click files to add them to context.\n\n" +
@@ -244,13 +255,16 @@ export function ChatPane({
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
-  const send = useCallback(async () => {
-    const text = input.trim();
-    if (!text || loading) return;
+  // ── shared send implementation ─────────────────────────────────────────────
+  const sendText = useCallback(async (
+    text: string,
+    kind: 'user' | 'retry-inject' = 'user',
+  ): Promise<PendingChange[]> => {
+    if (!text || loading) return [];
 
-    const userMsg: Message = { id: uid(), role: 'user', content: text };
+    // 'retry-inject' shows as a muted system note, not a user bubble
+    const userMsg: Message = { id: uid(), role: 'user', content: text, kind };
     setMessages(m => [...m, userMsg]);
-    setInput('');
     setLoading(true);
     setError(null);
 
@@ -277,28 +291,42 @@ export function ChatPane({
       const fc     = extractFileChanges(reply);
 
       setMessages(m => [...m, {
-        id: uid(), role: 'assistant', content: reply,
-        segments: segs, fileChanges: fc,
+        id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
       }]);
 
       if (fc.length > 0) onFileChanges(fc);
 
-      // Auto-run any plain code blocks
       if (autoRun) {
         for (const seg of segs) {
-          if (seg.type === 'code' && seg.content.trim()) {
-            onRunCode(seg.content, seg.lang);
-          }
+          if (seg.type === 'code' && seg.content.trim()) onRunCode(seg.content, seg.lang);
         }
       }
+
+      return fc;
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
       setMessages(m => [...m, { id: uid(), role: 'assistant', content: `⚠ ${msg}` }]);
+      return [];
     } finally {
       setLoading(false);
     }
-  }, [input, loading, messages, repoRoot, tree, contextFiles, autoRun, onRunCode, onFileChanges]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, messages, repoRoot, tree, contextFiles, autoRun, onRunCode, onFileChanges]);
+
+  // Expose imperative handle to parent (used by the verify loop)
+  useImperativeHandle(ref, () => ({
+    programmaticSend: (text, role = 'retry-inject') => sendText(text, role),
+  }), [sendText]);
+
+  const send = useCallback(async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+    setInput('');
+    if (onBeforeSend) await onBeforeSend(text);
+    await sendText(text, 'user');
+  }, [input, loading, sendText, onBeforeSend]);
+
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%',
@@ -320,6 +348,16 @@ export function ChatPane({
         </span>}
       </div>
 
+      {/* auto-context banner — shown when auto-context picked files */}
+      {autoSelectedFiles.length > 0 && (
+        <div style={{ padding: '5px 12px', background: 'rgba(212,255,63,.05)',
+          borderBottom: '1px solid rgba(212,255,63,.15)', flexShrink: 0,
+          fontSize: 10, color: '#8fa62b', lineHeight: 1.6 }}>
+          <span style={{ fontWeight: 700 }}>⚡ Auto-context:</span>{' '}
+          {autoSelectedFiles.join(', ')}
+        </div>
+      )}
+
       {/* messages */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px',
         display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -329,7 +367,18 @@ export function ChatPane({
             maxWidth: msg.role === 'user' ? '75%' : '100%',
             width: msg.role === 'assistant' ? '100%' : undefined,
           }}>
-            {msg.role === 'user' ? (
+            {msg.role === 'user' && msg.kind === 'retry-inject' ? (
+              /* Retry-inject messages: muted note, not a user bubble */
+              <div style={{ padding: '5px 10px', background: '#111a0a',
+                border: '1px dashed #2a4020', borderRadius: 6,
+                fontSize: 11, color: '#6a8a5a', whiteSpace: 'pre-wrap',
+                maxHeight: 120, overflowY: 'auto' }}>
+                <span style={{ fontWeight: 700, display: 'block', marginBottom: 3 }}>
+                  ⟳ Auto-retry — test failure injected
+                </span>
+                {msg.content.slice(0, 500)}{msg.content.length > 500 ? '…' : ''}
+              </div>
+            ) : msg.role === 'user' ? (
               <div style={{ background: '#1f1f1f', border: '1px solid #2a2a2a',
                 borderRadius: 8, padding: '7px 12px', fontSize: 13, whiteSpace: 'pre-wrap' }}>
                 {msg.content}
@@ -389,4 +438,5 @@ export function ChatPane({
       </form>
     </div>
   );
-}
+});
+ChatPane.displayName = 'ChatPane';

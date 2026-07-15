@@ -225,6 +225,8 @@ app.get('/health', (_req, res) => {
 });
 
 import { getFileTree, readFile, writeFiles as writeFilesHelper, countFiles } from './repo.ts';
+import { searchRepo }       from './search.ts';
+import { detectTestCommand } from './detect-test.ts';
 
 // ---------------------------------------------------------------------------
 // /files  GET ?root=<absolute-path>
@@ -273,6 +275,42 @@ app.post('/write-files', (req: Request, res: Response): void => {
     res.status(allOk ? 200 : 207).json({ results });
   } catch (err: unknown) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// /search  POST { root, query, maxFiles? }
+// Returns scored file matches for auto-context.
+// ---------------------------------------------------------------------------
+app.post('/search', async (req: Request, res: Response): Promise<void> => {
+  const { root, query, maxFiles } = req.body as {
+    root?: unknown; query?: unknown; maxFiles?: unknown;
+  };
+  if (typeof root !== 'string' || typeof query !== 'string') {
+    res.status(400).json({ error: 'root and query (strings) required' }); return;
+  }
+  try {
+    const matches = await searchRepo(root, query, typeof maxFiles === 'number' ? maxFiles : 6);
+    res.json({ matches });
+  } catch (err: unknown) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// /detect-test-command  GET ?root=<abs-path>
+// Infers the test command from project files.
+// ---------------------------------------------------------------------------
+app.get('/detect-test-command', (req: Request, res: Response): void => {
+  const root = req.query['root'];
+  if (typeof root !== 'string') {
+    res.status(400).json({ error: 'root query param required' }); return;
+  }
+  try {
+    const result = detectTestCommand(root);
+    res.json(result);
+  } catch (err: unknown) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 
