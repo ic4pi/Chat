@@ -1,7 +1,18 @@
 {
   "version": 2,
   "rewrites": [
-    { "source": "/", "destination": "/index.html" },
-    { "source": "/admin", "destination": "/api/admin" }
-  ]
+    { "source": "/",      "destination": "/index.html" },
+    { "source": "/admin", "destination": "/api/admin"  }
+  ],
+  "functions": {
+    "api/run.js":                  { "maxDuration": 300 },
+    "api/run-code.js":             { "maxDuration": 300 },
+    "api/init-repo.js":            { "maxDuration": 120 },
+    "api/files.js":                { "maxDuration": 30  },
+    "api/file.js":                 { "maxDuration": 30  },
+    "api/write-files.js":          { "maxDuration": 30  },
+    "api/search.js":               { "maxDuration": 30  },
+    "api/detect-test-command.js":  { "maxDuration": 30  },
+    "api/agent-chat.js":           { "maxDuration": 120 }
+  }
 }

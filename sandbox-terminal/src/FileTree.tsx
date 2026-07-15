@@ -131,7 +131,7 @@ export function FileTree({
             value={inputPath}
             onChange={e => setInputPath(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleOpen()}
-            placeholder="/path/to/your/repo"
+            placeholder="https://github.com/user/repo  or  /local/path"
             style={{ flex: 1, minWidth: 0, background: '#111', color: '#e8e8e8',
               border: '1px solid #2a2a2a', borderRadius: 4, padding: '4px 8px',
               fontFamily: 'inherit', fontSize: 11, outline: 'none' }} />

@@ -222,6 +222,7 @@ const uid = () => String(++_id);
 
 interface Props {
   repoRoot:          string;
+  sandboxId:         string | null;    // null = local mode, use /chat; else use /agent-chat
   tree:              FileNode[];
   contextFiles:      Map<string, string>;
   autoRun:           boolean;
@@ -229,12 +230,11 @@ interface Props {
   autoSelectedFiles: string[];
   onRunCode:         (code: string, lang: string)    => void;
   onFileChanges:     (changes: PendingChange[])      => void;
-  /** Called before each user-initiated send so the parent can auto-load context */
   onBeforeSend?:     (query: string) => Promise<void>;
 }
 
 export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
-  repoRoot, tree, contextFiles, autoRun, appliedPaths, autoSelectedFiles,
+  repoRoot, sandboxId, tree, contextFiles, autoRun, appliedPaths, autoSelectedFiles,
   onRunCode, onFileChanges, onBeforeSend,
 }, ref) {
   const [messages,  setMessages]  = useState<Message[]>([
@@ -274,9 +274,15 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       const systemPrompt = buildSystemPrompt(repoRoot, tree, contextFiles);
 
-      const res = await fetch(`${API_URL}/chat`, {
+      // Use /agent-chat (which accepts systemPrompt override) when a sandbox
+      // session is active (remote/Vercel), or local /chat endpoint otherwise.
+      const chatEndpoint = sandboxId ? `${API_URL}/agent-chat` : `${API_URL}/chat`;
+      const chatHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (sandboxId) chatHeaders['X-Sandbox-Session'] = sandboxId;
+
+      const res = await fetch(chatEndpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: chatHeaders,
         body: JSON.stringify({ messages: history, systemPrompt }),
       });
 

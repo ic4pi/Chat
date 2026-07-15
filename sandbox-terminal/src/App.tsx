@@ -24,10 +24,14 @@ const API_URL =
 // Auto-context helper
 // ---------------------------------------------------------------------------
 
-async function fetchAutoContext(root: string, query: string): Promise<string[]> {
+async function fetchAutoContext(
+  root: string, query: string, sandboxId: string | null
+): Promise<string[]> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (sandboxId) headers['X-Sandbox-Session'] = sandboxId;
   const res = await fetch(`${API_URL}/search`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ root, query, maxFiles: 5 }),
   });
   if (!res.ok) return [];
@@ -182,7 +186,7 @@ export function App() {
     if (!repo.root) { setAutoCtxFiles([]); return; }
     setAutoCtxFiles([]);
     try {
-      const paths = await fetchAutoContext(repo.root, query);
+      const paths = await fetchAutoContext(repo.root, query, repo.sandboxId);
       for (const p of paths) await repo.addToContext(p);
       setAutoCtxFiles(paths);
     } catch { /* silently ignore */ }
@@ -258,6 +262,11 @@ export function App() {
           flexShrink: 0, gap: 12 }}>
           <span style={{ color: '#d4ff3f', fontSize: 10, letterSpacing: '0.08em',
             textTransform: 'uppercase' }}>// sandbox agent</span>
+          {repo.isRemote && repo.sandboxId && (
+            <span style={{ fontSize: 9, color: '#555', letterSpacing: '0.06em' }}>
+              ● {repo.sandboxId.slice(0, 22)}…
+            </span>
+          )}
           <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 5,
               fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none' }}>
@@ -293,6 +302,7 @@ export function App() {
           <ChatPane
             ref={chatRef}
             repoRoot={repo.root}
+            sandboxId={repo.sandboxId}
             tree={repo.tree}
             contextFiles={repo.contextFiles}
             autoRun={autoRun}

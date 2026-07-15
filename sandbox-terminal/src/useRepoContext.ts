@@ -23,6 +23,8 @@ export interface PendingChange {
 
 export interface RepoContextState {
   root:           string;
+  sandboxId:      string | null;   // Vercel Sandbox session name (null when local)
+  isRemote:       boolean;         // true = GitHub URL opened via /api/init-repo
   tree:           FileNode[];
   totalFiles:     number;
   contextFiles:   Map<string, string>;   // relPath → content
@@ -32,7 +34,7 @@ export interface RepoContextState {
 }
 
 export interface RepoContextActions {
-  openRepo:        (rootPath: string) => Promise<void>;
+  openRepo:        (rootPathOrUrl: string) => Promise<void>;
   addToContext:    (relPath: string)  => Promise<void>;
   removeFromContext: (relPath: string) => void;
   clearContext:    () => void;
@@ -43,6 +45,8 @@ export interface RepoContextActions {
 
 export function useRepoContext(): RepoContextState & RepoContextActions {
   const [root,           setRoot]           = useState('');
+  const [sandboxId,      setSandboxId]      = useState<string | null>(null);
+  const [isRemote,       setIsRemote]       = useState(false);
   const [tree,           setTree]           = useState<FileNode[]>([]);
   const [totalFiles,     setTotalFiles]     = useState(0);
   const [contextFiles,   setContextFiles]   = useState<Map<string, string>>(new Map());
@@ -50,39 +54,74 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
   const [loading,        setLoading]        = useState(false);
   const [error,          setError]          = useState<string | null>(null);
 
-  const openRepo = useCallback(async (rootPath: string) => {
+  /** Build fetch headers — adds X-Sandbox-Session when we have a remote session */
+  const sessionHeaders = useCallback((extra?: Record<string, string>): Record<string, string> => {
+    const h: Record<string, string> = { 'Content-Type': 'application/json', ...(extra ?? {}) };
+    if (sandboxId) h['X-Sandbox-Session'] = sandboxId;
+    return h;
+  }, [sandboxId]);
+
+  const openRepo = useCallback(async (rootPathOrUrl: string) => {
     setLoading(true);
     setError(null);
     setTree([]);
     setContextFiles(new Map());
     setPendingChanges([]);
+
+    const isGitUrl = /^https?:\/\/|^git@/.test(rootPathOrUrl);
+
     try {
-      const res = await fetch(`${API_URL}/files?root=${encodeURIComponent(rootPath)}`);
-      const data = await res.json() as { tree?: FileNode[]; totalFiles?: number; error?: string };
-      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      setRoot(rootPath);
-      setTree(data.tree ?? []);
-      setTotalFiles(data.totalFiles ?? 0);
+      if (isGitUrl) {
+        // Remote mode: clone into Vercel Sandbox via /api/init-repo
+        const res = await fetch(`${API_URL}/init-repo`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json',
+            ...(sandboxId ? { 'X-Sandbox-Session': sandboxId } : {}) },
+          body: JSON.stringify({ url: rootPathOrUrl, sandboxId }),
+        });
+        const data = await res.json() as {
+          sandboxId?: string; repoDir?: string;
+          tree?: FileNode[]; totalFiles?: number; error?: string;
+        };
+        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+        setSandboxId(data.sandboxId ?? null);
+        setIsRemote(true);
+        setRoot(data.repoDir ?? rootPathOrUrl);
+        setTree(data.tree ?? []);
+        setTotalFiles(data.totalFiles ?? 0);
+      } else {
+        // Local mode: direct /files endpoint on sandbox-runner
+        setSandboxId(null);
+        setIsRemote(false);
+        const res = await fetch(`${API_URL}/files?root=${encodeURIComponent(rootPathOrUrl)}`);
+        const data = await res.json() as { tree?: FileNode[]; totalFiles?: number; error?: string };
+        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+        setRoot(rootPathOrUrl);
+        setTree(data.tree ?? []);
+        setTotalFiles(data.totalFiles ?? 0);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [sandboxId]);
 
   const addToContext = useCallback(async (relPath: string) => {
-    if (contextFiles.has(relPath)) return;   // already loaded
+    if (contextFiles.has(relPath)) return;
     try {
-      const res = await fetch(
-        `${API_URL}/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(relPath)}`
-      );
+      const headers = sandboxId ? { 'X-Sandbox-Session': sandboxId } : undefined;
+      const url = sandboxId
+        ? `${API_URL}/file?path=${encodeURIComponent(relPath)}`
+        : `${API_URL}/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(relPath)}`;
+      const res = await fetch(url, { headers });
       const data = await res.json() as { content?: string; error?: string };
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
       setContextFiles(m => new Map(m).set(relPath, data.content ?? ''));
     } catch (err: unknown) {
       console.error('addToContext failed:', err);
     }
-  }, [root, contextFiles]);
+  }, [root, sandboxId, contextFiles]);
 
   const removeFromContext = useCallback((relPath: string) => {
     setContextFiles(m => { const n = new Map(m); n.delete(relPath); return n; });
@@ -92,32 +131,29 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
 
   const applyChanges = useCallback(async () => {
     if (!pendingChanges.length) return [];
+    const body = sandboxId
+      ? { files: pendingChanges.map(c => ({ path: c.path, content: c.content })) }
+      : { root, files: pendingChanges.map(c => ({ path: c.path, content: c.content })) };
+
     const res = await fetch(`${API_URL}/write-files`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        root,
-        files: pendingChanges.map(c => ({ path: c.path, content: c.content })),
-      }),
+      headers: sessionHeaders(),
+      body: JSON.stringify(body),
     });
-    const data = await res.json() as {
-      results: Array<{ path: string; written: boolean; error?: string }>;
-    };
-    const results = (data.results ?? []).map(r => ({
-      path: r.path, ok: r.written, error: r.error,
-    }));
-    // Refresh context for any file we just wrote
+    const data = await res.json() as { results: Array<{ path: string; written: boolean; error?: string }> };
+    const results = (data.results ?? []).map(r => ({ path: r.path, ok: r.written, error: r.error }));
     const written = results.filter(r => r.ok).map(r => r.path);
     for (const p of written) {
       if (contextFiles.has(p)) await addToContext(p);
     }
     return results;
-  }, [root, pendingChanges, contextFiles, addToContext]);
+  }, [root, sandboxId, pendingChanges, contextFiles, sessionHeaders, addToContext]);
 
   const clearChanges = useCallback(() => setPendingChanges([]), []);
 
   return {
-    root, tree, totalFiles, contextFiles, pendingChanges, loading, error,
+    root, sandboxId, isRemote, tree, totalFiles,
+    contextFiles, pendingChanges, loading, error,
     openRepo, addToContext, removeFromContext, clearContext,
     setPendingChanges, applyChanges, clearChanges,
   };
