@@ -22,6 +22,8 @@
 
 import express, { type Request, type Response } from 'express';
 import { Sandbox } from '@vercel/sandbox';
+import { spawn } from 'child_process';
+import { PassThrough } from 'stream';
 
 const DEFAULT_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes
 
@@ -102,69 +104,106 @@ app.post('/run', async (req: Request, res: Response): Promise<void> => {
   }, timeout);
 
   // Abort if the client disconnects so we don't keep the sandbox alive.
-  req.on('close', () => {
-    if (!abort.signal.aborted) abort.abort(new Error('Client disconnected'));
+  // IMPORTANT: use res.on('close'), NOT req.on('close'). In HTTP/1.1 the
+  // request is "done" (and emits 'close') the moment the POST body is fully
+  // received — long before the SSE response finishes. res.on('close') fires
+  // when the underlying socket actually drops, i.e. a real client disconnect.
+  let streamDone = false; // prevent the normal res.end() path from self-aborting
+  res.on('close', () => {
+    if (!streamDone && !abort.signal.aborted) {
+      abort.abort(new Error('Client disconnected'));
+    }
   });
 
   let sandbox: Sandbox | null = null;
 
   try {
-    const auth = resolveSandboxAuth();
+    if (process.env['LOCAL_MODE'] === 'true') {
+      // ----------------------------------------------------------------
+      // LOCAL_MODE: bypass Vercel Sandbox and run the command directly
+      // via child_process.spawn. Useful for verifying SSE streaming without
+      // needing Vercel credentials. The SSE layer is identical to production.
+      // ----------------------------------------------------------------
+      sseEvent(res, 'status', '[LOCAL_MODE] running via child_process.spawn');
 
-    sseEvent(res, 'status', 'Creating sandbox…');
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn('bash', ['-c', command], { stdio: 'pipe' });
 
-    sandbox = await Sandbox.create({
-      ...auth,
-      runtime: 'node24',
-      // The sandbox itself also has a timeout; set it to match ours so it
-      // doesn't outlive the command budget if we crash before destroying it.
-      timeout,
-    });
+        const abortListener = () => {
+          child.kill('SIGTERM');
+          sseEvent(res, 'timeout',
+            abort.signal.reason instanceof Error
+              ? abort.signal.reason.message
+              : 'Aborted');
+          resolve();
+        };
+        abort.signal.addEventListener('abort', abortListener, { once: true });
 
-    sseEvent(res, 'status', `Sandbox ready: ${sandbox.name}`);
+        child.stdout.on('data', (chunk: Buffer) => sseEvent(res, 'stdout', chunk.toString()));
+        child.stderr.on('data', (chunk: Buffer) => sseEvent(res, 'stderr', chunk.toString()));
 
-    // detached: true — returns a Command object immediately so we can stream
-    // via .logs() before the command finishes.
-    const cmd = await sandbox.runCommand({
-      cmd: 'bash',
-      args: ['-c', command],
-      detached: true,
-    });
+        child.on('error', (err) => {
+          abort.signal.removeEventListener('abort', abortListener);
+          reject(err);
+        });
 
-    try {
-      // .logs() is an AsyncGenerator that yields { stream, data } pairs in
-      // real time as the sandbox process writes to stdout/stderr.
-      for await (const log of cmd.logs({ signal: abort.signal })) {
-        sseEvent(res, log.stream, log.data);
+        child.on('close', (code) => {
+          abort.signal.removeEventListener('abort', abortListener);
+          if (!abort.signal.aborted) sseEvent(res, 'exit', String(code ?? 0));
+          resolve();
+        });
+      });
+
+    } else {
+      // ----------------------------------------------------------------
+      // PRODUCTION: Vercel Sandbox
+      // ----------------------------------------------------------------
+      const auth = resolveSandboxAuth();
+
+      sseEvent(res, 'status', 'Creating sandbox…');
+
+      sandbox = await Sandbox.create({
+        ...auth,
+        runtime: 'node24',
+        timeout,
+      });
+
+      sseEvent(res, 'status', `Sandbox ready: ${sandbox.name}`);
+
+      const cmd = await sandbox.runCommand({
+        cmd: 'bash',
+        args: ['-c', command],
+        detached: true,
+      });
+
+      try {
+        for await (const log of cmd.logs({ signal: abort.signal })) {
+          sseEvent(res, log.stream, log.data);
+        }
+      } catch (logErr: unknown) {
+        if (abort.signal.aborted) {
+          await cmd.kill('SIGTERM').catch(() => { /* best effort */ });
+          const reason =
+            abort.signal.reason instanceof Error
+              ? abort.signal.reason.message
+              : 'Aborted';
+          sseEvent(res, 'timeout', reason);
+          return;
+        }
+        throw logErr;
       }
-    } catch (logErr: unknown) {
-      if (abort.signal.aborted) {
-        // Kill the running process so we don't leak sandbox resources.
-        await cmd.kill('SIGTERM').catch(() => { /* best effort */ });
-        const reason =
-          abort.signal.reason instanceof Error
-            ? abort.signal.reason.message
-            : 'Aborted';
-        sseEvent(res, 'timeout', reason);
-        return; // skip exit-code reporting
-      }
-      // Any other logs() error (StreamError, network, etc.) — re-throw.
-      throw logErr;
+
+      const finished = await cmd.wait();
+      sseEvent(res, 'exit', String(finished.exitCode ?? 0));
     }
-
-    // logs() drained normally → command finished. wait() resolves immediately
-    // because the process has already exited; it just gives us the exit code.
-    const finished = await cmd.wait();
-    sseEvent(res, 'exit', String(finished.exitCode ?? 0));
 
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[sandbox-runner] error:', message);
     sseEvent(res, 'error', message);
   } finally {
-    clearTimeout(timeoutHandle);
-    // Stop the sandbox; don't await — the client's connection is already
-    // finishing and we don't want to delay res.end().
+    streamDone = true;        // mark done BEFORE res.end() so the 'close' listener
+    clearTimeout(timeoutHandle); // doesn't mis-fire as a client disconnect
     if (sandbox) {
       sandbox.stop().catch((e: unknown) => {
         console.error('[sandbox-runner] sandbox.stop() failed:', e);
