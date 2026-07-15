@@ -4,27 +4,26 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview",
+    "dev":       "vite",
+    "build":     "vite build",
+    "preview":   "vite preview",
     "typecheck": "tsc --noEmit",
-    "verify": "node --experimental-strip-types scripts/verify.ts"
+    "verify":    "node --experimental-strip-types scripts/verify.ts"
   },
   "dependencies": {
-    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-fit":       "^0.10.0",
     "@xterm/addon-web-links": "^0.11.0",
-    "@xterm/xterm": "^5.5.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "@xterm/xterm":           "^5.5.0",
+    "react":                  "^18.3.1",
+    "react-dom":              "^18.3.1"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "@types/react": "^18.3.3",
-    "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.1",
+    "@types/node":           "^22.0.0",
+    "@types/react":          "^18.3.3",
+    "@types/react-dom":      "^18.3.0",
     "@vitejs/plugin-react-swc": "^4.3.1",
-    "puppeteer-core": "^22.15.0",
-    "typescript": "^5.5.3",
-    "vite": "^5.4.1"
+    "puppeteer-core":        "^22.15.0",
+    "typescript":            "^5.5.3",
+    "vite":                  "^5.4.1"
   }
 }

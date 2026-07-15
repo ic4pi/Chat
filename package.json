@@ -5,5 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vercel dev"
+  },
+  "dependencies": {
+    "@vercel/sandbox": "^2.6.0",
+    "cors": "^2.8.5",
+    "ignore": "^6.0.2"
   }
 }

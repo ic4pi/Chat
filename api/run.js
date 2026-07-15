@@ -14,14 +14,13 @@ import { requireSession, REPO_DIR } from '../lib/sandbox-session.js';
 const DEFAULT_TIMEOUT = 2 * 60 * 1000;
 
 export default async function handler(req, res) {
+  if (!setupSSE(res, req)) return;
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
 
   const { command, timeoutMs } = req.body || {};
   if (!command) return res.status(400).json({ error: 'command required' });
 
   const timeout = typeof timeoutMs === 'number' && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT;
-
-  setupSSE(res);
 
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(new Error(`Timed out after ${timeout / 1000}s`)), timeout);
