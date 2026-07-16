@@ -1,0 +1,5 @@
+# These directories are development tools, not part of the Vercel deployment.
+# The sandbox-terminal UI is pre-built into public/agent/ — no need to process
+# the source directory during deployment.
+sandbox-runner/
+sandbox-terminal/
