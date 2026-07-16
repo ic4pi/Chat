@@ -222,7 +222,9 @@ const uid = () => String(++_id);
 
 interface Props {
   repoRoot:          string;
-  sandboxId:         string | null;    // null = local mode, use /chat; else use /agent-chat
+  sandboxId:         string | null;
+  provider:          string;
+  model:             string;
   tree:              FileNode[];
   contextFiles:      Map<string, string>;
   autoRun:           boolean;
@@ -234,8 +236,8 @@ interface Props {
 }
 
 export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
-  repoRoot, sandboxId, tree, contextFiles, autoRun, appliedPaths, autoSelectedFiles,
-  onRunCode, onFileChanges, onBeforeSend,
+  repoRoot, sandboxId, provider, model, tree, contextFiles, autoRun, appliedPaths,
+  autoSelectedFiles, onRunCode, onFileChanges, onBeforeSend,
 }, ref) {
   const [messages,  setMessages]  = useState<Message[]>([
     { id: uid(), role: 'assistant', content:
@@ -283,7 +285,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       const res = await fetch(chatEndpoint, {
         method: 'POST',
         headers: chatHeaders,
-        body: JSON.stringify({ messages: history, systemPrompt }),
+        body: JSON.stringify({ messages: history, systemPrompt, provider, model }),
       });
 
       if (!res.ok) {

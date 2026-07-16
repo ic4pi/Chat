@@ -1,9 +1,11 @@
 /**
- * App — 3-panel layout wired with:
- *   • Auto-context: before the user's first message, or when context is empty,
- *     grep the repo for relevant files and auto-load them.
- *   • Auto-verify: after applying file changes, detect + run the test command,
- *     inject failures back into chat, retry up to 3 times.
+ * App — 3-panel layout on desktop, tab-based on mobile.
+ *
+ * Desktop: Files (240px) | Chat (flex) | Terminal (420px)
+ * Mobile:  Tabs → Files / Chat / Terminal  (full-screen each)
+ *
+ * Provider + model selectors live in the topbar so the agent
+ * can reach the user's Venice/OpenRouter models.
  */
 
 import React, { useCallback, useRef, useState } from 'react';
@@ -21,17 +23,32 @@ const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
 
 // ---------------------------------------------------------------------------
+// Provider / model config
+// ---------------------------------------------------------------------------
+
+const VENICE_MODELS = [
+  { id: 'venice-uncensored',            label: 'Venice Uncensored (Dolphin-Mistral 24B)' },
+  { id: 'qwen3-235b-a22b-instruct-2507',label: 'Qwen3 235B Instruct' },
+  { id: 'llama-3.3-70b',                label: 'Llama 3.3 70B' },
+  { id: 'mistral-31-24b',               label: 'Mistral 3.1 24B' },
+  { id: 'hermes-3-llama-3.1-405b',      label: 'Hermes 3 405B' },
+];
+
+const OR_MODELS = [
+  { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free', label: 'Dolphin-Venice 24B (free)' },
+  { id: 'nousresearch/hermes-3-llama-3.1-405b:free', label: 'Hermes 3 405B (free)' },
+  { id: 'meta-llama/llama-3.3-70b-instruct:free',    label: 'Llama 3.3 70B (free)' },
+];
+
+// ---------------------------------------------------------------------------
 // Auto-context helper
 // ---------------------------------------------------------------------------
 
-async function fetchAutoContext(
-  root: string, query: string, sandboxId: string | null
-): Promise<string[]> {
+async function fetchAutoContext(root: string, query: string, sandboxId: string | null): Promise<string[]> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (sandboxId) headers['X-Sandbox-Session'] = sandboxId;
   const res = await fetch(`${API_URL}/search`, {
-    method: 'POST',
-    headers,
+    method: 'POST', headers,
     body: JSON.stringify({ root, query, maxFiles: 5 }),
   });
   if (!res.ok) return [];
@@ -40,99 +57,9 @@ async function fetchAutoContext(
 }
 
 // ---------------------------------------------------------------------------
-// VerifyBanner — strip below the diff panel showing verify state
+// Mobile tab type
 // ---------------------------------------------------------------------------
-
-function VerifyBanner({
-  verifyState, attempt, testCommand, askCommand,
-  onRun, onSetCommand, onDismiss,
-}: {
-  verifyState:  string;
-  attempt:      number;
-  testCommand:  string | null;
-  askCommand:   boolean;
-  onRun:        () => void;
-  onSetCommand: (cmd: string) => void;
-  onDismiss:    () => void;
-}) {
-  const [customCmd, setCustomCmd] = useState('');
-
-  if (verifyState === 'idle') return null;
-
-  const color =
-    verifyState === 'passed'  ? '#8fbf6f' :
-    verifyState === 'failed'  ? '#ff6a6a' :
-    verifyState === 'running' ? '#5b8dee' :
-    verifyState === 'detecting' ? '#888' :
-    '#d4ff3f'; // retry-N
-
-  const label =
-    verifyState === 'detecting'  ? 'Detecting test command…' :
-    verifyState === 'running'    ? `Running: ${testCommand ?? '…'}` :
-    verifyState === 'passed'     ? '✓ Tests passed' :
-    verifyState === 'failed'     ? `✗ Tests failed after ${attempt} attempts` :
-    `⟳ Tests failed — retrying (attempt ${attempt}/${3})`;
-
-  if (askCommand) {
-    return (
-      <div style={{ padding: '8px 12px', background: '#0f0f0f',
-        borderTop: '1px solid #2a2a2a', flexShrink: 0 }}>
-        <div style={{ fontSize: 11, color: '#888', marginBottom: 6 }}>
-          Could not detect a test command. Enter it manually:
-        </div>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <input value={customCmd} onChange={e => setCustomCmd(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && customCmd.trim() && onSetCommand(customCmd.trim())}
-            placeholder="npm test / python3 -m pytest / cargo test…"
-            style={{ flex: 1, background: '#151515', color: '#e8e8e8',
-              border: '1px solid #333', borderRadius: 4, padding: '4px 8px',
-              fontFamily: 'inherit', fontSize: 12, outline: 'none' }} />
-          <button onClick={() => customCmd.trim() && onSetCommand(customCmd.trim())}
-            style={{ background: '#d4ff3f', color: '#0a0a0a', border: 'none',
-              borderRadius: 4, padding: '4px 12px', cursor: 'pointer',
-              fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
-            Set & Run
-          </button>
-          <button onClick={onDismiss}
-            style={{ background: 'transparent', color: '#555', border: '1px solid #222',
-              borderRadius: 4, padding: '4px 8px', cursor: 'pointer',
-              fontFamily: 'inherit', fontSize: 11 }}>
-            Skip
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10,
-      padding: '6px 12px', background: '#0c0c0c',
-      borderTop: '1px solid #1e1e1e', flexShrink: 0 }}>
-      <div style={{ width: 7, height: 7, borderRadius: '50%',
-        background: color, flexShrink: 0,
-        boxShadow: verifyState === 'running' ? `0 0 5px ${color}` : 'none' }} />
-      <span style={{ fontSize: 11, color, flex: 1 }}>{label}</span>
-      {verifyState === 'passed' && (
-        <button onClick={onDismiss}
-          style={{ background: 'transparent', color: '#555', border: 'none',
-            fontSize: 11, cursor: 'pointer', padding: 0 }}>dismiss</button>
-      )}
-      {verifyState === 'failed' && (
-        <>
-          <button onClick={onRun}
-            style={{ background: '#1a2a0a', color: '#8fbf6f', border: '1px solid #2a4a1a',
-              borderRadius: 4, padding: '3px 10px', cursor: 'pointer',
-              fontFamily: 'inherit', fontSize: 11 }}>
-            Retry
-          </button>
-          <button onClick={onDismiss}
-            style={{ background: 'transparent', color: '#555', border: 'none',
-              fontSize: 11, cursor: 'pointer', padding: 0 }}>dismiss</button>
-        </>
-      )}
-    </div>
-  );
-}
+type Tab = 'files' | 'chat' | 'terminal';
 
 // ---------------------------------------------------------------------------
 // App
@@ -143,40 +70,41 @@ export function App() {
   const chatRef = useRef<ChatHandle>(null);
   const repo    = useRepoContext();
 
-  const [autoRun,        setAutoRun]        = useState(true);
-  const [autoVerifyOn,   setAutoVerifyOn]   = useState(true);
-  const [applying,       setApplying]       = useState(false);
-  const [appliedPaths,   setAppliedPaths]   = useState<Set<string>>(new Set());
-  const [applyResults,   setApplyResults]   = useState<Array<{ path: string; ok: boolean; error?: string }>>([]);
-  const [autoCtxFiles,   setAutoCtxFiles]   = useState<string[]>([]);
+  const [provider,      setProvider]      = useState('venice');
+  const [model,         setModel]         = useState('venice-uncensored');
+  const [autoRun,       setAutoRun]       = useState(true);
+  const [autoVerifyOn,  setAutoVerifyOn]  = useState(true);
+  const [applying,      setApplying]      = useState(false);
+  const [appliedPaths,  setAppliedPaths]  = useState<Set<string>>(new Set());
+  const [applyResults,  setApplyResults]  = useState<Array<{ path: string; ok: boolean; error?: string }>>([]);
+  const [autoCtxFiles,  setAutoCtxFiles]  = useState<string[]>([]);
+  const [activeTab,     setActiveTab]     = useState<Tab>('chat');
 
-  // ── Apply changes to disk ────────────────────────────────────────────────
+  const models = provider === 'venice' ? VENICE_MODELS : OR_MODELS;
+
+  const handleProviderChange = useCallback((p: string) => {
+    setProvider(p);
+    setModel(p === 'venice' ? 'venice-uncensored' : 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free');
+  }, []);
+
+  // ── Apply ────────────────────────────────────────────────────────────────
   const handleApply = useCallback(async () => {
     setApplying(true);
     try {
       const results = await repo.applyChanges();
       setApplyResults(results);
-      const ok = new Set(results.filter(r => r.ok).map(r => r.path));
-      setAppliedPaths(ok);
+      setAppliedPaths(new Set(results.filter(r => r.ok).map(r => r.path)));
       return results;
-    } finally {
-      setApplying(false);
-    }
+    } finally { setApplying(false); }
   }, [repo]);
 
-  // ── Auto-verify loop ─────────────────────────────────────────────────────
-  const autoVerify = useAutoVerify(
-    repo.root,
-    termRef,
-    chatRef,
-    // applyChanges callback — the verify loop calls this after each retry fix
-    repo.applyChanges,
-  );
+  // ── Auto-verify ──────────────────────────────────────────────────────────
+  const autoVerify = useAutoVerify(repo.root, termRef, chatRef, repo.applyChanges);
 
   const handleApplyAndVerify = useCallback(async () => {
     const results = await handleApply();
-    const anyOk = results.some(r => r.ok);
-    if (anyOk && autoVerifyOn && repo.root) {
+    if (results.some(r => r.ok) && autoVerifyOn && repo.root) {
+      setActiveTab('terminal');
       await autoVerify.verify();
     }
   }, [handleApply, autoVerifyOn, repo.root, autoVerify]);
@@ -189,7 +117,7 @@ export function App() {
       const paths = await fetchAutoContext(repo.root, query, repo.sandboxId);
       for (const p of paths) await repo.addToContext(p);
       setAutoCtxFiles(paths);
-    } catch { /* silently ignore */ }
+    } catch { /* ignore */ }
   }, [repo]);
 
   // ── File changes from chat ───────────────────────────────────────────────
@@ -197,9 +125,12 @@ export function App() {
     const withOriginals = changes.map(async c => {
       if (!repo.root) return c;
       try {
-        const res = await fetch(
-          `${API_URL}/file?root=${encodeURIComponent(repo.root)}&path=${encodeURIComponent(c.path)}`
-        );
+        const headers: Record<string, string> = {};
+        if (repo.sandboxId) headers['X-Sandbox-Session'] = repo.sandboxId;
+        const url = repo.sandboxId
+          ? `${API_URL}/file?path=${encodeURIComponent(c.path)}`
+          : `${API_URL}/file?root=${encodeURIComponent(repo.root)}&path=${encodeURIComponent(c.path)}`;
+        const res = await fetch(url, { headers });
         if (!res.ok) return c;
         const data = await res.json() as { content?: string };
         return { ...c, original: data.content };
@@ -212,6 +143,7 @@ export function App() {
   }, [repo, autoVerify]);
 
   const handleRunCode = useCallback((code: string, lang: string) => {
+    setActiveTab('terminal');
     termRef.current?.runCode(code, lang);
   }, []);
 
@@ -219,143 +151,183 @@ export function App() {
     repo.setPendingChanges(repo.pendingChanges.filter(c => c.path !== p));
   }, [repo]);
 
-  // ── When user sends any message, clear auto-ctx highlight ────────────────
-  const handleClearAutoCtx = useCallback(() => setAutoCtxFiles([]), []);
+  // ── Shared panel contents ────────────────────────────────────────────────
+  const filePanel = (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%',
+      borderRight: '1px solid #1e1e1e', overflow: 'hidden' }}>
+      <FileTree
+        repoRoot={repo.root} tree={repo.tree} totalFiles={repo.totalFiles}
+        contextFiles={repo.contextFiles} loading={repo.loading} error={repo.error}
+        onOpenRepo={repo.openRepo}
+        onAddToContext={repo.addToContext}
+        onRemoveFromContext={repo.removeFromContext}
+        onClearContext={repo.clearContext}
+      />
+    </div>
+  );
+
+  const chatPanel = (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      {applyResults.length > 0 && (
+        <div style={{ padding: '4px 10px', background: '#0c1a0c',
+          borderBottom: '1px solid #1e3a1e', flexShrink: 0, fontSize: 11 }}>
+          {applyResults.map(r => (
+            <span key={r.path} style={{ marginRight: 10, color: r.ok ? '#8fbf6f' : '#ff6a6a' }}>
+              {r.ok ? '✓' : '✗'} {r.path}
+            </span>
+          ))}
+        </div>
+      )}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+        <ChatPane
+          ref={chatRef}
+          repoRoot={repo.root}
+          sandboxId={repo.sandboxId}
+          provider={provider}
+          model={model}
+          tree={repo.tree}
+          contextFiles={repo.contextFiles}
+          autoRun={autoRun}
+          appliedPaths={appliedPaths}
+          autoSelectedFiles={autoCtxFiles}
+          onRunCode={handleRunCode}
+          onFileChanges={handleFileChanges}
+          onBeforeSend={async (query) => {
+            if (repo.contextFiles.size === 0 && repo.root) {
+              await handleAutoContext(query);
+            } else {
+              setAutoCtxFiles([]);
+            }
+          }}
+        />
+      </div>
+      <DiffPanel
+        changes={repo.pendingChanges} applying={applying}
+        appliedPaths={appliedPaths} onApply={handleApplyAndVerify}
+        onDismiss={handleDismiss} onDismissAll={repo.clearChanges}
+      />
+    </div>
+  );
+
+  const termPanel = (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <SandboxTerminal ref={termRef} />
+    </div>
+  );
+
+  // ── Topbar ───────────────────────────────────────────────────────────────
+  const topbar = (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 8,
+      padding: '6px 12px', borderBottom: '1px solid #1e1e1e',
+      background: '#080808', flexShrink: 0, flexWrap: 'wrap',
+    }}>
+      <span style={{ color: '#d4ff3f', fontSize: 10, letterSpacing: '0.08em',
+        textTransform: 'uppercase', whiteSpace: 'nowrap' }}>// agent</span>
+
+      {/* provider */}
+      <select value={provider} onChange={e => handleProviderChange(e.target.value)}
+        style={{ background: '#111', color: '#e8e8e8', border: '1px solid #333',
+          borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11, cursor: 'pointer' }}>
+        <option value="venice">Venice</option>
+        <option value="openrouter">OpenRouter</option>
+      </select>
+
+      {/* model */}
+      <select value={model} onChange={e => setModel(e.target.value)}
+        style={{ background: '#111', color: '#e8e8e8', border: '1px solid #333',
+          borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11,
+          cursor: 'pointer', maxWidth: 200 }}>
+        {models.map(m => (
+          <option key={m.id} value={m.id}>{m.label}</option>
+        ))}
+      </select>
+
+      {/* sandbox indicator */}
+      {repo.sandboxId && (
+        <span style={{ fontSize: 9, color: '#555', whiteSpace: 'nowrap',
+          overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 140 }}
+          title={repo.sandboxId}>
+          ● {repo.sandboxId}
+        </span>
+      )}
+
+      <div style={{ marginLeft: 'auto', display: 'flex', gap: 12, alignItems: 'center' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4,
+          fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none',
+          whiteSpace: 'nowrap' }}>
+          Auto-run <input type="checkbox" checked={autoRun}
+            onChange={e => setAutoRun(e.target.checked)} style={{ accentColor: '#d4ff3f' }} />
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4,
+          fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none',
+          whiteSpace: 'nowrap' }}>
+          Auto-verify <input type="checkbox" checked={autoVerifyOn}
+            onChange={e => setAutoVerifyOn(e.target.checked)} style={{ accentColor: '#d4ff3f' }} />
+        </label>
+      </div>
+    </div>
+  );
+
+  // ── Tab bar (mobile only) ─────────────────────────────────────────────────
+  const tabBar = (
+    <div className="mobile-tabs">
+      {(['files', 'chat', 'terminal'] as Tab[]).map(t => (
+        <button key={t} onClick={() => setActiveTab(t)}
+          style={{
+            flex: 1, padding: '10px 0', background: activeTab === t ? '#111' : 'transparent',
+            color: activeTab === t ? '#d4ff3f' : '#555',
+            border: 'none', borderTop: activeTab === t ? '2px solid #d4ff3f' : '2px solid transparent',
+            fontFamily: 'inherit', fontSize: 12, cursor: 'pointer', textTransform: 'uppercase',
+            letterSpacing: '0.08em',
+          }}>
+          {t === 'files' ? `Files${repo.tree.length ? ' (' + repo.totalFiles + ')' : ''}` :
+           t === 'chat'  ? `Chat${repo.contextFiles.size ? ' (' + repo.contextFiles.size + ')' : ''}` :
+                           'Terminal'}
+        </button>
+      ))}
+    </div>
+  );
 
   return (
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: '240px 1fr 480px',
-      height: '100vh',
-      background: '#0a0a0a',
-      fontFamily: '"JetBrains Mono",ui-monospace,monospace',
-      overflow: 'hidden',
-    }}>
+    <>
+      <style>{`
+        .agent-desktop { display: grid; grid-template-columns: 240px 1fr 420px; height: 100vh; }
+        .mobile-tabs   { display: none; }
+        .mobile-panel  { display: none; }
+        @media (max-width: 900px) {
+          .agent-desktop { display: none; }
+          .mobile-tabs   { display: flex; background: #080808; border-top: 1px solid #1e1e1e;
+                           position: fixed; bottom: 0; left: 0; right: 0; z-index: 20; }
+          .mobile-panel  { display: flex; flex-direction: column;
+                           height: calc(100vh - 44px); overflow: hidden; }
+        }
+      `}</style>
 
-      {/* ── left: file tree ── */}
-      <div style={{ borderRight: '1px solid #1e1e1e', overflow: 'hidden',
-        display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '6px 10px', borderBottom: '1px solid #1e1e1e',
-          background: '#080808', flexShrink: 0 }}>
-          <span style={{ color: '#d4ff3f', fontSize: 10, letterSpacing: '0.1em',
-            textTransform: 'uppercase' }}>// files</span>
-        </div>
-        <div style={{ flex: 1, overflow: 'hidden' }}>
-          <FileTree
-            repoRoot={repo.root} tree={repo.tree} totalFiles={repo.totalFiles}
-            contextFiles={repo.contextFiles} loading={repo.loading} error={repo.error}
-            onOpenRepo={repo.openRepo}
-            onAddToContext={repo.addToContext}
-            onRemoveFromContext={repo.removeFromContext}
-            onClearContext={repo.clearContext}
-          />
-        </div>
-      </div>
+      {/* ── Desktop layout ── */}
+      <div style={{ height: '100vh', background: '#0a0a0a',
+        fontFamily: '"JetBrains Mono",ui-monospace,monospace',
+        display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {topbar}
 
-      {/* ── center: chat + diff + verify ── */}
-      <div style={{ display: 'flex', flexDirection: 'column',
-        borderRight: '1px solid #1e1e1e', overflow: 'hidden' }}>
-
-        {/* topbar */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '6px 14px', borderBottom: '1px solid #1e1e1e', background: '#080808',
-          flexShrink: 0, gap: 12 }}>
-          <span style={{ color: '#d4ff3f', fontSize: 10, letterSpacing: '0.08em',
-            textTransform: 'uppercase' }}>// sandbox agent</span>
-          {repo.isRemote && repo.sandboxId && (
-            <span style={{ fontSize: 9, color: '#555', letterSpacing: '0.06em' }}>
-              ● {repo.sandboxId.slice(0, 22)}…
-            </span>
-          )}
-          <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 5,
-              fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none' }}>
-              Auto-run
-              <input type="checkbox" checked={autoRun}
-                onChange={e => setAutoRun(e.target.checked)}
-                style={{ accentColor: '#d4ff3f' }} />
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 5,
-              fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none' }}>
-              Auto-verify
-              <input type="checkbox" checked={autoVerifyOn}
-                onChange={e => setAutoVerifyOn(e.target.checked)}
-                style={{ accentColor: '#d4ff3f' }} />
-            </label>
+        {/* 3-column grid */}
+        <div className="agent-desktop" style={{ flex: 1, minHeight: 0 }}>
+          {filePanel}
+          <div style={{ display: 'flex', flexDirection: 'column',
+            borderRight: '1px solid #1e1e1e', overflow: 'hidden' }}>
+            {chatPanel}
           </div>
+          {termPanel}
         </div>
 
-        {/* apply results banner */}
-        {applyResults.length > 0 && (
-          <div style={{ padding: '5px 12px', background: '#0c1a0c',
-            borderBottom: '1px solid #1e3a1e', flexShrink: 0, fontSize: 11 }}>
-            {applyResults.map(r => (
-              <span key={r.path} style={{ marginRight: 12,
-                color: r.ok ? '#8fbf6f' : '#ff6a6a' }}>
-                {r.ok ? '✓' : '✗'} {r.path}{r.error ? ` (${r.error})` : ''}
-              </span>
-            ))}
-          </div>
-        )}
-
-        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-          <ChatPane
-            ref={chatRef}
-            repoRoot={repo.root}
-            sandboxId={repo.sandboxId}
-            tree={repo.tree}
-            contextFiles={repo.contextFiles}
-            autoRun={autoRun}
-            appliedPaths={appliedPaths}
-            autoSelectedFiles={autoCtxFiles}
-            onRunCode={handleRunCode}
-            onFileChanges={handleFileChanges}
-            onBeforeSend={async (query) => {
-              // Auto-context: load relevant files if context is empty
-              if (repo.contextFiles.size === 0 && repo.root) {
-                await handleAutoContext(query);
-              } else {
-                setAutoCtxFiles([]);
-              }
-            }}
-          />
+        {/* Mobile: show active tab only */}
+        <div className="mobile-panel">
+          {activeTab === 'files'    && filePanel}
+          {activeTab === 'chat'     && chatPanel}
+          {activeTab === 'terminal' && termPanel}
         </div>
-
-        <DiffPanel
-          changes={repo.pendingChanges}
-          applying={applying}
-          appliedPaths={appliedPaths}
-          onApply={handleApplyAndVerify}
-          onDismiss={handleDismiss}
-          onDismissAll={repo.clearChanges}
-        />
-
-        <VerifyBanner
-          verifyState={autoVerify.verifyState}
-          attempt={autoVerify.attempt}
-          testCommand={autoVerify.testCommand}
-          askCommand={autoVerify.askCommand}
-          onRun={autoVerify.verify}
-          onSetCommand={(cmd) => {
-            autoVerify.setCustomCommand(cmd);
-            autoVerify.verify();
-          }}
-          onDismiss={autoVerify.reset}
-        />
+        {tabBar}
       </div>
-
-      {/* ── right: terminal ── */}
-      <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <div style={{ padding: '6px 14px', borderBottom: '1px solid #1e1e1e',
-          background: '#080808', flexShrink: 0 }}>
-          <span style={{ color: '#d4ff3f', fontSize: 10, letterSpacing: '0.08em',
-            textTransform: 'uppercase' }}>// sandbox terminal</span>
-        </div>
-        <div style={{ flex: 1, minHeight: 0 }}>
-          <SandboxTerminal ref={termRef} />
-        </div>
-      </div>
-
-    </div>
+    </>
   );
 }

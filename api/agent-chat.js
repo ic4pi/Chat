@@ -35,7 +35,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'messages array required' });
   }
 
-  const provider = PROVIDERS[providerId] || PROVIDERS.openrouter;
+  const provider = PROVIDERS[providerId] || PROVIDERS.venice;
   const apiKey   = process.env[provider.apiKeyEnv];
   if (!apiKey) {
     return res.status(500).json({
@@ -56,7 +56,7 @@ export default async function handler(req, res) {
         ...provider.extraHeaders(),
       },
       body: JSON.stringify({
-        model: model ?? 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
+        model: model ?? 'venice-uncensored',
         messages: messagesWithSystem,
         stream: false,
       }),
