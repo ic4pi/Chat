@@ -32,12 +32,6 @@ html, body {
 
 body { overflow: hidden; }
 
-/* iOS zooms in on any input/select/textarea with font-size < 16px on focus.
-   Override to 16px on mobile — looks the same, prevents the zoom jump. */
-@media (max-width: 900px) {
-  input, select, textarea { font-size: 16px !important; }
-}
-
 button {
   font-family: inherit;
   color: var(--text);
