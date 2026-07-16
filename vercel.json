@@ -1,5 +1,7 @@
 {
   "version": 2,
+  "buildCommand": null,
+  "installCommand": "npm install --ignore-scripts",
   "rewrites": [
     { "source": "/",                "destination": "/index.html" },
     { "source": "/admin",           "destination": "/api/admin"  },
