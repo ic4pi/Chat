@@ -675,14 +675,26 @@ button#sendBtn:hover:not(:disabled) { background: var(--accent-dim); }
   /* Keep the composer visible above the soft keyboard, and ONLY bump the
      message box to 16px (iOS zooms inputs <16px). Do NOT force every
      select/input to 16px — that blew up the whole topbar last time. */
+  #inputForm {
+    gap: 8px;
+    padding: 10px 12px;
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
   textarea#input {
     font-size: 16px;
-    max-height: 120px;
+    max-height: 96px;
+    min-width: 0;
+    width: 100%;
+  }
+  button#sendBtn {
+    padding: 0 14px;
+    flex: 0 0 auto;
   }
   .ctrl select {
     font-size: 12px;
     max-width: min(42vw, 160px);
   }
+  .msg { max-width: 100%; }
 }
 /* Hide the mobile close button on desktop where it isn't needed */
 @media (min-width: 901px) {

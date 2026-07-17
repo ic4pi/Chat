@@ -75,8 +75,10 @@ function freshState() {
     chats: [],
     activeChatId: null,
     activePersonaId: 'nexus',
-    activeProvider: 'openrouter',
-    activeModel: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
+    // Venice by default — OpenRouter free-tier models routinely hang / 429,
+    // which on iOS shows up as a multi-minute "thinking…" then "Load failed".
+    activeProvider: 'venice',
+    activeModel: 'venice-uncensored',
     chatsCollapsed: false,
     chatsCollapsedExplicit: false,
     artifactsCollapsed: true,
@@ -718,12 +720,19 @@ function friendlyNetworkError(err) {
 }
 
 // Client cap sits under the server's 120s maxDuration so we surface a clean
-// error instead of waiting on a dead socket.
+// error instead of waiting on a dead socket. Free-tier OpenRouter gets a
+// shorter leash so a dead free model doesn't burn two minutes before fallback.
 const CHAT_CLIENT_TIMEOUT_MS = 115_000;
+const CHAT_FREE_TIER_TIMEOUT_MS = 45_000;
+
+function timeoutFor(provider, model) {
+  if (provider === 'openrouter' && /:free$/i.test(model || '')) return CHAT_FREE_TIER_TIMEOUT_MS;
+  return CHAT_CLIENT_TIMEOUT_MS;
+}
 
 async function callChat(provider, model, messages, personaId) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), CHAT_CLIENT_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutFor(provider, model));
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
