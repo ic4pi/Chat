@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { FileTree }         from './FileTree.js';
 import { ChatPane }         from './ChatPane.js';
 import type { ChatHandle }  from './ChatPane.js';
@@ -11,6 +11,24 @@ import type { PendingChange } from './useRepoContext.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
+
+const MOBILE_QUERY = '(max-width: 900px)';
+
+/** Mount only one layout — CSS-hiding both trees duplicated ChatPane/Terminal
+ *  (broken refs, zero-size #chat-input on mobile, lost messages). */
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia(MOBILE_QUERY).matches : false,
+  );
+  useEffect(() => {
+    const mql = window.matchMedia(MOBILE_QUERY);
+    const onChange = () => setIsMobile(mql.matches);
+    onChange();
+    mql.addEventListener('change', onChange);
+    return () => mql.removeEventListener('change', onChange);
+  }, []);
+  return isMobile;
+}
 
 // ---------------------------------------------------------------------------
 // Provider / model options
@@ -109,6 +127,7 @@ export function App() {
   const [applyResults, setApplyResults] = useState<Array<{ path: string; ok: boolean; error?: string }>>([]);
   const [autoCtxFiles, setAutoCtxFiles] = useState<string[]>([]);
   const [mobileTab,    setMobileTab]    = useState<MobileTab>('chat');
+  const isMobile = useIsMobile();
 
   const models = provider === 'venice' ? VENICE_MODELS : OR_MODELS;
 
@@ -268,6 +287,15 @@ export function App() {
     </div>
   );
 
+  const fileTree = (
+    <FileTree
+      repoRoot={repo.root} tree={repo.tree} totalFiles={repo.totalFiles}
+      contextFiles={repo.contextFiles} loading={repo.loading} error={repo.error}
+      onOpenRepo={repo.openRepo} onAddToContext={repo.addToContext}
+      onRemoveFromContext={repo.removeFromContext} onClearContext={repo.clearContext}
+    />
+  );
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column',
       height: '100dvh', maxHeight: '100dvh', width: '100%', maxWidth: '100%',
@@ -275,88 +303,58 @@ export function App() {
       overflow: 'hidden' }}>
       {topbar}
 
-      {/* ── Desktop: 3-column grid ── */}
-      <div style={{ flex: 1, minHeight: 0, display: 'grid',
-        gridTemplateColumns: '240px 1fr 420px', overflow: 'hidden' }}
-        className="desktop-grid">
-
-        {/* Files */}
-        <div style={{ borderRight: '1px solid #1e1e1e', overflow: 'hidden',
-          display: 'flex', flexDirection: 'column' }}>
-          <FileTree
-            repoRoot={repo.root} tree={repo.tree} totalFiles={repo.totalFiles}
-            contextFiles={repo.contextFiles} loading={repo.loading} error={repo.error}
-            onOpenRepo={repo.openRepo} onAddToContext={repo.addToContext}
-            onRemoveFromContext={repo.removeFromContext} onClearContext={repo.clearContext}
-          />
-        </div>
-
-        {/* Chat — flex column so chatColumn's flex:1 works */}
-        <div style={{ borderRight: '1px solid #1e1e1e', overflow: 'hidden',
-          display: 'flex', flexDirection: 'column' }}>
-          {chatColumn}
-        </div>
-
-        {/* Terminal */}
-        <div style={{ overflow: 'hidden' }}>
-          <SandboxTerminal ref={termRef} />
-        </div>
-      </div>
-
-      {/* ── Mobile: tab-based ── */}
-      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
-        className="mobile-grid">
-        {mobileTab === 'files' && (
-          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <FileTree
-              repoRoot={repo.root} tree={repo.tree} totalFiles={repo.totalFiles}
-              contextFiles={repo.contextFiles} loading={repo.loading} error={repo.error}
-              onOpenRepo={repo.openRepo} onAddToContext={repo.addToContext}
-              onRemoveFromContext={repo.removeFromContext} onClearContext={repo.clearContext}
-            />
+      {!isMobile ? (
+        /* ── Desktop: 3-column grid (single ChatPane + Terminal) ── */
+        <div style={{ flex: 1, minHeight: 0, display: 'grid',
+          gridTemplateColumns: '240px 1fr 420px', overflow: 'hidden' }}>
+          <div style={{ borderRight: '1px solid #1e1e1e', overflow: 'hidden',
+            display: 'flex', flexDirection: 'column' }}>
+            {fileTree}
           </div>
-        )}
-        {mobileTab === 'chat' && (
-          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ borderRight: '1px solid #1e1e1e', overflow: 'hidden',
+            display: 'flex', flexDirection: 'column' }}>
             {chatColumn}
           </div>
-        )}
-        {mobileTab === 'terminal' && (
-          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ overflow: 'hidden', minHeight: 0 }}>
             <SandboxTerminal ref={termRef} />
           </div>
-        )}
-      </div>
-
-      {/* Mobile tab bar — pinned inside the 100dvh shell, above the home indicator */}
-      <div className="mobile-tabs" style={{ display: 'none', flexShrink: 0,
-        borderTop: '1px solid #1e1e1e', background: '#080808',
-        paddingBottom: 'env(safe-area-inset-bottom)' }}>
-        {(['files','chat','terminal'] as MobileTab[]).map(t => (
-          <button key={t} onClick={() => setMobileTab(t)}
-            style={{ flex: 1, padding: '10px 0', background: mobileTab === t ? '#111' : 'transparent',
-              color: mobileTab === t ? '#d4ff3f' : '#555', border: 'none',
-              borderTop: mobileTab === t ? '2px solid #d4ff3f' : '2px solid transparent',
-              fontFamily: 'inherit', fontSize: 11, cursor: 'pointer',
-              textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            {t === 'files' ? `Files${repo.tree.length ? ` (${repo.totalFiles})` : ''}` :
-             t === 'chat'  ? `Chat${repo.contextFiles.size ? ` (${repo.contextFiles.size})` : ''}` :
-             'Terminal'}
-          </button>
-        ))}
-      </div>
-
-      <style>{`
-        @media (max-width: 900px) {
-          .desktop-grid { display: none !important; }
-          .mobile-grid  { display: flex !important; flex-direction: column; }
-          .mobile-tabs  { display: flex !important; }
-        }
-        @media (min-width: 901px) {
-          .mobile-grid { display: none !important; }
-          .mobile-tabs { display: none !important; }
-        }
-      `}</style>
+        </div>
+      ) : (
+        /* ── Mobile: single ChatPane/Terminal instance; hide inactive tabs
+            with display (don't unmount) so chat history + termRef survive. ── */
+        <>
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }}>
+            <div style={{ position: 'absolute', inset: 0, overflow: 'hidden',
+              display: mobileTab === 'files' ? 'flex' : 'none', flexDirection: 'column' }}>
+              {fileTree}
+            </div>
+            <div style={{ position: 'absolute', inset: 0, overflow: 'hidden',
+              display: mobileTab === 'chat' ? 'flex' : 'none', flexDirection: 'column' }}>
+              {chatColumn}
+            </div>
+            <div style={{ position: 'absolute', inset: 0, overflow: 'hidden',
+              display: mobileTab === 'terminal' ? 'flex' : 'none', flexDirection: 'column' }}>
+              <SandboxTerminal ref={termRef} />
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexShrink: 0, borderTop: '1px solid #1e1e1e',
+            background: '#080808', paddingBottom: 'env(safe-area-inset-bottom)' }}
+            className="mobile-tabs">
+            {(['files','chat','terminal'] as MobileTab[]).map(t => (
+              <button key={t} onClick={() => setMobileTab(t)}
+                style={{ flex: 1, padding: '10px 0', background: mobileTab === t ? '#111' : 'transparent',
+                  color: mobileTab === t ? '#d4ff3f' : '#555', border: 'none',
+                  borderTop: mobileTab === t ? '2px solid #d4ff3f' : '2px solid transparent',
+                  fontFamily: 'inherit', fontSize: 11, cursor: 'pointer',
+                  textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                {t === 'files' ? `Files${repo.tree.length ? ` (${repo.totalFiles})` : ''}` :
+                 t === 'chat'  ? `Chat${repo.contextFiles.size ? ` (${repo.contextFiles.size})` : ''}` :
+                 'Terminal'}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
