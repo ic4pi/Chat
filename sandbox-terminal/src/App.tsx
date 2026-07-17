@@ -1,48 +1,32 @@
-/**
- * App — 3-panel layout on desktop, tab-based on mobile.
- *
- * Desktop: Files (240px) | Chat (flex) | Terminal (420px)
- * Mobile:  Tabs → Files / Chat / Terminal  (full-screen each)
- *
- * Provider + model selectors live in the topbar so the agent
- * can reach the user's Venice/OpenRouter models.
- */
-
 import React, { useCallback, useRef, useState } from 'react';
-import { FileTree }          from './FileTree.js';
-import { ChatPane }          from './ChatPane.js';
-import type { ChatHandle }   from './ChatPane.js';
-import { DiffPanel }         from './DiffPanel.js';
-import { SandboxTerminal }   from './Terminal.js';
+import { FileTree }         from './FileTree.js';
+import { ChatPane }         from './ChatPane.js';
+import type { ChatHandle }  from './ChatPane.js';
+import { DiffPanel }        from './DiffPanel.js';
+import { SandboxTerminal }  from './Terminal.js';
 import type { TerminalHandle } from './Terminal.js';
-import { useRepoContext }    from './useRepoContext.js';
-import { useAutoVerify }     from './useAutoVerify.js';
+import { useRepoContext }   from './useRepoContext.js';
+import { useAutoVerify }    from './useAutoVerify.js';
 import type { PendingChange } from './useRepoContext.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
 
 // ---------------------------------------------------------------------------
-// Provider / model config
+// Provider / model options
 // ---------------------------------------------------------------------------
-
 const VENICE_MODELS = [
-  { id: 'venice-uncensored',            label: 'Venice Uncensored (Dolphin-Mistral 24B)' },
-  { id: 'qwen3-235b-a22b-instruct-2507',label: 'Qwen3 235B Instruct' },
-  { id: 'llama-3.3-70b',                label: 'Llama 3.3 70B' },
-  { id: 'mistral-31-24b',               label: 'Mistral 3.1 24B' },
-  { id: 'hermes-3-llama-3.1-405b',      label: 'Hermes 3 405B' },
+  { id: 'venice-uncensored',             label: 'Venice Uncensored (Dolphin 24B)' },
+  { id: 'qwen3-235b-a22b-instruct-2507', label: 'Qwen3 235B Instruct' },
+  { id: 'llama-3.3-70b',                 label: 'Llama 3.3 70B' },
+  { id: 'mistral-31-24b',                label: 'Mistral 3.1 24B' },
+  { id: 'hermes-3-llama-3.1-405b',       label: 'Hermes 3 405B' },
 ];
-
 const OR_MODELS = [
   { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free', label: 'Dolphin-Venice 24B (free)' },
   { id: 'nousresearch/hermes-3-llama-3.1-405b:free', label: 'Hermes 3 405B (free)' },
   { id: 'meta-llama/llama-3.3-70b-instruct:free',    label: 'Llama 3.3 70B (free)' },
 ];
-
-// ---------------------------------------------------------------------------
-// Auto-context helper
-// ---------------------------------------------------------------------------
 
 async function fetchAutoContext(root: string, query: string, sandboxId: string | null): Promise<string[]> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -56,38 +40,83 @@ async function fetchAutoContext(root: string, query: string, sandboxId: string |
   return (data.matches ?? []).map(m => m.path);
 }
 
+type MobileTab = 'files' | 'chat' | 'terminal';
+
 // ---------------------------------------------------------------------------
-// Mobile tab type
+// VerifyBanner
 // ---------------------------------------------------------------------------
-type Tab = 'files' | 'chat' | 'terminal';
+function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, onSetCommand, onDismiss }: {
+  verifyState: string; attempt: number; testCommand: string | null; askCommand: boolean;
+  onRun: () => void; onSetCommand: (c: string) => void; onDismiss: () => void;
+}) {
+  const [cmd, setCmd] = useState('');
+  if (verifyState === 'idle') return null;
+  const color = verifyState === 'passed' ? '#8fbf6f' : verifyState === 'failed' ? '#ff6a6a' :
+    verifyState === 'running' ? '#5b8dee' : '#d4ff3f';
+  const label = verifyState === 'detecting' ? 'Detecting test command…' :
+    verifyState === 'running' ? `Running: ${testCommand ?? '…'}` :
+    verifyState === 'passed' ? '✓ Tests passed' :
+    verifyState === 'failed' ? `✗ Tests failed after ${attempt} attempts` :
+    `⟳ Retrying (attempt ${attempt}/3)`;
+  if (askCommand) return (
+    <div style={{ padding: '8px 12px', background: '#0f0f0f', borderTop: '1px solid #2a2a2a', flexShrink: 0 }}>
+      <div style={{ fontSize: 11, color: '#888', marginBottom: 5 }}>Test command not detected — enter it:</div>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <input value={cmd} onChange={e => setCmd(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && cmd.trim() && onSetCommand(cmd.trim())}
+          placeholder="npm test / pytest / cargo test…"
+          style={{ flex: 1, background: '#151515', color: '#e8e8e8', border: '1px solid #333',
+            borderRadius: 4, padding: '4px 8px', fontFamily: 'inherit', fontSize: 12, outline: 'none' }} />
+        <button onClick={() => cmd.trim() && onSetCommand(cmd.trim())}
+          style={{ background: '#d4ff3f', color: '#0a0a0a', border: 'none', borderRadius: 4,
+            padding: '4px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
+          Set & Run</button>
+        <button onClick={onDismiss}
+          style={{ background: 'transparent', color: '#555', border: '1px solid #222',
+            borderRadius: 4, padding: '4px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11 }}>
+          Skip</button>
+      </div>
+    </div>
+  );
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px',
+      background: '#0c0c0c', borderTop: '1px solid #1e1e1e', flexShrink: 0 }}>
+      <div style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }} />
+      <span style={{ fontSize: 11, color, flex: 1 }}>{label}</span>
+      {(verifyState === 'passed' || verifyState === 'failed') && (
+        <button onClick={verifyState === 'failed' ? onRun : onDismiss}
+          style={{ background: 'transparent', color: '#555', border: 'none', fontSize: 11, cursor: 'pointer' }}>
+          {verifyState === 'failed' ? 'Retry' : 'Dismiss'}</button>
+      )}
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
-
 export function App() {
   const termRef = useRef<TerminalHandle>(null);
   const chatRef = useRef<ChatHandle>(null);
   const repo    = useRepoContext();
 
-  const [provider,      setProvider]      = useState('venice');
-  const [model,         setModel]         = useState('venice-uncensored');
-  const [autoRun,       setAutoRun]       = useState(true);
-  const [autoVerifyOn,  setAutoVerifyOn]  = useState(true);
-  const [applying,      setApplying]      = useState(false);
-  const [appliedPaths,  setAppliedPaths]  = useState<Set<string>>(new Set());
-  const [applyResults,  setApplyResults]  = useState<Array<{ path: string; ok: boolean; error?: string }>>([]);
-  const [autoCtxFiles,  setAutoCtxFiles]  = useState<string[]>([]);
-  const [activeTab,     setActiveTab]     = useState<Tab>('chat');
+  const [provider,     setProvider]     = useState('venice');
+  const [model,        setModel]        = useState('venice-uncensored');
+  const [autoRun,      setAutoRun]      = useState(true);
+  const [autoVerifyOn, setAutoVerifyOn] = useState(true);
+  const [applying,     setApplying]     = useState(false);
+  const [appliedPaths, setAppliedPaths] = useState<Set<string>>(new Set());
+  const [applyResults, setApplyResults] = useState<Array<{ path: string; ok: boolean; error?: string }>>([]);
+  const [autoCtxFiles, setAutoCtxFiles] = useState<string[]>([]);
+  const [mobileTab,    setMobileTab]    = useState<MobileTab>('chat');
 
   const models = provider === 'venice' ? VENICE_MODELS : OR_MODELS;
 
-  const handleProviderChange = useCallback((p: string) => {
+  const handleProviderChange = (p: string) => {
     setProvider(p);
     setModel(p === 'venice' ? 'venice-uncensored' : 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free');
-  }, []);
+  };
 
-  // ── Apply ────────────────────────────────────────────────────────────────
   const handleApply = useCallback(async () => {
     setApplying(true);
     try {
@@ -98,18 +127,16 @@ export function App() {
     } finally { setApplying(false); }
   }, [repo]);
 
-  // ── Auto-verify ──────────────────────────────────────────────────────────
   const autoVerify = useAutoVerify(repo.root, termRef, chatRef, repo.applyChanges);
 
   const handleApplyAndVerify = useCallback(async () => {
     const results = await handleApply();
     if (results.some(r => r.ok) && autoVerifyOn && repo.root) {
-      setActiveTab('terminal');
+      setMobileTab('terminal');
       await autoVerify.verify();
     }
   }, [handleApply, autoVerifyOn, repo.root, autoVerify]);
 
-  // ── Auto-context ─────────────────────────────────────────────────────────
   const handleAutoContext = useCallback(async (query: string) => {
     if (!repo.root) { setAutoCtxFiles([]); return; }
     setAutoCtxFiles([]);
@@ -120,7 +147,6 @@ export function App() {
     } catch { /* ignore */ }
   }, [repo]);
 
-  // ── File changes from chat ───────────────────────────────────────────────
   const handleFileChanges = useCallback((changes: PendingChange[]) => {
     const withOriginals = changes.map(async c => {
       if (!repo.root) return c;
@@ -143,41 +169,66 @@ export function App() {
   }, [repo, autoVerify]);
 
   const handleRunCode = useCallback((code: string, lang: string) => {
-    setActiveTab('terminal');
+    setMobileTab('terminal');
     termRef.current?.runCode(code, lang);
   }, []);
 
-  const handleDismiss = useCallback((p: string) => {
-    repo.setPendingChanges(repo.pendingChanges.filter(c => c.path !== p));
-  }, [repo]);
-
-  // ── Shared panel contents ────────────────────────────────────────────────
-  const filePanel = (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%',
-      borderRight: '1px solid #1e1e1e', overflow: 'hidden' }}>
-      <FileTree
-        repoRoot={repo.root} tree={repo.tree} totalFiles={repo.totalFiles}
-        contextFiles={repo.contextFiles} loading={repo.loading} error={repo.error}
-        onOpenRepo={repo.openRepo}
-        onAddToContext={repo.addToContext}
-        onRemoveFromContext={repo.removeFromContext}
-        onClearContext={repo.clearContext}
-      />
+  // ── Shared topbar ────────────────────────────────────────────────────────
+  const topbar = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+      padding: '6px 12px', borderBottom: '1px solid #1e1e1e', background: '#080808',
+      flexShrink: 0 }}>
+      <span style={{ color: '#d4ff3f', fontSize: 10, letterSpacing: '0.08em',
+        textTransform: 'uppercase', whiteSpace: 'nowrap' }}>// agent</span>
+      <select value={provider} onChange={e => handleProviderChange(e.target.value)}
+        style={{ background: '#111', color: '#e8e8e8', border: '1px solid #333',
+          borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11, cursor: 'pointer' }}>
+        <option value="venice">Venice</option>
+        <option value="openrouter">OpenRouter</option>
+      </select>
+      <select value={model} onChange={e => setModel(e.target.value)}
+        style={{ background: '#111', color: '#e8e8e8', border: '1px solid #333',
+          borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11,
+          cursor: 'pointer', maxWidth: 200, flex: 1, minWidth: 0 }}>
+        {models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+      </select>
+      {repo.sandboxId && (
+        <span style={{ fontSize: 9, color: '#444', whiteSpace: 'nowrap',
+          overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 120 }}
+          title={repo.sandboxId}>● {repo.sandboxId.slice(0, 20)}</span>
+      )}
+      <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4,
+          fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+          Auto-run <input type="checkbox" checked={autoRun} onChange={e => setAutoRun(e.target.checked)}
+            style={{ accentColor: '#d4ff3f' }} />
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4,
+          fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+          Auto-verify <input type="checkbox" checked={autoVerifyOn} onChange={e => setAutoVerifyOn(e.target.checked)}
+            style={{ accentColor: '#d4ff3f' }} />
+        </label>
+      </div>
     </div>
   );
 
-  const chatPanel = (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {applyResults.length > 0 && (
-        <div style={{ padding: '4px 10px', background: '#0c1a0c',
-          borderBottom: '1px solid #1e3a1e', flexShrink: 0, fontSize: 11 }}>
-          {applyResults.map(r => (
-            <span key={r.path} style={{ marginRight: 10, color: r.ok ? '#8fbf6f' : '#ff6a6a' }}>
-              {r.ok ? '✓' : '✗'} {r.path}
-            </span>
-          ))}
-        </div>
-      )}
+  // ── apply-results banner (reused in both layouts) ─────────────────────────
+  const applyBanner = applyResults.length > 0 ? (
+    <div style={{ padding: '4px 10px', background: '#0c1a0c', borderBottom: '1px solid #1e3a1e',
+      flexShrink: 0, fontSize: 11 }}>
+      {applyResults.map(r => (
+        <span key={r.path} style={{ marginRight: 10, color: r.ok ? '#8fbf6f' : '#ff6a6a' }}>
+          {r.ok ? '✓' : '✗'} {r.path}
+        </span>
+      ))}
+    </div>
+  ) : null;
+
+  // ── the ChatPane column (always has input at bottom) ──────────────────────
+  const chatColumn = (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      {applyBanner}
+      {/* flex:1 + minHeight:0 lets the messages scroll without pushing the form off */}
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         <ChatPane
           ref={chatRef}
@@ -193,141 +244,115 @@ export function App() {
           onRunCode={handleRunCode}
           onFileChanges={handleFileChanges}
           onBeforeSend={async (query) => {
-            if (repo.contextFiles.size === 0 && repo.root) {
-              await handleAutoContext(query);
-            } else {
-              setAutoCtxFiles([]);
-            }
+            if (repo.contextFiles.size === 0 && repo.root) await handleAutoContext(query);
+            else setAutoCtxFiles([]);
           }}
         />
       </div>
       <DiffPanel
         changes={repo.pendingChanges} applying={applying}
         appliedPaths={appliedPaths} onApply={handleApplyAndVerify}
-        onDismiss={handleDismiss} onDismissAll={repo.clearChanges}
+        onDismiss={p => repo.setPendingChanges(repo.pendingChanges.filter(c => c.path !== p))}
+        onDismissAll={repo.clearChanges}
+      />
+      <VerifyBanner
+        verifyState={autoVerify.verifyState}
+        attempt={autoVerify.attempt}
+        testCommand={autoVerify.testCommand}
+        askCommand={autoVerify.askCommand}
+        onRun={autoVerify.verify}
+        onSetCommand={cmd => { autoVerify.setCustomCommand(cmd); autoVerify.verify(); }}
+        onDismiss={autoVerify.reset}
       />
     </div>
   );
 
-  const termPanel = (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <SandboxTerminal ref={termRef} />
-    </div>
-  );
-
-  // ── Topbar ───────────────────────────────────────────────────────────────
-  const topbar = (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 8,
-      padding: '6px 12px', borderBottom: '1px solid #1e1e1e',
-      background: '#080808', flexShrink: 0, flexWrap: 'wrap',
-    }}>
-      <span style={{ color: '#d4ff3f', fontSize: 10, letterSpacing: '0.08em',
-        textTransform: 'uppercase', whiteSpace: 'nowrap' }}>// agent</span>
-
-      {/* provider */}
-      <select value={provider} onChange={e => handleProviderChange(e.target.value)}
-        style={{ background: '#111', color: '#e8e8e8', border: '1px solid #333',
-          borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11, cursor: 'pointer' }}>
-        <option value="venice">Venice</option>
-        <option value="openrouter">OpenRouter</option>
-      </select>
-
-      {/* model */}
-      <select value={model} onChange={e => setModel(e.target.value)}
-        style={{ background: '#111', color: '#e8e8e8', border: '1px solid #333',
-          borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11,
-          cursor: 'pointer', maxWidth: 200 }}>
-        {models.map(m => (
-          <option key={m.id} value={m.id}>{m.label}</option>
-        ))}
-      </select>
-
-      {/* sandbox indicator */}
-      {repo.sandboxId && (
-        <span style={{ fontSize: 9, color: '#555', whiteSpace: 'nowrap',
-          overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 140 }}
-          title={repo.sandboxId}>
-          ● {repo.sandboxId}
-        </span>
-      )}
-
-      <div style={{ marginLeft: 'auto', display: 'flex', gap: 12, alignItems: 'center' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4,
-          fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none',
-          whiteSpace: 'nowrap' }}>
-          Auto-run <input type="checkbox" checked={autoRun}
-            onChange={e => setAutoRun(e.target.checked)} style={{ accentColor: '#d4ff3f' }} />
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4,
-          fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none',
-          whiteSpace: 'nowrap' }}>
-          Auto-verify <input type="checkbox" checked={autoVerifyOn}
-            onChange={e => setAutoVerifyOn(e.target.checked)} style={{ accentColor: '#d4ff3f' }} />
-        </label>
-      </div>
-    </div>
-  );
-
-  // ── Tab bar (mobile only) ─────────────────────────────────────────────────
-  const tabBar = (
-    <div className="mobile-tabs">
-      {(['files', 'chat', 'terminal'] as Tab[]).map(t => (
-        <button key={t} onClick={() => setActiveTab(t)}
-          style={{
-            flex: 1, padding: '10px 0', background: activeTab === t ? '#111' : 'transparent',
-            color: activeTab === t ? '#d4ff3f' : '#555',
-            border: 'none', borderTop: activeTab === t ? '2px solid #d4ff3f' : '2px solid transparent',
-            fontFamily: 'inherit', fontSize: 12, cursor: 'pointer', textTransform: 'uppercase',
-            letterSpacing: '0.08em',
-          }}>
-          {t === 'files' ? `Files${repo.tree.length ? ' (' + repo.totalFiles + ')' : ''}` :
-           t === 'chat'  ? `Chat${repo.contextFiles.size ? ' (' + repo.contextFiles.size + ')' : ''}` :
-                           'Terminal'}
-        </button>
-      ))}
-    </div>
-  );
-
   return (
-    <>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh',
+      background: '#0a0a0a', fontFamily: '"JetBrains Mono",ui-monospace,monospace',
+      overflow: 'hidden' }}>
+      {topbar}
+
+      {/* ── Desktop: 3-column grid ── */}
+      <div style={{ flex: 1, minHeight: 0, display: 'grid',
+        gridTemplateColumns: '240px 1fr 420px', overflow: 'hidden' }}
+        className="desktop-grid">
+
+        {/* Files */}
+        <div style={{ borderRight: '1px solid #1e1e1e', overflow: 'hidden',
+          display: 'flex', flexDirection: 'column' }}>
+          <FileTree
+            repoRoot={repo.root} tree={repo.tree} totalFiles={repo.totalFiles}
+            contextFiles={repo.contextFiles} loading={repo.loading} error={repo.error}
+            onOpenRepo={repo.openRepo} onAddToContext={repo.addToContext}
+            onRemoveFromContext={repo.removeFromContext} onClearContext={repo.clearContext}
+          />
+        </div>
+
+        {/* Chat */}
+        <div style={{ borderRight: '1px solid #1e1e1e', overflow: 'hidden' }}>
+          {chatColumn}
+        </div>
+
+        {/* Terminal */}
+        <div style={{ overflow: 'hidden' }}>
+          <SandboxTerminal ref={termRef} />
+        </div>
+      </div>
+
+      {/* ── Mobile: tab-based ── */}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}
+        className="mobile-grid">
+        {mobileTab === 'files' && (
+          <div style={{ height: '100%', overflow: 'hidden' }}>
+            <FileTree
+              repoRoot={repo.root} tree={repo.tree} totalFiles={repo.totalFiles}
+              contextFiles={repo.contextFiles} loading={repo.loading} error={repo.error}
+              onOpenRepo={repo.openRepo} onAddToContext={repo.addToContext}
+              onRemoveFromContext={repo.removeFromContext} onClearContext={repo.clearContext}
+            />
+          </div>
+        )}
+        {mobileTab === 'chat' && (
+          <div style={{ height: '100%', overflow: 'hidden' }}>
+            {chatColumn}
+          </div>
+        )}
+        {mobileTab === 'terminal' && (
+          <div style={{ height: '100%', overflow: 'hidden' }}>
+            <SandboxTerminal ref={termRef} />
+          </div>
+        )}
+      </div>
+
+      {/* Mobile tab bar */}
+      <div className="mobile-tabs" style={{ display: 'none', flexShrink: 0,
+        borderTop: '1px solid #1e1e1e', background: '#080808' }}>
+        {(['files','chat','terminal'] as MobileTab[]).map(t => (
+          <button key={t} onClick={() => setMobileTab(t)}
+            style={{ flex: 1, padding: '10px 0', background: mobileTab === t ? '#111' : 'transparent',
+              color: mobileTab === t ? '#d4ff3f' : '#555', border: 'none',
+              borderTop: mobileTab === t ? '2px solid #d4ff3f' : '2px solid transparent',
+              fontFamily: 'inherit', fontSize: 11, cursor: 'pointer',
+              textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            {t === 'files' ? `Files${repo.tree.length ? ` (${repo.totalFiles})` : ''}` :
+             t === 'chat'  ? `Chat${repo.contextFiles.size ? ` (${repo.contextFiles.size})` : ''}` :
+             'Terminal'}
+          </button>
+        ))}
+      </div>
+
       <style>{`
-        .agent-desktop { display: grid; grid-template-columns: 240px 1fr 420px; height: 100vh; }
-        .mobile-tabs   { display: none; }
-        .mobile-panel  { display: none; }
         @media (max-width: 900px) {
-          .agent-desktop { display: none; }
-          .mobile-tabs   { display: flex; background: #080808; border-top: 1px solid #1e1e1e;
-                           position: fixed; bottom: 0; left: 0; right: 0; z-index: 20; }
-          .mobile-panel  { display: flex; flex-direction: column;
-                           height: calc(100vh - 44px); overflow: hidden; }
+          .desktop-grid { display: none !important; }
+          .mobile-grid  { display: flex !important; flex-direction: column; }
+          .mobile-tabs  { display: flex !important; }
+        }
+        @media (min-width: 901px) {
+          .mobile-grid { display: none !important; }
+          .mobile-tabs { display: none !important; }
         }
       `}</style>
-
-      {/* ── Desktop layout ── */}
-      <div style={{ height: '100vh', background: '#0a0a0a',
-        fontFamily: '"JetBrains Mono",ui-monospace,monospace',
-        display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        {topbar}
-
-        {/* 3-column grid */}
-        <div className="agent-desktop" style={{ flex: 1, minHeight: 0 }}>
-          {filePanel}
-          <div style={{ display: 'flex', flexDirection: 'column',
-            borderRight: '1px solid #1e1e1e', overflow: 'hidden' }}>
-            {chatPanel}
-          </div>
-          {termPanel}
-        </div>
-
-        {/* Mobile: show active tab only */}
-        <div className="mobile-panel">
-          {activeTab === 'files'    && filePanel}
-          {activeTab === 'chat'     && chatPanel}
-          {activeTab === 'terminal' && termPanel}
-        </div>
-        {tabBar}
-      </div>
-    </>
+    </div>
   );
 }
