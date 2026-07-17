@@ -49,13 +49,22 @@ const OR_MODELS = [
 async function fetchAutoContext(root: string, query: string, sandboxId: string | null): Promise<string[]> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (sandboxId) headers['X-Sandbox-Session'] = sandboxId;
-  const res = await fetch(`${API_URL}/search`, {
-    method: 'POST', headers,
-    body: JSON.stringify({ root, query, maxFiles: 5 }),
-  });
-  if (!res.ok) return [];
-  const data = await res.json() as { matches?: Array<{ path: string }> };
-  return (data.matches ?? []).map(m => m.path);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8_000);
+  try {
+    const res = await fetch(`${API_URL}/search`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ root, query, maxFiles: 5 }),
+      signal: controller.signal,
+    });
+    if (!res.ok) return [];
+    const data = await res.json() as { matches?: Array<{ path: string }> };
+    return (data.matches ?? []).map(m => m.path);
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 type MobileTab = 'files' | 'chat' | 'terminal';

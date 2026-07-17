@@ -35,6 +35,10 @@ export interface ChatHandle {
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
 
+// Auto-context must NEVER block the user bubble from appearing.
+const BEFORE_SEND_TIMEOUT_MS = 8_000;
+const CHAT_TIMEOUT_MS = 115_000;
+
 // ---------------------------------------------------------------------------
 // System prompt
 // ---------------------------------------------------------------------------
@@ -137,11 +141,34 @@ function parseSegments(text: string): Segment[] {
   return out;
 }
 
+function friendlyError(raw: string): string {
+  const lower = raw.toLowerCase();
+  if (lower === 'load failed' || lower === 'failed to fetch' || lower.includes('networkerror')) {
+    return 'Connection dropped before the model replied (often a timeout). Try again or a faster model.';
+  }
+  if (lower.includes('abort')) {
+    return 'Request timed out waiting for the model. Try a faster model or a shorter prompt.';
+  }
+  return raw || 'Request failed';
+}
+
+async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p,
+      new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), ms); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Small UI atoms
 // ---------------------------------------------------------------------------
 
-function FileChangeBlock({ path, lang, content, isApplied, onRun }: {
+function FileChangeBlock({ path, lang, content, isApplied }: {
   path: string; lang: string; content: string;
   isApplied: boolean; onRun: () => void;
 }) {
@@ -200,6 +227,42 @@ function CodeBlock({ lang, content, onRun }: {
   );
 }
 
+function AssistantBody({ msg, appliedPaths, onRunCode }: {
+  msg: Message;
+  appliedPaths: Set<string>;
+  onRunCode: (code: string, lang: string) => void;
+}) {
+  const segs = msg.segments;
+  if (segs && segs.length > 0) {
+    return (
+      <>
+        {segs.map((seg, i) => {
+          if (seg.type === 'text') return (
+            <p key={i} style={{ margin: '4px 0', fontSize: 13, lineHeight: 1.6,
+              color: '#ccc', whiteSpace: 'pre-wrap' }}>{seg.content.trim()}</p>
+          );
+          if (seg.type === 'file-change') return (
+            <FileChangeBlock key={i} path={seg.path} lang={seg.lang}
+              content={seg.content}
+              isApplied={appliedPaths.has(seg.path)}
+              onRun={() => onRunCode(seg.content, seg.lang)} />
+          );
+          return (
+            <CodeBlock key={i} lang={seg.lang} content={seg.content}
+              onRun={() => onRunCode(seg.content, seg.lang)} />
+          );
+        })}
+      </>
+    );
+  }
+  // Welcome text, errors, and any reply that didn't parse into segments
+  // MUST still render — previously these were invisible.
+  return (
+    <p data-testid="assistant-text" style={{ margin: '4px 0', fontSize: 13, lineHeight: 1.6,
+      color: '#ccc', whiteSpace: 'pre-wrap' }}>{msg.content}</p>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -252,6 +315,18 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const sendingRef = useRef(false);
+
+  // Keep latest props in a ref so a send started before auto-context finishes
+  // still sees the updated file context afterward.
+  const latestRef = useRef({
+    repoRoot, sandboxId, provider, model, tree, contextFiles,
+    autoRun, onRunCode, onFileChanges, onBeforeSend, messages,
+  });
+  latestRef.current = {
+    repoRoot, sandboxId, provider, model, tree, contextFiles,
+    autoRun, onRunCode, onFileChanges, onBeforeSend, messages,
+  };
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -262,34 +337,50 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
     text: string,
     kind: 'user' | 'retry-inject' = 'user',
   ): Promise<PendingChange[]> => {
-    if (!text || loading) return [];
+    if (!text || sendingRef.current) return [];
+    sendingRef.current = true;
 
-    // 'retry-inject' shows as a muted system note, not a user bubble
+    // 1) Show the bubble IMMEDIATELY — never wait on auto-context / network first.
     const userMsg: Message = { id: uid(), role: 'user', content: text, kind };
     setMessages(m => [...m, userMsg]);
     setLoading(true);
     setError(null);
 
     try {
-      const history = [...messages, userMsg]
+      // 2) Optional auto-context, hard-capped so a hung /search can't eat the send.
+      const before = latestRef.current.onBeforeSend;
+      if (before && kind === 'user') {
+        await withTimeout(before(text), BEFORE_SEND_TIMEOUT_MS);
+      }
+
+      const {
+        repoRoot: root, sandboxId: sid, provider: prov, model: mod,
+        tree: tr, contextFiles: ctx, autoRun: ar, onRunCode: run, onFileChanges: onFc,
+        messages: prev,
+      } = latestRef.current;
+
+      // After await, React may already have flushed userMsg into state — don't duplicate.
+      const withUser = prev.some(m => m.id === userMsg.id) ? prev : [...prev, userMsg];
+      const history = withUser
+        .filter(m => m.role === 'user' || m.role === 'assistant')
         .map(m => ({ role: m.role, content: m.content }));
 
-      const systemPrompt = buildSystemPrompt(repoRoot, tree, contextFiles);
+      const systemPrompt = buildSystemPrompt(root, tr, ctx);
 
-      // Use /agent-chat (which accepts systemPrompt override) when a sandbox
-      // session is active (remote/Vercel), or local /chat endpoint otherwise.
-      const chatEndpoint = sandboxId ? `${API_URL}/agent-chat` : `${API_URL}/chat`;
+      // Always hit agent-chat — it accepts systemPrompt. /api/chat ignores it
+      // and is the main-chat persona endpoint, not the agent.
+      const chatEndpoint = `${API_URL}/agent-chat`;
       const chatHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (sandboxId) chatHeaders['X-Sandbox-Session'] = sandboxId;
+      if (sid) chatHeaders['X-Sandbox-Session'] = sid;
 
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 115_000);
+      const timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
       let res: Response;
       try {
         res = await fetch(chatEndpoint, {
           method: 'POST',
           headers: chatHeaders,
-          body: JSON.stringify({ messages: history, systemPrompt, provider, model }),
+          body: JSON.stringify({ messages: history, systemPrompt, provider: prov, model: mod }),
           signal: controller.signal,
         });
       } finally {
@@ -310,31 +401,25 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
       }]);
 
-      if (fc.length > 0) onFileChanges(fc);
+      if (fc.length > 0) onFc(fc);
 
-      if (autoRun) {
+      if (ar) {
         for (const seg of segs) {
-          if (seg.type === 'code' && seg.content.trim()) onRunCode(seg.content, seg.lang);
+          if (seg.type === 'code' && seg.content.trim()) run(seg.content, seg.lang);
         }
       }
 
       return fc;
     } catch (e: unknown) {
-      const raw = e instanceof Error ? e.message : String(e);
-      const lower = raw.toLowerCase();
-      // iOS Safari surfaces timed-out/dropped fetches as "Load failed".
-      const msg =
-        lower === 'load failed' || lower === 'failed to fetch'
-          ? 'Connection dropped before the model replied (often a timeout). Try again or a faster model.'
-          : raw;
+      const msg = friendlyError(e instanceof Error ? e.message : String(e));
       setError(msg);
       setMessages(m => [...m, { id: uid(), role: 'assistant', content: `⚠ ${msg}` }]);
       return [];
     } finally {
       setLoading(false);
+      sendingRef.current = false;
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, messages, repoRoot, tree, contextFiles, autoRun, onRunCode, onFileChanges]);
+  }, []);
 
   // Expose imperative handle to parent (used by the verify loop)
   useImperativeHandle(ref, () => ({
@@ -343,15 +428,13 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
   const send = useCallback(async () => {
     const text = input.trim();
-    if (!text || loading) return;
+    if (!text || sendingRef.current) return;
     setInput('');
-    if (onBeforeSend) await onBeforeSend(text);
     await sendText(text, 'user');
-  }, [input, loading, sendText, onBeforeSend]);
-
+  }, [input, sendText]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
+    <div data-testid="chat-pane" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
       background: '#0a0a0a', fontFamily: '"JetBrains Mono",ui-monospace,monospace' }}>
 
       {/* header */}
@@ -381,16 +464,15 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       )}
 
       {/* messages */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px',
-        display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div data-testid="chat-messages" style={{ flex: 1, overflowY: 'auto', padding: '12px 14px',
+        display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
         {messages.map(msg => (
-          <div key={msg.id} style={{
+          <div key={msg.id} data-testid={msg.role === 'user' ? 'user-msg' : 'assistant-msg'} style={{
             alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
             maxWidth: msg.role === 'user' ? '75%' : '100%',
             width: msg.role === 'assistant' ? '100%' : undefined,
           }}>
             {msg.role === 'user' && msg.kind === 'retry-inject' ? (
-              /* Retry-inject messages: muted note, not a user bubble */
               <div style={{ padding: '5px 10px', background: '#111a0a',
                 border: '1px dashed #2a4020', borderRadius: 6,
                 fontSize: 11, color: '#6a8a5a', whiteSpace: 'pre-wrap',
@@ -405,26 +487,13 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 borderRadius: 8, padding: '7px 12px', fontSize: 13, whiteSpace: 'pre-wrap' }}>
                 {msg.content}
               </div>
-            ) : (msg.segments ?? []).map((seg, i) => {
-              if (seg.type === 'text') return (
-                <p key={i} style={{ margin: '4px 0', fontSize: 13, lineHeight: 1.6,
-                  color: '#ccc', whiteSpace: 'pre-wrap' }}>{seg.content.trim()}</p>
-              );
-              if (seg.type === 'file-change') return (
-                <FileChangeBlock key={i} path={seg.path} lang={seg.lang}
-                  content={seg.content}
-                  isApplied={appliedPaths.has(seg.path)}
-                  onRun={() => onRunCode(seg.content, seg.lang)} />
-              );
-              return (
-                <CodeBlock key={i} lang={seg.lang} content={seg.content}
-                  onRun={() => onRunCode(seg.content, seg.lang)} />
-              );
-            })}
+            ) : (
+              <AssistantBody msg={msg} appliedPaths={appliedPaths} onRunCode={onRunCode} />
+            )}
           </div>
         ))}
         {loading && (
-          <div style={{ alignSelf: 'flex-start', fontSize: 12, color: '#555' }}>
+          <div data-testid="thinking" style={{ alignSelf: 'flex-start', fontSize: 12, color: '#555' }}>
             thinking…
           </div>
         )}
@@ -432,17 +501,18 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       </div>
 
       {/* input */}
-      <form onSubmit={e => { e.preventDefault(); send(); }}
+      <form data-testid="chat-form" onSubmit={e => { e.preventDefault(); void send(); }}
         style={{ borderTop: '1px solid #1e1e1e', padding: '10px 12px',
           display: 'flex', gap: 8, flexShrink: 0, alignItems: 'flex-end',
           background: '#0a0a0a' }}>
         <textarea
           id="chat-input"
+          data-testid="chat-input"
           value={input}
           rows={2}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); }
           }}
           placeholder="Describe what to fix or build… (Enter to send, Shift+Enter for newline)"
           disabled={loading}
@@ -451,7 +521,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             padding: '7px 10px', fontFamily: 'inherit', fontSize: 16,
             outline: 'none', resize: 'vertical', minHeight: 48, maxHeight: 120,
             opacity: loading ? .6 : 1 }} />
-        <button type="submit" disabled={!input.trim() || loading}
+        <button type="submit" data-testid="chat-send" disabled={!input.trim() || loading}
           style={{ background: input.trim() && !loading ? '#d4ff3f' : '#1a1a1a',
             color: input.trim() && !loading ? '#0a0a0a' : '#444',
             border: 'none', borderRadius: 4, padding: '8px 16px',
