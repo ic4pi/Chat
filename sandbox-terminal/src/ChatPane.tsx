@@ -282,11 +282,19 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       const chatHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
       if (sandboxId) chatHeaders['X-Sandbox-Session'] = sandboxId;
 
-      const res = await fetch(chatEndpoint, {
-        method: 'POST',
-        headers: chatHeaders,
-        body: JSON.stringify({ messages: history, systemPrompt, provider, model }),
-      });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 115_000);
+      let res: Response;
+      try {
+        res = await fetch(chatEndpoint, {
+          method: 'POST',
+          headers: chatHeaders,
+          body: JSON.stringify({ messages: history, systemPrompt, provider, model }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
 
       if (!res.ok) {
         const d = await res.json().catch(() => ({ error: `HTTP ${res.status}` })) as { error?: string };
@@ -312,7 +320,13 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       return fc;
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const raw = e instanceof Error ? e.message : String(e);
+      const lower = raw.toLowerCase();
+      // iOS Safari surfaces timed-out/dropped fetches as "Load failed".
+      const msg =
+        lower === 'load failed' || lower === 'failed to fetch'
+          ? 'Connection dropped before the model replied (often a timeout). Try again or a faster model.'
+          : raw;
       setError(msg);
       setMessages(m => [...m, { id: uid(), role: 'assistant', content: `⚠ ${msg}` }]);
       return [];
@@ -420,11 +434,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       {/* input */}
       <form onSubmit={e => { e.preventDefault(); send(); }}
         style={{ borderTop: '1px solid #1e1e1e', padding: '10px 12px',
-          display: 'flex', gap: 8, flexShrink: 0, alignItems: 'flex-end' }}>
+          display: 'flex', gap: 8, flexShrink: 0, alignItems: 'flex-end',
+          background: '#0a0a0a' }}>
         <textarea
           id="chat-input"
           value={input}
-          rows={3}
+          rows={2}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
@@ -433,8 +448,8 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           disabled={loading}
           style={{ flex: 1, background: '#111', color: '#e8e8e8',
             border: '1px solid #2a2a2a', borderRadius: 4,
-            padding: '7px 10px', fontFamily: 'inherit', fontSize: 13,
-            outline: 'none', resize: 'vertical', minHeight: 60,
+            padding: '7px 10px', fontFamily: 'inherit', fontSize: 16,
+            outline: 'none', resize: 'vertical', minHeight: 48, maxHeight: 120,
             opacity: loading ? .6 : 1 }} />
         <button type="submit" disabled={!input.trim() || loading}
           style={{ background: input.trim() && !loading ? '#d4ff3f' : '#1a1a1a',

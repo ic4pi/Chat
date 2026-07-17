@@ -77,6 +77,13 @@ export default async function handler(req, res) {
     ...messages.map((m) => ({ role: m.role, content: m.content })),
   ];
 
+  // Keep under the Vercel maxDuration (120s) so we can return a clean JSON
+  // error instead of the platform killing the isolate mid-response — which
+  // surfaces on iOS Safari as the cryptic "Load failed".
+  const UPSTREAM_TIMEOUT_MS = 110_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+
   try {
     const upstream = await fetch(provider.url, {
       method: 'POST',
@@ -90,6 +97,7 @@ export default async function handler(req, res) {
         messages: messagesWithSystem,
         stream: false,
       }),
+      signal: controller.signal,
     });
 
     const rawText = await upstream.text();
@@ -121,10 +129,15 @@ export default async function handler(req, res) {
       model,
     });
   } catch (err) {
-    return res.status(500).json({
-      error: err.message || 'Unknown server error',
+    const aborted = err?.name === 'AbortError' || controller.signal.aborted;
+    return res.status(aborted ? 504 : 500).json({
+      error: aborted
+        ? `${provider.label} took too long (>${UPSTREAM_TIMEOUT_MS / 1000}s). Try a faster model or a shorter prompt.`
+        : (err.message || 'Unknown server error'),
       provider: provider.label,
       model,
     });
+  } finally {
+    clearTimeout(timer);
   }
 }

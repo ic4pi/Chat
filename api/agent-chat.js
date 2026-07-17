@@ -47,6 +47,12 @@ export default async function handler(req, res) {
     ? [{ role: 'system', content: systemPrompt }, ...messages]
     : messages;
 
+  // Keep under Vercel maxDuration (120s) so the isolate returns JSON instead
+  // of being killed — iOS Safari otherwise reports that as "Load failed".
+  const UPSTREAM_TIMEOUT_MS = 110_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+
   try {
     const upstream = await fetch(provider.url, {
       method: 'POST',
@@ -60,6 +66,7 @@ export default async function handler(req, res) {
         messages: messagesWithSystem,
         stream: false,
       }),
+      signal: controller.signal,
     });
 
     const rawText = await upstream.text();
@@ -74,6 +81,13 @@ export default async function handler(req, res) {
     const reply = data.choices?.[0]?.message?.content ?? '';
     return res.status(200).json({ reply, model, provider: provider.label });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    const aborted = err?.name === 'AbortError' || controller.signal.aborted;
+    return res.status(aborted ? 504 : 500).json({
+      error: aborted
+        ? `${provider.label} took too long (>${UPSTREAM_TIMEOUT_MS / 1000}s). Try a faster model or a shorter prompt.`
+        : (err.message || 'Unknown server error'),
+    });
+  } finally {
+    clearTimeout(timer);
   }
 }

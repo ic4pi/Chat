@@ -698,19 +698,47 @@ function makeModelOption(m) {
 // Sending messages
 // ---------------------------------------------------------------------------
 
+// iOS Safari reports dropped/timed-out fetches as the useless string
+// "Load failed". Map that (and similar) to something the user can act on.
+function friendlyNetworkError(err) {
+  const raw = (err?.message || String(err || 'Network error')).trim();
+  const lower = raw.toLowerCase();
+  if (
+    lower === 'load failed' ||
+    lower === 'failed to fetch' ||
+    lower.includes('networkerror') ||
+    lower.includes('the internet connection appears to be offline')
+  ) {
+    return 'Connection dropped before the model replied (often a timeout or flaky network). Try again, or pick a faster model.';
+  }
+  if (lower.includes('aborted') || lower.includes('timeout')) {
+    return 'Request timed out waiting for the model. Try a faster model or a shorter prompt.';
+  }
+  return raw || 'Network error';
+}
+
+// Client cap sits under the server's 120s maxDuration so we surface a clean
+// error instead of waiting on a dead socket.
+const CHAT_CLIENT_TIMEOUT_MS = 115_000;
+
 async function callChat(provider, model, messages, personaId) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CHAT_CLIENT_TIMEOUT_MS);
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages, model, provider, personaId }),
+      signal: controller.signal,
     });
     let data = null;
     let errText = null;
     try { data = await res.json(); } catch { errText = 'Non-JSON response'; }
     return { ok: res.ok, status: res.status, data, errText };
   } catch (err) {
-    return { ok: false, status: 0, data: null, errText: err?.message || 'Network error' };
+    return { ok: false, status: 0, data: null, errText: friendlyNetworkError(err) };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -767,7 +795,9 @@ async function sendMessage(text) {
     if (!attempt.ok) {
       const data = attempt.data || {};
       const where = data.provider ? ` [${data.provider} · ${data.model || state.activeModel}]` : '';
-      chat.messages.push({ role: 'error', content: (data.error || attempt.errText || 'Request failed') + where, ts: Date.now() });
+      const rawErr = data.error || attempt.errText || 'Request failed';
+      const errMsg = friendlyNetworkError({ message: String(rawErr) });
+      chat.messages.push({ role: 'error', content: errMsg + where, ts: Date.now() });
     } else {
       const data = attempt.data || {};
       if (usedFallback) {

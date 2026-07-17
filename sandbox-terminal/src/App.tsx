@@ -269,7 +269,8 @@ export function App() {
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh',
+    <div style={{ display: 'flex', flexDirection: 'column',
+      height: '100dvh', maxHeight: '100dvh', width: '100%', maxWidth: '100%',
       background: '#0a0a0a', fontFamily: '"JetBrains Mono",ui-monospace,monospace',
       overflow: 'hidden' }}>
       {topbar}
@@ -327,9 +328,10 @@ export function App() {
         )}
       </div>
 
-      {/* Mobile tab bar */}
+      {/* Mobile tab bar — pinned inside the 100dvh shell, above the home indicator */}
       <div className="mobile-tabs" style={{ display: 'none', flexShrink: 0,
-        borderTop: '1px solid #1e1e1e', background: '#080808' }}>
+        borderTop: '1px solid #1e1e1e', background: '#080808',
+        paddingBottom: 'env(safe-area-inset-bottom)' }}>
         {(['files','chat','terminal'] as MobileTab[]).map(t => (
           <button key={t} onClick={() => setMobileTab(t)}
             style={{ flex: 1, padding: '10px 0', background: mobileTab === t ? '#111' : 'transparent',

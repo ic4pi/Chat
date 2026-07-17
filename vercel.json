@@ -9,6 +9,7 @@
     { "source": "/agent/(.*)",      "destination": "/agent/index.html" }
   ],
   "functions": {
+    "api/chat.js":                 { "maxDuration": 120 },
     "api/run.js":                  { "maxDuration": 300 },
     "api/run-code.js":             { "maxDuration": 300 },
     "api/init-repo.js":            { "maxDuration": 120 },
