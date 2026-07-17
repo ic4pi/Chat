@@ -226,10 +226,11 @@ export function App() {
 
   // ── the ChatPane column (always has input at bottom) ──────────────────────
   const chatColumn = (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
       {applyBanner}
       {/* flex:1 + minHeight:0 lets the messages scroll without pushing the form off */}
-      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden',
+        display: 'flex', flexDirection: 'column' }}>
         <ChatPane
           ref={chatRef}
           repoRoot={repo.root}
@@ -289,8 +290,9 @@ export function App() {
           />
         </div>
 
-        {/* Chat */}
-        <div style={{ borderRight: '1px solid #1e1e1e', overflow: 'hidden' }}>
+        {/* Chat — flex column so chatColumn's flex:1 works */}
+        <div style={{ borderRight: '1px solid #1e1e1e', overflow: 'hidden',
+          display: 'flex', flexDirection: 'column' }}>
           {chatColumn}
         </div>
 
@@ -301,10 +303,10 @@ export function App() {
       </div>
 
       {/* ── Mobile: tab-based ── */}
-      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
         className="mobile-grid">
         {mobileTab === 'files' && (
-          <div style={{ height: '100%', overflow: 'hidden' }}>
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <FileTree
               repoRoot={repo.root} tree={repo.tree} totalFiles={repo.totalFiles}
               contextFiles={repo.contextFiles} loading={repo.loading} error={repo.error}
@@ -314,12 +316,12 @@ export function App() {
           </div>
         )}
         {mobileTab === 'chat' && (
-          <div style={{ height: '100%', overflow: 'hidden' }}>
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {chatColumn}
           </div>
         )}
         {mobileTab === 'terminal' && (
-          <div style={{ height: '100%', overflow: 'hidden' }}>
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <SandboxTerminal ref={termRef} />
           </div>
         )}

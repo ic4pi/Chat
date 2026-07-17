@@ -337,7 +337,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%',
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
       background: '#0a0a0a', fontFamily: '"JetBrains Mono",ui-monospace,monospace' }}>
 
       {/* header */}
