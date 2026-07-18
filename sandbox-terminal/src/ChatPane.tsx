@@ -28,6 +28,7 @@ import type { FileNode } from './types.js';
 import {
   extractFileChanges,
   looksLikeWorkRequest,
+  looksLikeAuditRequest,
   NUDGE_PROMPT,
 } from './agentParse.js';
 import {
@@ -38,7 +39,7 @@ import {
   type SearchHit,
 } from './contextBudget.js';
 
-export { extractFileChanges, looksLikeWorkRequest } from './agentParse.js';
+export { extractFileChanges, looksLikeWorkRequest, looksLikeAuditRequest } from './agentParse.js';
 export type { SearchHit } from './contextBudget.js';
 
 // Imperative handle exposed to parent (used by auto-verify loop)
@@ -68,9 +69,19 @@ function buildSystemPrompt(
   const parts: string[] = [];
 
   parts.push(
-    'You are an expert coding agent that WRITES FILES. You are not a chatbot.',
-    'Context is provided like Cursor/Claude Code: search snippets first, then a small set of full files.',
-    'The host app parses your reply and writes File: blocks to disk automatically.',
+    'You are an expert coding agent for the repository in context.',
+    'Context is provided like Cursor/Claude Code: search snippets first, then a small set of full source files.',
+    'The host app can parse File: blocks and write them to disk automatically.',
+    '',
+    'CRITICAL — what to answer:',
+    '  • Only address the USER messages in this conversation.',
+    '  • Never invent tasks from UI placeholder examples (auth token expiry, /api/run rate limiting, GitHub stars, etc.).',
+    '  • If Open files / search hits are present, ground every claim in those paths. Cite real file paths.',
+    '  • If context is missing for something, say what file you need — do not invent src/auth.ts or similar.',
+    '',
+    'When the user asks for an audit, review, or assessment:',
+    '  • Reply in plain prose with concrete findings from the provided files (bugs, risks, missing pieces, next fixes).',
+    '  • Do NOT emit File: blocks unless they explicitly ask you to implement/fix now.',
     '',
     'HARD RULES when the user asks to fix, build, add, change, implement, or create anything:',
     '  1. Do the work in THIS reply. Never say "I will", "I\'ll implement", "next I\'ll", or describe a plan without files.',
@@ -301,7 +312,8 @@ interface Message {
   id:          string;
   role:        'user' | 'assistant';
   content:     string;
-  kind?:       'user' | 'retry-inject';   // retry-inject = auto-sent by verify loop
+  /** welcome = UI-only, never sent to the model; retry-inject = verify/nudge loop */
+  kind?:       'user' | 'retry-inject' | 'welcome';
   segments?:   Segment[];
   fileChanges?: PendingChange[];
 }
@@ -339,13 +351,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   autoSelectedFiles, searchHits, onRunCode, onFileChanges, onBeforeSend,
 }, ref) {
   const [messages,  setMessages]  = useState<Message[]>([
-    { id: uid(), role: 'assistant', content:
-      "Open a repo (local path or GitHub URL) and describe what to fix or build.\n\n" +
-      '• "Fix the auth token expiry bug in src/auth.ts"\n' +
-      '• "Add rate limiting to the /api/run endpoint"\n' +
-      '• "Write a Python script that fetches GitHub stars"\n\n' +
-      "Open a repo and ask. I search for snippets automatically — I do NOT auto-load full files. " +
-      "Click a file in the tree only if you want it fully in context. Auto-apply writes File: blocks to disk." }
+    { id: uid(), role: 'assistant', kind: 'welcome', content:
+      "Open a repo (local path or GitHub URL), then ask for an audit or describe what to fix.\n\n" +
+      "I search the repo for snippets and open a few small source files automatically " +
+      "(never dist/ or minified bundles). Click a file in the tree to pin more into context. " +
+      "Auto-apply writes File: blocks to disk." }
   ]);
   const [input,    setInput]    = useState('');
   const [loading,  setLoading]  = useState(false);
@@ -443,14 +453,21 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       }
 
       // After await, React may already have flushed userMsg into state — don't duplicate.
+      // Never send the UI welcome / example blurb to the model — that made the agent
+      // recite placeholder tasks (auth.ts, rate limiting, GitHub stars) as if they were real.
       const withUser = prev.some(m => m.id === userMsg.id) ? prev : [...prev, userMsg];
       const history = trimMessageHistory(
         withUser
-          .filter(m => m.role === 'user' || m.role === 'assistant')
+          .filter(m => (m.role === 'user' || m.role === 'assistant') && m.kind !== 'welcome')
           .map(m => ({ role: m.role, content: m.content })),
       );
 
-      const systemPrompt = buildSystemPrompt(root, tr, ctx, hits);
+      let systemPrompt = buildSystemPrompt(root, tr, ctx, hits);
+      if (looksLikeAuditRequest(text)) {
+        systemPrompt +=
+          '\n\nThis turn is an AUDIT/REVIEW. Analyze the Open files and search hits above. ' +
+          'List concrete issues with real paths from this repo. Do not invent example tasks.';
+      }
 
       // Always hit agent-chat — it accepts systemPrompt. /api/chat ignores it
       // and is the main-chat persona endpoint, not the agent.
@@ -464,9 +481,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       // If the model only talked about doing work, force one corrective turn.
       // Skip for verify-loop injects (those already demand File: format).
+      // Skip audits — those are prose assessments, not File: writes.
       const shouldNudge = fc.length === 0
         && kind === 'user'
         && looksLikeWorkRequest(text)
+        && !looksLikeAuditRequest(text)
         && (!!root || ctx.size > 0);
 
       if (shouldNudge) {
@@ -546,9 +565,9 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         <div style={{ padding: '5px 12px', background: 'rgba(212,255,63,.05)',
           borderBottom: '1px solid rgba(212,255,63,.15)', flexShrink: 0,
           fontSize: 10, color: '#8fa62b', lineHeight: 1.6 }}>
-          <span style={{ fontWeight: 700 }}>⚡ Search snippets:</span>{' '}
+          <span style={{ fontWeight: 700 }}>⚡ Context:</span>{' '}
           {autoSelectedFiles.join(', ')}
-          <span style={{ color: '#555' }}> — no full files auto-loaded</span>
+          <span style={{ color: '#555' }}> (snippets + small source files; bundles excluded)</span>
         </div>
       )}
 

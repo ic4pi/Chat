@@ -21,6 +21,10 @@ const SOURCE_EXT_RE =
 
 /** Only auto-load full files under this size (~12k tokens). */
 export const MAX_AUTO_FULL_FILE_CHARS = 48_000;
+/** Max full source files opened automatically per query (ephemeral working set). */
+export const MAX_AUTO_FULL_FILES = 3;
+/** Audits need a slightly larger working set, still well under the model window. */
+export const MAX_AUDIT_FULL_FILES = 6;
 /** Hard cap for any single file in the prompt. */
 export const MAX_FILE_CHARS = 80_000;
 /** Total full-file budget in the system prompt. */
@@ -28,6 +32,12 @@ export const MAX_CONTEXT_CHARS = 160_000;
 /** Search-hit snippet budget. */
 export const MAX_SNIPPET_CHARS = 24_000;
 export const MAX_TREE_PATHS = 80;
+
+/** Prefer these paths when the user asks for a broad audit and search is thin. */
+const AUDIT_SEED_RE =
+  /(^|\/)(api|lib|src|sandbox-terminal\/src|sandbox-runner\/src)\//;
+const AUDIT_NAME_RE =
+  /(agent|chat|context|repo|session|sandbox|search|auth|config|server|app)\./i;
 
 export interface SearchHit {
   path: string;
@@ -125,4 +135,31 @@ export function trimMessageHistory(
 
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
+}
+
+/** Rank source paths for a broad audit when keyword search returns little. */
+export function pickAuditSeedPaths(paths: string[], limit = MAX_AUDIT_FULL_FILES): string[] {
+  const scored = paths
+    .filter(p => isSourcePath(p))
+    .map(p => {
+      const norm = p.replace(/\\/g, '/');
+      let score = 1;
+      if (AUDIT_SEED_RE.test(norm)) score += 6;
+      if (AUDIT_NAME_RE.test(norm)) score += 4;
+      if (/(^|\/)(package\.json|README\.md|vercel\.json)$/i.test(norm)) score += 2;
+      // Prefer smaller editable sources over giant dumps (size unknown here — path only).
+      if (norm.split('/').length <= 3) score += 1;
+      return { path: norm, score };
+    })
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const { path: p } of scored) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    out.push(p);
+    if (out.length >= limit) break;
+  }
+  return out;
 }

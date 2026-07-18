@@ -5,7 +5,12 @@ import {
   formatSearchHits,
   truncateForContext,
   trimMessageHistory,
+  pickAuditSeedPaths,
 } from '../src/contextBudget.ts';
+import {
+  looksLikeAuditRequest,
+  looksLikeWorkRequest,
+} from '../src/agentParse.ts';
 
 let failed = 0;
 function assert(cond: boolean, msg: string) {
@@ -46,6 +51,23 @@ const hist = trimMessageHistory(
   20_000,
 );
 assert(hist[hist.length - 1]!.content === 'latest question', 'keeps latest user msg');
+
+assert(looksLikeAuditRequest('audit and recommend changes/fixes'), 'detects audit ask');
+assert(looksLikeAuditRequest('did you even look at the repo'), 'detects look-at-repo');
+assert(!looksLikeWorkRequest('make an audit of my coding agent app'), 'audit is not a write request');
+assert(looksLikeWorkRequest('fix the auth bug in api/session.js'), 'fix is a write request');
+
+const seeds = pickAuditSeedPaths([
+  'public/agent/assets/index-X.js',
+  'readme.txt',
+  'api/agent-chat.js',
+  'sandbox-terminal/src/ChatPane.tsx',
+  'sandbox-terminal/src/useRepoContext.ts',
+  'package.json',
+], 4);
+assert(seeds.includes('api/agent-chat.js'), 'audit seeds prefer api source');
+assert(seeds.includes('sandbox-terminal/src/ChatPane.tsx'), 'audit seeds prefer agent UI source');
+assert(!seeds.includes('public/agent/assets/index-X.js'), 'audit seeds skip bundles');
 
 if (failed) { console.error(`\n${failed} failure(s)`); process.exit(1); }
 console.log('\nAll context-budget tests passed.');

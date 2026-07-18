@@ -31,17 +31,29 @@ const STOP_WORDS = new Set([
   'issue','problem','feature','test','run','into','onto','about','like','more',
 ]);
 
+/** Broad review asks rarely contain code identifiers — seed with app structure terms. */
+const AUDIT_QUERY_RE = /\b(audit|review|assess(?:ment)?|analy[sz]e|inspect|recommend)\b/i;
+const AUDIT_SEED_KEYWORDS = ['agent', 'chat', 'sandbox', 'context', 'repo', 'session'];
+
 export function extractKeywords(query: string): string[] {
   // Split camelCase / PascalCase first
   const expanded = query.replace(/([a-z])([A-Z])/g, '$1 $2');
 
-  const words = expanded
-    .replace(/[^\w\s]/g, ' ')
-    .split(/\s+/)
-    .map(w => w.toLowerCase())
-    .filter(w => w.length >= 3 && !STOP_WORDS.has(w) && !/^\d+$/.test(w));
+  const words = [...new Set(
+    expanded
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .map(w => w.toLowerCase())
+      .filter(w => w.length >= 3 && !STOP_WORDS.has(w) && !/^\d+$/.test(w)),
+  )];
 
-  return [...new Set(words)].slice(0, 8); // cap at 8 keywords
+  if (AUDIT_QUERY_RE.test(query)) {
+    for (const seed of AUDIT_SEED_KEYWORDS) {
+      if (!words.includes(seed)) words.push(seed);
+    }
+  }
+
+  return words.slice(0, 8); // cap at 8 keywords
 }
 
 // ---------------------------------------------------------------------------

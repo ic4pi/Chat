@@ -22,17 +22,27 @@ const STOP_WORDS = new Set([
   'file','code','function','class','method','error','bug','issue','test','run','build',
 ]);
 
+/** Broad review asks rarely contain code identifiers — seed with app structure terms. */
+const AUDIT_QUERY_RE = /\b(audit|review|assess(?:ment)?|analy[sz]e|inspect|recommend)\b/i;
+const AUDIT_SEED_KEYWORDS = ['agent', 'chat', 'sandbox', 'context', 'repo', 'session'];
+
 const MAX_SEARCH_FILE_BYTES = 80_000;
 const MAX_SNIPPETS_PER_FILE = 4;
 const SNIPPET_CONTEXT_LINES = 1;
 
 function extractKeywords(query) {
   const expanded = query.replace(/([a-z])([A-Z])/g, '$1 $2');
-  return [...new Set(
+  const words = [...new Set(
     expanded.replace(/[^\w\s]/g, ' ').split(/\s+/)
       .map(w => w.toLowerCase())
       .filter(w => w.length >= 3 && !STOP_WORDS.has(w) && !/^\d+$/.test(w))
-  )].slice(0, 8);
+  )];
+  if (AUDIT_QUERY_RE.test(query || '')) {
+    for (const seed of AUDIT_SEED_KEYWORDS) {
+      if (!words.includes(seed)) words.push(seed);
+    }
+  }
+  return words.slice(0, 8);
 }
 
 function toRel(abs) {

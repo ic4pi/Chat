@@ -11,8 +11,14 @@ import type { PendingChange } from './useRepoContext.js';
 import {
   isJunkContextPath,
   isSourcePath,
+  pickAuditSeedPaths,
+  MAX_AUTO_FULL_FILE_CHARS,
+  MAX_AUTO_FULL_FILES,
+  MAX_AUDIT_FULL_FILES,
   type SearchHit,
 } from './contextBudget.js';
+import { looksLikeAuditRequest } from './agentParse.js';
+import type { FileNode } from './types.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
@@ -51,10 +57,21 @@ const OR_MODELS = [
   { id: 'meta-llama/llama-3.3-70b-instruct:free',    label: 'Llama 3.3 70B (free)' },
 ];
 
+function flattenTreePaths(nodes: FileNode[], prefix = ''): string[] {
+  const out: string[] = [];
+  for (const n of nodes) {
+    const p = prefix ? `${prefix}/${n.name}` : n.name;
+    if (n.type === 'file') out.push(p);
+    else if (n.children) out.push(...flattenTreePaths(n.children, p));
+  }
+  return out;
+}
+
 async function fetchAutoContext(
   root: string,
   query: string,
   sandboxId: string | null,
+  maxFiles = 6,
 ): Promise<SearchHit[]> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (sandboxId) headers['X-Sandbox-Session'] = sandboxId;
@@ -63,7 +80,7 @@ async function fetchAutoContext(
   try {
     const res = await fetch(`${API_URL}/search`, {
       method: 'POST', headers,
-      body: JSON.stringify({ root, query, maxFiles: 6 }),
+      body: JSON.stringify({ root, query, maxFiles }),
       signal: controller.signal,
     });
     if (!res.ok) return [];
@@ -83,6 +100,30 @@ async function fetchAutoContext(
     return [];
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function fetchFileContent(
+  root: string,
+  relPath: string,
+  sandboxId: string | null,
+  maxBytes = MAX_AUTO_FULL_FILE_CHARS,
+): Promise<string | null> {
+  if (isJunkContextPath(relPath) || !isSourcePath(relPath)) return null;
+  try {
+    const headers: Record<string, string> = {};
+    if (sandboxId) headers['X-Sandbox-Session'] = sandboxId;
+    const url = sandboxId
+      ? `${API_URL}/file?path=${encodeURIComponent(relPath)}&maxBytes=${maxBytes}`
+      : `${API_URL}/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(relPath)}`;
+    const res = await fetch(url, { headers });
+    if (!res.ok) return null;
+    const data = await res.json() as { content?: string };
+    if (data.content == null) return null;
+    if (data.content.length > MAX_AUTO_FULL_FILE_CHARS * 1.25) return null;
+    return data.content;
+  } catch {
+    return null;
   }
 }
 
@@ -200,26 +241,62 @@ export function App() {
     hits: SearchHit[];
     files: Map<string, string>;
   }> => {
-    // Opening a repo + asking a question must NEVER auto-load full files.
-    // Full files only enter the prompt when the user clicks them in the tree.
-    // Auto path = search snippets only (how Cursor/Claude Code start a turn).
+    // Cursor-style: search snippets first, then open a small budgeted working set
+    // of SOURCE files. Never open dist/bundles — those blew the 131k window.
     const empty = { hits: [] as SearchHit[], files: new Map<string, string>() };
     if (!repo.root) {
       setAutoCtxFiles([]);
       setSearchHits([]);
       return empty;
     }
+    const audit = looksLikeAuditRequest(query);
+    const maxHits = audit ? 10 : 6;
+    const maxFull = audit ? MAX_AUDIT_FULL_FILES : MAX_AUTO_FULL_FILES;
     try {
-      const hits = await fetchAutoContext(repo.root, query, repo.sandboxId);
+      let hits = await fetchAutoContext(repo.root, query, repo.sandboxId, maxHits);
+
+      // Broad audits often have weak keywords — seed from the file tree.
+      if (audit && hits.length < 3 && repo.tree.length > 0) {
+        const seeds = pickAuditSeedPaths(flattenTreePaths(repo.tree), maxFull);
+        const have = new Set(hits.map(h => h.path));
+        for (const path of seeds) {
+          if (have.has(path)) continue;
+          hits.push({ path, score: 0, reason: 'audit seed', snippets: [] });
+          have.add(path);
+        }
+      }
+
       setSearchHits(hits);
-      setAutoCtxFiles(hits.map(h => h.path));
-      return { hits, files: new Map() };
+
+      const toOpen = hits
+        .filter(h => isSourcePath(h.path))
+        .filter(h => {
+          // Unknown size (seed) — try load; search hits respect size when present.
+          if (h.size == null || h.size <= 0) return true;
+          return h.size <= MAX_AUTO_FULL_FILE_CHARS;
+        })
+        .slice(0, maxFull);
+
+      const opened = new Map<string, string>();
+      for (const h of toOpen) {
+        if (repo.contextFiles.has(h.path)) continue;
+        const content = await fetchFileContent(
+          repo.root, h.path, repo.sandboxId, MAX_AUTO_FULL_FILE_CHARS,
+        );
+        if (content != null) opened.set(h.path, content);
+      }
+
+      setAutoCtxFiles([
+        ...hits.map(h => h.path),
+        ...[...opened.keys()].filter(p => !hits.some(h => h.path === p)),
+      ]);
+      return { hits, files: opened };
     } catch {
       setAutoCtxFiles([]);
       setSearchHits([]);
       return empty;
     }
-  }, [repo.root, repo.sandboxId]);
+  }, [repo.root, repo.sandboxId, repo.tree, repo.contextFiles]);
 
   const handleFileChanges = useCallback(async (changes: PendingChange[]) => {
     const enriched = await Promise.all(changes.map(async c => {
