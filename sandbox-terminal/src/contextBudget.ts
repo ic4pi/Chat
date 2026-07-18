@@ -27,7 +27,7 @@ export const MAX_FILE_CHARS = 80_000;
 export const MAX_CONTEXT_CHARS = 160_000;
 /** Search-hit snippet budget. */
 export const MAX_SNIPPET_CHARS = 24_000;
-export const MAX_TREE_PATHS = 200;
+export const MAX_TREE_PATHS = 80;
 
 export interface SearchHit {
   path: string;

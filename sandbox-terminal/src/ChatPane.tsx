@@ -92,9 +92,15 @@ function buildSystemPrompt(
   }
 
   if (tree.length > 0) {
-    const flatPaths = flattenTree(tree);
-    const shown = flatPaths.slice(0, MAX_TREE_PATHS);
-    parts.push('', 'File tree (truncated):', shown.join('\n'));
+    // Tiny map only — never dump the whole repo into the prompt.
+    const flatPaths = flattenTree(tree).filter(p =>
+      !p.includes('node_modules') &&
+      !p.includes('/dist/') &&
+      !p.startsWith('dist/') &&
+      !p.includes('public/agent/assets'),
+    );
+    const shown = flatPaths.slice(0, Math.min(MAX_TREE_PATHS, 80));
+    parts.push('', 'File tree (paths only, truncated):', shown.join('\n'));
     if (flatPaths.length > shown.length) {
       parts.push(`… (${flatPaths.length - shown.length} more paths omitted)`);
     }
@@ -338,8 +344,8 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       '• "Fix the auth token expiry bug in src/auth.ts"\n' +
       '• "Add rate limiting to the /api/run endpoint"\n' +
       '• "Write a Python script that fetches GitHub stars"\n\n' +
-      "I search for snippets first, open a few source files, then write complete files to disk. " +
-      "Turn off Auto-apply if you want review-only." }
+      "Open a repo and ask. I search for snippets automatically — I do NOT auto-load full files. " +
+      "Click a file in the tree only if you want it fully in context. Auto-apply writes File: blocks to disk." }
   ]);
   const [input,    setInput]    = useState('');
   const [loading,  setLoading]  = useState(false);
@@ -540,9 +546,9 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         <div style={{ padding: '5px 12px', background: 'rgba(212,255,63,.05)',
           borderBottom: '1px solid rgba(212,255,63,.15)', flexShrink: 0,
           fontSize: 10, color: '#8fa62b', lineHeight: 1.6 }}>
-          <span style={{ fontWeight: 700 }}>⚡ Search:</span>{' '}
+          <span style={{ fontWeight: 700 }}>⚡ Search snippets:</span>{' '}
           {autoSelectedFiles.join(', ')}
-          <span style={{ color: '#555' }}> (snippets + up to 3 small source files)</span>
+          <span style={{ color: '#555' }}> — no full files auto-loaded</span>
         </div>
       )}
 

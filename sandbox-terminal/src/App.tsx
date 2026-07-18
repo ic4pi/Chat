@@ -11,7 +11,6 @@ import type { PendingChange } from './useRepoContext.js';
 import {
   isJunkContextPath,
   isSourcePath,
-  MAX_AUTO_FULL_FILE_CHARS,
   type SearchHit,
 } from './contextBudget.js';
 
@@ -159,8 +158,6 @@ export function App() {
   const [applyResults, setApplyResults] = useState<Array<{ path: string; ok: boolean; error?: string }>>([]);
   const [autoCtxFiles, setAutoCtxFiles] = useState<string[]>([]);
   const [searchHits,   setSearchHits]   = useState<SearchHit[]>([]);
-  /** Per-query working set — full files opened from search (not user-pinned). */
-  const [autoFullFiles, setAutoFullFiles] = useState<Map<string, string>>(new Map());
   const [mobileTab,    setMobileTab]    = useState<MobileTab>('chat');
   const isMobile = useIsMobile();
 
@@ -203,49 +200,26 @@ export function App() {
     hits: SearchHit[];
     files: Map<string, string>;
   }> => {
+    // Opening a repo + asking a question must NEVER auto-load full files.
+    // Full files only enter the prompt when the user clicks them in the tree.
+    // Auto path = search snippets only (how Cursor/Claude Code start a turn).
     const empty = { hits: [] as SearchHit[], files: new Map<string, string>() };
     if (!repo.root) {
       setAutoCtxFiles([]);
       setSearchHits([]);
-      setAutoFullFiles(new Map());
       return empty;
     }
     try {
-      // 1) Search → snippets (never dump whole files / bundles into the prompt)
       const hits = await fetchAutoContext(repo.root, query, repo.sandboxId);
       setSearchHits(hits);
       setAutoCtxFiles(hits.map(h => h.path));
-
-      // 2) Ephemeral working set: up to 3 small SOURCE files for THIS query only
-      const toOpen = hits
-        .filter(h => isSourcePath(h.path))
-        .filter(h => (h.size ?? 0) > 0 && (h.size ?? 0) <= MAX_AUTO_FULL_FILE_CHARS)
-        .slice(0, 3);
-
-      const opened = new Map<string, string>();
-      for (const h of toOpen) {
-        if (repo.contextFiles.has(h.path)) continue; // already user-pinned
-        try {
-          const headers: Record<string, string> = {};
-          if (repo.sandboxId) headers['X-Sandbox-Session'] = repo.sandboxId;
-          const url = repo.sandboxId
-            ? `${API_URL}/file?path=${encodeURIComponent(h.path)}&maxBytes=${MAX_AUTO_FULL_FILE_CHARS}`
-            : `${API_URL}/file?root=${encodeURIComponent(repo.root)}&path=${encodeURIComponent(h.path)}`;
-          const res = await fetch(url, { headers });
-          if (!res.ok) continue;
-          const data = await res.json() as { content?: string };
-          if (data.content != null) opened.set(h.path, data.content);
-        } catch { /* skip */ }
-      }
-      setAutoFullFiles(opened);
-      return { hits, files: opened };
+      return { hits, files: new Map() };
     } catch {
       setAutoCtxFiles([]);
       setSearchHits([]);
-      setAutoFullFiles(new Map());
       return empty;
     }
-  }, [repo]);
+  }, [repo.root, repo.sandboxId]);
 
   const handleFileChanges = useCallback(async (changes: PendingChange[]) => {
     const enriched = await Promise.all(changes.map(async c => {
