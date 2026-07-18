@@ -352,10 +352,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 }, ref) {
   const [messages,  setMessages]  = useState<Message[]>([
     { id: uid(), role: 'assistant', kind: 'welcome', content:
-      "Open a repo (local path or GitHub URL), then ask for an audit or describe what to fix.\n\n" +
-      "I search the repo for snippets and open a few small source files automatically " +
-      "(never dist/ or minified bundles). Click a file in the tree to pin more into context. " +
-      "Auto-apply writes File: blocks to disk." }
+      "1) Paste your GitHub link (or project folder) on the left and hit Open.\n" +
+      "2) Tell me what’s broken or what you want built — in plain English.\n\n" +
+      "I’ll find the right files myself and fix them. You don’t need to know filenames " +
+      "or pick anything in the file list." }
   ]);
   const [input,    setInput]    = useState('');
   const [loading,  setLoading]  = useState(false);
@@ -550,9 +550,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         alignItems: 'center', gap: 10 }}>
         <span style={{ color: '#d4ff3f', fontSize: 10, letterSpacing: '0.1em',
           textTransform: 'uppercase' }}>// agent</span>
-        {contextFiles.size > 0 && (
+        {(autoSelectedFiles.length > 0 || contextFiles.size > 0) && (
           <span style={{ fontSize: 10, color: '#555' }}>
-            {contextFiles.size} file{contextFiles.size !== 1 ? 's' : ''} in context
+            reading {Math.max(autoSelectedFiles.length, contextFiles.size)} file
+            {Math.max(autoSelectedFiles.length, contextFiles.size) !== 1 ? 's' : ''} for you
           </span>
         )}
         {error && <span style={{ fontSize: 10, color: '#ff6a6a', marginLeft: 'auto' }}>
@@ -560,14 +561,13 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         </span>}
       </div>
 
-      {/* auto-context banner — shown when auto-context picked files */}
+      {/* Friendly status — no jargon about snippets/tokens/bundles */}
       {autoSelectedFiles.length > 0 && (
         <div style={{ padding: '5px 12px', background: 'rgba(212,255,63,.05)',
           borderBottom: '1px solid rgba(212,255,63,.15)', flexShrink: 0,
           fontSize: 10, color: '#8fa62b', lineHeight: 1.6 }}>
-          <span style={{ fontWeight: 700 }}>⚡ Context:</span>{' '}
-          {autoSelectedFiles.join(', ')}
-          <span style={{ color: '#555' }}> (snippets + small source files; bundles excluded)</span>
+          <span style={{ fontWeight: 700 }}>Looking at:</span>{' '}
+          {autoSelectedFiles.map(p => p.split('/').pop() || p).join(', ')}
         </div>
       )}
 
@@ -622,7 +622,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           onKeyDown={e => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); }
           }}
-          placeholder="Describe what to fix or build… (Enter to send, Shift+Enter for newline)"
+          placeholder="What’s broken, or what should I build? (Enter to send)"
           disabled={loading}
           style={{ flex: 1, background: '#111', color: '#e8e8e8',
             border: '1px solid #2a2a2a', borderRadius: 4,

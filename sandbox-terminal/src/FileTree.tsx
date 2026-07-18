@@ -57,7 +57,7 @@ function TreeNode({ node, depth, contextPaths, onClickFile }: {
   return (
     <div
       onClick={() => onClickFile(node)}
-      title={inCtx ? 'In context — click to remove' : 'Click to add to context'}
+      title={inCtx ? 'Pinned — click to unpin' : 'Optional: pin this file'}
       style={{
         display: 'flex', alignItems: 'center', gap: 5,
         padding: '2px 4px 2px 0', paddingLeft: 8 + depth * 14,
@@ -115,8 +115,6 @@ export function FileTree({
   }, [contextFiles, onAddToContext, onRemoveFromContext]);
 
   const contextPaths = new Set(contextFiles.keys());
-  const contextTokenEst = [...contextFiles.values()]
-    .reduce((sum, c) => sum + Math.ceil(c.length / 4), 0);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%',
@@ -159,9 +157,9 @@ export function FileTree({
         {tree.length === 0 && !loading && !repoRoot && (
           <div style={{ padding: '12px 10px', fontSize: 11, color: '#444',
             lineHeight: 1.6 }}>
-            Enter an absolute path above to load a repo.
+            Paste a GitHub link above and hit Open.
             <br /><br />
-            Click any file to add it to the LLM context.
+            Then just chat — you don’t need to pick files.
           </div>
         )}
         {tree.map(node => (
@@ -170,35 +168,35 @@ export function FileTree({
         ))}
       </div>
 
-      {/* ── context summary ── */}
+      {/* ── optional pinned files (advanced; auto-pick does the real work) ── */}
       {contextFiles.size > 0 && (
         <div style={{ borderTop: '1px solid #1e1e1e', padding: '8px 10px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center',
             justifyContent: 'space-between', marginBottom: 5 }}>
             <span style={{ fontSize: 10, color: '#d4ff3f', letterSpacing: '0.08em',
               textTransform: 'uppercase' }}>
-              Context ({contextFiles.size})
+              Pinned ({contextFiles.size})
             </span>
             <button onClick={onClearContext}
               style={{ background: 'transparent', color: '#555', border: 'none',
                 fontSize: 10, cursor: 'pointer', padding: 0 }}>
-              clear all
+              clear
             </button>
+          </div>
+          <div style={{ fontSize: 10, color: '#444', marginBottom: 6, lineHeight: 1.4 }}>
+            Optional — the agent already finds files from your question.
           </div>
           {[...contextFiles.keys()].map(p => (
             <div key={p} style={{ display: 'flex', alignItems: 'center',
               justifyContent: 'space-between', padding: '2px 0', gap: 6 }}>
               <span style={{ fontSize: 10, color: '#aaa', flex: 1,
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                title={p}>{p}</span>
+                title={p}>{p.split('/').pop()}</span>
               <button onClick={() => onRemoveFromContext(p)}
                 style={{ background: 'transparent', color: '#555', border: 'none',
                   fontSize: 11, cursor: 'pointer', padding: 0, lineHeight: 1 }}>×</button>
             </div>
           ))}
-          <div style={{ marginTop: 5, fontSize: 10, color: '#444' }}>
-            ~{contextTokenEst.toLocaleString()} tokens
-          </div>
         </div>
       )}
     </div>

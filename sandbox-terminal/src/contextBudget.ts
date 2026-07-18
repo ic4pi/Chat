@@ -22,9 +22,9 @@ const SOURCE_EXT_RE =
 /** Only auto-load full files under this size (~12k tokens). */
 export const MAX_AUTO_FULL_FILE_CHARS = 48_000;
 /** Max full source files opened automatically per query (ephemeral working set). */
-export const MAX_AUTO_FULL_FILES = 3;
-/** Audits need a slightly larger working set, still well under the model window. */
-export const MAX_AUDIT_FULL_FILES = 6;
+export const MAX_AUTO_FULL_FILES = 5;
+/** Broad audits / vague asks get a slightly larger working set. */
+export const MAX_AUDIT_FULL_FILES = 8;
 /** Hard cap for any single file in the prompt. */
 export const MAX_FILE_CHARS = 80_000;
 /** Total full-file budget in the system prompt. */
@@ -137,7 +137,10 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-/** Rank source paths for a broad audit when keyword search returns little. */
+/**
+ * Rank source paths when the user didn't name a file (most non-coder asks).
+ * Used for audits and as a fallback when keyword search is thin.
+ */
 export function pickAuditSeedPaths(paths: string[], limit = MAX_AUDIT_FULL_FILES): string[] {
   const scored = paths
     .filter(p => isSourcePath(p))

@@ -250,18 +250,19 @@ export function App() {
       return empty;
     }
     const audit = looksLikeAuditRequest(query);
-    const maxHits = audit ? 10 : 6;
+    const maxHits = audit ? 12 : 8;
     const maxFull = audit ? MAX_AUDIT_FULL_FILES : MAX_AUTO_FULL_FILES;
     try {
       let hits = await fetchAutoContext(repo.root, query, repo.sandboxId, maxHits);
 
-      // Broad audits often have weak keywords — seed from the file tree.
-      if (audit && hits.length < 3 && repo.tree.length > 0) {
+      // Non-coders won't name files. If search is thin, pick likely source files
+      // from the tree so the agent still has something real to read/fix.
+      if (hits.length < 3 && repo.tree.length > 0) {
         const seeds = pickAuditSeedPaths(flattenTreePaths(repo.tree), maxFull);
         const have = new Set(hits.map(h => h.path));
         for (const path of seeds) {
           if (have.has(path)) continue;
-          hits.push({ path, score: 0, reason: 'audit seed', snippets: [] });
+          hits.push({ path, score: 0, reason: 'auto-picked', snippets: [] });
           have.add(path);
         }
       }
