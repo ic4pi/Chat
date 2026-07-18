@@ -8,8 +8,9 @@ import {
   pickAuditSeedPaths,
 } from '../src/contextBudget.ts';
 import {
-  looksLikeAuditRequest,
-  looksLikeWorkRequest,
+  looksLikeSuggestRequest,
+  looksLikeApplyRequest,
+  looksLikeLegacyWelcome,
   needsCodeContext,
 } from '../src/agentParse.ts';
 
@@ -53,14 +54,15 @@ const hist = trimMessageHistory(
 );
 assert(hist[hist.length - 1]!.content === 'latest question', 'keeps latest user msg');
 
-assert(looksLikeAuditRequest('audit and recommend changes/fixes'), 'detects audit ask');
-assert(looksLikeAuditRequest('did you even look at the repo'), 'detects look-at-repo');
-assert(!looksLikeWorkRequest('make an audit of my coding agent app'), 'audit is not a write request');
-assert(looksLikeWorkRequest('fix the auth bug in api/session.js'), 'fix is a write request');
+assert(looksLikeSuggestRequest('suggest additions and fixes'), 'suggest additions = suggest');
+assert(looksLikeSuggestRequest('audit and recommend changes/fixes'), 'audit = suggest');
+assert(!looksLikeApplyRequest('suggest additions and fixes'), 'suggest is not apply');
+assert(looksLikeApplyRequest('apply that fix now'), 'apply that fix = apply');
+assert(looksLikeApplyRequest('fix the login bug'), 'fix the bug = apply');
+assert(looksLikeLegacyWelcome('Fix the auth token expiry bug in src/auth.ts'), 'detects legacy welcome poison');
 assert(!needsCodeContext('hey'), 'hey stays light — no file dump');
 assert(!needsCodeContext('thanks'), 'thanks stays light');
-assert(needsCodeContext('fix the login bug'), 'fix pulls code context');
-assert(needsCodeContext('audit my coding agent app'), 'audit pulls code context');
+assert(needsCodeContext('suggest additions and fixes'), 'suggest pulls code context');
 
 const seeds = pickAuditSeedPaths([
   'public/agent/assets/index-X.js',

@@ -139,30 +139,34 @@ export function DiffPanel({
     <div style={{ borderTop: '1px solid #1e1e1e', background: '#0a0a0a',
       fontFamily: '"JetBrains Mono",ui-monospace,monospace' }}>
       {/* sticky header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10,
-        padding: '8px 12px', background: '#0f0f0f',
+      <div style={{ padding: '8px 12px', background: '#0f0f0f',
         borderBottom: '1px solid #1e1e1e', position: 'sticky', top: 0, zIndex: 5 }}>
-        <span style={{ fontSize: 10, color: '#d4ff3f', letterSpacing: '0.1em',
-          textTransform: 'uppercase' }}>
-          {pending.length} file{pending.length !== 1 ? 's' : ''} to apply
-        </span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          <button onClick={onDismissAll}
-            style={{ background: 'transparent', color: '#555',
-              border: '1px solid #222', borderRadius: 4,
-              padding: '4px 10px', cursor: 'pointer',
-              fontFamily: 'inherit', fontSize: 11 }}>
-            Discard all
-          </button>
-          <button onClick={onApply} disabled={applying || pending.length === 0}
-            data-testid="apply-btn"
-            style={{ background: pending.length > 0 ? '#d4ff3f' : '#1a1a1a',
-              color: pending.length > 0 ? '#0a0a0a' : '#444',
-              border: 'none', borderRadius: 4, padding: '4px 14px',
-              cursor: pending.length > 0 ? 'pointer' : 'default',
-              fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
-            {applying ? 'Applying…' : 'Apply to disk'}
-          </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 10, color: '#d4ff3f', letterSpacing: '0.1em',
+            textTransform: 'uppercase' }}>
+            {pending.length} proposed change{pending.length !== 1 ? 's' : ''}
+          </span>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+            <button onClick={onDismissAll}
+              style={{ background: 'transparent', color: '#555',
+                border: '1px solid #222', borderRadius: 4,
+                padding: '4px 10px', cursor: 'pointer',
+                fontFamily: 'inherit', fontSize: 11 }}>
+              Discard
+            </button>
+            <button onClick={onApply} disabled={applying || pending.length === 0}
+              data-testid="apply-btn"
+              style={{ background: pending.length > 0 ? '#d4ff3f' : '#1a1a1a',
+                color: pending.length > 0 ? '#0a0a0a' : '#444',
+                border: 'none', borderRadius: 4, padding: '4px 14px',
+                cursor: pending.length > 0 ? 'pointer' : 'default',
+                fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
+              {applying ? 'Saving…' : 'Save to sandbox'}
+            </button>
+          </div>
+        </div>
+        <div style={{ marginTop: 6, fontSize: 10, color: '#666', lineHeight: 1.4 }}>
+          Draft only until you save. Saves to the cloud sandbox — not GitHub, not your phone.
         </div>
       </div>
 

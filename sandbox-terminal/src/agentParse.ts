@@ -1,6 +1,6 @@
 /**
  * Pure helpers for coding-agent replies: File: block extraction and
- * "does this user message want code written?" detection.
+ * intent detection (suggest vs apply).
  */
 
 export interface FileChange {
@@ -26,49 +26,62 @@ export function extractFileChanges(text: string): FileChange[] {
   return changes;
 }
 
-/** True when the user wants a repo audit/review (prose assessment), not file writes. */
-export function looksLikeAuditRequest(text: string): boolean {
-  const t = text.toLowerCase();
-  if (t.length < 4) return false;
-  return /\b(audit|review|assess(?:ment)?|analy[sz]e|inspect|look at (the )?repo|read (the )?repo|what('?s| is) wrong|recommend(?:ed)? (changes|fixes))\b/.test(t);
+/** Old welcome blurb that poisoned the model into inventing fake tasks. */
+export function looksLikeLegacyWelcome(text: string): boolean {
+  return /Fix the auth token expiry|rate limiting to the \/api\/run|fetches GitHub stars/i.test(text);
 }
 
-/** True when the user clearly wants code written, not a conversational answer. */
-export function looksLikeWorkRequest(text: string): boolean {
+/**
+ * User wants ideas / review / recommendations — NOT automatic code writes.
+ * "suggest additions and fixes" must stay here.
+ */
+export function looksLikeSuggestRequest(text: string): boolean {
   const t = text.toLowerCase();
   if (t.length < 4) return false;
-  // Audits/reviews should stay prose — don't force File: blocks.
-  if (looksLikeAuditRequest(t) && !/\b(fix|implement|apply|patch|rewrite|refactor)\b/.test(t)) {
-    return false;
+  return /\b(suggest|suggestion|recommend|recommendation|advice|advise|ideas?|feedback|audit|review|assess(?:ment)?|analy[sz]e|inspect|improvements?|additions?|what should|how (can|should|would)|tell me what|look at (the )?repo|read (the )?repo|what('?s| is) wrong)\b/.test(t);
+}
+
+/** Explicit permission to write files into the sandbox. */
+export function looksLikeApplyRequest(text: string): boolean {
+  const t = text.toLowerCase();
+  if (t.length < 4) return false;
+  // Suggest/review language wins — never treat as apply.
+  if (looksLikeSuggestRequest(t)) {
+    return /\b(apply (it|them|this|the changes)|implement (it|them|this|now)|go ahead and (fix|change|write)|do it now|write the (fix|code|files)|save (it|them|the fix))\b/.test(t);
   }
-  return /\b(fix|build|implement|create|add|write|update|refactor|change|make|generate|patch|repair|ship|code|app|feature|bug|error|fail|broken|improve|rewrite|replace|delete|remove|rename)\b/.test(t);
+  return /\b(apply|implement|write the|do it|go ahead|ship it|save (it|the)|patch it|fix (it|this|my|the)|build|create|add|update|refactor|rewrite|replace|delete|remove|rename|make the)\b/.test(t);
+}
+
+/** @deprecated use looksLikeSuggestRequest */
+export function looksLikeAuditRequest(text: string): boolean {
+  return looksLikeSuggestRequest(text);
+}
+
+/** @deprecated use looksLikeApplyRequest — kept for older imports/tests */
+export function looksLikeWorkRequest(text: string): boolean {
+  return looksLikeApplyRequest(text);
 }
 
 /**
  * Small talk / meta questions should NOT pull repo files into the prompt.
- * That's how Cursor/Claude stay cheap on "hey" while still having the whole
- * project available when you ask for a fix.
  */
 export function needsCodeContext(text: string): boolean {
   const t = text.trim().toLowerCase();
   if (!t) return false;
-  if (looksLikeAuditRequest(t) || looksLikeWorkRequest(t)) return true;
-  // Explicit code/project questions
+  if (looksLikeSuggestRequest(t) || looksLikeApplyRequest(t)) return true;
   if (/\b(repo|codebase|project|file|function|bug|error|stack|crash|endpoint|api|component|where is|how does|why (is|does)|show me|find)\b/.test(t)) {
     return true;
   }
-  // Very short chit-chat / acknowledgements
   if (t.length <= 40 && /^(hi|hey|hello|yo|sup|thanks|thank you|ok|okay|cool|great|sure|yes|no|yep|nope|what can you do|who are you|help)\b/.test(t)) {
     return false;
   }
-  // Default: if they typed a real sentence and a repo is open, look at code.
-  // Short fragments without code intent stay light.
   return t.length >= 24 || /\b(please|can you|could you|would you)\b/.test(t);
 }
 
+/** Only used when the user explicitly asked to apply/write. */
 export const NUDGE_PROMPT =
-  'STOP. You did not output any File: blocks, so nothing was written to disk.\n' +
-  'Do the work NOW. Output complete file(s) using exactly this format — no plan, no "I will":\n\n' +
+  'STOP. You did not output any File: blocks, so nothing was written.\n' +
+  'The user asked you to APPLY changes. Output complete file(s) now:\n\n' +
   'File: <relative-path>\n' +
   '```lang\n' +
   '<full file content>\n' +

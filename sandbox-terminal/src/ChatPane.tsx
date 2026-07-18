@@ -27,8 +27,9 @@ import type { PendingChange } from './useRepoContext.js';
 import type { FileNode } from './types.js';
 import {
   extractFileChanges,
-  looksLikeWorkRequest,
-  looksLikeAuditRequest,
+  looksLikeApplyRequest,
+  looksLikeSuggestRequest,
+  looksLikeLegacyWelcome,
   needsCodeContext,
   NUDGE_PROMPT,
 } from './agentParse.js';
@@ -42,8 +43,8 @@ import {
 
 export {
   extractFileChanges,
-  looksLikeWorkRequest,
-  looksLikeAuditRequest,
+  looksLikeApplyRequest,
+  looksLikeSuggestRequest,
   needsCodeContext,
 } from './agentParse.js';
 export type { SearchHit } from './contextBudget.js';
@@ -77,30 +78,25 @@ function buildSystemPrompt(
   const light = !!opts?.light;
 
   parts.push(
-    'You are a coding agent. The user\'s whole project is available in a sandbox.',
-    'Like Cursor/Claude: the full repo is NOT pasted into every message. Each turn gets only the files needed for that ask.',
-    'The host app can parse File: blocks and write them to disk automatically.',
+    'You help non-coders understand and improve their project.',
+    'The whole project is available in a cloud sandbox. Each message only includes files needed for that ask.',
     '',
-    'CRITICAL — what to answer:',
-    '  • Only address the USER messages in this conversation.',
-    '  • Never invent tasks or fake files (e.g. src/auth.ts) that are not in the provided context.',
-    '  • If Open files / search hits are present, ground every claim in those paths.',
+    'DEFAULT MODE = SUGGEST (most asks):',
+    '  • Answer in plain English with concrete suggestions grounded in the provided files.',
+    '  • Cite real file paths from Open files / search hits / the file tree.',
+    '  • Do NOT invent files or tasks that are not in the provided context.',
+    '  • Do NOT output File: blocks. Do NOT claim you already fixed or saved anything.',
+    '  • Do NOT push to GitHub. Do NOT say the phone was updated.',
     '',
-    'When the user asks for an audit, review, or assessment:',
-    '  • Reply in plain prose with concrete findings from the provided files.',
-    '  • Do NOT emit File: blocks unless they explicitly ask you to implement/fix now.',
-    '',
-    'HARD RULES when the user asks to fix, build, add, change, implement, or create anything:',
-    '  1. Do the work in THIS reply. Never say "I will" or plan without files.',
-    '  2. Output every changed/created file as a COMPLETE file (not a diff).',
-    '  3. Each file MUST use this exact format:',
+    'APPLY MODE — only when the user clearly says to apply / implement / write / do it now:',
+    '  • Output each changed file as a COMPLETE file using this format:',
     '       File: <path relative to repo root>',
     '       ```typescript',
     '       // full file content',
     '       ```',
-    '  4. Keep prose short. Prefer editing files already provided this turn.',
+    '  • Keep prose to 1–2 short sentences. Changes go to the sandbox only until the user applies them.',
     '',
-    'Only answer in plain prose (no File: blocks) for pure questions that need no code changes.',
+    'Never invent placeholder tasks. Only discuss the user\'s actual request and real repo files.',
   );
 
   if (repoRoot) {
@@ -364,12 +360,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 }, ref) {
   const [messages,  setMessages]  = useState<Message[]>([
     { id: uid(), role: 'assistant', kind: 'welcome', content:
-      "Paste your GitHub link on the left → Open. That loads your whole project.\n\n" +
-      "Then just talk normally:\n" +
-      "• Short questions stay light (no file dump, no token blow-up)\n" +
-      "• “Fix this” / “audit my app” → I open only the files I need and correct the code\n\n" +
-      "You don’t pick files. Same idea as Cursor / Claude — whole project available, " +
-      "only the relevant bits go into each message." }
+      "Paste your GitHub link on the left → Open.\n\n" +
+      "Then ask in plain English, for example:\n" +
+      "• “Suggest additions and fixes” → I’ll only recommend (nothing is saved)\n" +
+      "• “Apply that fix” → I’ll write changes into the cloud sandbox (not GitHub, not your phone)\n\n" +
+      "You don’t need to pick files. Auto-save is off unless you turn it on." }
   ]);
   const [input,    setInput]    = useState('');
   const [loading,  setLoading]  = useState(false);
@@ -467,29 +462,39 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       }
 
       // After await, React may already have flushed userMsg into state — don't duplicate.
-      // Never send the UI welcome / example blurb to the model — that made the agent
-      // recite placeholder tasks (auth.ts, rate limiting, GitHub stars) as if they were real.
+      // Never send welcome / legacy example blurb to the model.
       const withUser = prev.some(m => m.id === userMsg.id) ? prev : [...prev, userMsg];
       const history = trimMessageHistory(
         withUser
-          .filter(m => (m.role === 'user' || m.role === 'assistant') && m.kind !== 'welcome')
+          .filter(m =>
+            (m.role === 'user' || m.role === 'assistant')
+            && m.kind !== 'welcome'
+            && !looksLikeLegacyWelcome(m.content),
+          )
           .map(m => ({ role: m.role, content: m.content })),
       );
 
-      // Light chat ("hey", "thanks"): keep the whole repo available in the sandbox,
-      // but don't paste tree/files into the model — that's how Cursor stays cheap.
+      const suggestTurn = kind === 'user' && looksLikeSuggestRequest(text);
+      const applyTurn = kind === 'user' && looksLikeApplyRequest(text);
+
+      // Light chat ("hey", "thanks"): don't paste tree/files into the model.
       const lightTurn = !needsCodeContext(text);
       let systemPrompt = buildSystemPrompt(
         root,
         lightTurn ? [] : tr,
-        ctx, // user-pinned files still count
+        ctx,
         lightTurn ? [] : hits,
         { light: lightTurn && !!root && ctx.size === 0 },
       );
-      if (looksLikeAuditRequest(text)) {
+      if (suggestTurn) {
         systemPrompt +=
-          '\n\nThis turn is an AUDIT/REVIEW. Analyze the Open files and search hits above. ' +
-          'List concrete issues with real paths from this repo. Do not invent example tasks.';
+          '\n\nTHIS TURN IS SUGGEST-ONLY. The user wants recommendations, not code writes. ' +
+          'Plain prose only. No File: blocks. No claiming anything was fixed or saved. ' +
+          'Ground every point in real paths from the provided context.';
+      } else if (applyTurn) {
+        systemPrompt +=
+          '\n\nTHIS TURN IS APPLY MODE. The user asked you to write changes. ' +
+          'Output File: blocks for the sandbox. Do not push to GitHub.';
       }
 
       // Always hit agent-chat — it accepts systemPrompt. /api/chat ignores it
@@ -498,17 +503,25 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       let segs  = parseSegments(reply);
       let fc    = extractFileChanges(reply);
 
+      // Suggest-only: ignore any File: blocks the model wrongly emitted.
+      if (suggestTurn) {
+        fc = [];
+        segs = segs.map(s =>
+          s.type === 'file-change'
+            ? { type: 'text' as const, content: `(Suggestion for ${s.path} — not saved. Say “apply this” if you want it written.)` }
+            : s,
+        );
+      }
+
       setMessages(m => [...m, {
         id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
       }]);
 
-      // If the model only talked about doing work, force one corrective turn.
-      // Skip for verify-loop injects (those already demand File: format).
-      // Skip audits — those are prose assessments, not File: writes.
+      // Only nudge for explicit APPLY asks — never for suggestions/reviews.
       const shouldNudge = fc.length === 0
         && kind === 'user'
-        && looksLikeWorkRequest(text)
-        && !looksLikeAuditRequest(text)
+        && applyTurn
+        && !suggestTurn
         && (!!root || ctx.size > 0);
 
       if (shouldNudge) {
@@ -531,9 +544,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         }]);
       }
 
-      if (fc.length > 0) await onFc(fc);
+      // Never write files on a suggest turn.
+      if (fc.length > 0 && !suggestTurn) await onFc(fc);
 
-      if (ar) {
+      if (ar && !suggestTurn) {
         for (const seg of segs) {
           if (seg.type === 'code' && seg.content.trim()) run(seg.content, seg.lang);
         }
@@ -645,7 +659,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           onKeyDown={e => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); }
           }}
-          placeholder="What’s broken, or what should I build? (Enter to send)"
+          placeholder="Suggest fixes, or say “apply this” to save (Enter to send)"
           disabled={loading}
           style={{ flex: 1, background: '#111', color: '#e8e8e8',
             border: '1px solid #2a2a2a', borderRadius: 4,

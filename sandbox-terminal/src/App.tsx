@@ -17,7 +17,7 @@ import {
   MAX_AUDIT_FULL_FILES,
   type SearchHit,
 } from './contextBudget.js';
-import { looksLikeAuditRequest, needsCodeContext } from './agentParse.js';
+import { looksLikeSuggestRequest, needsCodeContext } from './agentParse.js';
 import type { FileNode } from './types.js';
 
 const API_URL =
@@ -147,11 +147,13 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
     `⟳ Retrying (attempt ${attempt}/3)`;
   if (askCommand) return (
     <div style={{ padding: '8px 12px', background: '#0f0f0f', borderTop: '1px solid #2a2a2a', flexShrink: 0 }}>
-      <div style={{ fontSize: 11, color: '#888', marginBottom: 5 }}>Test command not detected — enter it:</div>
+      <div style={{ fontSize: 11, color: '#888', marginBottom: 5, lineHeight: 1.45 }}>
+        Auto-test is optional. Skip unless you know your project’s test command.
+      </div>
       <div style={{ display: 'flex', gap: 6 }}>
         <input value={cmd} onChange={e => setCmd(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && cmd.trim() && onSetCommand(cmd.trim())}
-          placeholder="npm test / pytest / cargo test…"
+          placeholder="only if you know it — or tap Skip"
           style={{ flex: 1, background: '#151515', color: '#e8e8e8', border: '1px solid #333',
             borderRadius: 4, padding: '4px 8px', fontFamily: 'inherit', fontSize: 12, outline: 'none' }} />
         <button onClick={() => cmd.trim() && onSetCommand(cmd.trim())}
@@ -159,8 +161,8 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
             padding: '4px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
           Set & Run</button>
         <button onClick={onDismiss}
-          style={{ background: 'transparent', color: '#555', border: '1px solid #222',
-            borderRadius: 4, padding: '4px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11 }}>
+          style={{ background: '#1a1a1a', color: '#e8e8e8', border: '1px solid #333',
+            borderRadius: 4, padding: '4px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
           Skip</button>
       </div>
     </div>
@@ -191,9 +193,11 @@ export function App() {
 
   const [provider,     setProvider]     = useState('venice');
   const [model,        setModel]        = useState('venice-uncensored');
-  const [autoRun,      setAutoRun]      = useState(true);
-  const [autoApplyOn,  setAutoApplyOn]  = useState(true);
-  const [autoVerifyOn, setAutoVerifyOn] = useState(true);
+  // Defaults OFF — this is a suggest-first app for non-coders.
+  // Writing / running / test loops only happen when the user opts in.
+  const [autoRun,      setAutoRun]      = useState(false);
+  const [autoApplyOn,  setAutoApplyOn]  = useState(false);
+  const [autoVerifyOn, setAutoVerifyOn] = useState(false);
   const [applying,     setApplying]     = useState(false);
   const [appliedPaths, setAppliedPaths] = useState<Set<string>>(new Set());
   const [applyResults, setApplyResults] = useState<Array<{ path: string; ok: boolean; error?: string }>>([]);
@@ -255,7 +259,7 @@ export function App() {
       return empty;
     }
 
-    const audit = looksLikeAuditRequest(query);
+    const audit = looksLikeSuggestRequest(query);
     const maxHits = audit ? 12 : 8;
     const maxFull = audit ? MAX_AUDIT_FULL_FILES : MAX_AUTO_FULL_FILES;
     try {
@@ -366,20 +370,23 @@ export function App() {
           overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 120 }}
           title={repo.sandboxId}>● {repo.sandboxId.slice(0, 20)}</span>
       )}
-      <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4,
+      <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+        <label title="Off by default. When on, suggested file changes save to the cloud sandbox only — not GitHub, not your phone."
+          style={{ display: 'flex', alignItems: 'center', gap: 4,
           fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
-          Auto-apply <input type="checkbox" checked={autoApplyOn} onChange={e => setAutoApplyOn(e.target.checked)}
+          Auto-save <input type="checkbox" checked={autoApplyOn} onChange={e => setAutoApplyOn(e.target.checked)}
             style={{ accentColor: '#d4ff3f' }} />
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4,
+        <label title="Off by default. When on, code snippets run in the sandbox terminal."
+          style={{ display: 'flex', alignItems: 'center', gap: 4,
           fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
           Auto-run <input type="checkbox" checked={autoRun} onChange={e => setAutoRun(e.target.checked)}
             style={{ accentColor: '#d4ff3f' }} />
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 4,
+        <label title="Off by default. Advanced: run project tests after saves."
+          style={{ display: 'flex', alignItems: 'center', gap: 4,
           fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
-          Auto-verify <input type="checkbox" checked={autoVerifyOn} onChange={e => setAutoVerifyOn(e.target.checked)}
+          Auto-test <input type="checkbox" checked={autoVerifyOn} onChange={e => setAutoVerifyOn(e.target.checked)}
             style={{ accentColor: '#d4ff3f' }} />
         </label>
       </div>
@@ -388,11 +395,14 @@ export function App() {
 
   // ── apply-results banner (reused in both layouts) ─────────────────────────
   const applyBanner = applyResults.length > 0 ? (
-    <div style={{ padding: '4px 10px', background: '#0c1a0c', borderBottom: '1px solid #1e3a1e',
-      flexShrink: 0, fontSize: 11 }}>
+    <div style={{ padding: '6px 10px', background: '#0c1a0c', borderBottom: '1px solid #1e3a1e',
+      flexShrink: 0, fontSize: 11, lineHeight: 1.45 }}>
+      <div style={{ color: '#8fbf6f', marginBottom: 4 }}>
+        Saved to the cloud sandbox only — not GitHub, not your phone.
+      </div>
       {applyResults.map(r => (
         <span key={r.path} style={{ marginRight: 10, color: r.ok ? '#8fbf6f' : '#ff6a6a' }}>
-          {r.ok ? '✓' : '✗'} {r.path}
+          {r.ok ? '✓' : '✗'} {r.path.split('/').pop()}
         </span>
       ))}
     </div>
