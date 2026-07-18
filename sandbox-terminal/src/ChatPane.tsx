@@ -33,10 +33,13 @@ import {
 import {
   MAX_TREE_PATHS,
   packContextFiles,
+  formatSearchHits,
   trimMessageHistory,
+  type SearchHit,
 } from './contextBudget.js';
 
 export { extractFileChanges, looksLikeWorkRequest } from './agentParse.js';
+export type { SearchHit } from './contextBudget.js';
 
 // Imperative handle exposed to parent (used by auto-verify loop)
 export interface ChatHandle {
@@ -60,11 +63,13 @@ function buildSystemPrompt(
   repoRoot: string,
   tree: FileNode[],
   contextFiles: Map<string, string>,
+  searchHits: SearchHit[],
 ): string {
   const parts: string[] = [];
 
   parts.push(
     'You are an expert coding agent that WRITES FILES. You are not a chatbot.',
+    'Context is provided like Cursor/Claude Code: search snippets first, then a small set of full files.',
     'The host app parses your reply and writes File: blocks to disk automatically.',
     '',
     'HARD RULES when the user asks to fix, build, add, change, implement, or create anything:',
@@ -76,7 +81,8 @@ function buildSystemPrompt(
     '       // full file content',
     '       ```',
     '  4. Keep prose under 3 short sentences total. File blocks come first whenever possible.',
-    '  5. If you lack a needed file, still create or modify the files you can — do not stall.',
+    '  5. Prefer editing files already in "Open files". Use search hits to locate symbols, then rewrite whole files.',
+    '  6. Never ask for dist/, public/agent/assets/, or minified bundles — they are excluded on purpose.',
     '',
     'Only answer in plain prose (no File: blocks) for pure questions that need no code changes.',
   );
@@ -88,17 +94,20 @@ function buildSystemPrompt(
   if (tree.length > 0) {
     const flatPaths = flattenTree(tree);
     const shown = flatPaths.slice(0, MAX_TREE_PATHS);
-    parts.push('', 'File tree (gitignore-filtered):', shown.join('\n'));
+    parts.push('', 'File tree (truncated):', shown.join('\n'));
     if (flatPaths.length > shown.length) {
       parts.push(`… (${flatPaths.length - shown.length} more paths omitted)`);
     }
   }
 
+  const hitBlock = formatSearchHits(searchHits);
+  if (hitBlock) parts.push('', hitBlock);
+
   const packed = packContextFiles(contextFiles);
   if (packed.size > 0) {
-    parts.push('', '── File contents ──');
+    parts.push('', '── Open files (full) ──');
     if (packed.size < contextFiles.size) {
-      parts.push(`(Using ${packed.size}/${contextFiles.size} context files to stay under the model limit.)`);
+      parts.push(`(Using ${packed.size}/${contextFiles.size} files to stay under the model limit.)`);
     }
     for (const [relPath, content] of packed) {
       const ext  = relPath.split('.').pop() ?? '';
@@ -308,15 +317,20 @@ interface Props {
   autoRun:           boolean;
   appliedPaths:      Set<string>;
   autoSelectedFiles: string[];
+  searchHits:        SearchHit[];
   onRunCode:         (code: string, lang: string)    => void;
   /** May apply writes; awaited so auto-apply finishes before send returns. */
   onFileChanges:     (changes: PendingChange[])      => void | Promise<void>;
-  onBeforeSend?:     (query: string) => Promise<void>;
+  /** Returns fresh search hits + ephemeral full files for THIS send (avoids stale React state). */
+  onBeforeSend?:     (query: string) => Promise<{
+    hits: SearchHit[];
+    files: Map<string, string>;
+  } | void>;
 }
 
 export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   repoRoot, sandboxId, provider, model, tree, contextFiles, autoRun, appliedPaths,
-  autoSelectedFiles, onRunCode, onFileChanges, onBeforeSend,
+  autoSelectedFiles, searchHits, onRunCode, onFileChanges, onBeforeSend,
 }, ref) {
   const [messages,  setMessages]  = useState<Message[]>([
     { id: uid(), role: 'assistant', content:
@@ -324,7 +338,8 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       '• "Fix the auth token expiry bug in src/auth.ts"\n' +
       '• "Add rate limiting to the /api/run endpoint"\n' +
       '• "Write a Python script that fetches GitHub stars"\n\n' +
-      "I write complete files to the repo automatically. Turn off Auto-apply if you want review-only." }
+      "I search for snippets first, open a few source files, then write complete files to disk. " +
+      "Turn off Auto-apply if you want review-only." }
   ]);
   const [input,    setInput]    = useState('');
   const [loading,  setLoading]  = useState(false);
@@ -335,11 +350,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   // Keep latest props in a ref so a send started before auto-context finishes
   // still sees the updated file context afterward.
   const latestRef = useRef({
-    repoRoot, sandboxId, provider, model, tree, contextFiles,
+    repoRoot, sandboxId, provider, model, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages,
   });
   latestRef.current = {
-    repoRoot, sandboxId, provider, model, tree, contextFiles,
+    repoRoot, sandboxId, provider, model, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages,
   };
 
@@ -394,16 +409,32 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
     try {
       // 2) Optional auto-context, hard-capped so a hung /search can't eat the send.
+      // Use the RETURNED hits/files — React setState is not flushed yet.
+      let freshHits: SearchHit[] | null = null;
+      let freshFiles: Map<string, string> | null = null;
       const before = latestRef.current.onBeforeSend;
       if (before && kind === 'user') {
-        await withTimeout(before(text), BEFORE_SEND_TIMEOUT_MS);
+        const result = await withTimeout(before(text), BEFORE_SEND_TIMEOUT_MS);
+        if (result) {
+          freshHits = result.hits;
+          freshFiles = result.files;
+        }
       }
 
       const {
         repoRoot: root, sandboxId: sid, provider: prov, model: mod,
-        tree: tr, contextFiles: ctx, autoRun: ar, onRunCode: run, onFileChanges: onFc,
+        tree: tr, contextFiles: pinned, searchHits: propHits,
+        autoRun: ar, onRunCode: run, onFileChanges: onFc,
         messages: prev,
       } = latestRef.current;
+
+      const hits = freshHits ?? propHits;
+      const ctx = new Map(pinned);
+      if (freshFiles) {
+        for (const [p, c] of freshFiles) {
+          if (!ctx.has(p)) ctx.set(p, c);
+        }
+      }
 
       // After await, React may already have flushed userMsg into state — don't duplicate.
       const withUser = prev.some(m => m.id === userMsg.id) ? prev : [...prev, userMsg];
@@ -413,7 +444,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           .map(m => ({ role: m.role, content: m.content })),
       );
 
-      const systemPrompt = buildSystemPrompt(root, tr, ctx);
+      const systemPrompt = buildSystemPrompt(root, tr, ctx, hits);
 
       // Always hit agent-chat — it accepts systemPrompt. /api/chat ignores it
       // and is the main-chat persona endpoint, not the agent.
@@ -509,8 +540,9 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         <div style={{ padding: '5px 12px', background: 'rgba(212,255,63,.05)',
           borderBottom: '1px solid rgba(212,255,63,.15)', flexShrink: 0,
           fontSize: 10, color: '#8fa62b', lineHeight: 1.6 }}>
-          <span style={{ fontWeight: 700 }}>⚡ Auto-context:</span>{' '}
+          <span style={{ fontWeight: 700 }}>⚡ Search:</span>{' '}
           {autoSelectedFiles.join(', ')}
+          <span style={{ color: '#555' }}> (snippets + up to 3 small source files)</span>
         </div>
       )}
 

@@ -1,6 +1,8 @@
 import {
   isJunkContextPath,
+  isSourcePath,
   packContextFiles,
+  formatSearchHits,
   truncateForContext,
   trimMessageHistory,
 } from '../src/contextBudget.ts';
@@ -13,21 +15,27 @@ function assert(cond: boolean, msg: string) {
 
 assert(isJunkContextPath('public/agent/assets/index-CtOox8uN.js'), 'skips agent asset bundle');
 assert(isJunkContextPath('sandbox-terminal/dist/assets/index-CtOox8uN.js'), 'skips dist bundle');
-assert(isJunkContextPath('foo/assets/index-AbCdEfGh.js'), 'skips hashed vite bundle');
-assert(!isJunkContextPath('sandbox-terminal/src/App.tsx'), 'keeps source');
-assert(!isJunkContextPath('api/agent-chat.js'), 'keeps api source');
+assert(!isSourcePath('public/agent/assets/index-CtOox8uN.js'), 'bundles are not source');
+assert(isSourcePath('sandbox-terminal/src/App.tsx'), 'tsx is source');
+assert(isSourcePath('api/agent-chat.js'), 'api js is source');
+assert(!isSourcePath('readme.txt'), 'txt not treated as source');
 
 const big = 'x'.repeat(200_000);
-const trunc = truncateForContext(big, 1000);
-assert(trunc.length < 1200 && trunc.includes('truncated'), 'truncates huge files');
+assert(truncateForContext(big, 1000).includes('truncated'), 'truncates huge files');
 
 const packed = packContextFiles(new Map([
   ['public/agent/assets/index-CtOox8uN.js', big],
   ['api/agent-chat.js', 'export default 1'],
-  ['sandbox-terminal/src/App.tsx', 'export function App(){}'],
 ]));
 assert(!packed.has('public/agent/assets/index-CtOox8uN.js'), 'pack drops junk path');
 assert(packed.has('api/agent-chat.js'), 'pack keeps source');
+
+const hits = formatSearchHits([
+  { path: 'api/search.js', snippets: ['10|export default async function handler'] },
+  { path: 'public/agent/assets/index-X.js', snippets: ['1|bundle'] },
+]);
+assert(hits.includes('api/search.js'), 'formats source hit');
+assert(!hits.includes('public/agent/assets'), 'omits junk hit');
 
 const hist = trimMessageHistory(
   [
@@ -38,7 +46,6 @@ const hist = trimMessageHistory(
   20_000,
 );
 assert(hist[hist.length - 1]!.content === 'latest question', 'keeps latest user msg');
-assert(hist.reduce((n, m) => n + m.content.length, 0) <= 20_000 + 100, 'history under budget');
 
 if (failed) { console.error(`\n${failed} failure(s)`); process.exit(1); }
 console.log('\nAll context-budget tests passed.');

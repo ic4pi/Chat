@@ -8,7 +8,12 @@ import type { TerminalHandle } from './Terminal.js';
 import { useRepoContext }   from './useRepoContext.js';
 import { useAutoVerify }    from './useAutoVerify.js';
 import type { PendingChange } from './useRepoContext.js';
-import { isJunkContextPath } from './contextBudget.js';
+import {
+  isJunkContextPath,
+  isSourcePath,
+  MAX_AUTO_FULL_FILE_CHARS,
+  type SearchHit,
+} from './contextBudget.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
@@ -47,7 +52,11 @@ const OR_MODELS = [
   { id: 'meta-llama/llama-3.3-70b-instruct:free',    label: 'Llama 3.3 70B (free)' },
 ];
 
-async function fetchAutoContext(root: string, query: string, sandboxId: string | null): Promise<string[]> {
+async function fetchAutoContext(
+  root: string,
+  query: string,
+  sandboxId: string | null,
+): Promise<SearchHit[]> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (sandboxId) headers['X-Sandbox-Session'] = sandboxId;
   const controller = new AbortController();
@@ -55,14 +64,22 @@ async function fetchAutoContext(root: string, query: string, sandboxId: string |
   try {
     const res = await fetch(`${API_URL}/search`, {
       method: 'POST', headers,
-      body: JSON.stringify({ root, query, maxFiles: 5 }),
+      body: JSON.stringify({ root, query, maxFiles: 6 }),
       signal: controller.signal,
     });
     if (!res.ok) return [];
-    const data = await res.json() as { matches?: Array<{ path: string }> };
+    const data = await res.json() as {
+      matches?: Array<{ path: string; score?: number; size?: number; reason?: string; snippets?: string[] }>;
+    };
     return (data.matches ?? [])
-      .map(m => m.path)
-      .filter(p => p && !isJunkContextPath(p));
+      .filter(m => m.path && !isJunkContextPath(m.path) && isSourcePath(m.path))
+      .map(m => ({
+        path: m.path,
+        score: m.score,
+        size: m.size,
+        reason: m.reason,
+        snippets: m.snippets ?? [],
+      }));
   } catch {
     return [];
   } finally {
@@ -141,6 +158,9 @@ export function App() {
   const [appliedPaths, setAppliedPaths] = useState<Set<string>>(new Set());
   const [applyResults, setApplyResults] = useState<Array<{ path: string; ok: boolean; error?: string }>>([]);
   const [autoCtxFiles, setAutoCtxFiles] = useState<string[]>([]);
+  const [searchHits,   setSearchHits]   = useState<SearchHit[]>([]);
+  /** Per-query working set — full files opened from search (not user-pinned). */
+  const [autoFullFiles, setAutoFullFiles] = useState<Map<string, string>>(new Map());
   const [mobileTab,    setMobileTab]    = useState<MobileTab>('chat');
   const isMobile = useIsMobile();
 
@@ -179,14 +199,52 @@ export function App() {
     return results;
   }, [handleApply, autoVerifyOn, repo.root, runVerify]);
 
-  const handleAutoContext = useCallback(async (query: string) => {
-    if (!repo.root) { setAutoCtxFiles([]); return; }
-    setAutoCtxFiles([]);
+  const handleAutoContext = useCallback(async (query: string): Promise<{
+    hits: SearchHit[];
+    files: Map<string, string>;
+  }> => {
+    const empty = { hits: [] as SearchHit[], files: new Map<string, string>() };
+    if (!repo.root) {
+      setAutoCtxFiles([]);
+      setSearchHits([]);
+      setAutoFullFiles(new Map());
+      return empty;
+    }
     try {
-      const paths = await fetchAutoContext(repo.root, query, repo.sandboxId);
-      for (const p of paths) await repo.addToContext(p);
-      setAutoCtxFiles(paths);
-    } catch { /* ignore */ }
+      // 1) Search → snippets (never dump whole files / bundles into the prompt)
+      const hits = await fetchAutoContext(repo.root, query, repo.sandboxId);
+      setSearchHits(hits);
+      setAutoCtxFiles(hits.map(h => h.path));
+
+      // 2) Ephemeral working set: up to 3 small SOURCE files for THIS query only
+      const toOpen = hits
+        .filter(h => isSourcePath(h.path))
+        .filter(h => (h.size ?? 0) > 0 && (h.size ?? 0) <= MAX_AUTO_FULL_FILE_CHARS)
+        .slice(0, 3);
+
+      const opened = new Map<string, string>();
+      for (const h of toOpen) {
+        if (repo.contextFiles.has(h.path)) continue; // already user-pinned
+        try {
+          const headers: Record<string, string> = {};
+          if (repo.sandboxId) headers['X-Sandbox-Session'] = repo.sandboxId;
+          const url = repo.sandboxId
+            ? `${API_URL}/file?path=${encodeURIComponent(h.path)}&maxBytes=${MAX_AUTO_FULL_FILE_CHARS}`
+            : `${API_URL}/file?root=${encodeURIComponent(repo.root)}&path=${encodeURIComponent(h.path)}`;
+          const res = await fetch(url, { headers });
+          if (!res.ok) continue;
+          const data = await res.json() as { content?: string };
+          if (data.content != null) opened.set(h.path, data.content);
+        } catch { /* skip */ }
+      }
+      setAutoFullFiles(opened);
+      return { hits, files: opened };
+    } catch {
+      setAutoCtxFiles([]);
+      setSearchHits([]);
+      setAutoFullFiles(new Map());
+      return empty;
+    }
   }, [repo]);
 
   const handleFileChanges = useCallback(async (changes: PendingChange[]) => {
@@ -302,10 +360,8 @@ export function App() {
           autoSelectedFiles={autoCtxFiles}
           onRunCode={handleRunCode}
           onFileChanges={handleFileChanges}
-          onBeforeSend={async (query) => {
-            if (repo.contextFiles.size === 0 && repo.root) await handleAutoContext(query);
-            else setAutoCtxFiles([]);
-          }}
+          onBeforeSend={handleAutoContext}
+          searchHits={searchHits}
         />
       </div>
       <DiffPanel
