@@ -469,7 +469,7 @@ export function App() {
             {chatColumn}
           </div>
           <div style={{ overflow: 'hidden', minHeight: 0 }}>
-            <SandboxTerminal ref={termRef} />
+            <SandboxTerminal ref={termRef} sandboxId={repo.sandboxId} />
           </div>
         </div>
       ) : (
@@ -487,7 +487,7 @@ export function App() {
             </div>
             <div style={{ position: 'absolute', inset: 0, overflow: 'hidden',
               display: mobileTab === 'terminal' ? 'flex' : 'none', flexDirection: 'column' }}>
-              <SandboxTerminal ref={termRef} />
+              <SandboxTerminal ref={termRef} sandboxId={repo.sandboxId} />
             </div>
           </div>
           <div style={{ display: 'flex', flexShrink: 0, borderTop: '1px solid #1e1e1e',

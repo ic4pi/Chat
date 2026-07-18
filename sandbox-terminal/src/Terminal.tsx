@@ -89,18 +89,36 @@ async function* parseSse(
   }
 }
 
+interface Props {
+  /** From Open repo (/api/init-repo). Required for /api/run and /api/run-code. */
+  sandboxId?: string | null;
+}
+
 // ── component ────────────────────────────────────────────────────────────────
-export const SandboxTerminal = forwardRef<TerminalHandle>((_, ref) => {
+export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function SandboxTerminal(
+  { sandboxId = null },
+  ref,
+) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef      = useRef<Terminal | null>(null);
   const fitRef       = useRef<FitAddon | null>(null);
   const abortRef     = useRef<AbortController | null>(null);
+  // Keep latest session id for fetches started from stale callbacks.
+  const sandboxIdRef = useRef<string | null>(sandboxId);
+  sandboxIdRef.current = sandboxId;
 
   const [command,   setCommand]   = useState('');
   const [status,    setStatus]    = useState<RunStatus>('idle');
   const [exitCode,  setExitCode]  = useState<number | null>(null);
   const [history,   setHistory]   = useState<string[]>([]);
   const [histIdx,   setHistIdx]   = useState(-1);
+
+  const sessionHeaders = useCallback((): Record<string, string> => {
+    const h: Record<string, string> = { 'Content-Type': 'application/json' };
+    const sid = sandboxIdRef.current;
+    if (sid) h['X-Sandbox-Session'] = sid;
+    return h;
+  }, []);
 
   // ── xterm mount ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -120,7 +138,7 @@ export const SandboxTerminal = forwardRef<TerminalHandle>((_, ref) => {
     setTimeout(() => { try { fit.fit(); } catch { /* not laid out yet */ } }, 0);
 
     term.writeln('\x1b[2;36m// Sandbox Terminal\x1b[0m');
-    term.writeln('\x1b[2;90m// Type a command above, or code blocks from chat run here automatically.\x1b[0m');
+    term.writeln('\x1b[2;90m// Open a GitHub repo on the left, then code from chat runs here.\x1b[0m');
     term.writeln('');
 
     termRef.current = term;
@@ -154,10 +172,16 @@ export const SandboxTerminal = forwardRef<TerminalHandle>((_, ref) => {
     setExitCode(null);
     term.writeln(`\x1b[2;37m${label}\x1b[0m`);
 
+    if (!sandboxIdRef.current) {
+      term.writeln('\n\x1b[1;31m✗  Error: No active sandbox session. Open a GitHub repo first.\x1b[0m');
+      setStatus('error');
+      return;
+    }
+
     try {
       const res = await fetch(`${API_URL}${endpoint}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: sessionHeaders(),
         body: JSON.stringify(body),
         signal: abort.signal,
       });
@@ -196,13 +220,12 @@ export const SandboxTerminal = forwardRef<TerminalHandle>((_, ref) => {
         const msg = err instanceof Error ? err.message : String(err);
         // Surface connection errors clearly — server unreachable, timeout, etc.
         term.writeln(`\n\x1b[1;31m✗  Connection error: ${msg}\x1b[0m`);
-        term.writeln('\x1b[2;31m   Is sandbox-runner running on port 3001?\x1b[0m');
         setStatus('error');
       }
     } finally {
       setStatus(s => (s === 'streaming' || s === 'connecting') ? 'done' : s);
     }
-  }, []);
+  }, [sessionHeaders]);
 
   // ── run shell command (manual input bar) ──────────────────────────────────
   const runShellInput = useCallback(async () => {
@@ -231,11 +254,19 @@ export const SandboxTerminal = forwardRef<TerminalHandle>((_, ref) => {
 
       term.writeln(`\x1b[2;37m$ ${command}\x1b[0m`);
 
+      if (!sandboxIdRef.current) {
+        const msg = 'No active sandbox session. Open a GitHub repo first.';
+        term.writeln(`\n\x1b[1;31m✗  Error: ${msg}\x1b[0m`);
+        setStatus('error');
+        resolve({ exitCode: -1, output: msg });
+        return;
+      }
+
       (async () => {
         try {
           const res = await fetch(`${API_URL}/run`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: sessionHeaders(),
             body: JSON.stringify({ command }),
             signal: abort.signal,
           });
@@ -292,7 +323,7 @@ export const SandboxTerminal = forwardRef<TerminalHandle>((_, ref) => {
         }
       })();
     });
-  }, []);
+  }, [sessionHeaders]);
 
   // ── run code snippet (called by parent via ref) ────────────────────────────
   const runCode = useCallback((code: string, language: string) => {
@@ -346,6 +377,11 @@ export const SandboxTerminal = forwardRef<TerminalHandle>((_, ref) => {
           textTransform: 'uppercase', whiteSpace: 'nowrap', userSelect: 'none' }}>
           // shell
         </span>
+        {!sandboxId && (
+          <span style={{ fontSize: 10, color: '#888', whiteSpace: 'nowrap' }}>
+            open a repo to run
+          </span>
+        )}
         <input id="cmd-input" value={command}
           onChange={e => { setCommand(e.target.value); setHistIdx(-1); }}
           onKeyDown={handleKey} disabled={isRunning}
