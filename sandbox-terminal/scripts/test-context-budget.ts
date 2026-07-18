@@ -10,6 +10,7 @@ import {
 import {
   looksLikeAuditRequest,
   looksLikeWorkRequest,
+  needsCodeContext,
 } from '../src/agentParse.ts';
 
 let failed = 0;
@@ -56,6 +57,10 @@ assert(looksLikeAuditRequest('audit and recommend changes/fixes'), 'detects audi
 assert(looksLikeAuditRequest('did you even look at the repo'), 'detects look-at-repo');
 assert(!looksLikeWorkRequest('make an audit of my coding agent app'), 'audit is not a write request');
 assert(looksLikeWorkRequest('fix the auth bug in api/session.js'), 'fix is a write request');
+assert(!needsCodeContext('hey'), 'hey stays light — no file dump');
+assert(!needsCodeContext('thanks'), 'thanks stays light');
+assert(needsCodeContext('fix the login bug'), 'fix pulls code context');
+assert(needsCodeContext('audit my coding agent app'), 'audit pulls code context');
 
 const seeds = pickAuditSeedPaths([
   'public/agent/assets/index-X.js',

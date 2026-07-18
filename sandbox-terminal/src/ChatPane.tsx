@@ -29,6 +29,7 @@ import {
   extractFileChanges,
   looksLikeWorkRequest,
   looksLikeAuditRequest,
+  needsCodeContext,
   NUDGE_PROMPT,
 } from './agentParse.js';
 import {
@@ -39,7 +40,12 @@ import {
   type SearchHit,
 } from './contextBudget.js';
 
-export { extractFileChanges, looksLikeWorkRequest, looksLikeAuditRequest } from './agentParse.js';
+export {
+  extractFileChanges,
+  looksLikeWorkRequest,
+  looksLikeAuditRequest,
+  needsCodeContext,
+} from './agentParse.js';
 export type { SearchHit } from './contextBudget.js';
 
 // Imperative handle exposed to parent (used by auto-verify loop)
@@ -65,41 +71,47 @@ function buildSystemPrompt(
   tree: FileNode[],
   contextFiles: Map<string, string>,
   searchHits: SearchHit[],
+  opts?: { light?: boolean },
 ): string {
   const parts: string[] = [];
+  const light = !!opts?.light;
 
   parts.push(
-    'You are an expert coding agent for the repository in context.',
-    'Context is provided like Cursor/Claude Code: search snippets first, then a small set of full source files.',
+    'You are a coding agent. The user\'s whole project is available in a sandbox.',
+    'Like Cursor/Claude: the full repo is NOT pasted into every message. Each turn gets only the files needed for that ask.',
     'The host app can parse File: blocks and write them to disk automatically.',
     '',
     'CRITICAL — what to answer:',
     '  • Only address the USER messages in this conversation.',
-    '  • Never invent tasks from UI placeholder examples (auth token expiry, /api/run rate limiting, GitHub stars, etc.).',
-    '  • If Open files / search hits are present, ground every claim in those paths. Cite real file paths.',
-    '  • If context is missing for something, say what file you need — do not invent src/auth.ts or similar.',
+    '  • Never invent tasks or fake files (e.g. src/auth.ts) that are not in the provided context.',
+    '  • If Open files / search hits are present, ground every claim in those paths.',
     '',
     'When the user asks for an audit, review, or assessment:',
-    '  • Reply in plain prose with concrete findings from the provided files (bugs, risks, missing pieces, next fixes).',
+    '  • Reply in plain prose with concrete findings from the provided files.',
     '  • Do NOT emit File: blocks unless they explicitly ask you to implement/fix now.',
     '',
     'HARD RULES when the user asks to fix, build, add, change, implement, or create anything:',
-    '  1. Do the work in THIS reply. Never say "I will", "I\'ll implement", "next I\'ll", or describe a plan without files.',
-    '  2. Output every changed/created file as a COMPLETE file (not a diff, not a snippet).',
-    '  3. Each file MUST use this exact format (marker line, then fence):',
+    '  1. Do the work in THIS reply. Never say "I will" or plan without files.',
+    '  2. Output every changed/created file as a COMPLETE file (not a diff).',
+    '  3. Each file MUST use this exact format:',
     '       File: <path relative to repo root>',
     '       ```typescript',
     '       // full file content',
     '       ```',
-    '  4. Keep prose under 3 short sentences total. File blocks come first whenever possible.',
-    '  5. Prefer editing files already in "Open files". Use search hits to locate symbols, then rewrite whole files.',
-    '  6. Never ask for dist/, public/agent/assets/, or minified bundles — they are excluded on purpose.',
+    '  4. Keep prose short. Prefer editing files already provided this turn.',
     '',
     'Only answer in plain prose (no File: blocks) for pure questions that need no code changes.',
   );
 
   if (repoRoot) {
-    parts.push('', `Repo root: ${repoRoot}`);
+    parts.push('', `Project is open at: ${repoRoot}`);
+    if (light) {
+      parts.push(
+        'This turn is a light/chat question — no source files were loaded on purpose.',
+        'Answer briefly. If they want a fix or audit, ask them to say what\'s broken (you will then open the right files).',
+      );
+      return parts.join('\n');
+    }
   }
 
   if (tree.length > 0) {
@@ -352,10 +364,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 }, ref) {
   const [messages,  setMessages]  = useState<Message[]>([
     { id: uid(), role: 'assistant', kind: 'welcome', content:
-      "1) Paste your GitHub link (or project folder) on the left and hit Open.\n" +
-      "2) Tell me what’s broken or what you want built — in plain English.\n\n" +
-      "I’ll find the right files myself and fix them. You don’t need to know filenames " +
-      "or pick anything in the file list." }
+      "Paste your GitHub link on the left → Open. That loads your whole project.\n\n" +
+      "Then just talk normally:\n" +
+      "• Short questions stay light (no file dump, no token blow-up)\n" +
+      "• “Fix this” / “audit my app” → I open only the files I need and correct the code\n\n" +
+      "You don’t pick files. Same idea as Cursor / Claude — whole project available, " +
+      "only the relevant bits go into each message." }
   ]);
   const [input,    setInput]    = useState('');
   const [loading,  setLoading]  = useState(false);
@@ -462,7 +476,16 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           .map(m => ({ role: m.role, content: m.content })),
       );
 
-      let systemPrompt = buildSystemPrompt(root, tr, ctx, hits);
+      // Light chat ("hey", "thanks"): keep the whole repo available in the sandbox,
+      // but don't paste tree/files into the model — that's how Cursor stays cheap.
+      const lightTurn = !needsCodeContext(text);
+      let systemPrompt = buildSystemPrompt(
+        root,
+        lightTurn ? [] : tr,
+        ctx, // user-pinned files still count
+        lightTurn ? [] : hits,
+        { light: lightTurn && !!root && ctx.size === 0 },
+      );
       if (looksLikeAuditRequest(text)) {
         systemPrompt +=
           '\n\nThis turn is an AUDIT/REVIEW. Analyze the Open files and search hits above. ' +

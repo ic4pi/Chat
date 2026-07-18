@@ -17,7 +17,7 @@ import {
   MAX_AUDIT_FULL_FILES,
   type SearchHit,
 } from './contextBudget.js';
-import { looksLikeAuditRequest } from './agentParse.js';
+import { looksLikeAuditRequest, needsCodeContext } from './agentParse.js';
 import type { FileNode } from './types.js';
 
 const API_URL =
@@ -241,14 +241,20 @@ export function App() {
     hits: SearchHit[];
     files: Map<string, string>;
   }> => {
-    // Cursor-style: search snippets first, then open a small budgeted working set
-    // of SOURCE files. Never open dist/bundles — those blew the 131k window.
+    // Whole repo stays open in the sandbox. Each chat turn only pulls what it
+    // needs — same idea as Cursor/Claude. Simple "hey" must NOT load files.
     const empty = { hits: [] as SearchHit[], files: new Map<string, string>() };
     if (!repo.root) {
       setAutoCtxFiles([]);
       setSearchHits([]);
       return empty;
     }
+    if (!needsCodeContext(query)) {
+      setAutoCtxFiles([]);
+      setSearchHits([]);
+      return empty;
+    }
+
     const audit = looksLikeAuditRequest(query);
     const maxHits = audit ? 12 : 8;
     const maxFull = audit ? MAX_AUDIT_FULL_FILES : MAX_AUTO_FULL_FILES;
