@@ -10,6 +10,7 @@
 
 import { useState, useCallback } from 'react';
 import type { FileNode } from './types.js';
+import { isJunkContextPath, MAX_FILE_CHARS, truncateForContext } from './contextBudget.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
@@ -39,7 +40,8 @@ export interface RepoContextActions {
   removeFromContext: (relPath: string) => void;
   clearContext:    () => void;
   setPendingChanges: (changes: PendingChange[]) => void;
-  applyChanges:    () => Promise<{ path: string; ok: boolean; error?: string }[]>;
+  /** Write pending (or explicitly provided) changes to disk/sandbox. */
+  applyChanges:    (files?: PendingChange[]) => Promise<{ path: string; ok: boolean; error?: string }[]>;
   clearChanges:    () => void;
 }
 
@@ -109,6 +111,11 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
 
   const addToContext = useCallback(async (relPath: string) => {
     if (contextFiles.has(relPath)) return;
+    // Never load hashed bundles / dist into the model prompt.
+    if (isJunkContextPath(relPath)) {
+      console.warn('addToContext skipped junk path:', relPath);
+      return;
+    }
     try {
       const headers = sandboxId ? { 'X-Sandbox-Session': sandboxId } : undefined;
       const url = sandboxId
@@ -117,7 +124,13 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
       const res = await fetch(url, { headers });
       const data = await res.json() as { content?: string; error?: string };
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      setContextFiles(m => new Map(m).set(relPath, data.content ?? ''));
+      const raw = data.content ?? '';
+      // Refuse absurd payloads entirely (minified 400KB+ bundles).
+      if (raw.length > MAX_FILE_CHARS * 3) {
+        console.warn('addToContext skipped oversized file:', relPath, raw.length);
+        return;
+      }
+      setContextFiles(m => new Map(m).set(relPath, truncateForContext(raw)));
     } catch (err: unknown) {
       console.error('addToContext failed:', err);
     }
@@ -129,11 +142,14 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
 
   const clearContext = useCallback(() => setContextFiles(new Map()), []);
 
-  const applyChanges = useCallback(async () => {
-    if (!pendingChanges.length) return [];
+  const applyChanges = useCallback(async (files?: PendingChange[]) => {
+    // Prefer an explicit list — callers that just received model output must
+    // not wait on React state (pendingChanges) or they race and write nothing.
+    const toWrite = files ?? pendingChanges;
+    if (!toWrite.length) return [];
     const body = sandboxId
-      ? { files: pendingChanges.map(c => ({ path: c.path, content: c.content })) }
-      : { root, files: pendingChanges.map(c => ({ path: c.path, content: c.content })) };
+      ? { files: toWrite.map(c => ({ path: c.path, content: c.content })) }
+      : { root, files: toWrite.map(c => ({ path: c.path, content: c.content })) };
 
     const res = await fetch(`${API_URL}/write-files`, {
       method: 'POST',

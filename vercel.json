@@ -3,10 +3,9 @@
   "buildCommand": null,
   "installCommand": "npm install --ignore-scripts",
   "rewrites": [
-    { "source": "/",                "destination": "/index.html" },
-    { "source": "/admin",           "destination": "/api/admin"  },
-    { "source": "/agent",           "destination": "/agent/index.html" },
-    { "source": "/agent/(.*)",      "destination": "/agent/index.html" }
+    { "source": "/",      "destination": "/index.html" },
+    { "source": "/admin", "destination": "/api/admin"  },
+    { "source": "/agent", "destination": "/agent/index.html" }
   ],
   "functions": {
     "api/chat.js":                 { "maxDuration": 120 },

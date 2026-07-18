@@ -51,7 +51,8 @@ export function useAutoVerify(
   repoRoot:   string,
   termRef:    RefObject<TerminalHandle>,
   chatRef:    RefObject<ChatHandle>,
-  applyChanges: () => Promise<Array<{ path: string; ok: boolean; error?: string }>>,
+  applyChanges: (files?: Array<{ path: string; content: string; original?: string }>) =>
+    Promise<Array<{ path: string; ok: boolean; error?: string }>>,
 ) {
   const [verifyState, setVerifyState] = useState<VerifyState>('idle');
   const [attempt,     setAttempt]     = useState(0);
@@ -131,7 +132,8 @@ export function useAutoVerify(
       const changes = await chatRef.current.programmaticSend(failureMsg, 'retry-inject');
 
       if (changes.length > 0) {
-        await applyChanges();
+        // Pass changes explicitly — React pendingChanges state is not updated yet.
+        await applyChanges(changes);
       }
       // Loop: run tests again
     }

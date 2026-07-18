@@ -15,7 +15,8 @@
  *       ```typescript
  *       // full new file content
  *       ```
- *   This is parsed by extractFileChanges() and surfaced as PendingChange[].
+ *   This is parsed by extractFileChanges() and auto-applied (default on).
+ *   If the model only plans in prose, we send one corrective nudge turn.
  *
  * The model can also produce normal code blocks (no File: header) which
  * are rendered as runnable snippets with "▶ Run in Sandbox".
@@ -24,6 +25,21 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { PendingChange } from './useRepoContext.js';
 import type { FileNode } from './types.js';
+import {
+  extractFileChanges,
+  looksLikeWorkRequest,
+  NUDGE_PROMPT,
+} from './agentParse.js';
+import {
+  MAX_TREE_PATHS,
+  packContextFiles,
+  formatSearchHits,
+  trimMessageHistory,
+  type SearchHit,
+} from './contextBudget.js';
+
+export { extractFileChanges, looksLikeWorkRequest } from './agentParse.js';
+export type { SearchHit } from './contextBudget.js';
 
 // Imperative handle exposed to parent (used by auto-verify loop)
 export interface ChatHandle {
@@ -47,21 +63,28 @@ function buildSystemPrompt(
   repoRoot: string,
   tree: FileNode[],
   contextFiles: Map<string, string>,
+  searchHits: SearchHit[],
 ): string {
   const parts: string[] = [];
 
   parts.push(
-    'You are an expert coding agent. You have access to a local code repository.',
-    'When asked to fix or build something:',
-    '  1. Reason about the problem briefly.',
-    '  2. Output the complete new content of every file you want to change or create.',
-    '  3. Precede each file block with exactly this marker on its own line:',
-    '       File: <path relative to repo root>',
-    '     followed immediately by a fenced code block with the FULL file content.',
-    '  4. Do NOT output partial files or diffs — always the complete file.',
-    '  5. After the file blocks, summarize what you changed and why.',
+    'You are an expert coding agent that WRITES FILES. You are not a chatbot.',
+    'Context is provided like Cursor/Claude Code: search snippets first, then a small set of full files.',
+    'The host app parses your reply and writes File: blocks to disk automatically.',
     '',
-    'If the task does not require file changes (e.g. a question), just answer directly.',
+    'HARD RULES when the user asks to fix, build, add, change, implement, or create anything:',
+    '  1. Do the work in THIS reply. Never say "I will", "I\'ll implement", "next I\'ll", or describe a plan without files.',
+    '  2. Output every changed/created file as a COMPLETE file (not a diff, not a snippet).',
+    '  3. Each file MUST use this exact format (marker line, then fence):',
+    '       File: <path relative to repo root>',
+    '       ```typescript',
+    '       // full file content',
+    '       ```',
+    '  4. Keep prose under 3 short sentences total. File blocks come first whenever possible.',
+    '  5. Prefer editing files already in "Open files". Use search hits to locate symbols, then rewrite whole files.',
+    '  6. Never ask for dist/, public/agent/assets/, or minified bundles — they are excluded on purpose.',
+    '',
+    'Only answer in plain prose (no File: blocks) for pure questions that need no code changes.',
   );
 
   if (repoRoot) {
@@ -70,12 +93,23 @@ function buildSystemPrompt(
 
   if (tree.length > 0) {
     const flatPaths = flattenTree(tree);
-    parts.push('', 'File tree (gitignore-filtered):', flatPaths.join('\n'));
+    const shown = flatPaths.slice(0, MAX_TREE_PATHS);
+    parts.push('', 'File tree (truncated):', shown.join('\n'));
+    if (flatPaths.length > shown.length) {
+      parts.push(`… (${flatPaths.length - shown.length} more paths omitted)`);
+    }
   }
 
-  if (contextFiles.size > 0) {
-    parts.push('', '── File contents ──');
-    for (const [relPath, content] of contextFiles) {
+  const hitBlock = formatSearchHits(searchHits);
+  if (hitBlock) parts.push('', hitBlock);
+
+  const packed = packContextFiles(contextFiles);
+  if (packed.size > 0) {
+    parts.push('', '── Open files (full) ──');
+    if (packed.size < contextFiles.size) {
+      parts.push(`(Using ${packed.size}/${contextFiles.size} files to stay under the model limit.)`);
+    }
+    for (const [relPath, content] of packed) {
       const ext  = relPath.split('.').pop() ?? '';
       parts.push('', `File: ${relPath}`, '```' + ext, content, '```');
     }
@@ -98,19 +132,6 @@ function flattenTree(nodes: FileNode[], prefix = ''): string[] {
 // Parse LLM output for "File: path\n```lang\ncontent```" blocks
 // ---------------------------------------------------------------------------
 
-export function extractFileChanges(text: string): PendingChange[] {
-  const changes: PendingChange[] = [];
-  // Match:   File: <path>\n```<lang?>\n<content>```
-  const re = /^File:\s*(.+)\n```[a-zA-Z0-9_+\-.]*\n([\s\S]*?)```/gm;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    const filePath = m[1]!.trim();
-    const content  = m[2]!;
-    if (filePath) changes.push({ path: filePath, content });
-  }
-  return changes;
-}
-
 // ---------------------------------------------------------------------------
 // Parse text into segments (File-change blocks, plain code blocks, plain text)
 // ---------------------------------------------------------------------------
@@ -123,14 +144,17 @@ type Segment =
 function parseSegments(text: string): Segment[] {
   const out: Segment[] = [];
   // Capture both "File: path\n```lang\ncontent```"  and bare "```lang\ncontent```"
-  const re = /(?:^|\n)(File:\s*(.+)\n)?```([a-zA-Z0-9_+\-.]*)\s*\n([\s\S]*?)```/g;
+  const re =
+    /(?:^|\r?\n)([*_]*File:\s*(.+?)[*_]*\s*\r?\n(?:\r?\n)?)?```([a-zA-Z0-9_+\-.]*)\s*\r?\n([\s\S]*?)```/g;
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
-    const before = text.slice(last, m.index + (m[0].startsWith('\n') ? 1 : 0));
+    const leadNl = m[0].startsWith('\n') || m[0].startsWith('\r') ? (m[0].startsWith('\r\n') ? 2 : 1) : 0;
+    const before = text.slice(last, m.index + leadNl);
     if (before.trim()) out.push({ type: 'text', content: before });
     if (m[2]) {
-      out.push({ type: 'file-change', path: m[2].trim(), lang: m[3] ?? '', content: m[4] ?? '' });
+      const path = m[2].trim().replace(/^[`'"]+|[`'"]+$/g, '');
+      out.push({ type: 'file-change', path, lang: m[3] ?? '', content: m[4] ?? '' });
     } else {
       out.push({ type: 'code', lang: m[3] ?? '', content: m[4] ?? '' });
     }
@@ -293,23 +317,29 @@ interface Props {
   autoRun:           boolean;
   appliedPaths:      Set<string>;
   autoSelectedFiles: string[];
+  searchHits:        SearchHit[];
   onRunCode:         (code: string, lang: string)    => void;
-  onFileChanges:     (changes: PendingChange[])      => void;
-  onBeforeSend?:     (query: string) => Promise<void>;
+  /** May apply writes; awaited so auto-apply finishes before send returns. */
+  onFileChanges:     (changes: PendingChange[])      => void | Promise<void>;
+  /** Returns fresh search hits + ephemeral full files for THIS send (avoids stale React state). */
+  onBeforeSend?:     (query: string) => Promise<{
+    hits: SearchHit[];
+    files: Map<string, string>;
+  } | void>;
 }
 
 export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   repoRoot, sandboxId, provider, model, tree, contextFiles, autoRun, appliedPaths,
-  autoSelectedFiles, onRunCode, onFileChanges, onBeforeSend,
+  autoSelectedFiles, searchHits, onRunCode, onFileChanges, onBeforeSend,
 }, ref) {
   const [messages,  setMessages]  = useState<Message[]>([
     { id: uid(), role: 'assistant', content:
-      "Open a repo in the left panel and click files to add them to context.\n\n" +
-      "Then describe what you want:\n" +
+      "Open a repo (local path or GitHub URL) and describe what to fix or build.\n\n" +
       '• "Fix the auth token expiry bug in src/auth.ts"\n' +
       '• "Add rate limiting to the /api/run endpoint"\n' +
       '• "Write a Python script that fetches GitHub stars"\n\n' +
-      "I'll output complete files. You review and apply with one click." }
+      "I search for snippets first, open a few source files, then write complete files to disk. " +
+      "Turn off Auto-apply if you want review-only." }
   ]);
   const [input,    setInput]    = useState('');
   const [loading,  setLoading]  = useState(false);
@@ -320,11 +350,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   // Keep latest props in a ref so a send started before auto-context finishes
   // still sees the updated file context afterward.
   const latestRef = useRef({
-    repoRoot, sandboxId, provider, model, tree, contextFiles,
+    repoRoot, sandboxId, provider, model, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages,
   });
   latestRef.current = {
-    repoRoot, sandboxId, provider, model, tree, contextFiles,
+    repoRoot, sandboxId, provider, model, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages,
   };
 
@@ -346,62 +376,114 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
     setLoading(true);
     setError(null);
 
-    try {
-      // 2) Optional auto-context, hard-capped so a hung /search can't eat the send.
-      const before = latestRef.current.onBeforeSend;
-      if (before && kind === 'user') {
-        await withTimeout(before(text), BEFORE_SEND_TIMEOUT_MS);
-      }
-
-      const {
-        repoRoot: root, sandboxId: sid, provider: prov, model: mod,
-        tree: tr, contextFiles: ctx, autoRun: ar, onRunCode: run, onFileChanges: onFc,
-        messages: prev,
-      } = latestRef.current;
-
-      // After await, React may already have flushed userMsg into state — don't duplicate.
-      const withUser = prev.some(m => m.id === userMsg.id) ? prev : [...prev, userMsg];
-      const history = withUser
-        .filter(m => m.role === 'user' || m.role === 'assistant')
-        .map(m => ({ role: m.role, content: m.content }));
-
-      const systemPrompt = buildSystemPrompt(root, tr, ctx);
-
-      // Always hit agent-chat — it accepts systemPrompt. /api/chat ignores it
-      // and is the main-chat persona endpoint, not the agent.
+    const callAgent = async (
+      history: Array<{ role: string; content: string }>,
+      systemPrompt: string,
+      sid: string | null,
+      prov: string,
+      mod: string,
+    ): Promise<string> => {
       const chatEndpoint = `${API_URL}/agent-chat`;
       const chatHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
       if (sid) chatHeaders['X-Sandbox-Session'] = sid;
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
-      let res: Response;
       try {
-        res = await fetch(chatEndpoint, {
+        const res = await fetch(chatEndpoint, {
           method: 'POST',
           headers: chatHeaders,
           body: JSON.stringify({ messages: history, systemPrompt, provider: prov, model: mod }),
           signal: controller.signal,
         });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({ error: `HTTP ${res.status}` })) as { error?: string };
+          throw new Error(d.error ?? `HTTP ${res.status}`);
+        }
+        const data = await res.json() as { reply?: string };
+        return data.reply ?? '(empty response)';
       } finally {
         clearTimeout(timer);
       }
+    };
 
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({ error: `HTTP ${res.status}` })) as { error?: string };
-        throw new Error(d.error ?? `HTTP ${res.status}`);
+    try {
+      // 2) Optional auto-context, hard-capped so a hung /search can't eat the send.
+      // Use the RETURNED hits/files — React setState is not flushed yet.
+      let freshHits: SearchHit[] | null = null;
+      let freshFiles: Map<string, string> | null = null;
+      const before = latestRef.current.onBeforeSend;
+      if (before && kind === 'user') {
+        const result = await withTimeout(before(text), BEFORE_SEND_TIMEOUT_MS);
+        if (result) {
+          freshHits = result.hits;
+          freshFiles = result.files;
+        }
       }
 
-      const data   = await res.json() as { reply?: string };
-      const reply  = data.reply ?? '(empty response)';
-      const segs   = parseSegments(reply);
-      const fc     = extractFileChanges(reply);
+      const {
+        repoRoot: root, sandboxId: sid, provider: prov, model: mod,
+        tree: tr, contextFiles: pinned, searchHits: propHits,
+        autoRun: ar, onRunCode: run, onFileChanges: onFc,
+        messages: prev,
+      } = latestRef.current;
+
+      const hits = freshHits ?? propHits;
+      const ctx = new Map(pinned);
+      if (freshFiles) {
+        for (const [p, c] of freshFiles) {
+          if (!ctx.has(p)) ctx.set(p, c);
+        }
+      }
+
+      // After await, React may already have flushed userMsg into state — don't duplicate.
+      const withUser = prev.some(m => m.id === userMsg.id) ? prev : [...prev, userMsg];
+      const history = trimMessageHistory(
+        withUser
+          .filter(m => m.role === 'user' || m.role === 'assistant')
+          .map(m => ({ role: m.role, content: m.content })),
+      );
+
+      const systemPrompt = buildSystemPrompt(root, tr, ctx, hits);
+
+      // Always hit agent-chat — it accepts systemPrompt. /api/chat ignores it
+      // and is the main-chat persona endpoint, not the agent.
+      let reply = await callAgent(history, systemPrompt, sid, prov, mod);
+      let segs  = parseSegments(reply);
+      let fc    = extractFileChanges(reply);
 
       setMessages(m => [...m, {
         id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
       }]);
 
-      if (fc.length > 0) onFc(fc);
+      // If the model only talked about doing work, force one corrective turn.
+      // Skip for verify-loop injects (those already demand File: format).
+      const shouldNudge = fc.length === 0
+        && kind === 'user'
+        && looksLikeWorkRequest(text)
+        && (!!root || ctx.size > 0);
+
+      if (shouldNudge) {
+        const nudgeMsg: Message = {
+          id: uid(), role: 'user', content: NUDGE_PROMPT, kind: 'retry-inject',
+        };
+        setMessages(m => [...m, nudgeMsg]);
+
+        const nudgedHistory = [
+          ...history,
+          { role: 'assistant', content: reply },
+          { role: 'user', content: NUDGE_PROMPT },
+        ];
+        reply = await callAgent(nudgedHistory, systemPrompt, sid, prov, mod);
+        segs  = parseSegments(reply);
+        fc    = extractFileChanges(reply);
+
+        setMessages(m => [...m, {
+          id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
+        }]);
+      }
+
+      if (fc.length > 0) await onFc(fc);
 
       if (ar) {
         for (const seg of segs) {
@@ -458,8 +540,9 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         <div style={{ padding: '5px 12px', background: 'rgba(212,255,63,.05)',
           borderBottom: '1px solid rgba(212,255,63,.15)', flexShrink: 0,
           fontSize: 10, color: '#8fa62b', lineHeight: 1.6 }}>
-          <span style={{ fontWeight: 700 }}>⚡ Auto-context:</span>{' '}
+          <span style={{ fontWeight: 700 }}>⚡ Search:</span>{' '}
           {autoSelectedFiles.join(', ')}
+          <span style={{ color: '#555' }}> (snippets + up to 3 small source files)</span>
         </div>
       )}
 

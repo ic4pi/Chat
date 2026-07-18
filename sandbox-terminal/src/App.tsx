@@ -8,6 +8,12 @@ import type { TerminalHandle } from './Terminal.js';
 import { useRepoContext }   from './useRepoContext.js';
 import { useAutoVerify }    from './useAutoVerify.js';
 import type { PendingChange } from './useRepoContext.js';
+import {
+  isJunkContextPath,
+  isSourcePath,
+  MAX_AUTO_FULL_FILE_CHARS,
+  type SearchHit,
+} from './contextBudget.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
@@ -46,7 +52,11 @@ const OR_MODELS = [
   { id: 'meta-llama/llama-3.3-70b-instruct:free',    label: 'Llama 3.3 70B (free)' },
 ];
 
-async function fetchAutoContext(root: string, query: string, sandboxId: string | null): Promise<string[]> {
+async function fetchAutoContext(
+  root: string,
+  query: string,
+  sandboxId: string | null,
+): Promise<SearchHit[]> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (sandboxId) headers['X-Sandbox-Session'] = sandboxId;
   const controller = new AbortController();
@@ -54,12 +64,22 @@ async function fetchAutoContext(root: string, query: string, sandboxId: string |
   try {
     const res = await fetch(`${API_URL}/search`, {
       method: 'POST', headers,
-      body: JSON.stringify({ root, query, maxFiles: 5 }),
+      body: JSON.stringify({ root, query, maxFiles: 6 }),
       signal: controller.signal,
     });
     if (!res.ok) return [];
-    const data = await res.json() as { matches?: Array<{ path: string }> };
-    return (data.matches ?? []).map(m => m.path);
+    const data = await res.json() as {
+      matches?: Array<{ path: string; score?: number; size?: number; reason?: string; snippets?: string[] }>;
+    };
+    return (data.matches ?? [])
+      .filter(m => m.path && !isJunkContextPath(m.path) && isSourcePath(m.path))
+      .map(m => ({
+        path: m.path,
+        score: m.score,
+        size: m.size,
+        reason: m.reason,
+        snippets: m.snippets ?? [],
+      }));
   } catch {
     return [];
   } finally {
@@ -126,15 +146,21 @@ export function App() {
   const termRef = useRef<TerminalHandle>(null);
   const chatRef = useRef<ChatHandle>(null);
   const repo    = useRepoContext();
+  /** Prevents Auto-apply from starting a second verify while one is running. */
+  const verifyingRef = useRef(false);
 
   const [provider,     setProvider]     = useState('venice');
   const [model,        setModel]        = useState('venice-uncensored');
   const [autoRun,      setAutoRun]      = useState(true);
+  const [autoApplyOn,  setAutoApplyOn]  = useState(true);
   const [autoVerifyOn, setAutoVerifyOn] = useState(true);
   const [applying,     setApplying]     = useState(false);
   const [appliedPaths, setAppliedPaths] = useState<Set<string>>(new Set());
   const [applyResults, setApplyResults] = useState<Array<{ path: string; ok: boolean; error?: string }>>([]);
   const [autoCtxFiles, setAutoCtxFiles] = useState<string[]>([]);
+  const [searchHits,   setSearchHits]   = useState<SearchHit[]>([]);
+  /** Per-query working set — full files opened from search (not user-pinned). */
+  const [autoFullFiles, setAutoFullFiles] = useState<Map<string, string>>(new Map());
   const [mobileTab,    setMobileTab]    = useState<MobileTab>('chat');
   const isMobile = useIsMobile();
 
@@ -145,10 +171,10 @@ export function App() {
     setModel(p === 'venice' ? 'venice-uncensored' : 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free');
   };
 
-  const handleApply = useCallback(async () => {
+  const handleApply = useCallback(async (files?: PendingChange[]) => {
     setApplying(true);
     try {
-      const results = await repo.applyChanges();
+      const results = await repo.applyChanges(files);
       setApplyResults(results);
       setAppliedPaths(new Set(results.filter(r => r.ok).map(r => r.path)));
       return results;
@@ -157,26 +183,72 @@ export function App() {
 
   const autoVerify = useAutoVerify(repo.root, termRef, chatRef, repo.applyChanges);
 
-  const handleApplyAndVerify = useCallback(async () => {
-    const results = await handleApply();
-    if (results.some(r => r.ok) && autoVerifyOn && repo.root) {
-      setMobileTab('terminal');
-      await autoVerify.verify();
-    }
-  }, [handleApply, autoVerifyOn, repo.root, autoVerify]);
+  const runVerify = useCallback(async () => {
+    if (verifyingRef.current) return;
+    verifyingRef.current = true;
+    setMobileTab('terminal');
+    try { await autoVerify.verify(); }
+    finally { verifyingRef.current = false; }
+  }, [autoVerify]);
 
-  const handleAutoContext = useCallback(async (query: string) => {
-    if (!repo.root) { setAutoCtxFiles([]); return; }
-    setAutoCtxFiles([]);
+  const handleApplyAndVerify = useCallback(async (files?: PendingChange[]) => {
+    const results = await handleApply(files);
+    if (results.some(r => r.ok) && autoVerifyOn && repo.root) {
+      await runVerify();
+    }
+    return results;
+  }, [handleApply, autoVerifyOn, repo.root, runVerify]);
+
+  const handleAutoContext = useCallback(async (query: string): Promise<{
+    hits: SearchHit[];
+    files: Map<string, string>;
+  }> => {
+    const empty = { hits: [] as SearchHit[], files: new Map<string, string>() };
+    if (!repo.root) {
+      setAutoCtxFiles([]);
+      setSearchHits([]);
+      setAutoFullFiles(new Map());
+      return empty;
+    }
     try {
-      const paths = await fetchAutoContext(repo.root, query, repo.sandboxId);
-      for (const p of paths) await repo.addToContext(p);
-      setAutoCtxFiles(paths);
-    } catch { /* ignore */ }
+      // 1) Search → snippets (never dump whole files / bundles into the prompt)
+      const hits = await fetchAutoContext(repo.root, query, repo.sandboxId);
+      setSearchHits(hits);
+      setAutoCtxFiles(hits.map(h => h.path));
+
+      // 2) Ephemeral working set: up to 3 small SOURCE files for THIS query only
+      const toOpen = hits
+        .filter(h => isSourcePath(h.path))
+        .filter(h => (h.size ?? 0) > 0 && (h.size ?? 0) <= MAX_AUTO_FULL_FILE_CHARS)
+        .slice(0, 3);
+
+      const opened = new Map<string, string>();
+      for (const h of toOpen) {
+        if (repo.contextFiles.has(h.path)) continue; // already user-pinned
+        try {
+          const headers: Record<string, string> = {};
+          if (repo.sandboxId) headers['X-Sandbox-Session'] = repo.sandboxId;
+          const url = repo.sandboxId
+            ? `${API_URL}/file?path=${encodeURIComponent(h.path)}&maxBytes=${MAX_AUTO_FULL_FILE_CHARS}`
+            : `${API_URL}/file?root=${encodeURIComponent(repo.root)}&path=${encodeURIComponent(h.path)}`;
+          const res = await fetch(url, { headers });
+          if (!res.ok) continue;
+          const data = await res.json() as { content?: string };
+          if (data.content != null) opened.set(h.path, data.content);
+        } catch { /* skip */ }
+      }
+      setAutoFullFiles(opened);
+      return { hits, files: opened };
+    } catch {
+      setAutoCtxFiles([]);
+      setSearchHits([]);
+      setAutoFullFiles(new Map());
+      return empty;
+    }
   }, [repo]);
 
-  const handleFileChanges = useCallback((changes: PendingChange[]) => {
-    const withOriginals = changes.map(async c => {
+  const handleFileChanges = useCallback(async (changes: PendingChange[]) => {
+    const enriched = await Promise.all(changes.map(async c => {
       if (!repo.root) return c;
       try {
         const headers: Record<string, string> = {};
@@ -189,12 +261,23 @@ export function App() {
         const data = await res.json() as { content?: string };
         return { ...c, original: data.content };
       } catch { return c; }
-    });
-    Promise.all(withOriginals).then(repo.setPendingChanges);
+    }));
+    repo.setPendingChanges(enriched);
     setAppliedPaths(new Set());
     setApplyResults([]);
-    autoVerify.reset();
-  }, [repo, autoVerify]);
+    // Don't reset verify state mid-loop — the retry injector owns that lifecycle.
+    if (!verifyingRef.current) autoVerify.reset();
+
+    // Default path: write immediately. During an active verify loop we only
+    // write (the loop applies explicitly too) — never nest another verify().
+    if (autoApplyOn && repo.root && enriched.length > 0) {
+      if (verifyingRef.current) {
+        await handleApply(enriched);
+      } else {
+        await handleApplyAndVerify(enriched);
+      }
+    }
+  }, [repo, autoVerify, autoApplyOn, handleApply, handleApplyAndVerify]);
 
   const handleRunCode = useCallback((code: string, lang: string) => {
     setMobileTab('terminal');
@@ -226,6 +309,11 @@ export function App() {
           title={repo.sandboxId}>● {repo.sandboxId.slice(0, 20)}</span>
       )}
       <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4,
+          fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+          Auto-apply <input type="checkbox" checked={autoApplyOn} onChange={e => setAutoApplyOn(e.target.checked)}
+            style={{ accentColor: '#d4ff3f' }} />
+        </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 4,
           fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
           Auto-run <input type="checkbox" checked={autoRun} onChange={e => setAutoRun(e.target.checked)}
@@ -272,15 +360,13 @@ export function App() {
           autoSelectedFiles={autoCtxFiles}
           onRunCode={handleRunCode}
           onFileChanges={handleFileChanges}
-          onBeforeSend={async (query) => {
-            if (repo.contextFiles.size === 0 && repo.root) await handleAutoContext(query);
-            else setAutoCtxFiles([]);
-          }}
+          onBeforeSend={handleAutoContext}
+          searchHits={searchHits}
         />
       </div>
       <DiffPanel
         changes={repo.pendingChanges} applying={applying}
-        appliedPaths={appliedPaths} onApply={handleApplyAndVerify}
+        appliedPaths={appliedPaths} onApply={() => { void handleApplyAndVerify(); }}
         onDismiss={p => repo.setPendingChanges(repo.pendingChanges.filter(c => c.path !== p))}
         onDismissAll={repo.clearChanges}
       />
@@ -289,8 +375,8 @@ export function App() {
         attempt={autoVerify.attempt}
         testCommand={autoVerify.testCommand}
         askCommand={autoVerify.askCommand}
-        onRun={autoVerify.verify}
-        onSetCommand={cmd => { autoVerify.setCustomCommand(cmd); autoVerify.verify(); }}
+        onRun={() => { void runVerify(); }}
+        onSetCommand={cmd => { autoVerify.setCustomCommand(cmd); void runVerify(); }}
         onDismiss={autoVerify.reset}
       />
     </div>

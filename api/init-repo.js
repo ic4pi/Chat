@@ -30,7 +30,9 @@ async function getFileTree(sandbox, dir, depth = 0, maxDepth = 5) {
   try {
     const result = await sandbox.runCommand({ cmd: 'find', args: [
       dir, '-maxdepth', '1', '-not', '-name', '.git',
-      '-not', '-name', 'node_modules', '-not', '-name', '__pycache__',
+      '-not', '-name', 'node_modules', '-not', '-name', 'dist',
+      '-not', '-name', 'build', '-not', '-name', '.next',
+      '-not', '-name', 'coverage', '-not', '-name', '__pycache__',
       '-not', '-path', dir,   // exclude the dir itself
     ]});
     const raw = await result.stdout();
@@ -39,6 +41,7 @@ async function getFileTree(sandbox, dir, depth = 0, maxDepth = 5) {
     for (const abs of entries) {
       const name = abs.split('/').pop();
       if (!name || name.startsWith('.') && name !== '.env.example') continue;
+      if (name === 'assets' && (dir.endsWith('/public/agent') || dir.endsWith('/agent'))) continue;
       const statRes = await sandbox.runCommand({ cmd: 'stat', args: ['-c', '%F', abs] });
       const kind = (await statRes.stdout()).trim();
       const rel = abs.replace(dir + '/', '');

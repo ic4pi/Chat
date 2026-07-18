@@ -3,9 +3,11 @@
  * Body: { messages, systemPrompt, model?, provider? }
  *
  * Like /api/chat but the client can supply a full systemPrompt (the agent
- * injects the file tree + context into it). The persona/master-prompt system
- * from the KV store is bypassed here — the agent owns its own system prompt.
+ * injects the file tree + context into it). Enforces a hard prompt budget
+ * so oversized context never reaches the upstream model.
  */
+
+import { estimateTokens } from '../lib/context-filters.js';
 
 const PROVIDERS = {
   openrouter: {
@@ -24,6 +26,55 @@ const PROVIDERS = {
     extraHeaders: () => ({}),
   },
 };
+
+/** Stay under Venice/Dolphin ~131k with room for the completion. */
+const MAX_INPUT_TOKENS = 100_000;
+const MAX_SYSTEM_TOKENS = 70_000;
+const MAX_HISTORY_TOKENS = 25_000;
+
+function truncateToTokens(text, maxTokens) {
+  const maxChars = maxTokens * 4;
+  if (!text || text.length <= maxChars) return text || '';
+  const head = Math.floor(maxChars * 0.75);
+  const tail = maxChars - head - 120;
+  return (
+    text.slice(0, head) +
+    '\n\n[… truncated by server to fit model context window …]\n\n' +
+    text.slice(-Math.max(tail, 0))
+  );
+}
+
+function budgetMessages(systemPrompt, messages) {
+  let system = truncateToTokens(systemPrompt || '', MAX_SYSTEM_TOKENS);
+
+  // Keep newest messages; drop oldest until history fits.
+  const hist = messages.map(m => ({
+    role: m.role,
+    content: String(m.content ?? ''),
+  }));
+  let histTokens = hist.reduce((n, m) => n + estimateTokens(m.content), 0);
+  while (hist.length > 1 && histTokens > MAX_HISTORY_TOKENS) {
+    const removed = hist.shift();
+    histTokens -= estimateTokens(removed.content);
+  }
+  for (const m of hist) {
+    if (estimateTokens(m.content) > 8_000) {
+      m.content = truncateToTokens(m.content, 8_000);
+    }
+  }
+
+  let total = estimateTokens(system) + hist.reduce((n, m) => n + estimateTokens(m.content), 0);
+  if (total > MAX_INPUT_TOKENS) {
+    system = truncateToTokens(system, Math.max(4_000, MAX_INPUT_TOKENS - histTokens - 1_000));
+    total = estimateTokens(system) + hist.reduce((n, m) => n + estimateTokens(m.content), 0);
+  }
+
+  return {
+    system,
+    messages: hist,
+    tokens: total,
+  };
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -45,12 +96,20 @@ export default async function handler(req, res) {
     });
   }
 
-  const messagesWithSystem = systemPrompt
-    ? [{ role: 'system', content: systemPrompt }, ...messages]
-    : messages;
+  const budgeted = budgetMessages(systemPrompt, messages);
+  const messagesWithSystem = budgeted.system
+    ? [{ role: 'system', content: budgeted.system }, ...budgeted.messages]
+    : budgeted.messages;
 
-  // Keep under Vercel maxDuration (120s) so the isolate returns JSON instead
-  // of being killed — iOS Safari otherwise reports that as "Load failed".
+  if (budgeted.tokens > MAX_INPUT_TOKENS) {
+    return res.status(413).json({
+      error:
+        `Prompt still too large (~${budgeted.tokens} tokens) after trimming. ` +
+        `Remove large files from context (never add dist/ or public/agent/assets/).`,
+      tokens: budgeted.tokens,
+    });
+  }
+
   const UPSTREAM_TIMEOUT_MS = 110_000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
@@ -77,11 +136,16 @@ export default async function handler(req, res) {
 
     if (!upstream.ok) {
       const msg = data?.error?.message || `Upstream error HTTP ${upstream.status}`;
-      return res.status(upstream.status).json({ error: msg });
+      return res.status(upstream.status).json({ error: msg, tokens: budgeted.tokens });
     }
 
     const reply = data.choices?.[0]?.message?.content ?? '';
-    return res.status(200).json({ reply, model, provider: provider.label });
+    return res.status(200).json({
+      reply,
+      model,
+      provider: provider.label,
+      tokens: budgeted.tokens,
+    });
   } catch (err) {
     const aborted = err?.name === 'AbortError' || controller.signal.aborted;
     return res.status(aborted ? 504 : 500).json({

@@ -1,5 +1,8 @@
-# These directories are development tools, not part of the Vercel deployment.
-# The sandbox-terminal UI is pre-built into public/agent/ — no need to process
-# the source directory during deployment.
+# Dev-only runner — not part of the Vercel deployment.
 sandbox-runner/
-sandbox-terminal/
+
+# Heavy deps inside the agent UI source tree. The UI itself is pre-built into
+# public/agent/; we still upload sandbox-terminal source so a Vercel project
+# with Root Directory=sandbox-terminal can build if linked that way.
+sandbox-terminal/node_modules/
+sandbox-runner/node_modules/
