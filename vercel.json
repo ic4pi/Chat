@@ -3,21 +3,20 @@
   "buildCommand": null,
   "installCommand": "npm install --ignore-scripts",
   "rewrites": [
-    { "source": "/",                "destination": "/index.html" },
-    { "source": "/admin",           "destination": "/api/admin"  },
-    { "source": "/agent",           "destination": "/agent/index.html" },
-    { "source": "/agent/(.*)",      "destination": "/agent/index.html" }
+    { "source": "/",      "destination": "/index.html" },
+    { "source": "/admin", "destination": "/api/admin"  },
+    { "source": "/agent", "destination": "/agent/index.html" }
   ],
   "functions": {
-    "api/chat.js":                 { "maxDuration": 120 },
-    "api/run.js":                  { "maxDuration": 300 },
-    "api/run-code.js":             { "maxDuration": 300 },
-    "api/init-repo.js":            { "maxDuration": 120 },
-    "api/files.js":                { "maxDuration": 30  },
-    "api/file.js":                 { "maxDuration": 30  },
-    "api/write-files.js":          { "maxDuration": 30  },
-    "api/search.js":               { "maxDuration": 30  },
-    "api/detect-test-command.js":  { "maxDuration": 30  },
-    "api/agent-chat.js":           { "maxDuration": 120 }
+    "api/chat.js":                 { "maxDuration": 60 },
+    "api/run.js":                  { "maxDuration": 60 },
+    "api/run-code.js":             { "maxDuration": 60 },
+    "api/init-repo.js":            { "maxDuration": 60 },
+    "api/files.js":                { "maxDuration": 30 },
+    "api/file.js":                 { "maxDuration": 30 },
+    "api/write-files.js":          { "maxDuration": 30 },
+    "api/search.js":               { "maxDuration": 30 },
+    "api/detect-test-command.js":  { "maxDuration": 30 },
+    "api/agent-chat.js":           { "maxDuration": 60 }
   }
 }
