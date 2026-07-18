@@ -228,7 +228,7 @@ export function App() {
   const runVerify = useCallback(async () => {
     if (verifyingRef.current) return;
     verifyingRef.current = true;
-    setMobileTab('terminal');
+    // Stay on Chat — don't yank the user to Terminal.
     try { await autoVerify.verify(); }
     finally { verifyingRef.current = false; }
   }, [autoVerify]);
@@ -342,7 +342,8 @@ export function App() {
   }, [repo, autoVerify, autoApplyOn, handleApply, handleApplyAndVerify]);
 
   const handleRunCode = useCallback((code: string, lang: string) => {
-    setMobileTab('terminal');
+    // Run in the background terminal without stealing the Chat tab.
+    // User can open Terminal when they want to see output.
     termRef.current?.runCode(code, lang);
   }, []);
 
@@ -351,6 +352,8 @@ export function App() {
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
       padding: '6px 12px', borderBottom: '1px solid #1e1e1e', background: '#080808',
       flexShrink: 0 }}>
+      <a href="/" style={{ color: '#888', fontSize: 11, textDecoration: 'none',
+        whiteSpace: 'nowrap', padding: '2px 0' }}>← Chat</a>
       <span style={{ color: '#d4ff3f', fontSize: 10, letterSpacing: '0.08em',
         textTransform: 'uppercase', whiteSpace: 'nowrap' }}>// agent</span>
       <select value={provider} onChange={e => handleProviderChange(e.target.value)}
@@ -501,18 +504,24 @@ export function App() {
             </div>
           </div>
           <div style={{ display: 'flex', flexShrink: 0, borderTop: '1px solid #1e1e1e',
-            background: '#080808', paddingBottom: 'env(safe-area-inset-bottom)' }}
+            background: '#080808', paddingBottom: 'env(safe-area-inset-bottom)',
+            position: 'relative', zIndex: 50 }}
             className="mobile-tabs">
-            {(['files','chat','terminal'] as MobileTab[]).map(t => (
-              <button key={t} onClick={() => setMobileTab(t)}
-                style={{ flex: 1, padding: '10px 0', background: mobileTab === t ? '#111' : 'transparent',
-                  color: mobileTab === t ? '#d4ff3f' : '#555', border: 'none',
-                  borderTop: mobileTab === t ? '2px solid #d4ff3f' : '2px solid transparent',
-                  fontFamily: 'inherit', fontSize: 11, cursor: 'pointer',
-                  textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                {t === 'files' ? `Files${repo.tree.length ? ` (${repo.totalFiles})` : ''}` :
-                 t === 'chat'  ? `Chat${repo.contextFiles.size ? ` (${repo.contextFiles.size})` : ''}` :
-                 'Terminal'}
+            {([
+              { id: 'files' as const, label: `Files${repo.tree.length ? ` (${repo.totalFiles})` : ''}` },
+              { id: 'chat' as const, label: 'Chat' },
+              { id: 'terminal' as const, label: 'Terminal' },
+            ]).map(t => (
+              <button key={t.id} type="button" onClick={() => setMobileTab(t.id)}
+                aria-current={mobileTab === t.id ? 'page' : undefined}
+                style={{ flex: 1, padding: '14px 0', minHeight: 48,
+                  background: mobileTab === t.id ? '#111' : 'transparent',
+                  color: mobileTab === t.id ? '#d4ff3f' : '#aaa', border: 'none',
+                  borderTop: mobileTab === t.id ? '2px solid #d4ff3f' : '2px solid transparent',
+                  fontFamily: 'inherit', fontSize: 12, fontWeight: mobileTab === t.id ? 700 : 500,
+                  cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.08em',
+                  WebkitTapHighlightColor: 'transparent' }}>
+                {t.label}
               </button>
             ))}
           </div>

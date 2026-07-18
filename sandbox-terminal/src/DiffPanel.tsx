@@ -170,8 +170,8 @@ export function DiffPanel({
         </div>
       </div>
 
-      {/* file diffs */}
-      <div style={{ padding: '8px 12px', maxHeight: 360, overflowY: 'auto' }}>
+      {/* file diffs — keep short on phones so Chat stays usable */}
+      <div style={{ padding: '8px 12px', maxHeight: 'min(28vh, 220px)', overflowY: 'auto' }}>
         {changes.map(c => (
           <FileDiff key={c.path} change={c}
             onDismiss={() => onDismiss(c.path)} />
