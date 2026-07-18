@@ -52,7 +52,9 @@ function buildIgnore(root: string) {
   const ig = ignore();
   ig.add(['.git','node_modules','__pycache__','.DS_Store','*.pyc',
           'dist','build','.next','.vercel','coverage','.cache',
-          '*.min.js','*.min.css','*.map','*.lock']);
+          'public/agent/assets','**/assets/index-*.js','**/assets/index-*.css',
+          '*.min.js','*.min.css','*.map','*.lock',
+          'package-lock.json','yarn.lock','pnpm-lock.yaml']);
   const gp = path.join(root, '.gitignore');
   if (fs.existsSync(gp)) ig.add(fs.readFileSync(gp, 'utf8'));
   return ig;
@@ -100,7 +102,10 @@ async function contentSearch(root: string, keyword: string): Promise<string[]> {
   // Try ripgrep first (much faster)
   let output = await spawnSearch('rg', [
     '--files-with-matches', '--ignore-case', '--glob=!node_modules',
-    '--glob=!.git', '--glob=!dist', '--glob=!build', '--glob=!*.min.js',
+    '--glob=!.git', '--glob=!dist', '--glob=!build', '--glob=!coverage',
+    '--glob=!.next', '--glob=!public/agent/assets',
+    '--glob=!*.min.js', '--glob=!*.min.css', '--glob=!*.map',
+    '--glob=!package-lock.json', '--glob=!**/assets/index-*.js',
     '--', keyword, root,
   ]);
 
@@ -110,6 +115,7 @@ async function contentSearch(root: string, keyword: string): Promise<string[]> {
       '-rl', '--include=*.*',
       '--exclude-dir=node_modules', '--exclude-dir=.git',
       '--exclude-dir=dist', '--exclude-dir=build',
+      '--exclude-dir=coverage', '--exclude-dir=.next',
       '-i', keyword, root,
     ]);
   }
@@ -119,7 +125,12 @@ async function contentSearch(root: string, keyword: string): Promise<string[]> {
     .map(f => {
       try { return path.relative(root, f); } catch { return ''; }
     })
-    .filter(Boolean);
+    .filter(rel => {
+      if (!rel) return false;
+      if (rel.includes('public/agent/assets/')) return false;
+      if (/assets\/index-[A-Za-z0-9_-]+\.(js|css)$/.test(rel)) return false;
+      return true;
+    });
 }
 
 // ---------------------------------------------------------------------------

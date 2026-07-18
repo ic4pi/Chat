@@ -8,6 +8,7 @@ import type { TerminalHandle } from './Terminal.js';
 import { useRepoContext }   from './useRepoContext.js';
 import { useAutoVerify }    from './useAutoVerify.js';
 import type { PendingChange } from './useRepoContext.js';
+import { isJunkContextPath } from './contextBudget.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
@@ -59,7 +60,9 @@ async function fetchAutoContext(root: string, query: string, sandboxId: string |
     });
     if (!res.ok) return [];
     const data = await res.json() as { matches?: Array<{ path: string }> };
-    return (data.matches ?? []).map(m => m.path);
+    return (data.matches ?? [])
+      .map(m => m.path)
+      .filter(p => p && !isJunkContextPath(p));
   } catch {
     return [];
   } finally {

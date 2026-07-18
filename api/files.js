@@ -10,7 +10,7 @@ async function getFileTree(sandbox, dir, depth = 0, maxDepth = 5) {
   if (depth > maxDepth) return [];
   try {
     const result = await sandbox.runCommand({ cmd: 'bash', args: ['-c',
-      `find "${dir}" -maxdepth 1 ! -path "${dir}" ! -name ".git" ! -name "node_modules" ! -name "__pycache__" ! -name "*.pyc" -print0 | sort -z`
+      `find "${dir}" -maxdepth 1 ! -path "${dir}" ! -name ".git" ! -name "node_modules" ! -name "dist" ! -name "build" ! -name ".next" ! -name "coverage" ! -name "__pycache__" ! -name "*.pyc" -print0 | sort -z`
     ]});
     const raw = await result.stdout();
     const entries = raw.split('\0').filter(Boolean);
@@ -18,6 +18,8 @@ async function getFileTree(sandbox, dir, depth = 0, maxDepth = 5) {
     for (const abs of entries) {
       const name = abs.split('/').pop();
       if (!name) continue;
+      // Hide prebuilt agent bundles from the tree (they blow context if selected).
+      if (name === 'assets' && (dir.endsWith('/public/agent') || dir.endsWith('/agent'))) continue;
       const statRes = await sandbox.runCommand({ cmd: 'bash', args: ['-c',
         `[ -d "${abs}" ] && echo dir || echo file`] });
       const kind = (await statRes.stdout()).trim();

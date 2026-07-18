@@ -10,6 +10,7 @@
 
 import { useState, useCallback } from 'react';
 import type { FileNode } from './types.js';
+import { isJunkContextPath, MAX_FILE_CHARS, truncateForContext } from './contextBudget.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
@@ -110,6 +111,11 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
 
   const addToContext = useCallback(async (relPath: string) => {
     if (contextFiles.has(relPath)) return;
+    // Never load hashed bundles / dist into the model prompt.
+    if (isJunkContextPath(relPath)) {
+      console.warn('addToContext skipped junk path:', relPath);
+      return;
+    }
     try {
       const headers = sandboxId ? { 'X-Sandbox-Session': sandboxId } : undefined;
       const url = sandboxId
@@ -118,7 +124,13 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
       const res = await fetch(url, { headers });
       const data = await res.json() as { content?: string; error?: string };
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      setContextFiles(m => new Map(m).set(relPath, data.content ?? ''));
+      const raw = data.content ?? '';
+      // Refuse absurd payloads entirely (minified 400KB+ bundles).
+      if (raw.length > MAX_FILE_CHARS * 3) {
+        console.warn('addToContext skipped oversized file:', relPath, raw.length);
+        return;
+      }
+      setContextFiles(m => new Map(m).set(relPath, truncateForContext(raw)));
     } catch (err: unknown) {
       console.error('addToContext failed:', err);
     }

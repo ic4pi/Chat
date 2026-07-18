@@ -30,6 +30,11 @@ import {
   looksLikeWorkRequest,
   NUDGE_PROMPT,
 } from './agentParse.js';
+import {
+  MAX_TREE_PATHS,
+  packContextFiles,
+  trimMessageHistory,
+} from './contextBudget.js';
 
 export { extractFileChanges, looksLikeWorkRequest } from './agentParse.js';
 
@@ -82,12 +87,20 @@ function buildSystemPrompt(
 
   if (tree.length > 0) {
     const flatPaths = flattenTree(tree);
-    parts.push('', 'File tree (gitignore-filtered):', flatPaths.join('\n'));
+    const shown = flatPaths.slice(0, MAX_TREE_PATHS);
+    parts.push('', 'File tree (gitignore-filtered):', shown.join('\n'));
+    if (flatPaths.length > shown.length) {
+      parts.push(`… (${flatPaths.length - shown.length} more paths omitted)`);
+    }
   }
 
-  if (contextFiles.size > 0) {
+  const packed = packContextFiles(contextFiles);
+  if (packed.size > 0) {
     parts.push('', '── File contents ──');
-    for (const [relPath, content] of contextFiles) {
+    if (packed.size < contextFiles.size) {
+      parts.push(`(Using ${packed.size}/${contextFiles.size} context files to stay under the model limit.)`);
+    }
+    for (const [relPath, content] of packed) {
       const ext  = relPath.split('.').pop() ?? '';
       parts.push('', `File: ${relPath}`, '```' + ext, content, '```');
     }
@@ -394,9 +407,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       // After await, React may already have flushed userMsg into state — don't duplicate.
       const withUser = prev.some(m => m.id === userMsg.id) ? prev : [...prev, userMsg];
-      const history = withUser
-        .filter(m => m.role === 'user' || m.role === 'assistant')
-        .map(m => ({ role: m.role, content: m.content }));
+      const history = trimMessageHistory(
+        withUser
+          .filter(m => m.role === 'user' || m.role === 'assistant')
+          .map(m => ({ role: m.role, content: m.content })),
+      );
 
       const systemPrompt = buildSystemPrompt(root, tr, ctx);
 

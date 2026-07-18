@@ -2,9 +2,11 @@
  * POST /api/search
  * Body: { query: string, maxFiles?: number }
  * Searches the cloned repo in the sandbox using ripgrep (included in node24 image).
+ * Skips build artifacts / hashed bundles so auto-context cannot blow the model window.
  */
 
 import { requireSession, REPO_DIR } from '../lib/sandbox-session.js';
+import { isJunkContextPath, SEARCH_EXCLUDE_GLOBS } from '../lib/context-filters.js';
 
 const STOP_WORDS = new Set([
   'the','a','an','is','in','on','at','to','for','of','and','or','that','this','with',
@@ -14,6 +16,9 @@ const STOP_WORDS = new Set([
   'file','code','function','class','method','error','bug','issue','test','run','build',
 ]);
 
+/** Skip files larger than this in search hits (~80KB). */
+const MAX_SEARCH_FILE_BYTES = 80_000;
+
 function extractKeywords(query) {
   const expanded = query.replace(/([a-z])([A-Z])/g, '$1 $2');
   return [...new Set(
@@ -21,6 +26,24 @@ function extractKeywords(query) {
       .map(w => w.toLowerCase())
       .filter(w => w.length >= 3 && !STOP_WORDS.has(w) && !/^\d+$/.test(w))
   )].slice(0, 8);
+}
+
+function toRel(abs) {
+  return abs.replace(REPO_DIR.replace(/\/$/, '') + '/', '').replace(/^\//, '');
+}
+
+function findPrunePaths() {
+  // Directories to prune: find … \( -path … -o -path … \) -prune -o …
+  return SEARCH_EXCLUDE_GLOBS
+    .map(d => `-path "*/${d}" -o -path "*/${d}/*"`)
+    .join(' -o ');
+}
+
+function rgGlobArgs() {
+  return SEARCH_EXCLUDE_GLOBS
+    .map(d => `--glob '!${d}' --glob '!${d}/**'`)
+    .join(' ')
+    + " --glob '!*.min.js' --glob '!*.min.css' --glob '!*.map' --glob '!package-lock.json'";
 }
 
 export default async function handler(req, res) {
@@ -39,41 +62,61 @@ export default async function handler(req, res) {
     const reasons = new Map();
 
     const addScore = (path, pts, reason) => {
+      if (!path || isJunkContextPath(path)) return;
       scores.set(path, (scores.get(path) ?? 0) + pts);
       const r = reasons.get(path) ?? [];
       r.push(reason);
       reasons.set(path, r);
     };
 
-    // Run all keyword searches in parallel inside the sandbox
+    const prunePaths = findPrunePaths();
+    const rgGlobs = rgGlobArgs();
+
     await Promise.all(keywords.map(async kw => {
-      // Filename search
+      const safeKw = kw.replace(/[^a-zA-Z0-9_.-]/g, '');
+      if (!safeKw) return;
+
+      // Filename search — prune junk dirs, skip huge files
       const fnRes = await sandbox.runCommand({ cmd: 'bash', args: ['-c',
-        `find "${REPO_DIR}" -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -iname "*${kw}*" 2>/dev/null | head -10`
+        `find "${REPO_DIR}" \\( ${prunePaths} \\) -prune -o -type f -iname "*${safeKw}*" -size -${MAX_SEARCH_FILE_BYTES}c -print 2>/dev/null | head -10`
       ]});
       const fnOut = await fnRes.stdout();
       for (const abs of fnOut.trim().split('\n').filter(Boolean)) {
-        addScore(abs.replace(REPO_DIR + '/', ''), 3, `filename contains "${kw}"`);
+        addScore(toRel(abs), 3, `filename contains "${safeKw}"`);
       }
 
-      // Content search (use rg if available, fall back to grep)
+      // Content search
       const rgRes = await sandbox.runCommand({ cmd: 'bash', args: ['-c',
-        `(rg --files-with-matches -i --glob "!node_modules" --glob "!.git" -- "${kw}" "${REPO_DIR}" 2>/dev/null || grep -rl --include="*.*" --exclude-dir=node_modules --exclude-dir=.git -i "${kw}" "${REPO_DIR}" 2>/dev/null) | head -20`
+        `(rg --files-with-matches -i ${rgGlobs} -- "${safeKw}" "${REPO_DIR}" 2>/dev/null || true) | head -20`
       ]});
       const rgOut = await rgRes.stdout();
       for (const abs of rgOut.trim().split('\n').filter(Boolean)) {
-        addScore(abs.replace(REPO_DIR + '/', ''), 1, `content matches "${kw}"`);
+        addScore(toRel(abs), 1, `content matches "${safeKw}"`);
       }
     }));
 
-    const matches = [...scores.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, maxFiles)
-      .map(([path, score]) => ({
+    // Drop any leftover junk + oversized files
+    const candidates = [...scores.entries()]
+      .filter(([path]) => !isJunkContextPath(path))
+      .sort((a, b) => b[1] - a[1]);
+
+    const matches = [];
+    for (const [path, score] of candidates) {
+      if (matches.length >= maxFiles) break;
+      try {
+        const st = await sandbox.runCommand({
+          cmd: 'bash',
+          args: ['-c', `stat -c %s "${REPO_DIR}/${path}" 2>/dev/null || echo 0`],
+        });
+        const size = parseInt(await st.stdout(), 10) || 0;
+        if (size <= 0 || size > MAX_SEARCH_FILE_BYTES) continue;
+      } catch { continue; }
+      matches.push({
         path, score,
         reason: (reasons.get(path) ?? []).join(', '),
         snippets: [],
-      }));
+      });
+    }
 
     return res.json({ matches });
   } catch (err) {
