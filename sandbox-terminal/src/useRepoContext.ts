@@ -39,7 +39,8 @@ export interface RepoContextActions {
   removeFromContext: (relPath: string) => void;
   clearContext:    () => void;
   setPendingChanges: (changes: PendingChange[]) => void;
-  applyChanges:    () => Promise<{ path: string; ok: boolean; error?: string }[]>;
+  /** Write pending (or explicitly provided) changes to disk/sandbox. */
+  applyChanges:    (files?: PendingChange[]) => Promise<{ path: string; ok: boolean; error?: string }[]>;
   clearChanges:    () => void;
 }
 
@@ -129,11 +130,14 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
 
   const clearContext = useCallback(() => setContextFiles(new Map()), []);
 
-  const applyChanges = useCallback(async () => {
-    if (!pendingChanges.length) return [];
+  const applyChanges = useCallback(async (files?: PendingChange[]) => {
+    // Prefer an explicit list — callers that just received model output must
+    // not wait on React state (pendingChanges) or they race and write nothing.
+    const toWrite = files ?? pendingChanges;
+    if (!toWrite.length) return [];
     const body = sandboxId
-      ? { files: pendingChanges.map(c => ({ path: c.path, content: c.content })) }
-      : { root, files: pendingChanges.map(c => ({ path: c.path, content: c.content })) };
+      ? { files: toWrite.map(c => ({ path: c.path, content: c.content })) }
+      : { root, files: toWrite.map(c => ({ path: c.path, content: c.content })) };
 
     const res = await fetch(`${API_URL}/write-files`, {
       method: 'POST',

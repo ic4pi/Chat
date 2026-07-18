@@ -15,7 +15,8 @@
  *       ```typescript
  *       // full new file content
  *       ```
- *   This is parsed by extractFileChanges() and surfaced as PendingChange[].
+ *   This is parsed by extractFileChanges() and auto-applied (default on).
+ *   If the model only plans in prose, we send one corrective nudge turn.
  *
  * The model can also produce normal code blocks (no File: header) which
  * are rendered as runnable snippets with "▶ Run in Sandbox".
@@ -24,6 +25,13 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { PendingChange } from './useRepoContext.js';
 import type { FileNode } from './types.js';
+import {
+  extractFileChanges,
+  looksLikeWorkRequest,
+  NUDGE_PROMPT,
+} from './agentParse.js';
+
+export { extractFileChanges, looksLikeWorkRequest } from './agentParse.js';
 
 // Imperative handle exposed to parent (used by auto-verify loop)
 export interface ChatHandle {
@@ -51,17 +59,21 @@ function buildSystemPrompt(
   const parts: string[] = [];
 
   parts.push(
-    'You are an expert coding agent. You have access to a local code repository.',
-    'When asked to fix or build something:',
-    '  1. Reason about the problem briefly.',
-    '  2. Output the complete new content of every file you want to change or create.',
-    '  3. Precede each file block with exactly this marker on its own line:',
-    '       File: <path relative to repo root>',
-    '     followed immediately by a fenced code block with the FULL file content.',
-    '  4. Do NOT output partial files or diffs — always the complete file.',
-    '  5. After the file blocks, summarize what you changed and why.',
+    'You are an expert coding agent that WRITES FILES. You are not a chatbot.',
+    'The host app parses your reply and writes File: blocks to disk automatically.',
     '',
-    'If the task does not require file changes (e.g. a question), just answer directly.',
+    'HARD RULES when the user asks to fix, build, add, change, implement, or create anything:',
+    '  1. Do the work in THIS reply. Never say "I will", "I\'ll implement", "next I\'ll", or describe a plan without files.',
+    '  2. Output every changed/created file as a COMPLETE file (not a diff, not a snippet).',
+    '  3. Each file MUST use this exact format (marker line, then fence):',
+    '       File: <path relative to repo root>',
+    '       ```typescript',
+    '       // full file content',
+    '       ```',
+    '  4. Keep prose under 3 short sentences total. File blocks come first whenever possible.',
+    '  5. If you lack a needed file, still create or modify the files you can — do not stall.',
+    '',
+    'Only answer in plain prose (no File: blocks) for pure questions that need no code changes.',
   );
 
   if (repoRoot) {
@@ -98,19 +110,6 @@ function flattenTree(nodes: FileNode[], prefix = ''): string[] {
 // Parse LLM output for "File: path\n```lang\ncontent```" blocks
 // ---------------------------------------------------------------------------
 
-export function extractFileChanges(text: string): PendingChange[] {
-  const changes: PendingChange[] = [];
-  // Match:   File: <path>\n```<lang?>\n<content>```
-  const re = /^File:\s*(.+)\n```[a-zA-Z0-9_+\-.]*\n([\s\S]*?)```/gm;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    const filePath = m[1]!.trim();
-    const content  = m[2]!;
-    if (filePath) changes.push({ path: filePath, content });
-  }
-  return changes;
-}
-
 // ---------------------------------------------------------------------------
 // Parse text into segments (File-change blocks, plain code blocks, plain text)
 // ---------------------------------------------------------------------------
@@ -123,14 +122,17 @@ type Segment =
 function parseSegments(text: string): Segment[] {
   const out: Segment[] = [];
   // Capture both "File: path\n```lang\ncontent```"  and bare "```lang\ncontent```"
-  const re = /(?:^|\n)(File:\s*(.+)\n)?```([a-zA-Z0-9_+\-.]*)\s*\n([\s\S]*?)```/g;
+  const re =
+    /(?:^|\r?\n)([*_]*File:\s*(.+?)[*_]*\s*\r?\n(?:\r?\n)?)?```([a-zA-Z0-9_+\-.]*)\s*\r?\n([\s\S]*?)```/g;
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
-    const before = text.slice(last, m.index + (m[0].startsWith('\n') ? 1 : 0));
+    const leadNl = m[0].startsWith('\n') || m[0].startsWith('\r') ? (m[0].startsWith('\r\n') ? 2 : 1) : 0;
+    const before = text.slice(last, m.index + leadNl);
     if (before.trim()) out.push({ type: 'text', content: before });
     if (m[2]) {
-      out.push({ type: 'file-change', path: m[2].trim(), lang: m[3] ?? '', content: m[4] ?? '' });
+      const path = m[2].trim().replace(/^[`'"]+|[`'"]+$/g, '');
+      out.push({ type: 'file-change', path, lang: m[3] ?? '', content: m[4] ?? '' });
     } else {
       out.push({ type: 'code', lang: m[3] ?? '', content: m[4] ?? '' });
     }
@@ -294,7 +296,8 @@ interface Props {
   appliedPaths:      Set<string>;
   autoSelectedFiles: string[];
   onRunCode:         (code: string, lang: string)    => void;
-  onFileChanges:     (changes: PendingChange[])      => void;
+  /** May apply writes; awaited so auto-apply finishes before send returns. */
+  onFileChanges:     (changes: PendingChange[])      => void | Promise<void>;
   onBeforeSend?:     (query: string) => Promise<void>;
 }
 
@@ -304,12 +307,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 }, ref) {
   const [messages,  setMessages]  = useState<Message[]>([
     { id: uid(), role: 'assistant', content:
-      "Open a repo in the left panel and click files to add them to context.\n\n" +
-      "Then describe what you want:\n" +
+      "Open a repo (local path or GitHub URL) and describe what to fix or build.\n\n" +
       '• "Fix the auth token expiry bug in src/auth.ts"\n' +
       '• "Add rate limiting to the /api/run endpoint"\n' +
       '• "Write a Python script that fetches GitHub stars"\n\n' +
-      "I'll output complete files. You review and apply with one click." }
+      "I write complete files to the repo automatically. Turn off Auto-apply if you want review-only." }
   ]);
   const [input,    setInput]    = useState('');
   const [loading,  setLoading]  = useState(false);
@@ -346,6 +348,37 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
     setLoading(true);
     setError(null);
 
+    const callAgent = async (
+      history: Array<{ role: string; content: string }>,
+      systemPrompt: string,
+      sid: string | null,
+      prov: string,
+      mod: string,
+    ): Promise<string> => {
+      const chatEndpoint = `${API_URL}/agent-chat`;
+      const chatHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (sid) chatHeaders['X-Sandbox-Session'] = sid;
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+      try {
+        const res = await fetch(chatEndpoint, {
+          method: 'POST',
+          headers: chatHeaders,
+          body: JSON.stringify({ messages: history, systemPrompt, provider: prov, model: mod }),
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({ error: `HTTP ${res.status}` })) as { error?: string };
+          throw new Error(d.error ?? `HTTP ${res.status}`);
+        }
+        const data = await res.json() as { reply?: string };
+        return data.reply ?? '(empty response)';
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
     try {
       // 2) Optional auto-context, hard-capped so a hung /search can't eat the send.
       const before = latestRef.current.onBeforeSend;
@@ -369,39 +402,42 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       // Always hit agent-chat — it accepts systemPrompt. /api/chat ignores it
       // and is the main-chat persona endpoint, not the agent.
-      const chatEndpoint = `${API_URL}/agent-chat`;
-      const chatHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (sid) chatHeaders['X-Sandbox-Session'] = sid;
-
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
-      let res: Response;
-      try {
-        res = await fetch(chatEndpoint, {
-          method: 'POST',
-          headers: chatHeaders,
-          body: JSON.stringify({ messages: history, systemPrompt, provider: prov, model: mod }),
-          signal: controller.signal,
-        });
-      } finally {
-        clearTimeout(timer);
-      }
-
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({ error: `HTTP ${res.status}` })) as { error?: string };
-        throw new Error(d.error ?? `HTTP ${res.status}`);
-      }
-
-      const data   = await res.json() as { reply?: string };
-      const reply  = data.reply ?? '(empty response)';
-      const segs   = parseSegments(reply);
-      const fc     = extractFileChanges(reply);
+      let reply = await callAgent(history, systemPrompt, sid, prov, mod);
+      let segs  = parseSegments(reply);
+      let fc    = extractFileChanges(reply);
 
       setMessages(m => [...m, {
         id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
       }]);
 
-      if (fc.length > 0) onFc(fc);
+      // If the model only talked about doing work, force one corrective turn.
+      // Skip for verify-loop injects (those already demand File: format).
+      const shouldNudge = fc.length === 0
+        && kind === 'user'
+        && looksLikeWorkRequest(text)
+        && (!!root || ctx.size > 0);
+
+      if (shouldNudge) {
+        const nudgeMsg: Message = {
+          id: uid(), role: 'user', content: NUDGE_PROMPT, kind: 'retry-inject',
+        };
+        setMessages(m => [...m, nudgeMsg]);
+
+        const nudgedHistory = [
+          ...history,
+          { role: 'assistant', content: reply },
+          { role: 'user', content: NUDGE_PROMPT },
+        ];
+        reply = await callAgent(nudgedHistory, systemPrompt, sid, prov, mod);
+        segs  = parseSegments(reply);
+        fc    = extractFileChanges(reply);
+
+        setMessages(m => [...m, {
+          id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
+        }]);
+      }
+
+      if (fc.length > 0) await onFc(fc);
 
       if (ar) {
         for (const seg of segs) {

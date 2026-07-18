@@ -126,10 +126,13 @@ export function App() {
   const termRef = useRef<TerminalHandle>(null);
   const chatRef = useRef<ChatHandle>(null);
   const repo    = useRepoContext();
+  /** Prevents Auto-apply from starting a second verify while one is running. */
+  const verifyingRef = useRef(false);
 
   const [provider,     setProvider]     = useState('venice');
   const [model,        setModel]        = useState('venice-uncensored');
   const [autoRun,      setAutoRun]      = useState(true);
+  const [autoApplyOn,  setAutoApplyOn]  = useState(true);
   const [autoVerifyOn, setAutoVerifyOn] = useState(true);
   const [applying,     setApplying]     = useState(false);
   const [appliedPaths, setAppliedPaths] = useState<Set<string>>(new Set());
@@ -145,10 +148,10 @@ export function App() {
     setModel(p === 'venice' ? 'venice-uncensored' : 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free');
   };
 
-  const handleApply = useCallback(async () => {
+  const handleApply = useCallback(async (files?: PendingChange[]) => {
     setApplying(true);
     try {
-      const results = await repo.applyChanges();
+      const results = await repo.applyChanges(files);
       setApplyResults(results);
       setAppliedPaths(new Set(results.filter(r => r.ok).map(r => r.path)));
       return results;
@@ -157,13 +160,21 @@ export function App() {
 
   const autoVerify = useAutoVerify(repo.root, termRef, chatRef, repo.applyChanges);
 
-  const handleApplyAndVerify = useCallback(async () => {
-    const results = await handleApply();
+  const runVerify = useCallback(async () => {
+    if (verifyingRef.current) return;
+    verifyingRef.current = true;
+    setMobileTab('terminal');
+    try { await autoVerify.verify(); }
+    finally { verifyingRef.current = false; }
+  }, [autoVerify]);
+
+  const handleApplyAndVerify = useCallback(async (files?: PendingChange[]) => {
+    const results = await handleApply(files);
     if (results.some(r => r.ok) && autoVerifyOn && repo.root) {
-      setMobileTab('terminal');
-      await autoVerify.verify();
+      await runVerify();
     }
-  }, [handleApply, autoVerifyOn, repo.root, autoVerify]);
+    return results;
+  }, [handleApply, autoVerifyOn, repo.root, runVerify]);
 
   const handleAutoContext = useCallback(async (query: string) => {
     if (!repo.root) { setAutoCtxFiles([]); return; }
@@ -175,8 +186,8 @@ export function App() {
     } catch { /* ignore */ }
   }, [repo]);
 
-  const handleFileChanges = useCallback((changes: PendingChange[]) => {
-    const withOriginals = changes.map(async c => {
+  const handleFileChanges = useCallback(async (changes: PendingChange[]) => {
+    const enriched = await Promise.all(changes.map(async c => {
       if (!repo.root) return c;
       try {
         const headers: Record<string, string> = {};
@@ -189,12 +200,23 @@ export function App() {
         const data = await res.json() as { content?: string };
         return { ...c, original: data.content };
       } catch { return c; }
-    });
-    Promise.all(withOriginals).then(repo.setPendingChanges);
+    }));
+    repo.setPendingChanges(enriched);
     setAppliedPaths(new Set());
     setApplyResults([]);
-    autoVerify.reset();
-  }, [repo, autoVerify]);
+    // Don't reset verify state mid-loop — the retry injector owns that lifecycle.
+    if (!verifyingRef.current) autoVerify.reset();
+
+    // Default path: write immediately. During an active verify loop we only
+    // write (the loop applies explicitly too) — never nest another verify().
+    if (autoApplyOn && repo.root && enriched.length > 0) {
+      if (verifyingRef.current) {
+        await handleApply(enriched);
+      } else {
+        await handleApplyAndVerify(enriched);
+      }
+    }
+  }, [repo, autoVerify, autoApplyOn, handleApply, handleApplyAndVerify]);
 
   const handleRunCode = useCallback((code: string, lang: string) => {
     setMobileTab('terminal');
@@ -226,6 +248,11 @@ export function App() {
           title={repo.sandboxId}>● {repo.sandboxId.slice(0, 20)}</span>
       )}
       <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4,
+          fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+          Auto-apply <input type="checkbox" checked={autoApplyOn} onChange={e => setAutoApplyOn(e.target.checked)}
+            style={{ accentColor: '#d4ff3f' }} />
+        </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 4,
           fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
           Auto-run <input type="checkbox" checked={autoRun} onChange={e => setAutoRun(e.target.checked)}
@@ -280,7 +307,7 @@ export function App() {
       </div>
       <DiffPanel
         changes={repo.pendingChanges} applying={applying}
-        appliedPaths={appliedPaths} onApply={handleApplyAndVerify}
+        appliedPaths={appliedPaths} onApply={() => { void handleApplyAndVerify(); }}
         onDismiss={p => repo.setPendingChanges(repo.pendingChanges.filter(c => c.path !== p))}
         onDismissAll={repo.clearChanges}
       />
@@ -289,8 +316,8 @@ export function App() {
         attempt={autoVerify.attempt}
         testCommand={autoVerify.testCommand}
         askCommand={autoVerify.askCommand}
-        onRun={autoVerify.verify}
-        onSetCommand={cmd => { autoVerify.setCustomCommand(cmd); autoVerify.verify(); }}
+        onRun={() => { void runVerify(); }}
+        onSetCommand={cmd => { autoVerify.setCustomCommand(cmd); void runVerify(); }}
         onDismiss={autoVerify.reset}
       />
     </div>
