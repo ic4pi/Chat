@@ -73,48 +73,36 @@ function buildSystemPrompt(
   tree: FileNode[],
   contextFiles: Map<string, string>,
   searchHits: SearchHit[],
-  opts?: { light?: boolean },
+  opts?: { light?: boolean; repoUrl?: string | null },
 ): string {
   const parts: string[] = [];
   const light = !!opts?.light;
+  const repoUrl = opts?.repoUrl || '';
 
   parts.push(
-    'You help non-coders understand and improve their project.',
-    'The whole project is available in a cloud sandbox. Each message only includes files needed for that ask.',
+    'You are a coding agent for the user\'s opened GitHub repo in a cloud sandbox.',
+    'Be direct. No tutorials. No fake example tasks. No <placeholders>, TODOs, or "your-token-here".',
+    'Every code file you output must be COMPLETE and ready to save.',
     '',
-    'DEFAULT MODE = SUGGEST (most asks):',
-    '  • Answer in plain English with concrete suggestions grounded in the provided files.',
-    '  • Cite real file paths from Open files / search hits / the file tree.',
-    '  • Do NOT invent files or tasks that are not in the provided context.',
-    '  • Do NOT output File: blocks. Do NOT claim you already fixed or saved anything.',
-    '  • Do NOT push to GitHub. Do NOT say the phone was updated.',
-    '',
-    'APPLY MODE — only when the user clearly says to apply / implement / write / do it now:',
-    '  • Output each changed file as a COMPLETE file using this format:',
-    '       File: <path relative to repo root>',
-    '       ```typescript',
-    '       // full file content',
-    '       ```',
-    '  • Keep prose to 1–2 short sentences.',
-    '  • NEVER say the bug is "fixed" or "saved to GitHub" by itself. Tell the user to tap Download',
-    '    (keeps the complete file) or Push to GitHub (after they paste a token).',
-    '',
-    'Never invent placeholder tasks. Only discuss the user\'s actual request and real repo files.',
+    'If the user wants changes written: output File: blocks with full file contents.',
+    'If they only want advice: plain English, cite real paths from context.',
+    'Never claim something is fixed unless you outputted complete File: blocks.',
+    'Never ask where to save — the host app saves/downloads/pushes.',
+    'Never invent paths. Use only paths from the tree / open files / search hits.',
   );
 
+  if (repoUrl) {
+    parts.push('', `GitHub repo URL: ${repoUrl}`);
+  }
   if (repoRoot) {
-    parts.push('', `Project is open at: ${repoRoot}`);
+    parts.push(`Sandbox path: ${repoRoot}`);
     if (light) {
-      parts.push(
-        'This turn is a light/chat question — no source files were loaded on purpose.',
-        'Answer briefly. If they want a fix or audit, ask them to say what\'s broken (you will then open the right files).',
-      );
+      parts.push('Light turn — answer briefly; no file dump this message.');
       return parts.join('\n');
     }
   }
 
   if (tree.length > 0) {
-    // Tiny map only — never dump the whole repo into the prompt.
     const flatPaths = flattenTree(tree).filter(p =>
       !p.includes('node_modules') &&
       !p.includes('/dist/') &&
@@ -122,9 +110,9 @@ function buildSystemPrompt(
       !p.includes('public/agent/assets'),
     );
     const shown = flatPaths.slice(0, Math.min(MAX_TREE_PATHS, 80));
-    parts.push('', 'File tree (paths only, truncated):', shown.join('\n'));
+    parts.push('', 'File tree:', shown.join('\n'));
     if (flatPaths.length > shown.length) {
-      parts.push(`… (${flatPaths.length - shown.length} more paths omitted)`);
+      parts.push(`… (${flatPaths.length - shown.length} more omitted)`);
     }
   }
 
@@ -134,9 +122,6 @@ function buildSystemPrompt(
   const packed = packContextFiles(contextFiles);
   if (packed.size > 0) {
     parts.push('', '── Open files (full) ──');
-    if (packed.size < contextFiles.size) {
-      parts.push(`(Using ${packed.size}/${contextFiles.size} files to stay under the model limit.)`);
-    }
     for (const [relPath, content] of packed) {
       const ext  = relPath.split('.').pop() ?? '';
       parts.push('', `File: ${relPath}`, '```' + ext, content, '```');
@@ -340,7 +325,7 @@ function AssistantBody({ msg, appliedPaths, onRunCode }: {
 // Types
 // ---------------------------------------------------------------------------
 
-interface Message {
+export interface Message {
   id:          string;
   role:        'user' | 'assistant';
   content:     string;
@@ -359,6 +344,7 @@ const uid = () => String(++_id);
 
 interface Props {
   repoRoot:          string;
+  repoUrl:           string | null;
   sandboxId:         string | null;
   provider:          string;
   model:             string;
@@ -368,6 +354,9 @@ interface Props {
   appliedPaths:      Set<string>;
   autoSelectedFiles: string[];
   searchHits:        SearchHit[];
+  /** Restored chat from localStorage (no welcome fluff). */
+  initialMessages?:  Message[];
+  onMessagesChange?: (messages: Message[]) => void;
   onRunCode:         (code: string, lang: string)    => void;
   /** May apply writes; awaited so auto-apply finishes before send returns. */
   onFileChanges:     (changes: PendingChange[])      => void | Promise<void>;
@@ -379,17 +368,11 @@ interface Props {
 }
 
 export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
-  repoRoot, sandboxId, provider, model, tree, contextFiles, autoRun, appliedPaths,
-  autoSelectedFiles, searchHits, onRunCode, onFileChanges, onBeforeSend,
+  repoRoot, repoUrl, sandboxId, provider, model, tree, contextFiles, autoRun, appliedPaths,
+  autoSelectedFiles, searchHits, initialMessages, onMessagesChange,
+  onRunCode, onFileChanges, onBeforeSend,
 }, ref) {
-  const [messages,  setMessages]  = useState<Message[]>([
-    { id: uid(), role: 'assistant', kind: 'welcome', content:
-      "Paste your GitHub link on the left → Open.\n\n" +
-      "Then ask in plain English, for example:\n" +
-      "• “Suggest additions and fixes” → I’ll only recommend (nothing is saved)\n" +
-      "• “Apply that fix” → I’ll write changes into the cloud sandbox (not GitHub, not your phone)\n\n" +
-      "You don’t need to pick files. Auto-save is off unless you turn it on." }
-  ]);
+  const [messages,  setMessages]  = useState<Message[]>(() => initialMessages ?? []);
   const [input,    setInput]    = useState('');
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState<string | null>(null);
@@ -399,17 +382,21 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   // Keep latest props in a ref so a send started before auto-context finishes
   // still sees the updated file context afterward.
   const latestRef = useRef({
-    repoRoot, sandboxId, provider, model, tree, contextFiles, searchHits,
+    repoRoot, repoUrl, sandboxId, provider, model, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages,
   });
   latestRef.current = {
-    repoRoot, sandboxId, provider, model, tree, contextFiles, searchHits,
+    repoRoot, repoUrl, sandboxId, provider, model, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages,
   };
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
+
+  useEffect(() => {
+    onMessagesChange?.(messages);
+  }, [messages, onMessagesChange]);
 
   // ── shared send implementation ─────────────────────────────────────────────
   const sendText = useCallback(async (
@@ -471,7 +458,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       }
 
       const {
-        repoRoot: root, sandboxId: sid, provider: prov, model: mod,
+        repoRoot: root, repoUrl: rUrl, sandboxId: sid, provider: prov, model: mod,
         tree: tr, contextFiles: pinned, searchHits: propHits,
         autoRun: ar, onRunCode: run, onFileChanges: onFc,
         messages: prev,
@@ -508,17 +495,14 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         lightTurn ? [] : tr,
         ctx,
         lightTurn ? [] : hits,
-        { light: lightTurn && !!root && ctx.size === 0 },
+        { light: lightTurn && !!root && ctx.size === 0, repoUrl: rUrl },
       );
       if (suggestTurn) {
         systemPrompt +=
-          '\n\nTHIS TURN IS SUGGEST-ONLY. The user wants recommendations, not code writes. ' +
-          'Plain prose only. No File: blocks. No claiming anything was fixed or saved. ' +
-          'Ground every point in real paths from the provided context.';
+          '\n\nSUGGEST-ONLY this turn: plain advice, real paths, no File: blocks, no placeholders.';
       } else if (applyTurn) {
         systemPrompt +=
-          '\n\nTHIS TURN IS APPLY MODE. The user asked you to write changes. ' +
-          'Output File: blocks for the sandbox. Do not push to GitHub.';
+          '\n\nAPPLY this turn: output complete File: blocks only (full files, no placeholders).';
       }
 
       // Always hit agent-chat — it accepts systemPrompt. /api/chat ignores it
@@ -635,6 +619,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       {/* messages */}
       <div data-testid="chat-messages" style={{ flex: 1, overflowY: 'auto', padding: '12px 14px',
         display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
+        {messages.length === 0 && !loading && (
+          <div style={{ fontSize: 12, color: '#444', lineHeight: 1.5 }}>
+            {repoRoot ? 'Ask for a change.' : 'Open a GitHub repo, then ask.'}
+          </div>
+        )}
         {messages.map(msg => (
           <div key={msg.id} data-testid={msg.role === 'user' ? 'user-msg' : 'assistant-msg'} style={{
             alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
@@ -683,7 +672,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           onKeyDown={e => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); }
           }}
-          placeholder="Suggest fixes, or say “apply this” to save (Enter to send)"
+          placeholder="What should change?"
           disabled={loading}
           style={{ flex: 1, background: '#111', color: '#e8e8e8',
             border: '1px solid #2a2a2a', borderRadius: 4,

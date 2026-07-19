@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { FileTree }         from './FileTree.js';
 import { ChatPane }         from './ChatPane.js';
-import type { ChatHandle }  from './ChatPane.js';
+import type { ChatHandle, Message }  from './ChatPane.js';
 import { DiffPanel }        from './DiffPanel.js';
 import { SandboxTerminal }  from './Terminal.js';
 import type { TerminalHandle } from './Terminal.js';
@@ -19,6 +19,8 @@ import {
 } from './contextBudget.js';
 import { looksLikeSuggestRequest, needsCodeContext } from './agentParse.js';
 import type { FileNode } from './types.js';
+import { loadSession, saveSession, clearSession, buildPushShellCommands } from './sessionStore.js';
+import { copyText } from './downloadFile.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
@@ -190,13 +192,13 @@ export function App() {
   const repo    = useRepoContext();
   /** Prevents Auto-apply from starting a second verify while one is running. */
   const verifyingRef = useRef(false);
+  const restored = useRef(loadSession());
 
-  const [provider,     setProvider]     = useState('venice');
-  const [model,        setModel]        = useState('venice-uncensored');
-  // Defaults OFF — this is a suggest-first app for non-coders.
-  // Writing / running / test loops only happen when the user opts in.
+  const [provider,     setProvider]     = useState(restored.current?.provider ?? 'venice');
+  const [model,        setModel]        = useState(restored.current?.model ?? 'venice-uncensored');
+  // Auto-save ON — generated files go to the sandbox immediately so you can download/push.
   const [autoRun,      setAutoRun]      = useState(false);
-  const [autoApplyOn,  setAutoApplyOn]  = useState(false);
+  const [autoApplyOn,  setAutoApplyOn]  = useState(restored.current?.autoApplyOn ?? true);
   const [autoVerifyOn, setAutoVerifyOn] = useState(false);
   const [applying,     setApplying]     = useState(false);
   const [appliedPaths, setAppliedPaths] = useState<Set<string>>(new Set());
@@ -207,7 +209,53 @@ export function App() {
   const [pushing,      setPushing]      = useState(false);
   const [pushError,    setPushError]    = useState<string | null>(null);
   const [pushOk,       setPushOk]       = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<Message[]>(() => {
+    const m = restored.current?.messages;
+    if (!m?.length) return [];
+    return m.map(x => ({
+      id: x.id,
+      role: x.role,
+      content: x.content,
+      kind: x.kind as Message['kind'],
+    }));
+  });
+  const [sessionKey,   setSessionKey]   = useState(0);
   const isMobile = useIsMobile();
+
+  // Re-open last GitHub repo + restore pending file drafts once on mount.
+  useEffect(() => {
+    const s = restored.current;
+    if (!s) return;
+    let cancelled = false;
+    (async () => {
+      if (s.repoUrl) {
+        await repo.openRepo(s.repoUrl);
+      }
+      if (!cancelled && s.pendingChanges?.length) {
+        repo.setPendingChanges(s.pendingChanges);
+      }
+    })().catch(() => { /* open may fail if sandbox expired */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist session whenever important state changes.
+  useEffect(() => {
+    saveSession({
+      repoUrl: repo.repoUrl,
+      sandboxId: repo.sandboxId,
+      provider,
+      model,
+      autoApplyOn,
+      messages: chatMessages.map(m => ({
+        id: m.id, role: m.role, content: m.content, kind: m.kind,
+      })),
+      pendingChanges: repo.pendingChanges,
+    });
+  }, [
+    repo.repoUrl, repo.sandboxId, repo.pendingChanges,
+    provider, model, autoApplyOn, chatMessages,
+  ]);
 
   const models = provider === 'venice' ? VENICE_MODELS : OR_MODELS;
 
@@ -406,6 +454,23 @@ export function App() {
         whiteSpace: 'nowrap', padding: '2px 0' }}>← Chat</a>
       <span style={{ color: '#d4ff3f', fontSize: 10, letterSpacing: '0.08em',
         textTransform: 'uppercase', whiteSpace: 'nowrap' }}>// agent</span>
+      {(repo.repoUrl || chatMessages.length > 0) && (
+        <button type="button"
+          onClick={() => {
+            if (!confirm('Clear saved session (chat + drafts) on this device?')) return;
+            clearSession();
+            setChatMessages([]);
+            repo.clearChanges();
+            setPushError(null);
+            setPushOk(null);
+            setSessionKey(k => k + 1);
+          }}
+          style={{ background: 'transparent', color: '#555', border: '1px solid #222',
+            borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
+            fontFamily: 'inherit', fontSize: 10 }}>
+          Clear session
+        </button>
+      )}
       <select value={provider} onChange={e => handleProviderChange(e.target.value)}
         style={{ background: '#111', color: '#e8e8e8', border: '1px solid #333',
           borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11, cursor: 'pointer' }}>
@@ -469,8 +534,10 @@ export function App() {
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden',
         display: 'flex', flexDirection: 'column' }}>
         <ChatPane
+          key={sessionKey}
           ref={chatRef}
           repoRoot={repo.root}
+          repoUrl={repo.repoUrl}
           sandboxId={repo.sandboxId}
           provider={provider}
           model={model}
@@ -479,6 +546,8 @@ export function App() {
           autoRun={autoRun}
           appliedPaths={appliedPaths}
           autoSelectedFiles={autoCtxFiles}
+          initialMessages={sessionKey === 0 ? chatMessages : []}
+          onMessagesChange={setChatMessages}
           onRunCode={handleRunCode}
           onFileChanges={handleFileChanges}
           onBeforeSend={handleAutoContext}
@@ -496,6 +565,14 @@ export function App() {
         onDismiss={p => repo.setPendingChanges(repo.pendingChanges.filter(c => c.path !== p))}
         onDismissAll={() => { repo.clearChanges(); setPushError(null); setPushOk(null); }}
         onPush={(token, message) => { void handlePush(token, message); }}
+        onCopyGitCommands={async () => {
+          const cmd = buildPushShellCommands({ commitMessage: 'Apply agent changes' });
+          const ok = await copyText(cmd);
+          if (ok) {
+            setPushOk('Git commands copied — paste into Terminal. For push with auth, use Push to GitHub.');
+            setMobileTab('terminal');
+          }
+        }}
       />
       <VerifyBanner
         verifyState={autoVerify.verifyState}

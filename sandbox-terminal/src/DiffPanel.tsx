@@ -133,11 +133,12 @@ interface Props {
   onDismiss:      (path: string) => void;
   onDismissAll:   () => void;
   onPush:         (token: string, message: string) => void;
+  onCopyGitCommands?: () => void;
 }
 
 export function DiffPanel({
   changes, applying, appliedPaths, canPush, pushing, pushError, pushOk,
-  onApply, onDismiss, onDismissAll, onPush,
+  onApply, onDismiss, onDismissAll, onPush, onCopyGitCommands,
 }: Props) {
   const [showPush, setShowPush] = useState(false);
   const [token, setToken] = useState(() => sessionStorage.getItem('gh_push_token') || '');
@@ -174,6 +175,14 @@ export function DiffPanel({
                 cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
               Download all
             </button>
+            {onCopyGitCommands && (
+              <button type="button" onClick={onCopyGitCommands}
+                style={{ background: 'transparent', color: '#89ddff',
+                  border: '1px solid #234', borderRadius: 4, padding: '4px 10px',
+                  cursor: 'pointer', fontFamily: 'inherit', fontSize: 11 }}>
+                Copy git cmds
+              </button>
+            )}
             <button type="button" onClick={onApply} disabled={applying || pending.length === 0}
               data-testid="apply-btn"
               style={{ background: pending.length > 0 ? '#222' : '#1a1a1a',
@@ -181,7 +190,7 @@ export function DiffPanel({
                 border: '1px solid #333', borderRadius: 4, padding: '4px 10px',
                 cursor: pending.length > 0 ? 'pointer' : 'default',
                 fontFamily: 'inherit', fontSize: 11 }}>
-              {applying ? 'Saving…' : 'Save to sandbox'}
+              {applying ? 'Saving…' : 'Save'}
             </button>
             {canPush && (
               <button type="button" onClick={() => setShowPush(s => !s)}
@@ -195,8 +204,7 @@ export function DiffPanel({
           </div>
         </div>
         <div style={{ marginTop: 6, fontSize: 10, color: '#888', lineHeight: 1.45 }}>
-          <strong style={{ color: '#ccc' }}>Download</strong> saves the complete file to your phone/computer.
-          {' '}<strong style={{ color: '#ccc' }}>Push</strong> commits and sends it to your GitHub repo (needs a token).
+          Auto-save writes to the sandbox. Download keeps the full file on your device. Push sends to GitHub.
         </div>
 
         {showPush && canPush && (

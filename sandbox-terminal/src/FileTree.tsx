@@ -157,9 +157,7 @@ export function FileTree({
         {tree.length === 0 && !loading && !repoRoot && (
           <div style={{ padding: '12px 10px', fontSize: 11, color: '#444',
             lineHeight: 1.6 }}>
-            Paste a GitHub link above and hit Open.
-            <br /><br />
-            Then just chat — you don’t need to pick files.
+            Paste a GitHub URL above.
           </div>
         )}
         {tree.map(node => (
