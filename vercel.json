@@ -15,6 +15,7 @@
     "api/files.js":                { "maxDuration": 30  },
     "api/file.js":                 { "maxDuration": 30  },
     "api/write-files.js":          { "maxDuration": 30  },
+    "api/git-push.js":             { "maxDuration": 120 },
     "api/search.js":               { "maxDuration": 30  },
     "api/detect-test-command.js":  { "maxDuration": 30  },
     "api/agent-chat.js":           { "maxDuration": 120 }

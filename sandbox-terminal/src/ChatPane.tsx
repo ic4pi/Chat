@@ -40,6 +40,7 @@ import {
   trimMessageHistory,
   type SearchHit,
 } from './contextBudget.js';
+import { copyText, downloadTextFile } from './downloadFile.js';
 
 export {
   extractFileChanges,
@@ -94,7 +95,9 @@ function buildSystemPrompt(
     '       ```typescript',
     '       // full file content',
     '       ```',
-    '  • Keep prose to 1–2 short sentences. Changes go to the sandbox only until the user applies them.',
+    '  • Keep prose to 1–2 short sentences.',
+    '  • NEVER say the bug is "fixed" or "saved to GitHub" by itself. Tell the user to tap Download',
+    '    (keeps the complete file) or Push to GitHub (after they paste a token).',
     '',
     'Never invent placeholder tasks. Only discuss the user\'s actual request and real repo files.',
   );
@@ -222,23 +225,44 @@ function FileChangeBlock({ path, lang, content, isApplied }: {
   isApplied: boolean; onRun: () => void;
 }) {
   const [showCode, setShowCode] = useState(false);
+  const [copied, setCopied] = useState(false);
   const lines = content.split('\n').length;
   return (
     <div style={{ margin: '8px 0', border: '1px solid #2a4a1a',
       borderRadius: 6, background: '#0c1a0c', overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '5px 10px', borderBottom: '1px solid #1e3a1e' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        padding: '5px 10px', borderBottom: '1px solid #1e3a1e', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
           <span style={{ fontSize: 10, color: '#8fbf6f', fontWeight: 700 }}>FILE</span>
-          <span style={{ fontSize: 11, color: '#e8e8e8' }}>{path}</span>
+          <span style={{ fontSize: 11, color: '#e8e8e8', overflow: 'hidden',
+            textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{path}</span>
           <span style={{ fontSize: 10, color: '#555' }}>{lines} lines</span>
-          {isApplied && <span style={{ fontSize: 10, color: '#d4ff3f' }}>✓ applied</span>}
+          {isApplied && <span style={{ fontSize: 10, color: '#d4ff3f' }}>✓ saved</span>}
         </div>
-        <button onClick={() => setShowCode(s => !s)}
-          style={{ background: 'transparent', color: '#555', border: 'none',
-            fontSize: 11, cursor: 'pointer', padding: 0 }}>
-          {showCode ? 'hide' : 'show'}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button type="button"
+            onClick={() => downloadTextFile(path, content)}
+            style={{ background: '#d4ff3f', color: '#0a0a0a', border: 'none',
+              borderRadius: 4, padding: '3px 10px', cursor: 'pointer',
+              fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
+            Download
+          </button>
+          <button type="button"
+            onClick={async () => {
+              const ok = await copyText(content);
+              if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
+            }}
+            style={{ background: 'transparent', color: copied ? '#d4ff3f' : '#8fbf6f',
+              border: '1px solid #2a4a1a', borderRadius: 4, padding: '3px 8px',
+              cursor: 'pointer', fontFamily: 'inherit', fontSize: 11 }}>
+            {copied ? 'Copied' : 'Copy'}
+          </button>
+          <button onClick={() => setShowCode(s => !s)}
+            style={{ background: 'transparent', color: '#555', border: 'none',
+              fontSize: 11, cursor: 'pointer', padding: 0 }}>
+            {showCode ? 'hide' : 'show'}
+          </button>
+        </div>
       </div>
       {showCode && (
         <pre style={{ margin: 0, padding: '8px 12px', overflowX: 'auto',

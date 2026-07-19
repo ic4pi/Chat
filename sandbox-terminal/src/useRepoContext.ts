@@ -26,6 +26,8 @@ export interface RepoContextState {
   root:           string;
   sandboxId:      string | null;   // Vercel Sandbox session name (null when local)
   isRemote:       boolean;         // true = GitHub URL opened via /api/init-repo
+  /** Original GitHub/git URL the user opened (for push). */
+  repoUrl:        string | null;
   tree:           FileNode[];
   totalFiles:     number;
   contextFiles:   Map<string, string>;   // relPath → content
@@ -49,6 +51,7 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
   const [root,           setRoot]           = useState('');
   const [sandboxId,      setSandboxId]      = useState<string | null>(null);
   const [isRemote,       setIsRemote]       = useState(false);
+  const [repoUrl,        setRepoUrl]        = useState<string | null>(null);
   const [tree,           setTree]           = useState<FileNode[]>([]);
   const [totalFiles,     setTotalFiles]     = useState(0);
   const [contextFiles,   setContextFiles]   = useState<Map<string, string>>(new Map());
@@ -88,6 +91,7 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
         if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
         setSandboxId(data.sandboxId ?? null);
         setIsRemote(true);
+        setRepoUrl(rootPathOrUrl);
         setRoot(data.repoDir ?? rootPathOrUrl);
         setTree(data.tree ?? []);
         setTotalFiles(data.totalFiles ?? 0);
@@ -95,6 +99,7 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
         // Local mode: direct /files endpoint on sandbox-runner
         setSandboxId(null);
         setIsRemote(false);
+        setRepoUrl(null);
         const res = await fetch(`${API_URL}/files?root=${encodeURIComponent(rootPathOrUrl)}`);
         const data = await res.json() as { tree?: FileNode[]; totalFiles?: number; error?: string };
         if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
@@ -168,7 +173,7 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
   const clearChanges = useCallback(() => setPendingChanges([]), []);
 
   return {
-    root, sandboxId, isRemote, tree, totalFiles,
+    root, sandboxId, isRemote, repoUrl, tree, totalFiles,
     contextFiles, pendingChanges, loading, error,
     openRepo, addToContext, removeFromContext, clearContext,
     setPendingChanges, applyChanges, clearChanges,

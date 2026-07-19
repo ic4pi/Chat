@@ -204,6 +204,9 @@ export function App() {
   const [autoCtxFiles, setAutoCtxFiles] = useState<string[]>([]);
   const [searchHits,   setSearchHits]   = useState<SearchHit[]>([]);
   const [mobileTab,    setMobileTab]    = useState<MobileTab>('chat');
+  const [pushing,      setPushing]      = useState(false);
+  const [pushError,    setPushError]    = useState<string | null>(null);
+  const [pushOk,       setPushOk]       = useState<string | null>(null);
   const isMobile = useIsMobile();
 
   const models = provider === 'venice' ? VENICE_MODELS : OR_MODELS;
@@ -347,6 +350,53 @@ export function App() {
     termRef.current?.runCode(code, lang);
   }, []);
 
+  const handlePush = useCallback(async (token: string, message: string) => {
+    if (!repo.sandboxId) {
+      setPushError('Open a GitHub repo first.');
+      return;
+    }
+    setPushing(true);
+    setPushError(null);
+    setPushOk(null);
+    try {
+      // Ensure pending drafts are written to the sandbox before commit.
+      const paths = repo.pendingChanges.map(c => c.path);
+      if (repo.pendingChanges.length > 0) {
+        await handleApply(repo.pendingChanges);
+      }
+      const res = await fetch(`${API_URL}/git-push`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Sandbox-Session': repo.sandboxId,
+        },
+        body: JSON.stringify({
+          token,
+          message,
+          // Empty => git add -A (covers already-saved sandbox edits too)
+          files: paths.length ? paths : undefined,
+        }),
+      });
+      const data = await res.json() as {
+        ok?: boolean; pushed?: boolean; branch?: string;
+        message?: string; error?: string; detail?: string;
+      };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      if (data.pushed) {
+        setPushOk(
+          `Pushed to GitHub${data.branch ? ` (${data.branch})` : ''}. ` +
+          'Open the repo on github.com to see the new commit.',
+        );
+      } else {
+        setPushOk(data.message ?? 'Nothing new to push.');
+      }
+    } catch (err: unknown) {
+      setPushError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPushing(false);
+    }
+  }, [repo.sandboxId, repo.pendingChanges, handleApply]);
+
   // ── Shared topbar ────────────────────────────────────────────────────────
   const topbar = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
@@ -437,9 +487,15 @@ export function App() {
       </div>
       <DiffPanel
         changes={repo.pendingChanges} applying={applying}
-        appliedPaths={appliedPaths} onApply={() => { void handleApplyAndVerify(); }}
+        appliedPaths={appliedPaths}
+        canPush={!!repo.sandboxId && !!repo.repoUrl}
+        pushing={pushing}
+        pushError={pushError}
+        pushOk={pushOk}
+        onApply={() => { void handleApplyAndVerify(); }}
         onDismiss={p => repo.setPendingChanges(repo.pendingChanges.filter(c => c.path !== p))}
-        onDismissAll={repo.clearChanges}
+        onDismissAll={() => { repo.clearChanges(); setPushError(null); setPushOk(null); }}
+        onPush={(token, message) => { void handlePush(token, message); }}
       />
       <VerifyBanner
         verifyState={autoVerify.verifyState}
