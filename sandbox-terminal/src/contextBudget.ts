@@ -112,22 +112,40 @@ export function formatSearchHits(hits: SearchHit[], budget = MAX_SNIPPET_CHARS):
   return parts.join('\n');
 }
 
-export function trimMessageHistory(
-  messages: Array<{ role: string; content: string }>,
+function contentLen(content: unknown): number {
+  if (typeof content === 'string') return content.length;
+  if (Array.isArray(content)) {
+    return content.reduce((n: number, part: unknown) => {
+      if (typeof part === 'string') return n + part.length;
+      if (part && typeof part === 'object' && 'text' in part) {
+        return n + String((part as { text?: string }).text || '').length;
+      }
+      // Images are large; count a fixed budget so we don't blow the prompt.
+      if (part && typeof part === 'object' && (part as { type?: string }).type === 'image_url') {
+        return n + 8_000;
+      }
+      return n;
+    }, 0);
+  }
+  return String(content ?? '').length;
+}
+
+export function trimMessageHistory<T extends { role: string; content: unknown }>(
+  messages: T[],
   budgetChars = 60_000,
-): Array<{ role: string; content: string }> {
+): T[] {
   if (messages.length === 0) return messages;
-  let total = messages.reduce((n, m) => n + m.content.length, 0);
+  let total = messages.reduce((n, m) => n + contentLen(m.content), 0);
   if (total <= budgetChars) return messages;
 
   const out = [...messages];
   while (out.length > 1 && total > budgetChars) {
     const removed = out.shift()!;
-    total -= removed.content.length;
+    total -= contentLen(removed.content);
   }
-  // Truncate oversized individual messages (e.g. huge prior assistant dumps)
+  // Truncate oversized individual string messages (e.g. huge prior assistant dumps)
   return out.map(m =>
-    m.content.length > 20_000
+    typeof m.content === 'string' && m.content.length > 20_000
       ? { ...m, content: truncateForContext(m.content, 20_000) }
       : m,
   );

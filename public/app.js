@@ -37,16 +37,87 @@ const VENICE_FALLBACK_MODELS = [
   { id: 'mistral-31-24b', name: 'Mistral 3.1 24B (Venice Medium)', description: 'Mistral 3.1 with vision.' },
 ];
 
-// Static OpenRouter model list. Venice models come from /api/models live.
-// Only uncensored fine-tunes are listed — the previous Gemma entry was pulled
-// because google/gemma is safety-tuned and refuses on-topic prompts, which is
-// exactly the behavior this app exists to avoid. Add more slugs here if you
-// want; anything from https://openrouter.ai/models works.
-const OPENROUTER_MODELS = [
-  { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free', name: 'Dolphin-Mistral 24B Venice Edition (free)' },
-  { id: 'nousresearch/hermes-3-llama-3.1-405b:free', name: 'Hermes 3 405B (free)' },
-  { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B Instruct (free)' },
-];
+// Static fallback model lists when /api/models is unreachable.
+const PROVIDER_FALLBACKS = {
+  venice: VENICE_FALLBACK_MODELS,
+  openrouter: [
+    { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free', name: 'Dolphin-Mistral 24B Venice Edition (free)' },
+    { id: 'nousresearch/hermes-3-llama-3.1-405b:free', name: 'Hermes 3 405B (free)' },
+    { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B Instruct (free)' },
+    { id: 'qwen/qwen3-coder:free', name: 'Qwen3 Coder (free)' },
+  ],
+  cerebras: [
+    { id: 'llama-3.3-70b', name: 'Llama 3.3 70B' },
+    { id: 'qwen-3-32b', name: 'Qwen 3 32B' },
+    { id: 'llama3.1-8b', name: 'Llama 3.1 8B' },
+  ],
+  groq: [
+    { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B Versatile' },
+    { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B Instant' },
+    { id: 'qwen/qwen3-32b', name: 'Qwen3 32B' },
+    { id: 'moonshotai/kimi-k2-instruct', name: 'Kimi K2 Instruct' },
+  ],
+  nvidia: [
+    { id: 'meta/llama-3.3-70b-instruct', name: 'Llama 3.3 70B Instruct' },
+    { id: 'meta/llama-3.1-405b-instruct', name: 'Llama 3.1 405B Instruct' },
+    { id: 'qwen/qwen3-235b-a22b', name: 'Qwen3 235B' },
+    { id: 'nvidia/llama-3.1-nemotron-70b-instruct', name: 'Nemotron 70B Instruct' },
+  ],
+};
+
+const DEFAULT_MODELS = {
+  venice: 'venice-uncensored',
+  openrouter: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
+  cerebras: 'llama-3.3-70b',
+  groq: 'llama-3.3-70b-versatile',
+  nvidia: 'meta/llama-3.3-70b-instruct',
+};
+
+const PROVIDER_IDS = ['venice', 'openrouter', 'cerebras', 'groq', 'nvidia'];
+const PROVIDER_LABELS = {
+  venice: 'Venice', openrouter: 'OpenRouter', cerebras: 'Cerebras', groq: 'Groq', nvidia: 'NVIDIA',
+};
+
+const KEYS_STORAGE = 'uncensored_provider_keys_v1';
+const ROLES_STORAGE = 'uncensored_role_models_v1';
+
+const DEFAULT_ROLE_MODELS = {
+  write:  { provider: 'venice', model: 'venice-uncensored' },
+  review: { provider: 'venice', model: 'olafangensan-glm-4.7-flash-heretic' },
+  plan:   { provider: 'venice', model: 'qwen3-235b-a22b-instruct-2507' },
+};
+
+function loadProviderKeys() {
+  try {
+    const raw = localStorage.getItem(KEYS_STORAGE);
+    return raw ? (JSON.parse(raw) || {}) : {};
+  } catch { return {}; }
+}
+function saveProviderKeys(keys) {
+  try { localStorage.setItem(KEYS_STORAGE, JSON.stringify(keys)); } catch { /* ignore */ }
+}
+function loadRoleModels() {
+  try {
+    const raw = localStorage.getItem(ROLES_STORAGE);
+    if (!raw) return { ...DEFAULT_ROLE_MODELS };
+    const parsed = JSON.parse(raw) || {};
+    return {
+      write:  { ...DEFAULT_ROLE_MODELS.write,  ...parsed.write },
+      review: { ...DEFAULT_ROLE_MODELS.review, ...parsed.review },
+      plan:   { ...DEFAULT_ROLE_MODELS.plan,   ...parsed.plan },
+    };
+  } catch {
+    return { ...DEFAULT_ROLE_MODELS };
+  }
+}
+function saveRoleModels(roles) {
+  try { localStorage.setItem(ROLES_STORAGE, JSON.stringify(roles)); } catch { /* ignore */ }
+}
+
+let providerKeys = loadProviderKeys();
+let roleModels = loadRoleModels();
+let pendingUploads = []; // { kind, name, content }
+const modelsCache = {};
 
 // ---------------------------------------------------------------------------
 // State
@@ -75,6 +146,7 @@ function freshState() {
     chats: [],
     activeChatId: null,
     activePersonaId: 'nexus',
+    activeRole: 'write',
     // Venice by default — OpenRouter free-tier models routinely hang / 429,
     // which on iOS shows up as a multi-minute "thinking…" then "Load failed".
     activeProvider: 'venice',
@@ -212,7 +284,15 @@ const els = {
   chatTitle: $('chatTitle'),
   providerSelect: $('providerSelect'),
   modelSelect: $('modelSelect'),
+  roleSelect: $('roleSelect'),
   personaSelect: $('personaSelect'),
+  keysBtn: $('keysBtn'),
+  keysModal: $('keysModal'),
+  keysForm: $('keysForm'),
+  closeKeysModal: $('closeKeysModal'),
+  attachBtn: $('attachBtn'),
+  attachInput: $('attachInput'),
+  attachPreview: $('attachPreview'),
   artifactList: $('artifactList'),
   artifactModal: $('artifactModal'),
   artifactModalTitle: $('artifactModalTitle'),
@@ -623,65 +703,45 @@ function renderPersonaSelect() {
 // Models
 // ---------------------------------------------------------------------------
 
-let veniceModelsCache = null;
+async function loadProviderModels(provider) {
+  const key = (providerKeys[provider] || '').trim();
+  const cacheKey = `${provider}:${key ? 'byok' : 'env'}`;
+  if (modelsCache[cacheKey] && !key) return modelsCache[cacheKey];
 
-async function loadVeniceModels() {
-  if (veniceModelsCache) return veniceModelsCache;
+  const headers = {};
+  if (key) headers['X-Provider-Key'] = key;
+
   try {
-    const res = await fetch('/api/models?provider=venice');
+    const res = await fetch(`/api/models?provider=${encodeURIComponent(provider)}`, { headers });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to load Venice models');
-    veniceModelsCache = data.models || [];
-    return veniceModelsCache;
+    if (!res.ok) throw new Error(data.error || 'Failed to load models');
+    const models = data.models || [];
+    if (!key) modelsCache[cacheKey] = models;
+    return models.length ? models : (PROVIDER_FALLBACKS[provider] || []);
   } catch (err) {
-    console.warn('Could not fetch Venice model list:', err);
-    return null;
+    console.warn(`Could not fetch ${provider} model list:`, err);
+    return PROVIDER_FALLBACKS[provider] || [];
   }
 }
 
 async function renderModelSelect() {
   els.modelSelect.innerHTML = '';
   const provider = state.activeProvider;
+  const models = await loadProviderModels(provider);
 
-  if (provider === 'venice') {
-    const models = await loadVeniceModels();
-    if (!models) {
-      const grp = document.createElement('optgroup');
-      grp.label = 'Venice — all uncensored (fallback list, /api/models unreachable)';
-      for (const fallback of VENICE_FALLBACK_MODELS) {
-        const opt = document.createElement('option');
-        opt.value = fallback.id;
-        opt.textContent = fallback.name;
-        opt.title = fallback.description || '';
-        grp.appendChild(opt);
-      }
-      els.modelSelect.appendChild(grp);
-    } else {
-      // All Venice text models are uncensored — Venice does not apply
-      // server-side moderation. Show them in one flat group; sort so
-      // dedicated uncensored fine-tunes (Heretic, Dolphin, abliterated…)
-      // appear first for discoverability, then everything else by name.
-      const sorted = models.slice().sort((a, b) => {
-        if (a.uncensored !== b.uncensored) return a.uncensored ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
-      const grp = document.createElement('optgroup');
-      grp.label = 'Venice — all uncensored';
-      for (const m of sorted) grp.appendChild(makeModelOption(m));
-      els.modelSelect.appendChild(grp);
-    }
-  } else {
-    for (const m of OPENROUTER_MODELS) {
-      const opt = document.createElement('option');
-      opt.value = m.id;
-      opt.textContent = m.name;
-      els.modelSelect.appendChild(opt);
-    }
-  }
+  const sorted = models.slice().sort((a, b) => {
+    if (!!a.uncensored !== !!b.uncensored) return a.uncensored ? -1 : 1;
+    return (a.name || a.id).localeCompare(b.name || b.id);
+  });
+
+  const grp = document.createElement('optgroup');
+  grp.label = `${PROVIDER_LABELS[provider] || provider}${provider === 'venice' ? ' — all uncensored' : ''}`;
+  for (const m of sorted) grp.appendChild(makeModelOption(m));
+  els.modelSelect.appendChild(grp);
 
   const available = Array.from(els.modelSelect.options).map((o) => o.value);
   if (!available.includes(state.activeModel)) {
-    state.activeModel = available[0] || state.activeModel;
+    state.activeModel = available[0] || DEFAULT_MODELS[provider] || state.activeModel;
     saveState();
   }
   els.modelSelect.value = state.activeModel;
@@ -691,7 +751,7 @@ function makeModelOption(m) {
   const opt = document.createElement('option');
   opt.value = m.id;
   const traitStr = m.traits && m.traits.length ? `  [${m.traits.join(', ')}]` : '';
-  opt.textContent = `${m.name}${traitStr}`;
+  opt.textContent = `${m.name || m.id}${traitStr}`;
   if (m.description) opt.title = m.description;
   return opt;
 }
@@ -733,11 +793,20 @@ function timeoutFor(provider, model) {
 async function callChat(provider, model, messages, personaId) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutFor(provider, model));
+  const apiKey = (providerKeys[provider] || '').trim();
+  const headers = { 'Content-Type': 'application/json' };
+  if (apiKey) headers['X-Provider-Key'] = apiKey;
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, model, provider, personaId }),
+      headers,
+      body: JSON.stringify({
+        messages,
+        model,
+        provider,
+        personaId,
+        apiKey: apiKey || undefined,
+      }),
       signal: controller.signal,
     });
     let data = null;
@@ -765,10 +834,25 @@ function shouldFallback(attempt) {
 
 async function sendMessage(text) {
   const chat = ensureActiveChat();
+  const uploads = pendingUploads.slice();
+  pendingUploads = [];
+  renderAttachPreview();
 
-  chat.messages.push({ role: 'user', content: text, ts: Date.now() });
+  let displayText = text;
+  const imageParts = [];
+  for (const u of uploads) {
+    if (u.kind === 'text') {
+      displayText += `\n\n[Uploaded file: ${u.name}]\n\`\`\`\n${u.content.slice(0, 80_000)}\n\`\`\``;
+    } else {
+      displayText += `\n\n[Uploaded image: ${u.name}]`;
+      imageParts.push({ type: 'image_url', image_url: { url: u.content } });
+    }
+  }
+  if (!displayText.trim() && imageParts.length === 0) return;
+
+  chat.messages.push({ role: 'user', content: displayText, ts: Date.now() });
   if (chat.name === 'New chat' || chat.name === 'Untitled') {
-    chat.name = text.slice(0, 40).trim() || 'Untitled';
+    chat.name = (text || uploads[0]?.name || 'Untitled').slice(0, 40).trim() || 'Untitled';
   }
   chat.provider = state.activeProvider;
   chat.model = state.activeModel;
@@ -784,7 +868,23 @@ async function sendMessage(text) {
 
   const apiMessages = chat.messages
     .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .map((m) => ({ role: m.role, content: m.content }));
+    .map((m, idx, arr) => {
+      // Multimodal only on the latest user turn when images were attached.
+      if (
+        imageParts.length
+        && idx === arr.length - 1
+        && m.role === 'user'
+      ) {
+        return {
+          role: 'user',
+          content: [
+            { type: 'text', text: m.content },
+            ...imageParts,
+          ],
+        };
+      }
+      return { role: m.role, content: m.content };
+    });
 
   try {
     let attempt = await callChat(state.activeProvider, state.activeModel, apiMessages, state.activePersonaId);
@@ -895,10 +995,13 @@ async function renderAll() {
   renderChatList();
   renderChatTitle();
   renderPersonaSelect();
+  if (!state.activeRole) state.activeRole = 'write';
+  if (els.roleSelect) els.roleSelect.value = state.activeRole;
   els.providerSelect.value = state.activeProvider;
   await Promise.all([renderModelSelect(), fetchPersonas()]);
   renderMessages();
   renderArtifacts();
+  renderAttachPreview();
 }
 
 // ---------------------------------------------------------------------------
@@ -908,7 +1011,7 @@ async function renderAll() {
 els.inputForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const text = els.input.value.trim();
-  if (!text) return;
+  if (!text && pendingUploads.length === 0) return;
   els.input.value = '';
   els.input.style.height = 'auto';
   sendMessage(text);
@@ -977,6 +1080,15 @@ els.chatTitle.addEventListener('keydown', (e) => {
 
 els.providerSelect.addEventListener('change', async () => {
   state.activeProvider = els.providerSelect.value;
+  state.activeModel = DEFAULT_MODELS[state.activeProvider] || state.activeModel;
+  // Persist assignment for the active role
+  if (state.activeRole && roleModels[state.activeRole]) {
+    roleModels[state.activeRole] = {
+      provider: state.activeProvider,
+      model: state.activeModel,
+    };
+    saveRoleModels(roleModels);
+  }
   saveState();
   await renderModelSelect();
   saveState();
@@ -985,6 +1097,13 @@ els.modelSelect.addEventListener('change', () => {
   state.activeModel = els.modelSelect.value;
   const chat = activeChat();
   if (chat) { chat.model = state.activeModel; chat.provider = state.activeProvider; }
+  if (state.activeRole && roleModels[state.activeRole]) {
+    roleModels[state.activeRole] = {
+      provider: state.activeProvider,
+      model: state.activeModel,
+    };
+    saveRoleModels(roleModels);
+  }
   saveState();
 });
 els.personaSelect.addEventListener('change', () => {
@@ -992,6 +1111,114 @@ els.personaSelect.addEventListener('change', () => {
   const chat = activeChat();
   if (chat) chat.personaId = state.activePersonaId;
   saveState();
+});
+
+if (els.roleSelect) {
+  els.roleSelect.addEventListener('change', async () => {
+    state.activeRole = els.roleSelect.value;
+    const assigned = roleModels[state.activeRole];
+    if (assigned) {
+      state.activeProvider = assigned.provider;
+      state.activeModel = assigned.model;
+      els.providerSelect.value = state.activeProvider;
+    }
+    saveState();
+    await renderModelSelect();
+  });
+}
+
+function renderAttachPreview() {
+  if (!els.attachPreview) return;
+  if (!pendingUploads.length) {
+    els.attachPreview.classList.add('hidden');
+    els.attachPreview.innerHTML = '';
+    return;
+  }
+  els.attachPreview.classList.remove('hidden');
+  els.attachPreview.innerHTML = '';
+  pendingUploads.forEach((u, i) => {
+    const chip = document.createElement('span');
+    chip.className = 'attach-chip';
+    chip.textContent = `${u.kind === 'image' ? '🖼' : '📄'} ${u.name} `;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = '×';
+    btn.addEventListener('click', () => {
+      pendingUploads.splice(i, 1);
+      renderAttachPreview();
+    });
+    chip.appendChild(btn);
+    els.attachPreview.appendChild(chip);
+  });
+}
+
+async function readUploadFile(file) {
+  const isImage = /^image\//.test(file.type) || /\.(png|jpe?g|gif|webp)$/i.test(file.name);
+  const content = await new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result || ''));
+    r.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+    if (isImage) r.readAsDataURL(file);
+    else r.readAsText(file);
+  });
+  return { kind: isImage ? 'image' : 'text', name: file.name, content };
+}
+
+if (els.attachBtn && els.attachInput) {
+  els.attachBtn.addEventListener('click', () => els.attachInput.click());
+  els.attachInput.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files || []);
+    for (const file of files) {
+      if (file.size > 8_000_000) {
+        alert(`${file.name} is too large (max 8MB)`);
+        continue;
+      }
+      try {
+        pendingUploads.push(await readUploadFile(file));
+      } catch (err) {
+        console.warn(err);
+      }
+    }
+    renderAttachPreview();
+    e.target.value = '';
+  });
+}
+
+function openKeysModal() {
+  if (!els.keysModal || !els.keysForm) return;
+  els.keysForm.innerHTML = '';
+  for (const id of PROVIDER_IDS) {
+    const label = document.createElement('label');
+    label.textContent = PROVIDER_LABELS[id];
+    const input = document.createElement('input');
+    input.type = 'password';
+    input.autocomplete = 'off';
+    input.placeholder = `${PROVIDER_LABELS[id]} API key`;
+    input.value = providerKeys[id] || '';
+    input.dataset.provider = id;
+    input.addEventListener('change', () => {
+      providerKeys[id] = input.value;
+      saveProviderKeys(providerKeys);
+      // Bust cache so next model fetch uses the new key
+      Object.keys(modelsCache).forEach((k) => {
+        if (k.startsWith(`${id}:`)) delete modelsCache[k];
+      });
+    });
+    label.appendChild(input);
+    els.keysForm.appendChild(label);
+  }
+  els.keysModal.classList.remove('hidden');
+}
+function closeKeysModal() {
+  els.keysModal?.classList.add('hidden');
+  // Refresh models in case a key was added
+  renderModelSelect().catch(() => {});
+}
+
+els.keysBtn?.addEventListener('click', openKeysModal);
+els.closeKeysModal?.addEventListener('click', closeKeysModal);
+els.keysModal?.addEventListener('click', (e) => {
+  if (e.target === els.keysModal) closeKeysModal();
 });
 
 els.closeArtifactModal.addEventListener('click', closeArtifactModal);
@@ -1015,6 +1242,7 @@ els.clearAllBtn.addEventListener('click', clearAll);
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (!els.artifactModal.classList.contains('hidden')) closeArtifactModal();
+    if (els.keysModal && !els.keysModal.classList.contains('hidden')) closeKeysModal();
   }
 });
 

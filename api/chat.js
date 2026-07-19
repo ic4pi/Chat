@@ -1,45 +1,26 @@
-// Vercel serverless function — proxies to OpenRouter or Venice so API keys
-// never hit the browser. The provider is chosen by the client and the correct
-// key is used per provider. No silent fallback to a different model: if the
-// selected model fails, the caller sees the real upstream error.
+// Vercel serverless function — proxies to Venice / OpenRouter / Cerebras /
+// Groq / NVIDIA. Server env keys are used by default; the client may also
+// send apiKey (BYOK) which takes precedence for that request.
 //
-// System-prompt handling: the browser sends a personaId (a short string like
-// 'nexus' or a uid). The server looks up that persona's system prompt in KV
-// and prepends the (also KV-stored) master prompt to it, so the actual
-// contents of neither prompt are ever sent to or accessible by the client.
-// If a client passes an explicit systemPrompt string, it is IGNORED — the
-// server is the source of truth for what the model sees.
+// System-prompt handling: the browser sends a personaId. The server looks up
+// that persona's system prompt in KV and prepends the master prompt. An
+// explicit client systemPrompt string is IGNORED.
 
 import { loadConfig } from '../lib/config.js';
+import { resolveProvider } from '../lib/providers.js';
 
-const PROVIDERS = {
-  openrouter: {
-    url: 'https://openrouter.ai/api/v1/chat/completions',
-    apiKeyEnv: 'OPENROUTER_API_KEY',
-    label: 'OpenRouter',
-    extraHeaders: () => ({
-      'HTTP-Referer': process.env.SITE_URL || 'https://example.vercel.app',
-      'X-Title': 'Uncensored Chat',
-    }),
-  },
-  venice: {
-    url: 'https://api.venice.ai/api/v1/chat/completions',
-    apiKeyEnv: 'VENICE_API_KEY',
-    label: 'Venice',
-    extraHeaders: () => ({}),
-  },
-};
-
-// Absolute last-resort system prompt, used only if KV is unreachable AND the
-// client somehow supplies no personaId. Everything else takes precedence.
 const FALLBACK_SYSTEM_PROMPT = 'You are a helpful, direct assistant.';
 
 export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Provider-Key');
+  if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { messages, model, provider: providerId, personaId } = req.body || {};
+  const { messages, model, provider: providerId, personaId, apiKey: clientKey } = req.body || {};
 
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'messages array is required' });
@@ -48,17 +29,16 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'model is required' });
   }
 
-  const provider = PROVIDERS[providerId] || PROVIDERS.openrouter;
-  const apiKey = process.env[provider.apiKeyEnv];
-  if (!apiKey) {
+  let resolved;
+  try {
+    resolved = resolveProvider(providerId || 'openrouter', clientKey || req.headers['x-provider-key']);
+  } catch (err) {
     return res.status(500).json({
-      error: `Server is missing ${provider.apiKeyEnv}. Add it in Vercel → Settings → Environment Variables.`,
-      provider: provider.label,
+      error: err.message || 'Provider not configured',
+      provider: providerId,
     });
   }
 
-  // Resolve the effective system prompt server-side, from KV. Client never
-  // participates in this decision — only sends the ID it wants.
   let effectiveSystemPrompt = FALLBACK_SYSTEM_PROMPT;
   try {
     const config = await loadConfig();
@@ -77,20 +57,17 @@ export default async function handler(req, res) {
     ...messages.map((m) => ({ role: m.role, content: m.content })),
   ];
 
-  // Keep under the Vercel maxDuration (120s) so we can return a clean JSON
-  // error instead of the platform killing the isolate mid-response — which
-  // surfaces on iOS Safari as the cryptic "Load failed".
   const UPSTREAM_TIMEOUT_MS = 110_000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
   try {
-    const upstream = await fetch(provider.url, {
+    const upstream = await fetch(resolved.url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-        ...provider.extraHeaders(),
+        Authorization: `Bearer ${resolved.apiKey}`,
+        ...resolved.extraHeaders(),
       },
       body: JSON.stringify({
         model,
@@ -113,10 +90,10 @@ export default async function handler(req, res) {
         data?.error?.message ||
         data?.error ||
         data?.message ||
-        `Upstream ${provider.label} error (HTTP ${upstream.status})`;
+        `Upstream ${resolved.label} error (HTTP ${upstream.status})`;
       return res.status(upstream.status).json({
         error: typeof message === 'string' ? message : JSON.stringify(message),
-        provider: provider.label,
+        provider: resolved.label,
         model,
         raw: data,
       });
@@ -125,16 +102,17 @@ export default async function handler(req, res) {
     const reply = data.choices?.[0]?.message?.content ?? '';
     return res.status(200).json({
       reply,
-      provider: provider.label,
+      provider: resolved.label,
       model,
+      keySource: resolved.keySource,
     });
   } catch (err) {
     const aborted = err?.name === 'AbortError' || controller.signal.aborted;
     return res.status(aborted ? 504 : 500).json({
       error: aborted
-        ? `${provider.label} took too long (>${UPSTREAM_TIMEOUT_MS / 1000}s). Try a faster model or a shorter prompt.`
+        ? `${resolved.label} took too long (>${UPSTREAM_TIMEOUT_MS / 1000}s). Try a faster model or a shorter prompt.`
         : (err.message || 'Unknown server error'),
-      provider: provider.label,
+      provider: resolved.label,
       model,
     });
   } finally {

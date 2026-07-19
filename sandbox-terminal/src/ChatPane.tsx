@@ -342,12 +342,20 @@ const uid = () => String(++_id);
 // ChatPane
 // ---------------------------------------------------------------------------
 
+export interface PendingUpload {
+  kind: 'text' | 'image';
+  name: string;
+  content: string;
+}
+
 interface Props {
   repoRoot:          string;
   repoUrl:           string | null;
   sandboxId:         string | null;
   provider:          string;
   model:             string;
+  /** BYOK key for the active provider (optional). */
+  apiKey?:           string;
   tree:              FileNode[];
   contextFiles:      Map<string, string>;
   autoRun:           boolean;
@@ -360,6 +368,8 @@ interface Props {
   onRunCode:         (code: string, lang: string)    => void;
   /** May apply writes; awaited so auto-apply finishes before send returns. */
   onFileChanges:     (changes: PendingChange[])      => void | Promise<void>;
+  /** Inject uploaded text files into context. */
+  onUploadText?:     (name: string, content: string) => void;
   /** Returns fresh search hits + ephemeral full files for THIS send (avoids stale React state). */
   onBeforeSend?:     (query: string) => Promise<{
     hits: SearchHit[];
@@ -368,25 +378,27 @@ interface Props {
 }
 
 export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
-  repoRoot, repoUrl, sandboxId, provider, model, tree, contextFiles, autoRun, appliedPaths,
+  repoRoot, repoUrl, sandboxId, provider, model, apiKey, tree, contextFiles, autoRun, appliedPaths,
   autoSelectedFiles, searchHits, initialMessages, onMessagesChange,
-  onRunCode, onFileChanges, onBeforeSend,
+  onRunCode, onFileChanges, onUploadText, onBeforeSend,
 }, ref) {
   const [messages,  setMessages]  = useState<Message[]>(() => initialMessages ?? []);
   const [input,    setInput]    = useState('');
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState<string | null>(null);
+  const [uploads,  setUploads]  = useState<PendingUpload[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
 
   // Keep latest props in a ref so a send started before auto-context finishes
   // still sees the updated file context afterward.
   const latestRef = useRef({
-    repoRoot, repoUrl, sandboxId, provider, model, tree, contextFiles, searchHits,
+    repoRoot, repoUrl, sandboxId, provider, model, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages,
   });
   latestRef.current = {
-    repoRoot, repoUrl, sandboxId, provider, model, tree, contextFiles, searchHits,
+    repoRoot, repoUrl, sandboxId, provider, model, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages,
   };
 
@@ -413,15 +425,17 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
     setError(null);
 
     const callAgent = async (
-      history: Array<{ role: string; content: string }>,
+      history: Array<{ role: string; content: string | unknown }>,
       systemPrompt: string,
       sid: string | null,
       prov: string,
       mod: string,
+      key?: string,
     ): Promise<string> => {
       const chatEndpoint = `${API_URL}/agent-chat`;
       const chatHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
       if (sid) chatHeaders['X-Sandbox-Session'] = sid;
+      if (key) chatHeaders['X-Provider-Key'] = key;
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
@@ -429,7 +443,13 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         const res = await fetch(chatEndpoint, {
           method: 'POST',
           headers: chatHeaders,
-          body: JSON.stringify({ messages: history, systemPrompt, provider: prov, model: mod }),
+          body: JSON.stringify({
+            messages: history,
+            systemPrompt,
+            provider: prov,
+            model: mod,
+            apiKey: key || undefined,
+          }),
           signal: controller.signal,
         });
         if (!res.ok) {
@@ -459,7 +479,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       const {
         repoRoot: root, repoUrl: rUrl, sandboxId: sid, provider: prov, model: mod,
-        tree: tr, contextFiles: pinned, searchHits: propHits,
+        apiKey: key, tree: tr, contextFiles: pinned, searchHits: propHits,
         autoRun: ar, onRunCode: run, onFileChanges: onFc,
         messages: prev,
       } = latestRef.current;
@@ -482,8 +502,21 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             && m.kind !== 'welcome'
             && !looksLikeLegacyWelcome(m.content),
           )
-          .map(m => ({ role: m.role, content: m.content })),
+          .map(m => ({ role: m.role, content: m.content as string | unknown })),
       );
+
+      // Attach pending images to the latest user turn (vision-capable models).
+      const pendingImages = (latestRef.current as { _pendingImages?: Array<{ type: 'image_url'; image_url: { url: string } }> })._pendingImages;
+      if (pendingImages?.length && history.length > 0) {
+        const last = history[history.length - 1];
+        if (last.role === 'user' && typeof last.content === 'string') {
+          last.content = [
+            { type: 'text', text: last.content },
+            ...pendingImages,
+          ];
+        }
+        (latestRef.current as { _pendingImages?: unknown })._pendingImages = undefined;
+      }
 
       const suggestTurn = kind === 'user' && looksLikeSuggestRequest(text);
       const applyTurn = kind === 'user' && looksLikeApplyRequest(text);
@@ -507,7 +540,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       // Always hit agent-chat — it accepts systemPrompt. /api/chat ignores it
       // and is the main-chat persona endpoint, not the agent.
-      let reply = await callAgent(history, systemPrompt, sid, prov, mod);
+      let reply = await callAgent(history, systemPrompt, sid, prov, mod, key);
       let segs  = parseSegments(reply);
       let fc    = extractFileChanges(reply);
 
@@ -543,7 +576,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           { role: 'assistant', content: reply },
           { role: 'user', content: NUDGE_PROMPT },
         ];
-        reply = await callAgent(nudgedHistory, systemPrompt, sid, prov, mod);
+        reply = await callAgent(nudgedHistory, systemPrompt, sid, prov, mod, key);
         segs  = parseSegments(reply);
         fc    = extractFileChanges(reply);
 
@@ -580,10 +613,54 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
   const send = useCallback(async () => {
     const text = input.trim();
-    if (!text || sendingRef.current) return;
+    if ((!text && uploads.length === 0) || sendingRef.current) return;
+
+    // Text uploads go into context; images ride along on this turn.
+    const pending = uploads;
+    setUploads([]);
     setInput('');
-    await sendText(text, 'user');
-  }, [input, sendText]);
+
+    let sendBody = text;
+    const imageParts: Array<{ type: 'image_url'; image_url: { url: string } }> = [];
+    for (const u of pending) {
+      if (u.kind === 'text') {
+        onUploadText?.(u.name, u.content);
+        sendBody += `\n\n[Uploaded file: ${u.name}]\n\`\`\`\n${u.content.slice(0, 80_000)}\n\`\`\``;
+      } else {
+        imageParts.push({ type: 'image_url', image_url: { url: u.content } });
+        sendBody += `\n\n[Uploaded image: ${u.name}]`;
+      }
+    }
+    if (!sendBody.trim() && imageParts.length === 0) return;
+
+    // If images are present, stash them so callAgent history can use multimodal.
+    if (imageParts.length > 0) {
+      (latestRef.current as { _pendingImages?: typeof imageParts })._pendingImages = imageParts;
+    }
+    await sendText(sendBody.trim() || '(see attached image)', 'user');
+  }, [input, uploads, sendText, onUploadText]);
+
+  const handleFiles = useCallback(async (fileList: FileList | null) => {
+    if (!fileList?.length) return;
+    const next: PendingUpload[] = [];
+    for (const file of Array.from(fileList)) {
+      if (file.size > 8_000_000) {
+        setError(`${file.name} is too large (max 8MB)`);
+        continue;
+      }
+      const isImage = /^image\//.test(file.type) || /\.(png|jpe?g|gif|webp)$/i.test(file.name);
+      const content = await new Promise<string>((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result || ''));
+        r.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+        if (isImage) r.readAsDataURL(file);
+        else r.readAsText(file);
+      });
+      next.push({ kind: isImage ? 'image' : 'text', name: file.name, content });
+    }
+    if (next.length) setUploads(u => [...u, ...next]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }, []);
 
   return (
     <div data-testid="chat-pane" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
@@ -658,11 +735,36 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         <div ref={bottomRef} />
       </div>
 
+      {uploads.length > 0 && (
+        <div style={{ padding: '6px 12px', borderTop: '1px solid #1e1e1e',
+          display: 'flex', flexWrap: 'wrap', gap: 6, background: '#0c0c0c' }}>
+          {uploads.map((u, i) => (
+            <span key={`${u.name}-${i}`} style={{
+              fontSize: 10, color: '#aaa', background: '#151515', border: '1px solid #2a2a2a',
+              borderRadius: 4, padding: '2px 8px', display: 'inline-flex', gap: 6, alignItems: 'center',
+            }}>
+              {u.kind === 'image' ? '🖼' : '📄'} {u.name}
+              <button type="button" onClick={() => setUploads(list => list.filter((_, j) => j !== i))}
+                style={{ background: 'transparent', border: 'none', color: '#666', cursor: 'pointer', padding: 0 }}>×</button>
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* input */}
       <form data-testid="chat-form" onSubmit={e => { e.preventDefault(); void send(); }}
         style={{ borderTop: '1px solid #1e1e1e', padding: '10px 12px',
           display: 'flex', gap: 8, flexShrink: 0, alignItems: 'flex-end',
           background: '#0a0a0a' }}>
+        <input ref={fileInputRef} type="file" multiple accept="image/*,.txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.css,.html,.yml,.yaml,.toml,.env,.csv"
+          style={{ display: 'none' }}
+          onChange={e => { void handleFiles(e.target.files); }} />
+        <button type="button" title="Upload photo or file"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={loading}
+          style={{ background: '#151515', color: '#aaa', border: '1px solid #2a2a2a',
+            borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
+            fontFamily: 'inherit', fontSize: 12, alignSelf: 'flex-end' }}>📎</button>
         <textarea
           id="chat-input"
           data-testid="chat-input"
@@ -679,11 +781,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             padding: '7px 10px', fontFamily: 'inherit', fontSize: 16,
             outline: 'none', resize: 'vertical', minHeight: 48, maxHeight: 120,
             opacity: loading ? .6 : 1 }} />
-        <button type="submit" data-testid="chat-send" disabled={!input.trim() || loading}
-          style={{ background: input.trim() && !loading ? '#d4ff3f' : '#1a1a1a',
-            color: input.trim() && !loading ? '#0a0a0a' : '#444',
+        <button type="submit" data-testid="chat-send" disabled={(!input.trim() && uploads.length === 0) || loading}
+          style={{ background: (input.trim() || uploads.length) && !loading ? '#d4ff3f' : '#1a1a1a',
+            color: (input.trim() || uploads.length) && !loading ? '#0a0a0a' : '#444',
             border: 'none', borderRadius: 4, padding: '8px 16px',
-            cursor: input.trim() && !loading ? 'pointer' : 'default',
+            cursor: (input.trim() || uploads.length) && !loading ? 'pointer' : 'default',
             fontFamily: 'inherit', fontSize: 12, fontWeight: 700,
             alignSelf: 'flex-end' }}>Send</button>
       </form>

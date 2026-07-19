@@ -402,7 +402,73 @@ select:focus, input[type="text"]:focus, textarea:focus {
   padding-left: max(16px, env(safe-area-inset-left));
   padding-right: max(16px, env(safe-area-inset-right));
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.input-row {
+  display: flex;
   gap: 10px;
+  align-items: flex-end;
+}
+.attach-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.attach-preview.hidden { display: none; }
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted, #888);
+  background: var(--panel, #151515);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+.attach-chip button {
+  background: transparent;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+}
+.ctrl-btn {
+  align-self: flex-end;
+  margin-bottom: 2px;
+  white-space: nowrap;
+}
+.keys-modal { max-width: 520px; width: min(520px, 94vw); }
+.keys-hint {
+  font-size: 12px;
+  color: #888;
+  line-height: 1.45;
+  margin: 0 0 12px;
+  padding: 0 4px;
+}
+.keys-form {
+  display: grid;
+  gap: 10px;
+}
+.keys-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.keys-form input {
+  background: #111;
+  color: #e8e8e8;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
 }
 
 .backdrop {

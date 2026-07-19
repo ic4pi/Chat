@@ -40,15 +40,26 @@
         <button id="newChatTopBtn" class="icon-btn accent" title="New chat" aria-label="New chat">+</button>
         <h1 id="chatTitle" contenteditable="true" spellcheck="false">Untitled</h1>
         <a id="adminLink" class="icon-btn" href="/admin" target="_blank" rel="noopener" title="Admin (personas &amp; master prompt)">⚙</a>
-        <a id="agentLink" class="icon-btn" href="/agent" target="_blank" rel="noopener" title="Repo agent — open a GitHub repo and let the model fix or build code">⌨</a>
+        <a id="agentLink" class="icon-btn" href="/agent" title="Repo agent — open a GitHub repo and let the model fix or build code">⌨</a>
         <button id="toggleArtifacts" class="icon-btn" title="Toggle artifacts">📎</button>
       </div>
       <div class="topbar-row controls">
+        <label class="ctrl">
+          <span>role</span>
+          <select id="roleSelect">
+            <option value="write">Write</option>
+            <option value="review">Review</option>
+            <option value="plan">Plan</option>
+          </select>
+        </label>
         <label class="ctrl">
           <span>provider</span>
           <select id="providerSelect">
             <option value="venice">Venice</option>
             <option value="openrouter">OpenRouter</option>
+            <option value="cerebras">Cerebras</option>
+            <option value="groq">Groq</option>
+            <option value="nvidia">NVIDIA</option>
           </select>
         </label>
         <label class="ctrl">
@@ -59,6 +70,7 @@
           <span>persona</span>
           <select id="personaSelect"></select>
         </label>
+        <button id="keysBtn" class="text-btn ctrl-btn" type="button" title="Bring your own API keys">Keys</button>
       </div>
     </header>
 
@@ -66,8 +78,13 @@
     <div id="typing">model is thinking…</div>
 
     <form id="inputForm">
-      <textarea id="input" rows="1" placeholder="Type a message… (Enter to send, Shift+Enter for newline)" autofocus></textarea>
-      <button id="sendBtn" type="submit">Send</button>
+      <div id="attachPreview" class="attach-preview hidden"></div>
+      <div class="input-row">
+        <input id="attachInput" type="file" multiple accept="image/*,.txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.css,.html,.yml,.yaml,.csv" hidden />
+        <button id="attachBtn" type="button" class="icon-btn" title="Upload photo or file">📎</button>
+        <textarea id="input" rows="1" placeholder="Type a message… (Enter to send, Shift+Enter for newline)" autofocus></textarea>
+        <button id="sendBtn" type="submit">Send</button>
+      </div>
     </form>
   </main>
 
@@ -83,6 +100,18 @@
     </div>
   </aside>
 
+</div>
+
+<!-- BYOK keys panel -->
+<div id="keysModal" class="modal-overlay hidden" role="dialog" aria-modal="true">
+  <div class="modal keys-modal">
+    <div class="modal-header">
+      <h2>Your API keys</h2>
+      <button id="closeKeysModal" class="icon-btn" title="Close">×</button>
+    </div>
+    <p class="keys-hint">Keys stay in this browser only. When set they override the server key for that provider. Leave blank to use the site default.</p>
+    <div id="keysForm" class="keys-form"></div>
+  </div>
 </div>
 
 <!-- Hidden artifact viewer -->

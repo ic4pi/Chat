@@ -39,6 +39,8 @@ export interface RepoContextState {
 export interface RepoContextActions {
   openRepo:        (rootPathOrUrl: string) => Promise<void>;
   addToContext:    (relPath: string)  => Promise<void>;
+  /** Inject an uploaded / pasted file into model context (not from the repo tree). */
+  injectContextFile: (relPath: string, content: string) => void;
   removeFromContext: (relPath: string) => void;
   clearContext:    () => void;
   setPendingChanges: (changes: PendingChange[]) => void;
@@ -141,6 +143,11 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     }
   }, [root, sandboxId, contextFiles]);
 
+  const injectContextFile = useCallback((relPath: string, content: string) => {
+    const path = relPath.startsWith('uploads/') ? relPath : `uploads/${relPath}`;
+    setContextFiles(m => new Map(m).set(path, truncateForContext(content)));
+  }, []);
+
   const removeFromContext = useCallback((relPath: string) => {
     setContextFiles(m => { const n = new Map(m); n.delete(relPath); return n; });
   }, []);
@@ -175,7 +182,7 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
   return {
     root, sandboxId, isRemote, repoUrl, tree, totalFiles,
     contextFiles, pendingChanges, loading, error,
-    openRepo, addToContext, removeFromContext, clearContext,
+    openRepo, addToContext, injectContextFile, removeFromContext, clearContext,
     setPendingChanges, applyChanges, clearChanges,
   };
 }

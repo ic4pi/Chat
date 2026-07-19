@@ -21,6 +21,19 @@ import { looksLikeSuggestRequest, needsCodeContext } from './agentParse.js';
 import type { FileNode } from './types.js';
 import { loadSession, saveSession, clearSession, buildPushShellCommands } from './sessionStore.js';
 import { copyText } from './downloadFile.js';
+import {
+  PROVIDER_LIST,
+  ROLE_LIST,
+  type RoleId,
+  type CatalogModel,
+  loadProviderKeys,
+  saveProviderKeys,
+  loadRoleModels,
+  saveRoleModels,
+  fetchModels,
+  DEFAULT_MODELS,
+  FALLBACK_MODELS,
+} from './providerPrefs.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
@@ -42,22 +55,6 @@ function useIsMobile() {
   }, []);
   return isMobile;
 }
-
-// ---------------------------------------------------------------------------
-// Provider / model options
-// ---------------------------------------------------------------------------
-const VENICE_MODELS = [
-  { id: 'venice-uncensored',             label: 'Venice Uncensored (Dolphin 24B)' },
-  { id: 'qwen3-235b-a22b-instruct-2507', label: 'Qwen3 235B Instruct' },
-  { id: 'llama-3.3-70b',                 label: 'Llama 3.3 70B' },
-  { id: 'mistral-31-24b',                label: 'Mistral 3.1 24B' },
-  { id: 'hermes-3-llama-3.1-405b',       label: 'Hermes 3 405B' },
-];
-const OR_MODELS = [
-  { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free', label: 'Dolphin-Venice 24B (free)' },
-  { id: 'nousresearch/hermes-3-llama-3.1-405b:free', label: 'Hermes 3 405B (free)' },
-  { id: 'meta-llama/llama-3.3-70b-instruct:free',    label: 'Llama 3.3 70B (free)' },
-];
 
 function flattenTreePaths(nodes: FileNode[], prefix = ''): string[] {
   const out: string[] = [];
@@ -193,9 +190,23 @@ export function App() {
   /** Prevents Auto-apply from starting a second verify while one is running. */
   const verifyingRef = useRef(false);
   const restored = useRef(loadSession());
+  const roleModelsRef = useRef(loadRoleModels());
 
-  const [provider,     setProvider]     = useState(restored.current?.provider ?? 'venice');
-  const [model,        setModel]        = useState(restored.current?.model ?? 'venice-uncensored');
+  const [role,         setRole]         = useState<RoleId>('write');
+  const [provider,     setProvider]     = useState(
+    restored.current?.provider ?? roleModelsRef.current.write.provider ?? 'venice',
+  );
+  const [model,        setModel]        = useState(
+    restored.current?.model ?? roleModelsRef.current.write.model ?? 'venice-uncensored',
+  );
+  const [models,       setModels]       = useState<CatalogModel[]>(
+    () => FALLBACK_MODELS[provider] || FALLBACK_MODELS.venice,
+  );
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [keys,         setKeys]         = useState(() => loadProviderKeys());
+  const [showKeys,     setShowKeys]     = useState(false);
+  const [showRoles,    setShowRoles]    = useState(false);
+  const [roleModels,   setRoleModels]   = useState(() => loadRoleModels());
   // Auto-save ON — generated files go to the sandbox immediately so you can download/push.
   const [autoRun,      setAutoRun]      = useState(false);
   const [autoApplyOn,  setAutoApplyOn]  = useState(restored.current?.autoApplyOn ?? true);
@@ -221,6 +232,23 @@ export function App() {
   });
   const [sessionKey,   setSessionKey]   = useState(0);
   const isMobile = useIsMobile();
+  const activeApiKey = (keys[provider] || '').trim();
+
+  // Live model catalog (same /api/models as main chat — includes GLM Heretic).
+  useEffect(() => {
+    let cancelled = false;
+    setModelsLoading(true);
+    fetchModels(provider, activeApiKey || undefined)
+      .then(list => {
+        if (cancelled) return;
+        setModels(list);
+        if (!list.some(m => m.id === model) && list[0]) {
+          setModel(list[0].id);
+        }
+      })
+      .finally(() => { if (!cancelled) setModelsLoading(false); });
+    return () => { cancelled = true; };
+  }, [provider, activeApiKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-open last GitHub repo + restore pending file drafts once on mount.
   useEffect(() => {
@@ -257,11 +285,39 @@ export function App() {
     provider, model, autoApplyOn, chatMessages,
   ]);
 
-  const models = provider === 'venice' ? VENICE_MODELS : OR_MODELS;
-
   const handleProviderChange = (p: string) => {
     setProvider(p);
-    setModel(p === 'venice' ? 'venice-uncensored' : 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free');
+    const fallback = DEFAULT_MODELS[p] || FALLBACK_MODELS[p]?.[0]?.id || '';
+    setModel(fallback);
+    setRoleModels(prev => {
+      const next = { ...prev, [role]: { provider: p, model: fallback } };
+      saveRoleModels(next);
+      return next;
+    });
+  };
+
+  const handleModelChange = (m: string) => {
+    setModel(m);
+    setRoleModels(prev => {
+      const next = { ...prev, [role]: { provider, model: m } };
+      saveRoleModels(next);
+      return next;
+    });
+  };
+
+  const handleRoleChange = (r: RoleId) => {
+    setRole(r);
+    const assigned = roleModels[r];
+    if (assigned) {
+      setProvider(assigned.provider);
+      setModel(assigned.model);
+    }
+  };
+
+  const handleKeySave = (providerId: string, value: string) => {
+    const next = { ...keys, [providerId]: value };
+    setKeys(next);
+    saveProviderKeys(next);
   };
 
   const handleApply = useCallback(async (files?: PendingChange[]) => {
@@ -447,67 +503,117 @@ export function App() {
 
   // ── Shared topbar ────────────────────────────────────────────────────────
   const topbar = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
-      padding: '6px 12px', borderBottom: '1px solid #1e1e1e', background: '#080808',
-      flexShrink: 0 }}>
-      <a href="/" style={{ color: '#888', fontSize: 11, textDecoration: 'none',
-        whiteSpace: 'nowrap', padding: '2px 0' }}>← Chat</a>
-      <span style={{ color: '#d4ff3f', fontSize: 10, letterSpacing: '0.08em',
-        textTransform: 'uppercase', whiteSpace: 'nowrap' }}>// agent</span>
-      {(repo.repoUrl || chatMessages.length > 0) && (
-        <button type="button"
-          onClick={() => {
-            if (!confirm('Clear saved session (chat + drafts) on this device?')) return;
-            clearSession();
-            setChatMessages([]);
-            repo.clearChanges();
-            setPushError(null);
-            setPushOk(null);
-            setSessionKey(k => k + 1);
-          }}
-          style={{ background: 'transparent', color: '#555', border: '1px solid #222',
-            borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
-            fontFamily: 'inherit', fontSize: 10 }}>
-          Clear session
+    <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0,
+      borderBottom: '1px solid #1e1e1e', background: '#080808' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+        padding: '6px 12px' }}>
+        <a href="/" style={{ color: '#d4ff3f', fontSize: 12, textDecoration: 'none',
+          whiteSpace: 'nowrap', padding: '2px 0', fontWeight: 700 }}>← Chat</a>
+        <span style={{ color: '#555', fontSize: 10, letterSpacing: '0.08em',
+          textTransform: 'uppercase', whiteSpace: 'nowrap' }}>// agent</span>
+        {(repo.repoUrl || chatMessages.length > 0) && (
+          <button type="button"
+            onClick={() => {
+              if (!confirm('Clear saved session (chat + drafts) on this device?')) return;
+              clearSession();
+              setChatMessages([]);
+              repo.clearChanges();
+              setPushError(null);
+              setPushOk(null);
+              setSessionKey(k => k + 1);
+            }}
+            style={{ background: 'transparent', color: '#555', border: '1px solid #222',
+              borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
+              fontFamily: 'inherit', fontSize: 10 }}>
+            Clear session
+          </button>
+        )}
+        <select value={role} onChange={e => handleRoleChange(e.target.value as RoleId)}
+          title="Role — uses the model you assigned for write / review / plan"
+          style={{ background: '#111', color: '#e8e8e8', border: '1px solid #333',
+            borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11, cursor: 'pointer' }}>
+          {ROLE_LIST.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+        </select>
+        <select value={provider} onChange={e => handleProviderChange(e.target.value)}
+          style={{ background: '#111', color: '#e8e8e8', border: '1px solid #333',
+            borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11, cursor: 'pointer' }}>
+          {PROVIDER_LIST.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+        </select>
+        <select value={model} onChange={e => handleModelChange(e.target.value)}
+          disabled={modelsLoading}
+          style={{ background: '#111', color: '#e8e8e8', border: '1px solid #333',
+            borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11,
+            cursor: 'pointer', maxWidth: 220, flex: 1, minWidth: 0 }}>
+          {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+        </select>
+        <button type="button" onClick={() => setShowKeys(s => !s)}
+          title="Bring your own API keys"
+          style={{ background: activeApiKey ? '#1a2a0a' : '#151515', color: activeApiKey ? '#8fbf6f' : '#888',
+            border: '1px solid #2a2a2a', borderRadius: 4, padding: '3px 8px',
+            cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
+          Keys
         </button>
-      )}
-      <select value={provider} onChange={e => handleProviderChange(e.target.value)}
-        style={{ background: '#111', color: '#e8e8e8', border: '1px solid #333',
-          borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11, cursor: 'pointer' }}>
-        <option value="venice">Venice</option>
-        <option value="openrouter">OpenRouter</option>
-      </select>
-      <select value={model} onChange={e => setModel(e.target.value)}
-        style={{ background: '#111', color: '#e8e8e8', border: '1px solid #333',
-          borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11,
-          cursor: 'pointer', maxWidth: 200, flex: 1, minWidth: 0 }}>
-        {models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
-      </select>
-      {repo.sandboxId && (
-        <span style={{ fontSize: 9, color: '#444', whiteSpace: 'nowrap',
-          overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 120 }}
-          title={repo.sandboxId}>● {repo.sandboxId.slice(0, 20)}</span>
-      )}
-      <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-        <label title="Off by default. When on, suggested file changes save to the cloud sandbox only — not GitHub, not your phone."
-          style={{ display: 'flex', alignItems: 'center', gap: 4,
-          fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
-          Auto-save <input type="checkbox" checked={autoApplyOn} onChange={e => setAutoApplyOn(e.target.checked)}
-            style={{ accentColor: '#d4ff3f' }} />
-        </label>
-        <label title="Off by default. When on, code snippets run in the sandbox terminal."
-          style={{ display: 'flex', alignItems: 'center', gap: 4,
-          fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
-          Auto-run <input type="checkbox" checked={autoRun} onChange={e => setAutoRun(e.target.checked)}
-            style={{ accentColor: '#d4ff3f' }} />
-        </label>
-        <label title="Off by default. Advanced: run project tests after saves."
-          style={{ display: 'flex', alignItems: 'center', gap: 4,
-          fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
-          Auto-test <input type="checkbox" checked={autoVerifyOn} onChange={e => setAutoVerifyOn(e.target.checked)}
-            style={{ accentColor: '#d4ff3f' }} />
-        </label>
+        <button type="button" onClick={() => setShowRoles(s => !s)}
+          title="Assign models per role"
+          style={{ background: showRoles ? '#1a2a0a' : '#151515', color: '#888',
+            border: '1px solid #2a2a2a', borderRadius: 4, padding: '3px 8px',
+            cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
+          Roles
+        </button>
+        {repo.sandboxId && (
+          <span style={{ fontSize: 9, color: '#444', whiteSpace: 'nowrap',
+            overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 120 }}
+            title={repo.sandboxId}>● {repo.sandboxId.slice(0, 20)}</span>
+        )}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <label title="Off by default. When on, suggested file changes save to the cloud sandbox only — not GitHub, not your phone."
+            style={{ display: 'flex', alignItems: 'center', gap: 4,
+            fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+            Auto-save <input type="checkbox" checked={autoApplyOn} onChange={e => setAutoApplyOn(e.target.checked)}
+              style={{ accentColor: '#d4ff3f' }} />
+          </label>
+          <label title="Off by default. When on, code snippets run in the sandbox terminal."
+            style={{ display: 'flex', alignItems: 'center', gap: 4,
+            fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+            Auto-run <input type="checkbox" checked={autoRun} onChange={e => setAutoRun(e.target.checked)}
+              style={{ accentColor: '#d4ff3f' }} />
+          </label>
+          <label title="Off by default. Advanced: run project tests after saves."
+            style={{ display: 'flex', alignItems: 'center', gap: 4,
+            fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+            Auto-test <input type="checkbox" checked={autoVerifyOn} onChange={e => setAutoVerifyOn(e.target.checked)}
+              style={{ accentColor: '#d4ff3f' }} />
+          </label>
+        </div>
       </div>
+      {showKeys && (
+        <div style={{ padding: '8px 12px', borderTop: '1px solid #1a1a1a',
+          display: 'grid', gap: 6, gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
+          <div style={{ gridColumn: '1 / -1', fontSize: 10, color: '#666', lineHeight: 1.4 }}>
+            Keys stay in this browser only. Used when set; otherwise the server env key is used.
+          </div>
+          {PROVIDER_LIST.map(p => (
+            <label key={p.id} style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 10, color: '#888' }}>
+              {p.label}
+              <input type="password" autoComplete="off"
+                value={keys[p.id] || ''}
+                placeholder={`${p.label} API key`}
+                onChange={e => handleKeySave(p.id, e.target.value)}
+                style={{ background: '#111', color: '#e8e8e8', border: '1px solid #333',
+                  borderRadius: 4, padding: '4px 8px', fontFamily: 'inherit', fontSize: 11 }} />
+            </label>
+          ))}
+        </div>
+      )}
+      {showRoles && (
+        <div style={{ padding: '8px 12px', borderTop: '1px solid #1a1a1a', fontSize: 10, color: '#888', lineHeight: 1.5 }}>
+          Switch the role dropdown to use a different model for writing, reviewing, or planning.
+          Changing provider/model while a role is selected saves that assignment.
+          Current: write={roleModels.write.model.split('/').pop()} ·
+          review={roleModels.review.model.split('/').pop()} ·
+          plan={roleModels.plan.model.split('/').pop()}
+        </div>
+      )}
     </div>
   );
 
@@ -541,6 +647,7 @@ export function App() {
           sandboxId={repo.sandboxId}
           provider={provider}
           model={model}
+          apiKey={activeApiKey || undefined}
           tree={repo.tree}
           contextFiles={repo.contextFiles}
           autoRun={autoRun}
@@ -550,6 +657,7 @@ export function App() {
           onMessagesChange={setChatMessages}
           onRunCode={handleRunCode}
           onFileChanges={handleFileChanges}
+          onUploadText={(name, content) => repo.injectContextFile(name, content)}
           onBeforeSend={handleAutoContext}
           searchHits={searchHits}
         />
