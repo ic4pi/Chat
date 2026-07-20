@@ -302,6 +302,8 @@ const els = {
   closeArtifactModal: $('closeArtifactModal'),
   chat: $('chat'),
   typing: $('typing'),
+  typingStatus: $('typingStatus'),
+  typingThoughts: $('typingThoughts'),
   inputForm: $('inputForm'),
   input: $('input'),
   sendBtn: $('sendBtn'),
@@ -417,14 +419,32 @@ function renderChatTitle() {
   els.chatTitle.textContent = chat ? chat.name : 'Untitled';
 }
 
-function renderMessages() {
+/** @param {{ scroll?: 'bottom' | 'assistant-start' | 'none', pinMsgTs?: number }} [opts] */
+function renderMessages(opts = {}) {
+  const scroll = opts.scroll || 'bottom';
   els.chat.innerHTML = '';
   const chat = activeChat();
   if (!chat) return;
+  let pinEl = null;
   for (const m of chat.messages) {
-    renderMessageInto(els.chat, m);
+    const el = renderMessageInto(els.chat, m);
+    if (opts.pinMsgTs && m.ts === opts.pinMsgTs && m.role === 'assistant') {
+      pinEl = el;
+    }
   }
-  els.chat.scrollTop = els.chat.scrollHeight;
+  // Default pin: latest assistant message
+  if (scroll === 'assistant-start' && !pinEl) {
+    const bots = els.chat.querySelectorAll('.msg.bot');
+    pinEl = bots.length ? bots[bots.length - 1] : null;
+  }
+  if (scroll === 'assistant-start' && pinEl) {
+    // Put the start of the reply near the top of the chat viewport
+    requestAnimationFrame(() => {
+      pinEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
+  } else if (scroll === 'bottom') {
+    els.chat.scrollTop = els.chat.scrollHeight;
+  }
 }
 
 function renderMessageInto(container, m) {
@@ -435,7 +455,8 @@ function renderMessageInto(container, m) {
     'bot';
 
   const div = document.createElement('div');
-  div.className = 'msg ' + cls;
+  div.className = 'msg ' + cls + (m.streaming ? ' streaming' : '');
+  if (m.ts) div.dataset.ts = String(m.ts);
 
   const label = document.createElement('span');
   label.className = 'role';
@@ -451,12 +472,13 @@ function renderMessageInto(container, m) {
   content.className = 'content';
 
   if (m.role === 'assistant') {
-    renderMarkdownInto(content, m.content || '');
+    renderMarkdownInto(content, m.content || (m.streaming ? '…' : ''));
   } else {
     content.textContent = m.content || '';
   }
   div.appendChild(content);
   container.appendChild(div);
+  return div;
 }
 
 // Minimal markdown-esque renderer for the bot output. Only handles fenced code
@@ -806,6 +828,7 @@ async function callChat(provider, model, messages, personaId) {
         provider,
         personaId,
         apiKey: apiKey || undefined,
+        stream: false,
       }),
       signal: controller.signal,
     });
@@ -818,6 +841,124 @@ async function callChat(provider, model, messages, personaId) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Stream a chat completion. onEvent({type, ...}) for status/token/thinking/done/error.
+ * Returns { ok, status, data, errText } shaped like callChat for fallbacks.
+ */
+async function callChatStream(provider, model, messages, personaId, onEvent) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutFor(provider, model));
+  const apiKey = (providerKeys[provider] || '').trim();
+  const headers = { 'Content-Type': 'application/json', Accept: 'text/event-stream' };
+  if (apiKey) headers['X-Provider-Key'] = apiKey;
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        messages,
+        model,
+        provider,
+        personaId,
+        apiKey: apiKey || undefined,
+        stream: true,
+      }),
+      signal: controller.signal,
+    });
+
+    const ctype = (res.headers.get('content-type') || '').toLowerCase();
+    // Non-SSE error JSON from our server
+    if (!res.ok && !ctype.includes('text/event-stream')) {
+      let data = null;
+      let errText = null;
+      try { data = await res.json(); } catch { errText = 'Non-JSON response'; }
+      return { ok: false, status: res.status, data, errText };
+    }
+
+    if (!res.body) {
+      return { ok: false, status: res.status, data: null, errText: 'No response body' };
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let donePayload = null;
+    let streamError = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n');
+      buffer = parts.pop() || '';
+      for (const line of parts) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+        let evt;
+        try { evt = JSON.parse(payload); } catch { continue; }
+        if (typeof onEvent === 'function') onEvent(evt);
+        if (evt.type === 'done') donePayload = evt;
+        if (evt.type === 'error') streamError = evt;
+      }
+    }
+
+    if (streamError) {
+      return {
+        ok: false,
+        status: 502,
+        data: { error: streamError.error, provider: streamError.provider, model: streamError.model },
+        errText: streamError.error,
+      };
+    }
+    if (!donePayload) {
+      return { ok: false, status: 502, data: null, errText: 'Stream ended without a reply' };
+    }
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        reply: donePayload.reply || '',
+        reasoning: donePayload.reasoning,
+        provider: donePayload.provider,
+        model: donePayload.model,
+      },
+      errText: null,
+    };
+  } catch (err) {
+    return { ok: false, status: 0, data: null, errText: friendlyNetworkError(err) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function setTypingActive(on, statusText) {
+  if (!els.typing) return;
+  if (on) {
+    els.typing.hidden = false;
+    els.typing.dataset.active = '1';
+    els.typing.style.display = 'block';
+    if (els.typingStatus && statusText) els.typingStatus.textContent = statusText;
+  } else {
+    els.typing.dataset.active = '0';
+    els.typing.style.display = 'none';
+    els.typing.hidden = true;
+    if (els.typingThoughts) {
+      els.typingThoughts.textContent = '';
+      els.typingThoughts.classList.add('hidden');
+    }
+  }
+}
+
+function appendTypingThought(text) {
+  if (!els.typingThoughts || !text) return;
+  els.typingThoughts.classList.remove('hidden');
+  els.typingThoughts.textContent += text;
+  els.typingThoughts.scrollTop = els.typingThoughts.scrollHeight;
 }
 
 // Only retry on transient / provider-side failures. Never retry on 400 (bad
@@ -861,15 +1002,26 @@ async function sendMessage(text) {
   saveState();
   renderChatList();
   renderChatTitle();
-  renderMessages();
+  renderMessages({ scroll: 'bottom' });
 
   els.sendBtn.disabled = true;
-  els.typing.style.display = 'block';
+  const startedAt = Date.now();
+  let tickTimer = null;
+  const updateStatusClock = (base) => {
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    setTypingActive(true, `${base} · ${secs}s`);
+  };
+  setTypingActive(true, 'Sending…');
+  tickTimer = setInterval(() => {
+    const cur = els.typingStatus?.textContent || 'Waiting…';
+    const base = cur.replace(/\s·\s\d+s$/, '');
+    updateStatusClock(base);
+  }, 1000);
 
   const apiMessages = chat.messages
     .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .filter((m) => !m.streaming)
     .map((m, idx, arr) => {
-      // Multimodal only on the latest user turn when images were attached.
       if (
         imageParts.length
         && idx === arr.length - 1
@@ -886,14 +1038,81 @@ async function sendMessage(text) {
       return { role: m.role, content: m.content };
     });
 
+  const assistantTs = Date.now();
+  let pinnedToStart = false;
+  let streamBuf = '';
+  chat.messages.push({
+    role: 'assistant',
+    content: '',
+    ts: assistantTs,
+    streaming: true,
+    model: state.activeModel,
+    provider: state.activeProvider,
+  });
+  renderMessages({ scroll: 'assistant-start', pinMsgTs: assistantTs });
+  pinnedToStart = true;
+
+  const refreshStreamingBubble = () => {
+    const msg = chat.messages.find((m) => m.ts === assistantTs && m.role === 'assistant');
+    if (!msg) return;
+    msg.content = streamBuf;
+    // Update DOM in place to avoid scroll jumps
+    const el = els.chat.querySelector(`.msg.bot[data-ts="${assistantTs}"] .content`);
+    if (el) {
+      el.innerHTML = '';
+      renderMarkdownInto(el, streamBuf || '…');
+    } else {
+      renderMessages({ scroll: 'none' });
+    }
+  };
+
   try {
-    let attempt = await callChat(state.activeProvider, state.activeModel, apiMessages, state.activePersonaId);
+    updateStatusClock('Waiting for model');
+    let attempt = await callChatStream(
+      state.activeProvider,
+      state.activeModel,
+      apiMessages,
+      state.activePersonaId,
+      (evt) => {
+        if (evt.type === 'status') {
+          updateStatusClock(evt.message || 'Working…');
+        } else if (evt.type === 'thinking') {
+          appendTypingThought(evt.text || '');
+          updateStatusClock('Thinking');
+        } else if (evt.type === 'token') {
+          streamBuf += evt.text || '';
+          updateStatusClock('Writing');
+          refreshStreamingBubble();
+          if (!pinnedToStart) {
+            renderMessages({ scroll: 'assistant-start', pinMsgTs: assistantTs });
+            pinnedToStart = true;
+          }
+        }
+      },
+    );
     let usedFallback = null;
 
     if (!attempt.ok && shouldFallback(attempt)) {
       const fb = MODEL_FALLBACKS?.[state.activeProvider]?.[state.activeModel];
       if (fb) {
-        const retry = await callChat(fb.provider, fb.model, apiMessages, state.activePersonaId);
+        updateStatusClock('Retrying on backup model');
+        streamBuf = '';
+        refreshStreamingBubble();
+        const retry = await callChatStream(
+          fb.provider,
+          fb.model,
+          apiMessages,
+          state.activePersonaId,
+          (evt) => {
+            if (evt.type === 'status') updateStatusClock(evt.message || 'Working…');
+            else if (evt.type === 'thinking') appendTypingThought(evt.text || '');
+            else if (evt.type === 'token') {
+              streamBuf += evt.text || '';
+              updateStatusClock('Writing');
+              refreshStreamingBubble();
+            }
+          },
+        );
         if (retry.ok) {
           attempt = retry;
           usedFallback = fb;
@@ -901,12 +1120,17 @@ async function sendMessage(text) {
       }
     }
 
+    // Remove streaming placeholder
+    const idx = chat.messages.findIndex((m) => m.ts === assistantTs && m.role === 'assistant');
+    if (idx !== -1) chat.messages.splice(idx, 1);
+
     if (!attempt.ok) {
       const data = attempt.data || {};
       const where = data.provider ? ` [${data.provider} · ${data.model || state.activeModel}]` : '';
       const rawErr = data.error || attempt.errText || 'Request failed';
       const errMsg = friendlyNetworkError({ message: String(rawErr) });
       chat.messages.push({ role: 'error', content: errMsg + where, ts: Date.now() });
+      renderMessages({ scroll: 'bottom' });
     } else {
       const data = attempt.data || {};
       if (usedFallback) {
@@ -916,13 +1140,13 @@ async function sendMessage(text) {
           ts: Date.now(),
         });
       }
-      const reply = data.reply || '(empty response)';
+      const reply = data.reply || streamBuf || '(empty response)';
       chat.messages.push({
         role: 'assistant',
         content: reply,
-        ts: Date.now(),
+        ts: assistantTs,
         provider: data.provider,
-        model: data.model,
+        model: data.model || state.activeModel,
       });
       const newArts = extractArtifacts(reply);
       if (newArts.length) {
@@ -932,18 +1156,22 @@ async function sendMessage(text) {
           applySidebarState();
         }
       }
+      // Land at the beginning of the answer, not the end
+      renderMessages({ scroll: 'assistant-start', pinMsgTs: assistantTs });
+      renderArtifacts();
     }
     chat.updatedAt = Date.now();
     saveState();
-    renderMessages();
-    renderArtifacts();
   } catch (err) {
+    const idx = chat.messages.findIndex((m) => m.ts === assistantTs && m.role === 'assistant' && m.streaming);
+    if (idx !== -1) chat.messages.splice(idx, 1);
     chat.messages.push({ role: 'error', content: err.message || 'Network error', ts: Date.now() });
     saveState();
-    renderMessages();
+    renderMessages({ scroll: 'bottom' });
   } finally {
+    if (tickTimer) clearInterval(tickTimer);
     els.sendBtn.disabled = false;
-    els.typing.style.display = 'none';
+    setTypingActive(false);
     els.input.focus();
   }
 }

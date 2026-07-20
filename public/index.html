@@ -75,7 +75,10 @@
     </header>
 
     <div id="chat"></div>
-    <div id="typing">model is thinking…</div>
+    <div id="typing" class="typing-bar" hidden>
+      <div id="typingStatus" class="typing-status">Waiting for model…</div>
+      <div id="typingThoughts" class="typing-thoughts hidden"></div>
+    </div>
 
     <form id="inputForm">
       <div id="attachPreview" class="attach-preview hidden"></div>
