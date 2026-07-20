@@ -40,16 +40,16 @@
         <button id="newChatTopBtn" class="icon-btn accent" title="New chat" aria-label="New chat">+</button>
         <h1 id="chatTitle" contenteditable="true" spellcheck="false">Untitled</h1>
         <a id="adminLink" class="icon-btn" href="/admin" target="_blank" rel="noopener" title="Admin (personas &amp; master prompt)">⚙</a>
-        <a id="agentLink" class="icon-btn" href="/agent" title="Repo agent — open a GitHub repo and let the model fix or build code">⌨</a>
+        <button id="workspaceBtn" class="text-btn ctrl-btn workspace-btn" type="button" title="Open this chat in Workspace (files + terminal sandbox)">Workspace</button>
         <button id="toggleArtifacts" class="icon-btn" title="Toggle artifacts">📎</button>
       </div>
       <div class="topbar-row controls">
         <label class="ctrl">
           <span>role</span>
           <select id="roleSelect">
-            <option value="write">Write</option>
-            <option value="review">Review</option>
             <option value="plan">Plan</option>
+            <option value="review">Review</option>
+            <option value="write">Write</option>
           </select>
         </label>
         <label class="ctrl">
@@ -85,9 +85,12 @@
       <div class="input-row">
         <input id="attachInput" type="file" multiple accept="image/*,.txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.css,.html,.yml,.yaml,.csv" hidden />
         <button id="attachBtn" type="button" class="icon-btn" title="Upload photo or file">📎</button>
-        <textarea id="input" rows="1" placeholder="Type a message… (Enter to send, Shift+Enter for newline)" autofocus></textarea>
+        <button id="micBtn" type="button" class="icon-btn" title="Free voice input (browser speech — Chrome/Safari best)">🎤</button>
+        <button id="speakBtn" type="button" class="icon-btn" title="Speak replies aloud (free browser TTS)" aria-pressed="false">🔊</button>
+        <textarea id="input" rows="1" placeholder="Plan or ask… (code builds in Workspace)" autofocus></textarea>
         <button id="sendBtn" type="submit">Send</button>
       </div>
+      <div id="voiceHint" class="voice-hint">Chat stays prose (no code dumps). Tap <b>Workspace</b> to open files + terminal with this conversation. Voice is free via your browser.</div>
     </form>
   </main>
 

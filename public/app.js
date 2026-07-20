@@ -146,7 +146,7 @@ function freshState() {
     chats: [],
     activeChatId: null,
     activePersonaId: 'nexus',
-    activeRole: 'write',
+    activeRole: 'plan',
     // Venice by default — OpenRouter free-tier models routinely hang / 429,
     // which on iOS shows up as a multi-minute "thinking…" then "Load failed".
     activeProvider: 'venice',
@@ -290,9 +290,12 @@ const els = {
   keysModal: $('keysModal'),
   keysForm: $('keysForm'),
   closeKeysModal: $('closeKeysModal'),
+  workspaceBtn: $('workspaceBtn'),
   attachBtn: $('attachBtn'),
   attachInput: $('attachInput'),
   attachPreview: $('attachPreview'),
+  micBtn: $('micBtn'),
+  speakBtn: $('speakBtn'),
   artifactList: $('artifactList'),
   artifactModal: $('artifactModal'),
   artifactModalTitle: $('artifactModalTitle'),
@@ -827,6 +830,7 @@ async function callChat(provider, model, messages, personaId) {
         model,
         provider,
         personaId,
+        role: state.activeRole || 'plan',
         apiKey: apiKey || undefined,
         stream: false,
       }),
@@ -863,6 +867,7 @@ async function callChatStream(provider, model, messages, personaId, onEvent) {
         model,
         provider,
         personaId,
+        role: state.activeRole || 'plan',
         apiKey: apiKey || undefined,
         stream: true,
       }),
@@ -1159,6 +1164,7 @@ async function sendMessage(text) {
       // Land at the beginning of the answer, not the end
       renderMessages({ scroll: 'assistant-start', pinMsgTs: assistantTs });
       renderArtifacts();
+      speakReply(reply);
     }
     chat.updatedAt = Date.now();
     saveState();
@@ -1223,7 +1229,7 @@ async function renderAll() {
   renderChatList();
   renderChatTitle();
   renderPersonaSelect();
-  if (!state.activeRole) state.activeRole = 'write';
+  if (!state.activeRole) state.activeRole = 'plan';
   if (els.roleSelect) els.roleSelect.value = state.activeRole;
   els.providerSelect.value = state.activeProvider;
   await Promise.all([renderModelSelect(), fetchPersonas()]);
@@ -1354,6 +1360,148 @@ if (els.roleSelect) {
     await renderModelSelect();
   });
 }
+
+// ---------------------------------------------------------------------------
+// Free voice (Web Speech API) + Workspace handoff
+// ---------------------------------------------------------------------------
+
+const SPEAK_PREF_KEY = 'uncensored_speak_replies_v1';
+let speakReplies = false;
+try { speakReplies = localStorage.getItem(SPEAK_PREF_KEY) === '1'; } catch { /* ignore */ }
+
+function syncSpeakBtn() {
+  if (!els.speakBtn) return;
+  els.speakBtn.classList.toggle('speak-on', speakReplies);
+  els.speakBtn.setAttribute('aria-pressed', speakReplies ? 'true' : 'false');
+  els.speakBtn.title = speakReplies
+    ? 'Speaking replies on (tap to mute)'
+    : 'Speak replies aloud (free browser TTS)';
+}
+syncSpeakBtn();
+
+function speakReply(text) {
+  if (!speakReplies || !text) return;
+  if (typeof window === 'undefined' || !window.speechSynthesis) return;
+  try {
+    window.speechSynthesis.cancel();
+    // Strip code-ish fences so TTS doesn't drone through dumps
+    const clean = String(text)
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/[#*_`]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 1200);
+    if (!clean) return;
+    const u = new SpeechSynthesisUtterance(clean);
+    u.rate = 1.05;
+    window.speechSynthesis.speak(u);
+  } catch (err) {
+    console.warn('TTS failed:', err);
+  }
+}
+
+els.speakBtn?.addEventListener('click', () => {
+  speakReplies = !speakReplies;
+  try { localStorage.setItem(SPEAK_PREF_KEY, speakReplies ? '1' : '0'); } catch { /* ignore */ }
+  if (!speakReplies && window.speechSynthesis) window.speechSynthesis.cancel();
+  syncSpeakBtn();
+});
+
+let recognition = null;
+let listening = false;
+
+function getSpeechRecognition() {
+  const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
+  return Ctor ? new Ctor() : null;
+}
+
+function stopListening() {
+  listening = false;
+  els.micBtn?.classList.remove('listening');
+  try { recognition?.stop(); } catch { /* ignore */ }
+}
+
+els.micBtn?.addEventListener('click', () => {
+  if (listening) {
+    stopListening();
+    return;
+  }
+  const rec = getSpeechRecognition();
+  if (!rec) {
+    alert('Voice input needs a browser with Speech Recognition (Chrome or Safari on a real device).');
+    return;
+  }
+  recognition = rec;
+  rec.continuous = false;
+  rec.interimResults = true;
+  rec.lang = navigator.language || 'en-US';
+  let finalText = '';
+  rec.onstart = () => {
+    listening = true;
+    els.micBtn?.classList.add('listening');
+  };
+  rec.onerror = () => stopListening();
+  rec.onend = () => {
+    listening = false;
+    els.micBtn?.classList.remove('listening');
+    setTypingActive(false);
+    if (finalText.trim()) {
+      els.input.value = (els.input.value ? els.input.value + ' ' : '') + finalText.trim();
+      els.input.dispatchEvent(new Event('input'));
+      els.input.focus();
+    }
+  };
+  rec.onresult = (event) => {
+    let interim = '';
+    finalText = '';
+    for (let i = 0; i < event.results.length; i++) {
+      const r = event.results[i];
+      if (r.isFinal) finalText += r[0].transcript;
+      else interim += r[0].transcript;
+    }
+    if (interim && els.typingStatus) {
+      setTypingActive(true, `Listening… ${interim}`);
+    }
+  };
+  try {
+    setTypingActive(true, 'Listening…');
+    rec.start();
+  } catch (err) {
+    stopListening();
+    setTypingActive(false);
+    alert('Could not start mic: ' + (err.message || err));
+  }
+});
+
+const WORKSPACE_HANDOFF_KEY = 'chat_to_workspace_v1';
+
+function openInWorkspace() {
+  const chat = ensureActiveChat();
+  const messages = (chat.messages || [])
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({ role: m.role, content: m.content }));
+  if (!messages.length) {
+    // Still allow opening empty workspace
+  }
+  const payload = {
+    v: 1,
+    title: chat.name,
+    provider: state.activeProvider,
+    model: state.activeModel,
+    role: state.activeRole === 'plan' ? 'write' : state.activeRole,
+    messages,
+    createdAt: Date.now(),
+  };
+  try {
+    sessionStorage.setItem(WORKSPACE_HANDOFF_KEY, JSON.stringify(payload));
+  } catch (err) {
+    alert('Could not hand off chat (storage full?). Try a shorter chat.');
+    return;
+  }
+  window.location.href = '/agent';
+}
+
+els.workspaceBtn?.addEventListener('click', openInWorkspace);
 
 function renderAttachPreview() {
   if (!els.attachPreview) return;

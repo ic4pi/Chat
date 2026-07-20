@@ -330,7 +330,7 @@ export interface Message {
   role:        'user' | 'assistant';
   content:     string;
   /** welcome = UI-only, never sent to the model; retry-inject = verify/nudge loop */
-  kind?:       'user' | 'retry-inject' | 'welcome';
+  kind?:       'user' | 'retry-inject' | 'welcome' | 'imported';
   segments?:   Segment[];
   fileChanges?: PendingChange[];
 }
@@ -354,6 +354,8 @@ interface Props {
   sandboxId:         string | null;
   provider:          string;
   model:             string;
+  /** Active role — plan stays prose-first until user asks to apply. */
+  role?:             string;
   /** BYOK key for the active provider (optional). */
   apiKey?:           string;
   tree:              FileNode[];
@@ -378,7 +380,7 @@ interface Props {
 }
 
 export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
-  repoRoot, repoUrl, sandboxId, provider, model, apiKey, tree, contextFiles, autoRun, appliedPaths,
+  repoRoot, repoUrl, sandboxId, provider, model, role, apiKey, tree, contextFiles, autoRun, appliedPaths,
   autoSelectedFiles, searchHits, initialMessages, onMessagesChange,
   onRunCode, onFileChanges, onUploadText, onBeforeSend,
 }, ref) {
@@ -394,11 +396,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   // Keep latest props in a ref so a send started before auto-context finishes
   // still sees the updated file context afterward.
   const latestRef = useRef({
-    repoRoot, repoUrl, sandboxId, provider, model, apiKey, tree, contextFiles, searchHits,
+    repoRoot, repoUrl, sandboxId, provider, model, role, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages,
   });
   latestRef.current = {
-    repoRoot, repoUrl, sandboxId, provider, model, apiKey, tree, contextFiles, searchHits,
+    repoRoot, repoUrl, sandboxId, provider, model, role, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages,
   };
 
@@ -479,7 +481,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       const {
         repoRoot: root, repoUrl: rUrl, sandboxId: sid, provider: prov, model: mod,
-        apiKey: key, tree: tr, contextFiles: pinned, searchHits: propHits,
+        role: activeRole, apiKey: key, tree: tr, contextFiles: pinned, searchHits: propHits,
         autoRun: ar, onRunCode: run, onFileChanges: onFc,
         messages: prev,
       } = latestRef.current;
@@ -518,8 +520,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         (latestRef.current as { _pendingImages?: unknown })._pendingImages = undefined;
       }
 
-      const suggestTurn = kind === 'user' && looksLikeSuggestRequest(text);
-      const applyTurn = kind === 'user' && looksLikeApplyRequest(text);
+      const suggestTurn = kind === 'user' && (
+        looksLikeSuggestRequest(text) || activeRole === 'plan' || activeRole === 'review'
+      );
+      const applyTurn = kind === 'user' && looksLikeApplyRequest(text) && activeRole !== 'plan';
 
       // Light chat ("hey", "thanks"): don't paste tree/files into the model.
       const lightTurn = !needsCodeContext(text);
@@ -530,7 +534,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         lightTurn ? [] : hits,
         { light: lightTurn && !!root && ctx.size === 0, repoUrl: rUrl },
       );
-      if (suggestTurn) {
+      if (activeRole === 'plan') {
+        systemPrompt +=
+          '\n\nROLE=PLAN: architecture and steps only. No File: blocks, no fenced code, no scripts until the user says to apply/implement.';
+      } else if (suggestTurn) {
         systemPrompt +=
           '\n\nSUGGEST-ONLY this turn: plain advice, real paths, no File: blocks, no placeholders.';
       } else if (applyTurn) {

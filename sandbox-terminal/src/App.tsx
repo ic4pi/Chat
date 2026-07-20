@@ -21,6 +21,7 @@ import { looksLikeSuggestRequest, needsCodeContext } from './agentParse.js';
 import type { FileNode } from './types.js';
 import { loadSession, saveSession, clearSession, buildPushShellCommands } from './sessionStore.js';
 import { copyText } from './downloadFile.js';
+import { consumeWorkspaceHandoff } from './workspaceHandoff.js';
 import {
   PROVIDER_LIST,
   ROLE_LIST,
@@ -220,7 +221,28 @@ export function App() {
   const [pushing,      setPushing]      = useState(false);
   const [pushError,    setPushError]    = useState<string | null>(null);
   const [pushOk,       setPushOk]       = useState<string | null>(null);
+  const handoffMeta = useRef<{
+    provider?: string; model?: string; role?: string; title?: string; fromChat?: boolean;
+  } | null>(null);
   const [chatMessages, setChatMessages] = useState<Message[]>(() => {
+    const handoff = consumeWorkspaceHandoff();
+    if (handoff?.messages?.length) {
+      handoffMeta.current = {
+        provider: handoff.provider,
+        model: handoff.model,
+        role: handoff.role,
+        title: handoff.title,
+        fromChat: true,
+      };
+      return handoff.messages
+        .filter(m => m.role === 'user' || m.role === 'assistant')
+        .map(m => ({
+          id: Math.random().toString(36).slice(2, 10),
+          role: m.role,
+          content: m.content,
+          kind: 'imported' as Message['kind'],
+        }));
+    }
     const m = restored.current?.messages;
     if (!m?.length) return [];
     return m.map(x => ({
@@ -230,9 +252,21 @@ export function App() {
       kind: x.kind as Message['kind'],
     }));
   });
+  const [fromChat] = useState(() => !!handoffMeta.current?.fromChat);
   const [sessionKey,   setSessionKey]   = useState(0);
   const isMobile = useIsMobile();
   const activeApiKey = (keys[provider] || '').trim();
+
+  // Apply provider/model/role from a chat → workspace handoff.
+  useEffect(() => {
+    const h = handoffMeta.current;
+    if (!h) return;
+    if (h.provider) setProvider(h.provider);
+    if (h.model) setModel(h.model);
+    if (h.role === 'write' || h.role === 'review' || h.role === 'plan') {
+      setRole(h.role);
+    }
+  }, []);
 
   // Live model catalog (same /api/models as main chat — includes GLM Heretic).
   useEffect(() => {
@@ -510,7 +544,12 @@ export function App() {
         <a href="/" style={{ color: '#d4ff3f', fontSize: 12, textDecoration: 'none',
           whiteSpace: 'nowrap', padding: '2px 0', fontWeight: 700 }}>← Chat</a>
         <span style={{ color: '#555', fontSize: 10, letterSpacing: '0.08em',
-          textTransform: 'uppercase', whiteSpace: 'nowrap' }}>// agent</span>
+          textTransform: 'uppercase', whiteSpace: 'nowrap' }}>// workspace</span>
+        {fromChat && (
+          <span style={{ fontSize: 10, color: '#8fa62b', whiteSpace: 'nowrap' }}>
+            chat imported — open a repo to build
+          </span>
+        )}
         {(repo.repoUrl || chatMessages.length > 0) && (
           <button type="button"
             onClick={() => {
@@ -647,6 +686,7 @@ export function App() {
           sandboxId={repo.sandboxId}
           provider={provider}
           model={model}
+          role={role}
           apiKey={activeApiKey || undefined}
           tree={repo.tree}
           contextFiles={repo.contextFiles}

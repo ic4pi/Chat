@@ -10,11 +10,39 @@ import { resolveProvider } from '../lib/providers.js';
 const FALLBACK_SYSTEM_PROMPT = 'You are a helpful, direct assistant.';
 const UPSTREAM_TIMEOUT_MS = 110_000;
 
+/** Normal chat is conversation/planning — never a code dump. Coding happens in Workspace. */
+const NO_CODE_CHAT_RULES = `
+CHANNEL RULES (this is normal chat, not the coding workspace):
+- Do NOT write code, scripts, configs, SQL, HTML, or fenced code blocks.
+- Do NOT invent File: blocks or paste whole files.
+- Answer in plain language: steps, tradeoffs, architecture, checklists.
+- If the user needs real code or repo edits, tell them to tap Workspace (files + terminal sandbox) and continue there with this conversation.
+`.trim();
+
+const ROLE_RULES = {
+  plan: `
+ROLE: PLAN
+- Focus on goals, approach, risks, and a short ordered plan.
+- No code. No pseudo-code that is basically code.
+- Prefer bullets and decisions the user can approve before building.
+`.trim(),
+  review: `
+ROLE: REVIEW
+- Critique ideas and approaches in prose.
+- No replacement code dumps. Point out issues and what to change conceptually.
+`.trim(),
+  write: `
+ROLE: WRITE (chat mode)
+- Still no code in this channel. Explain what to build and how.
+- For actual implementation, direct them to Workspace.
+`.trim(),
+};
+
 function sseWrite(res, obj) {
   res.write(`data: ${JSON.stringify(obj)}\n\n`);
 }
 
-async function resolveSystemPrompt(personaId) {
+async function resolveSystemPrompt(personaId, role) {
   let effectiveSystemPrompt = FALLBACK_SYSTEM_PROMPT;
   try {
     const config = await loadConfig();
@@ -29,7 +57,10 @@ async function resolveSystemPrompt(personaId) {
   } catch (err) {
     console.error('loadConfig failed:', err);
   }
-  return effectiveSystemPrompt;
+
+  const roleKey = typeof role === 'string' ? role.toLowerCase() : 'write';
+  const roleExtra = ROLE_RULES[roleKey] || ROLE_RULES.write;
+  return `${effectiveSystemPrompt}\n\n${NO_CODE_CHAT_RULES}\n\n${roleExtra}`;
 }
 
 function extractDelta(chunk) {
@@ -244,6 +275,7 @@ export default async function handler(req, res) {
     model,
     provider: providerId,
     personaId,
+    role,
     apiKey: clientKey,
     stream: wantStream,
   } = req.body || {};
@@ -265,7 +297,7 @@ export default async function handler(req, res) {
     });
   }
 
-  const effectiveSystemPrompt = await resolveSystemPrompt(personaId);
+  const effectiveSystemPrompt = await resolveSystemPrompt(personaId, role);
   const messagesWithSystem = [
     { role: 'system', content: effectiveSystemPrompt },
     ...messages.map((m) => ({ role: m.role, content: m.content })),

@@ -487,11 +487,33 @@ select:focus, input[type="text"]:focus, textarea:focus {
   padding: 0;
   font-size: 12px;
 }
-.ctrl-btn {
-  align-self: flex-end;
-  margin-bottom: 2px;
-  white-space: nowrap;
+.workspace-btn {
+  background: rgba(212, 255, 63, 0.08);
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
+.workspace-btn:hover {
+  background: rgba(212, 255, 63, 0.16);
+  border-color: var(--accent);
+}
+.icon-btn.listening {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: rgba(255, 106, 106, 0.08);
+}
+.icon-btn.speak-on {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+.voice-hint {
+  font-size: 10px;
+  color: var(--muted-2);
+  line-height: 1.4;
+  padding: 0 2px;
+}
+.voice-hint b { color: var(--accent-dim); font-weight: 700; }
 .keys-modal { max-width: 520px; width: min(520px, 94vw); }
 .keys-hint {
   font-size: 12px;
