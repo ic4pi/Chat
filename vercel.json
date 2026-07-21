@@ -11,7 +11,7 @@
     "api/chat.js":                 { "maxDuration": 120 },
     "api/run.js":                  { "maxDuration": 300 },
     "api/run-code.js":             { "maxDuration": 300 },
-    "api/init-repo.js":            { "maxDuration": 120 },
+    "api/init-repo.js":            { "maxDuration": 300 },
     "api/files.js":                { "maxDuration": 30  },
     "api/file.js":                 { "maxDuration": 30  },
     "api/write-files.js":          { "maxDuration": 30  },

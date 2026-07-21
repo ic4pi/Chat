@@ -14,7 +14,7 @@
  */
 
 import { Sandbox } from '@vercel/sandbox';
-import { REPO_DIR, createSession, getExistingSession } from '../lib/sandbox-session.js';
+import { REPO_DIR, createSession, ensurePythonStack } from '../lib/sandbox-session.js';
 
 function getSandboxAuth() {
   const { VERCEL_TOKEN, VERCEL_TEAM_ID, VERCEL_PROJECT_ID } = process.env;
@@ -131,6 +131,12 @@ export default async function handler(req, res) {
     // Extend timeout now that the repo is ready
     await sandbox.extendTimeout(30 * 60 * 1000);
 
+    // Provision Python + pip + venv (Amazon Linux dnf). Needed for real builds.
+    const py = await ensurePythonStack(sandbox);
+    if (!py.ok) {
+      console.warn('ensurePythonStack failed:', py.error);
+    }
+
     const tree = await getFileTree(sandbox, REPO_DIR);
     const totalFiles = countNodes(tree);
 
@@ -141,6 +147,9 @@ export default async function handler(req, res) {
       tree,
       totalFiles,
       isNew,
+      python: py.ok
+        ? { ready: true, already: !!py.already, detail: py.detail || null }
+        : { ready: false, error: py.error || 'python install failed' },
     });
 
   } catch (err) {

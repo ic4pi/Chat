@@ -365,6 +365,13 @@ select:focus, input[type="text"]:focus, textarea:focus {
 .msg.bot .content { white-space: normal; }
 .msg.bot .content p { margin: 0 0 8px 0; white-space: pre-wrap; }
 .msg.bot .content p:last-child { margin-bottom: 0; }
+.msg-speak {
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--accent-dim);
+  border-color: #2a2a2a;
+  padding: 4px 8px;
+}
 
 .msg pre.code-block {
   background: var(--code-bg);

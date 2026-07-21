@@ -34,6 +34,8 @@ export interface RepoContextState {
   pendingChanges: PendingChange[];
   loading:        boolean;
   error:          string | null;
+  pythonReady:    boolean | null;
+  pythonDetail:   string | null;
 }
 
 export interface RepoContextActions {
@@ -60,6 +62,8 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
   const [pendingChanges, setPendingChanges] = useState<PendingChange[]>([]);
   const [loading,        setLoading]        = useState(false);
   const [error,          setError]          = useState<string | null>(null);
+  const [pythonReady,    setPythonReady]    = useState<boolean | null>(null);
+  const [pythonDetail,   setPythonDetail]   = useState<string | null>(null);
 
   /** Build fetch headers — adds X-Sandbox-Session when we have a remote session */
   const sessionHeaders = useCallback((extra?: Record<string, string>): Record<string, string> => {
@@ -89,6 +93,7 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
         const data = await res.json() as {
           sandboxId?: string; repoDir?: string;
           tree?: FileNode[]; totalFiles?: number; error?: string;
+          python?: { ready?: boolean; already?: boolean; detail?: string; error?: string };
         };
         if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
         setSandboxId(data.sandboxId ?? null);
@@ -97,6 +102,17 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
         setRoot(data.repoDir ?? rootPathOrUrl);
         setTree(data.tree ?? []);
         setTotalFiles(data.totalFiles ?? 0);
+        if (data.python) {
+          setPythonReady(!!data.python.ready);
+          setPythonDetail(
+            data.python.ready
+              ? (data.python.detail || (data.python.already ? 'Python already installed' : 'Python + pip ready'))
+              : (data.python.error || 'Python install failed'),
+          );
+        } else {
+          setPythonReady(null);
+          setPythonDetail(null);
+        }
       } else {
         // Local mode: direct /files endpoint on sandbox-runner
         setSandboxId(null);
@@ -182,6 +198,7 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
   return {
     root, sandboxId, isRemote, repoUrl, tree, totalFiles,
     contextFiles, pendingChanges, loading, error,
+    pythonReady, pythonDetail,
     openRepo, addToContext, injectContextFile, removeFromContext, clearContext,
     setPendingChanges, applyChanges, clearChanges,
   };

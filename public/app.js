@@ -476,6 +476,19 @@ function renderMessageInto(container, m) {
 
   if (m.role === 'assistant') {
     renderMarkdownInto(content, m.content || (m.streaming ? '…' : ''));
+    if (m.content && !m.streaming) {
+      const speak = document.createElement('button');
+      speak.type = 'button';
+      speak.className = 'text-btn msg-speak';
+      speak.textContent = 'Read aloud';
+      speak.title = 'Speak this reply (works on iPhone)';
+      speak.addEventListener('click', (e) => {
+        e.preventDefault();
+        unlockTts();
+        setTimeout(() => speakReply(m.content, { force: true }), 120);
+      });
+      div.appendChild(speak);
+    }
   } else {
     content.textContent = m.content || '';
   }
@@ -1368,43 +1381,156 @@ if (els.roleSelect) {
 const SPEAK_PREF_KEY = 'uncensored_speak_replies_v1';
 let speakReplies = false;
 try { speakReplies = localStorage.getItem(SPEAK_PREF_KEY) === '1'; } catch { /* ignore */ }
+let ttsUnlocked = false;
+let lastSpokenTs = 0;
 
 function syncSpeakBtn() {
   if (!els.speakBtn) return;
   els.speakBtn.classList.toggle('speak-on', speakReplies);
   els.speakBtn.setAttribute('aria-pressed', speakReplies ? 'true' : 'false');
   els.speakBtn.title = speakReplies
-    ? 'Speaking replies on (tap to mute)'
-    : 'Speak replies aloud (free browser TTS)';
+    ? 'Speaking replies on — tap again to mute (or long-press last reply)'
+    : 'Tap to enable spoken replies (free browser TTS)';
 }
 syncSpeakBtn();
 
-function speakReply(text) {
-  if (!speakReplies || !text) return;
-  if (typeof window === 'undefined' || !window.speechSynthesis) return;
+function warmVoices() {
   try {
+    if (!window.speechSynthesis) return;
+    const voices = window.speechSynthesis.getVoices();
+    if (!voices.length) {
+      window.speechSynthesis.addEventListener('voiceschanged', () => {
+        window.speechSynthesis.getVoices();
+      }, { once: true });
+    }
+  } catch { /* ignore */ }
+}
+warmVoices();
+
+function cleanForSpeech(text) {
+  return String(text || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/[#*_`>+]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 1200);
+}
+
+/** iOS Safari only allows speak() after a user gesture — unlock with a short phrase. */
+function unlockTts() {
+  if (typeof window === 'undefined' || !window.speechSynthesis) return false;
+  try {
+    warmVoices();
+    // Safari: cancel then speak in the same tick often drops audio — wait a beat.
     window.speechSynthesis.cancel();
-    // Strip code-ish fences so TTS doesn't drone through dumps
-    const clean = String(text)
-      .replace(/```[\s\S]*?```/g, ' ')
-      .replace(/[#*_`]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 1200);
-    if (!clean) return;
-    const u = new SpeechSynthesisUtterance(clean);
-    u.rate = 1.05;
+    const u = new SpeechSynthesisUtterance('Voice on');
+    u.volume = 0.01; // near-silent unlock (still counts as a gesture speak)
+    u.rate = 1.2;
     window.speechSynthesis.speak(u);
+    ttsUnlocked = true;
+    // Some iOS builds pause immediately — nudge resume
+    setTimeout(() => {
+      try {
+        if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+      } catch { /* ignore */ }
+    }, 80);
+    return true;
   } catch (err) {
-    console.warn('TTS failed:', err);
+    console.warn('TTS unlock failed:', err);
+    return false;
   }
 }
 
+function speakReply(text, { force = false } = {}) {
+  if (!force && !speakReplies) return;
+  if (typeof window === 'undefined' || !window.speechSynthesis) {
+    if (force) alert('Spoken replies need a browser with speech synthesis.');
+    return;
+  }
+  const clean = cleanForSpeech(text);
+  if (!clean) return;
+
+  const run = () => {
+    try {
+      // Avoid cancel()+speak() in the same tick on Safari
+      try { window.speechSynthesis.resume(); } catch { /* ignore */ }
+      const u = new SpeechSynthesisUtterance(clean);
+      u.rate = 1.02;
+      const voices = window.speechSynthesis.getVoices?.() || [];
+      const en = voices.find(v => /en[-_]/i.test(v.lang) && /female|samantha|google|enhanced/i.test(v.name))
+        || voices.find(v => /en[-_]/i.test(v.lang));
+      if (en) u.voice = en;
+      u.onerror = (e) => console.warn('TTS error', e);
+      window.speechSynthesis.speak(u);
+      lastSpokenTs = Date.now();
+      // iOS sometimes starts paused when not in gesture — try resume loop briefly
+      let n = 0;
+      const kick = setInterval(() => {
+        n += 1;
+        try {
+          if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+          if (!window.speechSynthesis.speaking || n > 10) clearInterval(kick);
+        } catch {
+          clearInterval(kick);
+        }
+      }, 200);
+    } catch (err) {
+      console.warn('TTS failed:', err);
+    }
+  };
+
+  if (!ttsUnlocked) {
+    // Without a prior gesture unlock, iOS will silently no-op.
+    // Still attempt after a short delay in case desktop browsers are fine.
+    setTimeout(run, 60);
+    return;
+  }
+
+  try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
+  setTimeout(run, 120);
+}
+
 els.speakBtn?.addEventListener('click', () => {
-  speakReplies = !speakReplies;
+  const turningOn = !speakReplies;
+  speakReplies = turningOn;
   try { localStorage.setItem(SPEAK_PREF_KEY, speakReplies ? '1' : '0'); } catch { /* ignore */ }
-  if (!speakReplies && window.speechSynthesis) window.speechSynthesis.cancel();
+
+  if (!speakReplies) {
+    try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
+    syncSpeakBtn();
+    return;
+  }
+
+  // Unlock TTS inside the click gesture (required on iPhone), then confirm.
+  const ok = unlockTts();
   syncSpeakBtn();
+  if (!ok && !window.speechSynthesis) {
+    speakReplies = false;
+    try { localStorage.setItem(SPEAK_PREF_KEY, '0'); } catch { /* ignore */ }
+    syncSpeakBtn();
+    alert('This browser cannot speak replies. Try Safari or Chrome on a real phone/desktop.');
+    return;
+  }
+
+  // Speak a clear confirmation at normal volume after unlock whisper
+  setTimeout(() => {
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance('Spoken replies are on. I will read answers aloud.');
+      u.rate = 1.05;
+      window.speechSynthesis.speak(u);
+    } catch { /* ignore */ }
+  }, 250);
+});
+
+// Double-tap speaker while ON = read the last assistant message (gesture-safe).
+els.speakBtn?.addEventListener('dblclick', () => {
+  const chat = activeChat();
+  const last = [...(chat?.messages || [])].reverse().find(m => m.role === 'assistant');
+  if (last) {
+    unlockTts();
+    setTimeout(() => speakReply(last.content, { force: true }), 150);
+  }
 });
 
 let recognition = null;

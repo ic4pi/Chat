@@ -5,13 +5,13 @@
  */
 
 import { setupSSE, sseEvent } from '../lib/sse.js';
-import { requireSession, REPO_DIR } from '../lib/sandbox-session.js';
+import { requireSession, ensurePythonStack, REPO_DIR, VENV_DIR } from '../lib/sandbox-session.js';
 
 const DEFAULT_TIMEOUT = 2 * 60 * 1000;
 
 const LANG_CONFIG = {
-  python: { ext: '.py', runner: ['python3'] },
-  py:     { ext: '.py', runner: ['python3'] },
+  python: { ext: '.py', runner: ['python3'], needsPython: true },
+  py:     { ext: '.py', runner: ['python3'], needsPython: true },
   javascript: { ext: '.js', runner: ['node'] },
   js:         { ext: '.js', runner: ['node'] },
   typescript: { ext: '.ts', runner: ['npx', 'ts-node', '--skipProject'] },
@@ -42,10 +42,31 @@ export default async function handler(req, res) {
     const sandbox = await requireSession(req);
     sseEvent(res, 'status', `Running ${lang || 'bash'} in sandbox ${sandbox.name}`);
 
+    if (config.needsPython) {
+      sseEvent(res, 'status', 'Ensuring Python + pip…');
+      const py = await ensurePythonStack(sandbox);
+      if (!py.ok) {
+        sseEvent(res, 'stderr', `Python setup failed: ${py.error || 'unknown'}\n`);
+      } else if (!py.already) {
+        sseEvent(res, 'status', py.detail || 'Python ready');
+      }
+    }
+
     const filename = `_snippet${config.ext}`;
     await sandbox.writeFiles([{ path: `/tmp/${filename}`, content: Buffer.from(code, 'utf8') }]);
 
-    const [cmd, ...args] = config.runner;
+    // Prefer the sandbox venv interpreter when present.
+    let runner = config.runner;
+    if (config.needsPython) {
+      const venvPy = await sandbox.runCommand({
+        cmd: 'bash',
+        args: ['-lc', `test -x ${VENV_DIR}/bin/python && echo yes || echo no`],
+      });
+      const out = typeof venvPy.stdout === 'function' ? (await venvPy.stdout()).trim() : '';
+      if (out === 'yes') runner = [`${VENV_DIR}/bin/python`];
+    }
+
+    const [cmd, ...args] = runner;
     const sdxCmd = await sandbox.runCommand({
       cmd, args: [...args, `/tmp/${filename}`],
       cwd: REPO_DIR,

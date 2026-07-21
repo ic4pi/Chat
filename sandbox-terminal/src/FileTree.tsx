@@ -92,6 +92,8 @@ interface Props {
   contextFiles:   Map<string, string>;
   loading:        boolean;
   error:          string | null;
+  pythonReady?:   boolean | null;
+  pythonDetail?:  string | null;
   onOpenRepo:     (path: string) => void;
   onAddToContext: (relPath: string) => void;
   onRemoveFromContext: (relPath: string) => void;
@@ -100,6 +102,7 @@ interface Props {
 
 export function FileTree({
   repoRoot, tree, totalFiles, contextFiles, loading, error,
+  pythonReady, pythonDetail,
   onOpenRepo, onAddToContext, onRemoveFromContext, onClearContext,
 }: Props) {
   const [inputPath, setInputPath] = useState(repoRoot || '');
@@ -144,6 +147,15 @@ export function FileTree({
         </div>
         {error && (
           <div style={{ marginTop: 5, fontSize: 11, color: '#ff6a6a' }}>✗ {error}</div>
+        )}
+        {pythonReady != null && (
+          <div style={{
+            marginTop: 5, fontSize: 10, lineHeight: 1.4,
+            color: pythonReady ? '#8fbf6f' : '#ff6a6a',
+          }}>
+            {pythonReady ? '●' : '✗'} Python {pythonReady ? 'ready' : 'missing'}
+            {pythonDetail ? ` — ${pythonDetail.slice(0, 80)}` : ''}
+          </div>
         )}
         {repoRoot && !loading && (
           <div style={{ marginTop: 4, fontSize: 10, color: '#555' }}>

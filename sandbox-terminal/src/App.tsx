@@ -738,6 +738,7 @@ export function App() {
     <FileTree
       repoRoot={repo.root} tree={repo.tree} totalFiles={repo.totalFiles}
       contextFiles={repo.contextFiles} loading={repo.loading} error={repo.error}
+      pythonReady={repo.pythonReady} pythonDetail={repo.pythonDetail}
       onOpenRepo={repo.openRepo} onAddToContext={repo.addToContext}
       onRemoveFromContext={repo.removeFromContext} onClearContext={repo.clearContext}
     />
