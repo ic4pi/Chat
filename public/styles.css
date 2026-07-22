@@ -268,8 +268,72 @@ select:focus, input[type="text"]:focus, textarea:focus {
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
   padding-bottom: 2px;
+  /* Let native <select> menus receive taps (iOS often steals them from overflow scroll). */
+  touch-action: pan-x;
 }
 .topbar-row.controls::-webkit-scrollbar { display: none; }
+.ctrl {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 0 0 auto;
+  min-width: 0;
+  position: relative;
+  z-index: 2;
+}
+.ctrl > span {
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  padding-left: 4px;
+}
+.ctrl select {
+  max-width: 220px;
+  min-width: 110px;
+  /* Bigger hit target; native picker needs room on touch devices */
+  min-height: 36px;
+  pointer-events: auto;
+}
+.tone-btn {
+  background: rgba(212, 255, 63, 0.08);
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.tone-btn:hover {
+  background: rgba(212, 255, 63, 0.16);
+  border-color: var(--accent);
+}
+.tone-modal { max-width: 440px; width: min(440px, 94vw); }
+.tone-form {
+  display: grid;
+  gap: 12px;
+  padding: 4px;
+}
+.tone-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.tone-form select {
+  font-size: 16px;
+  min-height: 48px;
+  padding: 10px 12px;
+  width: 100%;
+  max-width: none;
+}
+.tone-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
 #chatTitle {
   font-size: 13px;
   letter-spacing: 0.02em;
@@ -285,24 +349,6 @@ select:focus, input[type="text"]:focus, textarea:focus {
   white-space: nowrap;
 }
 #chatTitle:focus { background: var(--panel); white-space: normal; overflow: visible; }
-.ctrl {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex: 0 0 auto;
-  min-width: 0;
-}
-.ctrl > span {
-  font-size: 9px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--muted-2);
-  padding-left: 4px;
-}
-.ctrl select {
-  max-width: 220px;
-  min-width: 110px;
-}
 #adminLink { text-decoration: none; }
 
 
@@ -838,8 +884,16 @@ button#sendBtn:hover:not(:disabled) { background: var(--accent-dim); }
     flex: 0 0 auto;
   }
   .ctrl select {
-    font-size: 12px;
-    max-width: min(42vw, 160px);
+    font-size: 16px;
+    max-width: min(46vw, 180px);
+    min-height: 44px;
+  }
+  /* On phones, use the Persona · Voice sheet — topbar overflow-scroll steals select taps. */
+  .desk-only { display: none !important; }
+  .topbar-row.controls {
+    overflow-x: visible;
+    flex-wrap: wrap;
+    touch-action: manipulation;
   }
   .msg { max-width: 100%; }
 }

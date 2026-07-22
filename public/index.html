@@ -44,7 +44,8 @@
         <button id="toggleArtifacts" class="icon-btn" title="Toggle artifacts">📎</button>
       </div>
       <div class="topbar-row controls">
-        <label class="ctrl">
+        <button id="toneBtn" class="text-btn ctrl-btn tone-btn" type="button" title="Role, persona, and voice">Persona · Voice</button>
+        <label class="ctrl ctrl-inline">
           <span>role</span>
           <select id="roleSelect">
             <option value="plan">Plan</option>
@@ -52,7 +53,7 @@
             <option value="write">Write</option>
           </select>
         </label>
-        <label class="ctrl">
+        <label class="ctrl ctrl-inline">
           <span>provider</span>
           <select id="providerSelect">
             <option value="venice">Venice</option>
@@ -62,17 +63,17 @@
             <option value="nvidia">NVIDIA</option>
           </select>
         </label>
-        <label class="ctrl">
+        <label class="ctrl ctrl-inline">
           <span>model</span>
           <select id="modelSelect"></select>
         </label>
-        <label class="ctrl">
+        <label class="ctrl ctrl-inline desk-only">
           <span>persona</span>
           <select id="personaSelect"></select>
         </label>
-        <label class="ctrl">
+        <label class="ctrl ctrl-inline desk-only">
           <span>voice</span>
-          <select id="voiceSelect" title="Neural spoken-reply voice (free)">
+          <select id="voiceSelect" title="Voice for the current persona">
             <option value="en-US-AvaNeural">Ava · US</option>
             <option value="en-US-AndrewNeural">Andrew · US</option>
             <option value="en-US-EmmaMultilingualNeural">Emma · US</option>
@@ -103,7 +104,7 @@
         <textarea id="input" rows="1" placeholder="Plan or ask… (code builds in Workspace)" autofocus></textarea>
         <button id="sendBtn" type="submit">Send</button>
       </div>
-      <div id="voiceHint" class="voice-hint">Tap <b>🔊</b> once to enable <b>neural</b> spoken replies (Ava etc. — much clearer than phone robot voice). Pick a voice in the top bar.</div>
+      <div id="voiceHint" class="voice-hint">Tap <b>Persona · Voice</b> to set role / persona / a voice per persona. Tap <b>🔊</b> to hear replies in that persona’s voice.</div>
     </form>
   </main>
 
@@ -119,6 +120,48 @@
     </div>
   </aside>
 
+</div>
+
+<!-- Persona / role / voice sheet (reliable on mobile — topbar selects can miss taps) -->
+<div id="toneModal" class="modal-overlay hidden" role="dialog" aria-modal="true">
+  <div class="modal tone-modal">
+    <div class="modal-header">
+      <h2>Persona · Voice</h2>
+      <button id="closeToneModal" class="icon-btn" title="Close">×</button>
+    </div>
+    <p class="keys-hint">Each persona can have its own speaking voice. Change persona, then pick a voice — it’s saved for that persona.</p>
+    <div class="tone-form">
+      <label>
+        Role
+        <select id="toneRoleSelect">
+          <option value="plan">Plan</option>
+          <option value="review">Review</option>
+          <option value="write">Write</option>
+        </select>
+      </label>
+      <label>
+        Persona
+        <select id="tonePersonaSelect"></select>
+      </label>
+      <label>
+        Voice for this persona
+        <select id="toneVoiceSelect">
+          <option value="en-US-AvaNeural">Ava · US</option>
+          <option value="en-US-AndrewNeural">Andrew · US</option>
+          <option value="en-US-EmmaMultilingualNeural">Emma · US</option>
+          <option value="en-US-BrianMultilingualNeural">Brian · US</option>
+          <option value="en-US-JennyNeural">Jenny · US</option>
+          <option value="en-GB-SoniaNeural">Sonia · UK</option>
+          <option value="en-GB-RyanNeural">Ryan · UK</option>
+          <option value="en-AU-NatashaNeural">Natasha · AU</option>
+        </select>
+      </label>
+      <div class="tone-actions">
+        <button id="previewVoiceBtn" class="text-btn" type="button">Preview voice</button>
+        <button id="saveToneBtn" class="text-btn primary" type="button">Done</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- BYOK keys panel -->

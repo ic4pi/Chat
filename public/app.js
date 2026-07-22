@@ -286,6 +286,15 @@ const els = {
   modelSelect: $('modelSelect'),
   roleSelect: $('roleSelect'),
   personaSelect: $('personaSelect'),
+  voiceSelect: $('voiceSelect'),
+  toneBtn: $('toneBtn'),
+  toneModal: $('toneModal'),
+  closeToneModal: $('closeToneModal'),
+  toneRoleSelect: $('toneRoleSelect'),
+  tonePersonaSelect: $('tonePersonaSelect'),
+  toneVoiceSelect: $('toneVoiceSelect'),
+  previewVoiceBtn: $('previewVoiceBtn'),
+  saveToneBtn: $('saveToneBtn'),
   keysBtn: $('keysBtn'),
   keysModal: $('keysModal'),
   keysForm: $('keysForm'),
@@ -296,7 +305,6 @@ const els = {
   attachPreview: $('attachPreview'),
   micBtn: $('micBtn'),
   speakBtn: $('speakBtn'),
-  voiceSelect: $('voiceSelect'),
   artifactList: $('artifactList'),
   artifactModal: $('artifactModal'),
   artifactModalTitle: $('artifactModalTitle'),
@@ -726,15 +734,21 @@ async function fetchPersonas() {
 }
 
 function renderPersonaSelect() {
-  els.personaSelect.innerHTML = '';
-  for (const p of personas) {
-    const opt = document.createElement('option');
-    opt.value = p.id;
-    opt.textContent = p.name;
-    if (p.description) opt.title = p.description;
-    els.personaSelect.appendChild(opt);
-  }
-  els.personaSelect.value = state.activePersonaId;
+  const fill = (selectEl) => {
+    if (!selectEl) return;
+    selectEl.innerHTML = '';
+    for (const p of personas) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.name;
+      if (p.description) opt.title = p.description;
+      selectEl.appendChild(opt);
+    }
+    selectEl.value = state.activePersonaId;
+  };
+  fill(els.personaSelect);
+  fill(els.tonePersonaSelect);
+  syncVoiceSelectToPersona();
 }
 
 
@@ -1354,43 +1368,145 @@ els.modelSelect.addEventListener('change', () => {
   }
   saveState();
 });
-els.personaSelect.addEventListener('change', () => {
-  state.activePersonaId = els.personaSelect.value;
-  const chat = activeChat();
-  if (chat) chat.personaId = state.activePersonaId;
-  saveState();
+els.personaSelect?.addEventListener('change', () => {
+  applyPersona(els.personaSelect.value);
 });
 
 if (els.roleSelect) {
   els.roleSelect.addEventListener('change', async () => {
-    state.activeRole = els.roleSelect.value;
-    const assigned = roleModels[state.activeRole];
-    if (assigned) {
-      state.activeProvider = assigned.provider;
-      state.activeModel = assigned.model;
-      els.providerSelect.value = state.activeProvider;
-    }
-    saveState();
-    await renderModelSelect();
+    await applyRole(els.roleSelect.value);
   });
 }
+
+// ---------------------------------------------------------------------------
+// Per-persona neural voices + Persona · Voice sheet
+// ---------------------------------------------------------------------------
+
+const SPEAK_PREF_KEY = 'uncensored_speak_replies_v1';
+const VOICE_PREF_KEY = 'uncensored_tts_voice_v1'; // legacy single-voice fallback
+const PERSONA_VOICES_KEY = 'uncensored_persona_voices_v1';
+const DEFAULT_NEURAL_VOICE = 'en-US-AvaNeural';
+const DEFAULT_PERSONA_VOICES = {
+  nexus: 'en-US-AndrewNeural',
+  plain: 'en-US-AvaNeural',
+};
+
+function loadPersonaVoices() {
+  try {
+    const raw = localStorage.getItem(PERSONA_VOICES_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return { ...DEFAULT_PERSONA_VOICES, ...(parsed && typeof parsed === 'object' ? parsed : {}) };
+  } catch {
+    return { ...DEFAULT_PERSONA_VOICES };
+  }
+}
+
+function savePersonaVoices(map) {
+  try { localStorage.setItem(PERSONA_VOICES_KEY, JSON.stringify(map)); } catch { /* ignore */ }
+}
+
+let personaVoices = loadPersonaVoices();
+
+function voiceForPersona(personaId) {
+  const id = personaId || state.activePersonaId || 'nexus';
+  return personaVoices[id]
+    || personaVoices.nexus
+    || localStorage.getItem(VOICE_PREF_KEY)
+    || DEFAULT_NEURAL_VOICE;
+}
+
+function setVoiceForPersona(personaId, voice) {
+  const id = personaId || state.activePersonaId;
+  if (!id || !voice) return;
+  personaVoices = { ...personaVoices, [id]: voice };
+  savePersonaVoices(personaVoices);
+  try { localStorage.setItem(VOICE_PREF_KEY, voice); } catch { /* ignore */ }
+}
+
+function syncVoiceSelectToPersona() {
+  const v = voiceForPersona(state.activePersonaId);
+  if (els.voiceSelect) els.voiceSelect.value = v;
+  if (els.toneVoiceSelect) els.toneVoiceSelect.value = v;
+}
+
+async function applyRole(roleId) {
+  state.activeRole = roleId || 'plan';
+  if (els.roleSelect) els.roleSelect.value = state.activeRole;
+  if (els.toneRoleSelect) els.toneRoleSelect.value = state.activeRole;
+  const assigned = roleModels[state.activeRole];
+  if (assigned) {
+    state.activeProvider = assigned.provider;
+    state.activeModel = assigned.model;
+    if (els.providerSelect) els.providerSelect.value = state.activeProvider;
+  }
+  saveState();
+  await renderModelSelect();
+}
+
+function applyPersona(personaId) {
+  state.activePersonaId = personaId || personas[0]?.id || 'nexus';
+  if (els.personaSelect) els.personaSelect.value = state.activePersonaId;
+  if (els.tonePersonaSelect) els.tonePersonaSelect.value = state.activePersonaId;
+  const chat = activeChat();
+  if (chat) chat.personaId = state.activePersonaId;
+  syncVoiceSelectToPersona();
+  saveState();
+}
+
+function openToneModal() {
+  if (!els.toneModal) return;
+  if (els.toneRoleSelect) els.toneRoleSelect.value = state.activeRole || 'plan';
+  renderPersonaSelect();
+  syncVoiceSelectToPersona();
+  els.toneModal.classList.remove('hidden');
+}
+
+function closeToneModal() {
+  els.toneModal?.classList.add('hidden');
+}
+
+els.toneBtn?.addEventListener('click', openToneModal);
+els.closeToneModal?.addEventListener('click', closeToneModal);
+els.saveToneBtn?.addEventListener('click', closeToneModal);
+els.toneModal?.addEventListener('click', (e) => {
+  if (e.target === els.toneModal) closeToneModal();
+});
+
+els.toneRoleSelect?.addEventListener('change', () => {
+  void applyRole(els.toneRoleSelect.value);
+});
+els.tonePersonaSelect?.addEventListener('change', () => {
+  applyPersona(els.tonePersonaSelect.value);
+});
+els.toneVoiceSelect?.addEventListener('change', () => {
+  setVoiceForPersona(state.activePersonaId, els.toneVoiceSelect.value);
+  syncVoiceSelectToPersona();
+});
+els.voiceSelect?.addEventListener('change', () => {
+  setVoiceForPersona(state.activePersonaId, els.voiceSelect.value);
+  syncVoiceSelectToPersona();
+});
+
+els.previewVoiceBtn?.addEventListener('click', async () => {
+  const voice = els.toneVoiceSelect?.value || voiceForPersona(state.activePersonaId);
+  const personaName = personas.find(p => p.id === state.activePersonaId)?.name || 'this persona';
+  try {
+    const blob = await fetchNeuralAudio(
+      `Hi — I'm ${personaName}. This is how I sound.`,
+      voice,
+    );
+    await playBlob(blob);
+  } catch (err) {
+    alert('Preview failed: ' + (err.message || err));
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Neural spoken replies (Edge TTS via /api/tts) + Workspace handoff
 // ---------------------------------------------------------------------------
 
-const SPEAK_PREF_KEY = 'uncensored_speak_replies_v1';
-const VOICE_PREF_KEY = 'uncensored_tts_voice_v1';
-const DEFAULT_NEURAL_VOICE = 'en-US-AvaNeural';
-
 let speakReplies = false;
 try { speakReplies = localStorage.getItem(SPEAK_PREF_KEY) === '1'; } catch { /* ignore */ }
-
-let neuralVoice = DEFAULT_NEURAL_VOICE;
-try {
-  const saved = localStorage.getItem(VOICE_PREF_KEY);
-  if (saved) neuralVoice = saved;
-} catch { /* ignore */ }
 
 let ttsUnlocked = false;
 let activeAudio = null;
@@ -1402,17 +1518,9 @@ function syncSpeakBtn() {
   els.speakBtn.setAttribute('aria-pressed', speakReplies ? 'true' : 'false');
   els.speakBtn.title = speakReplies
     ? 'Neural spoken replies on — tap to mute'
-    : 'Tap to enable neural spoken replies (Ava / Andrew / …)';
+    : 'Tap to enable neural spoken replies (per persona)';
 }
 syncSpeakBtn();
-
-if (els.voiceSelect) {
-  els.voiceSelect.value = neuralVoice;
-  els.voiceSelect.addEventListener('change', () => {
-    neuralVoice = els.voiceSelect.value || DEFAULT_NEURAL_VOICE;
-    try { localStorage.setItem(VOICE_PREF_KEY, neuralVoice); } catch { /* ignore */ }
-  });
-}
 
 function cleanForSpeech(text) {
   return String(text || '')
@@ -1437,7 +1545,7 @@ function chunkSpeech(text, max = 1800) {
     rest = rest.slice(cut + 1).trim();
   }
   if (rest) parts.push(rest);
-  return parts.slice(0, 4); // cap length so replies don't drone forever
+  return parts.slice(0, 4);
 }
 
 function stopNeuralSpeech() {
@@ -1516,7 +1624,7 @@ async function speakReply(text, { force = false } = {}) {
   const chunks = chunkSpeech(text);
   if (!chunks.length) return;
 
-  const voice = (els.voiceSelect?.value || neuralVoice || DEFAULT_NEURAL_VOICE);
+  const voice = voiceForPersona(state.activePersonaId);
 
   speakQueue = speakQueue.then(async () => {
     try {
@@ -1538,15 +1646,13 @@ async function speakReply(text, { force = false } = {}) {
 async function unlockTts() {
   ttsUnlocked = true;
   try {
-    // Tiny silent-ish unlock via neural "Ready." — also previews the better voice.
-    const blob = await fetchNeuralAudio('Ready.', els.voiceSelect?.value || neuralVoice);
+    const blob = await fetchNeuralAudio('Ready.', voiceForPersona(state.activePersonaId));
     const audio = new Audio(URL.createObjectURL(blob));
     audio.volume = 0.001;
     await audio.play().catch(() => {});
     audio.pause();
     return true;
   } catch {
-    // Still mark unlocked; browser fallback may work after gesture
     try {
       if (window.speechSynthesis) {
         const u = new SpeechSynthesisUtterance(' ');
@@ -1570,11 +1676,11 @@ els.speakBtn?.addEventListener('click', async () => {
   }
 
   syncSpeakBtn();
+  const personaName = personas.find(p => p.id === state.activePersonaId)?.name || 'your persona';
   try {
-    // Full confirmation in the chosen neural voice (gesture-safe on iOS)
     const blob = await fetchNeuralAudio(
-      'Spoken replies are on. I will read answers with a clearer voice.',
-      els.voiceSelect?.value || neuralVoice,
+      `Spoken replies are on. I'll speak as ${personaName}.`,
+      voiceForPersona(state.activePersonaId),
     );
     ttsUnlocked = true;
     await playBlob(blob);
@@ -1803,6 +1909,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (!els.artifactModal.classList.contains('hidden')) closeArtifactModal();
     if (els.keysModal && !els.keysModal.classList.contains('hidden')) closeKeysModal();
+    if (els.toneModal && !els.toneModal.classList.contains('hidden')) closeToneModal();
   }
 });
 
