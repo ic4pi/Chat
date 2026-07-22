@@ -70,6 +70,19 @@
           <span>persona</span>
           <select id="personaSelect"></select>
         </label>
+        <label class="ctrl">
+          <span>voice</span>
+          <select id="voiceSelect" title="Neural spoken-reply voice (free)">
+            <option value="en-US-AvaNeural">Ava · US</option>
+            <option value="en-US-AndrewNeural">Andrew · US</option>
+            <option value="en-US-EmmaMultilingualNeural">Emma · US</option>
+            <option value="en-US-BrianMultilingualNeural">Brian · US</option>
+            <option value="en-US-JennyNeural">Jenny · US</option>
+            <option value="en-GB-SoniaNeural">Sonia · UK</option>
+            <option value="en-GB-RyanNeural">Ryan · UK</option>
+            <option value="en-AU-NatashaNeural">Natasha · AU</option>
+          </select>
+        </label>
         <button id="keysBtn" class="text-btn ctrl-btn" type="button" title="Bring your own API keys">Keys</button>
       </div>
     </header>
@@ -86,11 +99,11 @@
         <input id="attachInput" type="file" multiple accept="image/*,.txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.css,.html,.yml,.yaml,.csv" hidden />
         <button id="attachBtn" type="button" class="icon-btn" title="Upload photo or file">📎</button>
         <button id="micBtn" type="button" class="icon-btn" title="Free voice input (browser speech — Chrome/Safari best)">🎤</button>
-        <button id="speakBtn" type="button" class="icon-btn" title="Speak replies aloud (free browser TTS)" aria-pressed="false">🔊</button>
+        <button id="speakBtn" type="button" class="icon-btn" title="Speak replies with neural voice" aria-pressed="false">🔊</button>
         <textarea id="input" rows="1" placeholder="Plan or ask… (code builds in Workspace)" autofocus></textarea>
         <button id="sendBtn" type="submit">Send</button>
       </div>
-      <div id="voiceHint" class="voice-hint">Chat stays prose (no code dumps). Tap <b>Workspace</b> for files + terminal. Tap <b>🔊</b> once to enable spoken replies (required on iPhone), then answers are read aloud.</div>
+      <div id="voiceHint" class="voice-hint">Tap <b>🔊</b> once to enable <b>neural</b> spoken replies (Ava etc. — much clearer than phone robot voice). Pick a voice in the top bar.</div>
     </form>
   </main>
 

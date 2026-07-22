@@ -9,6 +9,7 @@
   "dependencies": {
     "@vercel/sandbox": "^2.6.0",
     "cors": "^2.8.5",
+    "edge-tts-universal": "^1.4.0",
     "ignore": "^7.0.6"
   }
 }

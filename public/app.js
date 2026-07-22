@@ -296,6 +296,7 @@ const els = {
   attachPreview: $('attachPreview'),
   micBtn: $('micBtn'),
   speakBtn: $('speakBtn'),
+  voiceSelect: $('voiceSelect'),
   artifactList: $('artifactList'),
   artifactModal: $('artifactModal'),
   artifactModalTitle: $('artifactModalTitle'),
@@ -1375,162 +1376,219 @@ if (els.roleSelect) {
 }
 
 // ---------------------------------------------------------------------------
-// Free voice (Web Speech API) + Workspace handoff
+// Neural spoken replies (Edge TTS via /api/tts) + Workspace handoff
 // ---------------------------------------------------------------------------
 
 const SPEAK_PREF_KEY = 'uncensored_speak_replies_v1';
+const VOICE_PREF_KEY = 'uncensored_tts_voice_v1';
+const DEFAULT_NEURAL_VOICE = 'en-US-AvaNeural';
+
 let speakReplies = false;
 try { speakReplies = localStorage.getItem(SPEAK_PREF_KEY) === '1'; } catch { /* ignore */ }
+
+let neuralVoice = DEFAULT_NEURAL_VOICE;
+try {
+  const saved = localStorage.getItem(VOICE_PREF_KEY);
+  if (saved) neuralVoice = saved;
+} catch { /* ignore */ }
+
 let ttsUnlocked = false;
-let lastSpokenTs = 0;
+let activeAudio = null;
+let speakQueue = Promise.resolve();
 
 function syncSpeakBtn() {
   if (!els.speakBtn) return;
   els.speakBtn.classList.toggle('speak-on', speakReplies);
   els.speakBtn.setAttribute('aria-pressed', speakReplies ? 'true' : 'false');
   els.speakBtn.title = speakReplies
-    ? 'Speaking replies on — tap again to mute (or long-press last reply)'
-    : 'Tap to enable spoken replies (free browser TTS)';
+    ? 'Neural spoken replies on — tap to mute'
+    : 'Tap to enable neural spoken replies (Ava / Andrew / …)';
 }
 syncSpeakBtn();
 
-function warmVoices() {
-  try {
-    if (!window.speechSynthesis) return;
-    const voices = window.speechSynthesis.getVoices();
-    if (!voices.length) {
-      window.speechSynthesis.addEventListener('voiceschanged', () => {
-        window.speechSynthesis.getVoices();
-      }, { once: true });
-    }
-  } catch { /* ignore */ }
+if (els.voiceSelect) {
+  els.voiceSelect.value = neuralVoice;
+  els.voiceSelect.addEventListener('change', () => {
+    neuralVoice = els.voiceSelect.value || DEFAULT_NEURAL_VOICE;
+    try { localStorage.setItem(VOICE_PREF_KEY, neuralVoice); } catch { /* ignore */ }
+  });
 }
-warmVoices();
 
 function cleanForSpeech(text) {
   return String(text || '')
     .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\[Uploaded (file|image):[^\]]*\]/gi, ' ')
     .replace(/[#*_`>+]+/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 1200);
+    .trim();
 }
 
-/** iOS Safari only allows speak() after a user gesture — unlock with a short phrase. */
-function unlockTts() {
-  if (typeof window === 'undefined' || !window.speechSynthesis) return false;
-  try {
-    warmVoices();
-    // Safari: cancel then speak in the same tick often drops audio — wait a beat.
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance('Voice on');
-    u.volume = 0.01; // near-silent unlock (still counts as a gesture speak)
-    u.rate = 1.2;
-    window.speechSynthesis.speak(u);
-    ttsUnlocked = true;
-    // Some iOS builds pause immediately — nudge resume
-    setTimeout(() => {
-      try {
-        if (window.speechSynthesis.paused) window.speechSynthesis.resume();
-      } catch { /* ignore */ }
-    }, 80);
-    return true;
-  } catch (err) {
-    console.warn('TTS unlock failed:', err);
-    return false;
-  }
-}
-
-function speakReply(text, { force = false } = {}) {
-  if (!force && !speakReplies) return;
-  if (typeof window === 'undefined' || !window.speechSynthesis) {
-    if (force) alert('Spoken replies need a browser with speech synthesis.');
-    return;
-  }
+function chunkSpeech(text, max = 1800) {
   const clean = cleanForSpeech(text);
-  if (!clean) return;
-
-  const run = () => {
-    try {
-      // Avoid cancel()+speak() in the same tick on Safari
-      try { window.speechSynthesis.resume(); } catch { /* ignore */ }
-      const u = new SpeechSynthesisUtterance(clean);
-      u.rate = 1.02;
-      const voices = window.speechSynthesis.getVoices?.() || [];
-      const en = voices.find(v => /en[-_]/i.test(v.lang) && /female|samantha|google|enhanced/i.test(v.name))
-        || voices.find(v => /en[-_]/i.test(v.lang));
-      if (en) u.voice = en;
-      u.onerror = (e) => console.warn('TTS error', e);
-      window.speechSynthesis.speak(u);
-      lastSpokenTs = Date.now();
-      // iOS sometimes starts paused when not in gesture — try resume loop briefly
-      let n = 0;
-      const kick = setInterval(() => {
-        n += 1;
-        try {
-          if (window.speechSynthesis.paused) window.speechSynthesis.resume();
-          if (!window.speechSynthesis.speaking || n > 10) clearInterval(kick);
-        } catch {
-          clearInterval(kick);
-        }
-      }, 200);
-    } catch (err) {
-      console.warn('TTS failed:', err);
-    }
-  };
-
-  if (!ttsUnlocked) {
-    // Without a prior gesture unlock, iOS will silently no-op.
-    // Still attempt after a short delay in case desktop browsers are fine.
-    setTimeout(run, 60);
-    return;
+  if (!clean) return [];
+  if (clean.length <= max) return [clean];
+  const parts = [];
+  let rest = clean;
+  while (rest.length > max) {
+    let cut = rest.lastIndexOf('. ', max);
+    if (cut < max * 0.4) cut = rest.lastIndexOf(' ', max);
+    if (cut < max * 0.3) cut = max;
+    parts.push(rest.slice(0, cut + 1).trim());
+    rest = rest.slice(cut + 1).trim();
   }
-
-  try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
-  setTimeout(run, 120);
+  if (rest) parts.push(rest);
+  return parts.slice(0, 4); // cap length so replies don't drone forever
 }
 
-els.speakBtn?.addEventListener('click', () => {
+function stopNeuralSpeech() {
+  try {
+    if (activeAudio) {
+      activeAudio.pause();
+      activeAudio.src = '';
+      activeAudio = null;
+    }
+  } catch { /* ignore */ }
+  try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
+}
+
+async function fetchNeuralAudio(text, voice) {
+  const res = await fetch('/api/tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, voice }),
+  });
+  if (!res.ok) {
+    let msg = `TTS HTTP ${res.status}`;
+    try {
+      const data = await res.json();
+      if (data?.error) msg = data.error;
+    } catch { /* ignore */ }
+    throw new Error(msg);
+  }
+  return res.blob();
+}
+
+function playBlob(blob) {
+  return new Promise((resolve, reject) => {
+    stopNeuralSpeech();
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    activeAudio = audio;
+    audio.onended = () => {
+      URL.revokeObjectURL(url);
+      if (activeAudio === audio) activeAudio = null;
+      resolve();
+    };
+    audio.onerror = () => {
+      URL.revokeObjectURL(url);
+      if (activeAudio === audio) activeAudio = null;
+      reject(new Error('Audio playback failed'));
+    };
+    const p = audio.play();
+    if (p && typeof p.catch === 'function') {
+      p.catch((err) => {
+        URL.revokeObjectURL(url);
+        reject(err);
+      });
+    }
+  });
+}
+
+/** Fallback robotic browser voice — only if neural TTS fails. */
+function speakBrowserFallback(text) {
+  if (!window.speechSynthesis) return;
+  try {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(cleanForSpeech(text).slice(0, 1200));
+    u.rate = 1.02;
+    const voices = window.speechSynthesis.getVoices?.() || [];
+    const en = voices.find(v => /en[-_]/i.test(v.lang) && /enhanced|premium|neural|samantha|google/i.test(v.name))
+      || voices.find(v => /en[-_]/i.test(v.lang));
+    if (en) u.voice = en;
+    window.speechSynthesis.speak(u);
+  } catch (err) {
+    console.warn('browser TTS fallback failed', err);
+  }
+}
+
+async function speakReply(text, { force = false } = {}) {
+  if (!force && !speakReplies) return;
+  const chunks = chunkSpeech(text);
+  if (!chunks.length) return;
+
+  const voice = (els.voiceSelect?.value || neuralVoice || DEFAULT_NEURAL_VOICE);
+
+  speakQueue = speakQueue.then(async () => {
+    try {
+      for (const chunk of chunks) {
+        const blob = await fetchNeuralAudio(chunk, voice);
+        await playBlob(blob);
+      }
+      ttsUnlocked = true;
+    } catch (err) {
+      console.warn('Neural TTS failed, falling back:', err);
+      speakBrowserFallback(chunks.join(' '));
+    }
+  }).catch(() => { /* queue continues */ });
+
+  return speakQueue;
+}
+
+/** Must run inside a user gesture on iPhone so later Audio.play() is allowed. */
+async function unlockTts() {
+  ttsUnlocked = true;
+  try {
+    // Tiny silent-ish unlock via neural "Ready." — also previews the better voice.
+    const blob = await fetchNeuralAudio('Ready.', els.voiceSelect?.value || neuralVoice);
+    const audio = new Audio(URL.createObjectURL(blob));
+    audio.volume = 0.001;
+    await audio.play().catch(() => {});
+    audio.pause();
+    return true;
+  } catch {
+    // Still mark unlocked; browser fallback may work after gesture
+    try {
+      if (window.speechSynthesis) {
+        const u = new SpeechSynthesisUtterance(' ');
+        u.volume = 0;
+        window.speechSynthesis.speak(u);
+      }
+    } catch { /* ignore */ }
+    return true;
+  }
+}
+
+els.speakBtn?.addEventListener('click', async () => {
   const turningOn = !speakReplies;
   speakReplies = turningOn;
   try { localStorage.setItem(SPEAK_PREF_KEY, speakReplies ? '1' : '0'); } catch { /* ignore */ }
 
   if (!speakReplies) {
-    try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
+    stopNeuralSpeech();
     syncSpeakBtn();
     return;
   }
 
-  // Unlock TTS inside the click gesture (required on iPhone), then confirm.
-  const ok = unlockTts();
   syncSpeakBtn();
-  if (!ok && !window.speechSynthesis) {
-    speakReplies = false;
-    try { localStorage.setItem(SPEAK_PREF_KEY, '0'); } catch { /* ignore */ }
-    syncSpeakBtn();
-    alert('This browser cannot speak replies. Try Safari or Chrome on a real phone/desktop.');
-    return;
+  try {
+    // Full confirmation in the chosen neural voice (gesture-safe on iOS)
+    const blob = await fetchNeuralAudio(
+      'Spoken replies are on. I will read answers with a clearer voice.',
+      els.voiceSelect?.value || neuralVoice,
+    );
+    ttsUnlocked = true;
+    await playBlob(blob);
+  } catch (err) {
+    console.warn(err);
+    unlockTts();
+    speakBrowserFallback('Spoken replies are on, but the neural voice failed to load. Using the phone voice for now.');
   }
-
-  // Speak a clear confirmation at normal volume after unlock whisper
-  setTimeout(() => {
-    try {
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance('Spoken replies are on. I will read answers aloud.');
-      u.rate = 1.05;
-      window.speechSynthesis.speak(u);
-    } catch { /* ignore */ }
-  }, 250);
 });
 
-// Double-tap speaker while ON = read the last assistant message (gesture-safe).
 els.speakBtn?.addEventListener('dblclick', () => {
   const chat = activeChat();
   const last = [...(chat?.messages || [])].reverse().find(m => m.role === 'assistant');
-  if (last) {
-    unlockTts();
-    setTimeout(() => speakReply(last.content, { force: true }), 150);
-  }
+  if (last) void speakReply(last.content, { force: true });
 });
 
 let recognition = null;
