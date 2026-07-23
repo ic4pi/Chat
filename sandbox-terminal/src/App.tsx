@@ -700,6 +700,8 @@ export function App() {
           onUploadText={(name, content) => repo.injectContextFile(name, content)}
           onBeforeSend={handleAutoContext}
           searchHits={searchHits}
+          pythonReady={repo.pythonReady}
+          pythonDetail={repo.pythonDetail}
         />
       </div>
       <DiffPanel

@@ -41,6 +41,7 @@
         <h1 id="chatTitle" contenteditable="true" spellcheck="false">Untitled</h1>
         <a id="adminLink" class="icon-btn" href="/admin" target="_blank" rel="noopener" title="Admin (personas &amp; master prompt)">⚙</a>
         <button id="workspaceBtn" class="text-btn ctrl-btn workspace-btn" type="button" title="Open this chat in Workspace (files + terminal sandbox)">Workspace</button>
+        <button id="groupBtn" class="text-btn ctrl-btn group-btn" type="button" title="Group chat — all personas around a table">Group</button>
         <button id="toggleArtifacts" class="icon-btn" title="Toggle artifacts">📎</button>
       </div>
       <div class="topbar-row controls">
@@ -159,6 +160,50 @@
       <div class="tone-actions">
         <button id="previewVoiceBtn" class="text-btn" type="button">Preview voice</button>
         <button id="saveToneBtn" class="text-btn primary" type="button">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Group module: pick mode + topic, then all personas sit at the table -->
+<div id="groupModal" class="modal-overlay hidden" role="dialog" aria-modal="true">
+  <div class="modal group-modal">
+    <div class="modal-header">
+      <h2>Group table</h2>
+      <button id="closeGroupModal" class="icon-btn" title="Close">×</button>
+    </div>
+    <p class="keys-hint">All personas join one conversation. Pick a vibe, set the topic, then talk to the table.</p>
+    <div class="group-form">
+      <fieldset class="group-modes">
+        <legend>Mode</legend>
+        <label class="group-mode">
+          <input type="radio" name="groupMode" value="boardroom" />
+          <span>
+            <strong>Boardroom</strong>
+            <small>Fully serious. Decisions and substance only.</small>
+          </span>
+        </label>
+        <label class="group-mode">
+          <input type="radio" name="groupMode" value="brainstorm" checked />
+          <span>
+            <strong>Brainstorm</strong>
+            <small>Serious about ideas — room to joke while working.</small>
+          </span>
+        </label>
+        <label class="group-mode">
+          <input type="radio" name="groupMode" value="freechat" />
+          <span>
+            <strong>Free chat</strong>
+            <small>Hang out. Whatever tone fits.</small>
+          </span>
+        </label>
+      </fieldset>
+      <label class="group-topic-label">
+        Topic
+        <input id="groupTopicInput" type="text" maxlength="200" placeholder="e.g. Launch pricing for the new API" />
+      </label>
+      <div class="tone-actions">
+        <button id="startGroupBtn" class="text-btn primary" type="button">Open the table</button>
       </div>
     </div>
   </div>

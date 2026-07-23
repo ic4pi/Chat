@@ -5,13 +5,21 @@
  *
  * SSE events: status | stdout | stderr | exit | timeout | error
  * Each data field is a JSON-encoded string.
+ *
+ * PATH always prefers the sandbox venv so `python` / `pip` work after Open repo.
+ * Commands that look like Python/pip also force ensurePythonStack first.
  */
 
-import { Sandbox } from '@vercel/sandbox';
 import { setupSSE, sseEvent } from '../lib/sse.js';
-import { requireSession, REPO_DIR } from '../lib/sandbox-session.js';
+import {
+  requireSession,
+  ensurePythonStack,
+  REPO_DIR,
+  venvPathExport,
+} from '../lib/sandbox-session.js';
 
 const DEFAULT_TIMEOUT = 2 * 60 * 1000;
+const PY_CMD_RE = /(^|[\s;/|&])(python3?|pip3?|pyvenv|venv)([\s;/|&]|$)/i;
 
 export default async function handler(req, res) {
   if (!setupSSE(res, req)) return;
@@ -32,8 +40,24 @@ export default async function handler(req, res) {
     sandbox = await requireSession(req);
     sseEvent(res, 'status', `Running in sandbox ${sandbox.name}`);
 
+    if (PY_CMD_RE.test(command)) {
+      sseEvent(res, 'status', 'Ensuring Python + pip (venv)…');
+      const py = await ensurePythonStack(sandbox);
+      if (!py.ok) {
+        sseEvent(res, 'stderr', `Python setup failed: ${py.error || 'unknown'}\n`);
+        sseEvent(res, 'exit', '1');
+        return;
+      }
+      if (!py.already) {
+        sseEvent(res, 'status', py.detail || 'Python ready');
+      }
+    }
+
+    // Always prepend venv so python/pip resolve even when the model forgot to activate.
+    const wrapped = `${venvPathExport()}; cd ${REPO_DIR} && ${command}`;
+
     const cmd = await sandbox.runCommand({
-      cmd: 'bash', args: ['-c', command],
+      cmd: 'bash', args: ['-lc', wrapped],
       cwd: REPO_DIR,
       detached: true,
     });

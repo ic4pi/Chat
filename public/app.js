@@ -235,14 +235,18 @@ function ensureActiveChat() {
   return chat;
 }
 
-function createChat() {
+function createChat(opts = {}) {
   const chat = {
     id: uid(),
-    name: 'New chat',
+    name: opts.name || 'New chat',
+    kind: opts.kind || 'chat',
+    groupMode: opts.groupMode || null,
+    topic: opts.topic || null,
+    groupSummary: opts.groupSummary || '',
     provider: state.activeProvider,
     model: state.activeModel,
     personaId: state.activePersonaId,
-    messages: [],
+    messages: opts.messages || [],
     artifacts: [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -250,6 +254,28 @@ function createChat() {
   state.chats.unshift(chat);
   state.activeChatId = chat.id;
   saveState();
+  return chat;
+}
+
+const GROUP_MODE_LABELS = {
+  boardroom: 'Boardroom',
+  brainstorm: 'Brainstorm',
+  freechat: 'Free chat',
+};
+
+function createGroupChat(mode, topic) {
+  const label = GROUP_MODE_LABELS[mode] || 'Group';
+  const chat = createChat({
+    kind: 'group',
+    groupMode: mode,
+    topic,
+    name: `${label}: ${topic.slice(0, 36)}`,
+    messages: [{
+      role: 'info',
+      content: `${label} table · topic: ${topic}. Everyone is here — say something to start the round.`,
+      ts: Date.now(),
+    }],
+  });
   return chat;
 }
 
@@ -300,6 +326,11 @@ const els = {
   keysForm: $('keysForm'),
   closeKeysModal: $('closeKeysModal'),
   workspaceBtn: $('workspaceBtn'),
+  groupBtn: $('groupBtn'),
+  groupModal: $('groupModal'),
+  closeGroupModal: $('closeGroupModal'),
+  groupTopicInput: $('groupTopicInput'),
+  startGroupBtn: $('startGroupBtn'),
   attachBtn: $('attachBtn'),
   attachInput: $('attachInput'),
   attachPreview: $('attachPreview'),
@@ -379,6 +410,13 @@ function renderChatList() {
       renderAll();
     });
 
+    if (c.kind === 'group') {
+      const tag = document.createElement('span');
+      tag.className = 'group-tag';
+      tag.textContent = GROUP_MODE_LABELS[c.groupMode] || 'Group';
+      li.appendChild(tag);
+    }
+
     const save = document.createElement('button');
     save.className = 'chat-action save-chat';
     save.textContent = '⤓';
@@ -437,6 +475,15 @@ function renderMessages(opts = {}) {
   els.chat.innerHTML = '';
   const chat = activeChat();
   if (!chat) return;
+
+  if (chat.kind === 'group') {
+    const banner = document.createElement('div');
+    banner.className = 'group-banner';
+    const modeLabel = GROUP_MODE_LABELS[chat.groupMode] || 'Group';
+    banner.innerHTML = `<strong>${modeLabel}</strong> · ${escapeHtml(chat.topic || 'Untitled topic')} — all personas at the table. Each round uses a short summary of the last ~10 messages.`;
+    els.chat.appendChild(banner);
+  }
+
   let pinEl = null;
   for (const m of chat.messages) {
     const el = renderMessageInto(els.chat, m);
@@ -459,6 +506,14 @@ function renderMessages(opts = {}) {
   }
 }
 
+function escapeHtml(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 function renderMessageInto(container, m) {
   const cls =
     m.role === 'user' ? 'user' :
@@ -467,7 +522,7 @@ function renderMessageInto(container, m) {
     'bot';
 
   const div = document.createElement('div');
-  div.className = 'msg ' + cls + (m.streaming ? ' streaming' : '');
+  div.className = 'msg ' + cls + (m.streaming ? ' streaming' : '') + (m.personaId ? ' group-turn' : '');
   if (m.ts) div.dataset.ts = String(m.ts);
 
   const label = document.createElement('span');
@@ -476,8 +531,11 @@ function renderMessageInto(container, m) {
     m.role === 'user' ? 'you' :
     m.role === 'error' ? 'error' :
     m.role === 'info' ? 'notice' :
-    m.role === 'assistant' ? (m.model ? `model · ${m.model}` : 'model') :
-    m.role;
+    m.role === 'assistant'
+      ? (m.personaName
+        ? m.personaName
+        : (m.model ? `model · ${m.model}` : 'model'))
+      : m.role;
   div.appendChild(label);
 
   const content = document.createElement('div');
@@ -494,7 +552,7 @@ function renderMessageInto(container, m) {
       speak.addEventListener('click', (e) => {
         e.preventDefault();
         unlockTts();
-        setTimeout(() => speakReply(m.content, { force: true }), 120);
+        setTimeout(() => speakReply(m.content, { force: true, personaId: m.personaId }), 120);
       });
       div.appendChild(speak);
     }
@@ -1008,6 +1066,10 @@ function shouldFallback(attempt) {
 
 async function sendMessage(text) {
   const chat = ensureActiveChat();
+  if (chat.kind === 'group') {
+    return sendGroupMessage(text);
+  }
+
   const uploads = pendingUploads.slice();
   pendingUploads = [];
   renderAttachPreview();
@@ -1210,6 +1272,242 @@ async function sendMessage(text) {
   }
 }
 
+/**
+ * Stream a group round. onEvent for status/speaker/token/turn/summary/done/error.
+ */
+async function callGroupStream(chat, apiMessages, onEvent) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(timeoutFor(state.activeProvider, state.activeModel), 240_000));
+  const apiKey = (providerKeys[state.activeProvider] || '').trim();
+  const headers = { 'Content-Type': 'application/json', Accept: 'text/event-stream' };
+  if (apiKey) headers['X-Provider-Key'] = apiKey;
+
+  try {
+    const res = await fetch('/api/group-chat', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        messages: apiMessages,
+        summary: chat.groupSummary || '',
+        topic: chat.topic,
+        mode: chat.groupMode,
+        model: state.activeModel,
+        provider: state.activeProvider,
+        apiKey: apiKey || undefined,
+      }),
+      signal: controller.signal,
+    });
+
+    const ctype = (res.headers.get('content-type') || '').toLowerCase();
+    if (!res.ok && !ctype.includes('text/event-stream')) {
+      let data = null;
+      let errText = null;
+      try { data = await res.json(); } catch { errText = 'Non-JSON response'; }
+      return { ok: false, status: res.status, data, errText };
+    }
+    if (!res.body) {
+      return { ok: false, status: res.status, data: null, errText: 'No response body' };
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let donePayload = null;
+    let streamError = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n');
+      buffer = parts.pop() || '';
+      for (const line of parts) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+        let evt;
+        try { evt = JSON.parse(payload); } catch { continue; }
+        if (typeof onEvent === 'function') onEvent(evt);
+        if (evt.type === 'done') donePayload = evt;
+        if (evt.type === 'error') streamError = evt;
+      }
+    }
+
+    if (streamError && !donePayload) {
+      return {
+        ok: false,
+        status: 502,
+        data: { error: streamError.error },
+        errText: streamError.error,
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      data: donePayload || {},
+      errText: null,
+    };
+  } catch (err) {
+    return { ok: false, status: 0, data: null, errText: friendlyNetworkError(err) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function sendGroupMessage(text) {
+  const chat = ensureActiveChat();
+  const displayText = (text || '').trim();
+  if (!displayText) return;
+
+  chat.messages.push({ role: 'user', content: displayText, ts: Date.now() });
+  if (chat.name.startsWith('Boardroom:') || chat.name.startsWith('Brainstorm:') || chat.name.startsWith('Free chat:')) {
+    /* keep topic-based name */
+  }
+  chat.provider = state.activeProvider;
+  chat.model = state.activeModel;
+  chat.updatedAt = Date.now();
+  saveState();
+  renderChatList();
+  renderChatTitle();
+  renderMessages({ scroll: 'bottom' });
+
+  els.sendBtn.disabled = true;
+  const startedAt = Date.now();
+  let tickTimer = null;
+  const updateStatusClock = (base) => {
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    setTypingActive(true, `${base} · ${secs}s`);
+  };
+  setTypingActive(true, 'Gathering the table…');
+  tickTimer = setInterval(() => {
+    const cur = els.typingStatus?.textContent || 'Waiting…';
+    const base = cur.replace(/\s·\s\d+s$/, '');
+    updateStatusClock(base);
+  }, 1000);
+
+  const apiMessages = chat.messages
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({
+      role: m.role,
+      content: m.content,
+      personaId: m.personaId,
+      personaName: m.personaName,
+    }));
+
+  let currentTs = null;
+  let currentPersonaId = null;
+  let streamBuf = '';
+  let firstPin = null;
+  const spokenThisRound = [];
+
+  const ensureBubble = (personaId, personaName) => {
+    if (currentTs && currentPersonaId === personaId) return;
+    // Finalize previous streaming bubble if any
+    if (currentTs) {
+      const prev = chat.messages.find((m) => m.ts === currentTs && m.role === 'assistant');
+      if (prev) {
+        prev.streaming = false;
+        if (!prev.content) prev.content = streamBuf || '…';
+      }
+    }
+    streamBuf = '';
+    currentPersonaId = personaId;
+    currentTs = Date.now() + Math.random();
+    if (!firstPin) firstPin = currentTs;
+    chat.messages.push({
+      role: 'assistant',
+      content: '',
+      ts: currentTs,
+      streaming: true,
+      personaId,
+      personaName,
+      model: state.activeModel,
+      provider: state.activeProvider,
+    });
+    renderMessages({ scroll: 'assistant-start', pinMsgTs: firstPin });
+  };
+
+  const refreshBubble = () => {
+    const msg = chat.messages.find((m) => m.ts === currentTs && m.role === 'assistant');
+    if (!msg) return;
+    msg.content = streamBuf;
+    const el = els.chat.querySelector(`.msg.bot[data-ts="${currentTs}"] .content`);
+    if (el) {
+      el.innerHTML = '';
+      renderMarkdownInto(el, streamBuf || '…');
+    } else {
+      renderMessages({ scroll: 'none' });
+    }
+  };
+
+  try {
+    const attempt = await callGroupStream(chat, apiMessages, (evt) => {
+      if (evt.type === 'status') {
+        updateStatusClock(evt.message || 'Working…');
+      } else if (evt.type === 'summary' && typeof evt.summary === 'string') {
+        chat.groupSummary = evt.summary;
+      } else if (evt.type === 'speaker') {
+        ensureBubble(evt.personaId, evt.personaName);
+        updateStatusClock(`${evt.personaName || 'Persona'} speaking`);
+      } else if (evt.type === 'token') {
+        ensureBubble(evt.personaId || currentPersonaId, evt.personaName);
+        streamBuf = evt.text || streamBuf;
+        refreshBubble();
+        updateStatusClock(`${evt.personaName || 'Persona'} speaking`);
+      } else if (evt.type === 'turn') {
+        ensureBubble(evt.personaId, evt.personaName);
+        streamBuf = evt.content || streamBuf;
+        const msg = chat.messages.find((m) => m.ts === currentTs && m.role === 'assistant');
+        if (msg) {
+          msg.content = streamBuf;
+          msg.streaming = false;
+          msg.personaId = evt.personaId;
+          msg.personaName = evt.personaName;
+        }
+        refreshBubble();
+        spokenThisRound.push({ content: streamBuf, personaId: evt.personaId });
+        currentTs = null;
+        currentPersonaId = null;
+        streamBuf = '';
+      }
+    });
+
+    // Clear any leftover streaming flag
+    for (const m of chat.messages) {
+      if (m.streaming) m.streaming = false;
+    }
+
+    if (!attempt.ok) {
+      const rawErr = attempt.data?.error || attempt.errText || 'Group round failed';
+      chat.messages.push({
+        role: 'error',
+        content: friendlyNetworkError({ message: String(rawErr) }),
+        ts: Date.now(),
+      });
+      renderMessages({ scroll: 'bottom' });
+    } else {
+      if (attempt.data?.summary) chat.groupSummary = attempt.data.summary;
+      renderMessages({ scroll: 'assistant-start', pinMsgTs: firstPin });
+      // Speak first reply of the round if voice is on (avoid stacking every persona)
+      if (spokenThisRound[0]) {
+        speakReply(spokenThisRound[0].content, { personaId: spokenThisRound[0].personaId });
+      }
+    }
+    chat.updatedAt = Date.now();
+    saveState();
+  } catch (err) {
+    chat.messages.push({ role: 'error', content: err.message || 'Network error', ts: Date.now() });
+    saveState();
+    renderMessages({ scroll: 'bottom' });
+  } finally {
+    if (tickTimer) clearInterval(tickTimer);
+    els.sendBtn.disabled = false;
+    setTypingActive(false);
+    els.input.focus();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Export / import / clear
 // ---------------------------------------------------------------------------
@@ -1264,6 +1562,12 @@ async function renderAll() {
   renderMessages();
   renderArtifacts();
   renderAttachPreview();
+  const chat = activeChat();
+  if (els.input) {
+    els.input.placeholder = chat?.kind === 'group'
+      ? 'Address the table…'
+      : 'Plan or ask… (code builds in Workspace)';
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1619,12 +1923,12 @@ function speakBrowserFallback(text) {
   }
 }
 
-async function speakReply(text, { force = false } = {}) {
+async function speakReply(text, { force = false, personaId = null } = {}) {
   if (!force && !speakReplies) return;
   const chunks = chunkSpeech(text);
   if (!chunks.length) return;
 
-  const voice = voiceForPersona(state.activePersonaId);
+  const voice = voiceForPersona(personaId || state.activePersonaId);
 
   speakQueue = speakQueue.then(async () => {
     try {
@@ -1792,6 +2096,52 @@ function openInWorkspace() {
 }
 
 els.workspaceBtn?.addEventListener('click', openInWorkspace);
+
+function openGroupModal() {
+  if (!els.groupModal) return;
+  els.groupModal.classList.remove('hidden');
+  if (els.groupTopicInput) {
+    els.groupTopicInput.value = '';
+    setTimeout(() => els.groupTopicInput.focus(), 50);
+  }
+}
+function closeGroupModal() {
+  els.groupModal?.classList.add('hidden');
+}
+els.groupBtn?.addEventListener('click', openGroupModal);
+els.closeGroupModal?.addEventListener('click', closeGroupModal);
+els.groupModal?.addEventListener('click', (e) => {
+  if (e.target === els.groupModal) closeGroupModal();
+});
+els.startGroupBtn?.addEventListener('click', async () => {
+  const modeEl = document.querySelector('input[name="groupMode"]:checked');
+  const mode = modeEl?.value || 'brainstorm';
+  const topic = (els.groupTopicInput?.value || '').trim();
+  if (!topic) {
+    alert('Enter a topic for the table.');
+    els.groupTopicInput?.focus();
+    return;
+  }
+  createGroupChat(mode, topic);
+  closeGroupModal();
+  if (isMobileViewport()) {
+    state.chatsCollapsed = true;
+    state.chatsCollapsedExplicit = true;
+    saveState();
+  }
+  await renderAll();
+  if (els.input) {
+    els.input.placeholder = 'Address the table…';
+    els.input.focus();
+  }
+});
+
+els.groupTopicInput?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    els.startGroupBtn?.click();
+  }
+});
 
 function renderAttachPreview() {
   if (!els.attachPreview) return;

@@ -19,6 +19,7 @@
     "api/search.js":               { "maxDuration": 30  },
     "api/detect-test-command.js":  { "maxDuration": 30  },
     "api/agent-chat.js":           { "maxDuration": 120 },
+    "api/group-chat.js":           { "maxDuration": 300 },
     "api/tts.js":                  { "maxDuration": 60  }
   }
 }

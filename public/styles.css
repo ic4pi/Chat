@@ -307,6 +307,115 @@ select:focus, input[type="text"]:focus, textarea:focus {
   border-color: var(--accent);
 }
 .tone-modal { max-width: 440px; width: min(440px, 94vw); }
+.group-modal { max-width: 480px; width: min(480px, 94vw); }
+.group-form {
+  display: grid;
+  gap: 14px;
+  padding: 4px;
+}
+.group-modes {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+.group-modes legend {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0 4px;
+}
+.group-mode {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.group-mode:has(input:checked) {
+  background: var(--panel);
+  border-color: var(--border);
+}
+.group-mode input {
+  margin-top: 4px;
+  accent-color: var(--accent);
+}
+.group-mode strong {
+  display: block;
+  font-size: 14px;
+  color: var(--text);
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.group-mode small {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+  line-height: 1.35;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.group-topic-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.group-topic-label input {
+  font-size: 16px;
+  min-height: 48px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+.group-btn {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.group-btn:hover {
+  background: rgba(212, 255, 63, 0.16);
+  border-color: var(--accent);
+}
+.msg.bot.group-turn .role {
+  color: var(--accent);
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+.msg.bot.group-turn {
+  border-left: 2px solid var(--accent-dim);
+  padding-left: 10px;
+}
+.chat-list li .group-tag {
+  font-size: 10px;
+  color: var(--accent);
+  opacity: 0.85;
+  flex-shrink: 0;
+}
+.group-banner {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.4;
+}
+.group-banner strong {
+  color: var(--text);
+  font-weight: 600;
+}
 .tone-form {
   display: grid;
   gap: 12px;

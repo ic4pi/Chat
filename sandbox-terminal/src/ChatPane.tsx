@@ -73,11 +73,18 @@ function buildSystemPrompt(
   tree: FileNode[],
   contextFiles: Map<string, string>,
   searchHits: SearchHit[],
-  opts?: { light?: boolean; repoUrl?: string | null },
+  opts?: {
+    light?: boolean;
+    repoUrl?: string | null;
+    pythonReady?: boolean | null;
+    pythonDetail?: string | null;
+  },
 ): string {
   const parts: string[] = [];
   const light = !!opts?.light;
   const repoUrl = opts?.repoUrl || '';
+  const pythonReady = opts?.pythonReady;
+  const pythonDetail = opts?.pythonDetail || '';
 
   parts.push(
     'You are a coding agent for the user\'s opened GitHub repo in a cloud sandbox.',
@@ -85,13 +92,13 @@ function buildSystemPrompt(
     'Every code file you output must be COMPLETE and ready to save.',
     '',
     'SANDBOX FACTS (do not invent limitations):',
-    '- This is a Vercel Sandbox microVM (Amazon Linux 2023), NOT a local laptop and NOT Docker-less.',
+    '- This is a Vercel Sandbox microVM (Amazon Linux 2023), NOT a local laptop.',
     '- Package manager is dnf (or yum), NEVER apt-get. Example: sudo dnf install -y python3 python3-pip',
-    '- python3, pip, and a venv at /vercel/sandbox/venv are provisioned when the repo opens.',
-    '- Prefer: source /vercel/sandbox/venv/bin/activate && pip install <pkg> && python …',
-    '- Or: /vercel/sandbox/venv/bin/pip install <pkg> && /vercel/sandbox/venv/bin/python script.py',
-    '- NEVER say you cannot run/compile because apt-get/Docker/python:3.10-slim is missing.',
-    '- NEVER tell the user to push to another machine for basic Python work — run it here.',
+    '- Terminal PATH prefers /vercel/sandbox/venv/bin — `python` and `pip` should resolve there.',
+    '- Prefer: /vercel/sandbox/venv/bin/pip install <pkg> && /vercel/sandbox/venv/bin/python script.py',
+    '- Or: source /vercel/sandbox/venv/bin/activate && pip install <pkg> && python …',
+    '- NEVER say you cannot run Python because apt-get/Docker/python:3.10-slim is missing.',
+    '- NEVER tell the user to run install commands on their laptop for basic Python — run them in this Terminal.',
     '- If a package is missing, install it with pip in the venv (or dnf for system libs), then run.',
     '',
     'If the user wants changes written: output File: blocks with full file contents.',
@@ -100,6 +107,28 @@ function buildSystemPrompt(
     'Never ask where to save — the host app saves/downloads/pushes.',
     'Never invent paths. Use only paths from the tree / open files / search hits.',
   );
+
+  if (pythonReady === true) {
+    parts.push(
+      '',
+      'PYTHON STATUS: READY in this sandbox.',
+      pythonDetail ? `Detail: ${pythonDetail}` : '',
+      'Run Python yourself via Terminal / ▶ Run — do not ask the user to install Python locally.',
+    );
+  } else if (pythonReady === false) {
+    parts.push(
+      '',
+      'PYTHON STATUS: NOT READY yet.',
+      pythonDetail ? `Detail: ${pythonDetail}` : '',
+      'Tell the user to re-open the repo (left panel → Open) so Python provisions, then retry.',
+      'Do not invent apt-get/Docker workarounds.',
+    );
+  } else {
+    parts.push(
+      '',
+      'PYTHON STATUS: unknown until a repo is opened. After Open, python/pip live in /vercel/sandbox/venv.',
+    );
+  }
 
   if (repoUrl) {
     parts.push('', `GitHub repo URL: ${repoUrl}`);
@@ -387,12 +416,16 @@ interface Props {
     hits: SearchHit[];
     files: Map<string, string>;
   } | void>;
+  /** From /api/init-repo — whether the sandbox venv is actually usable. */
+  pythonReady?:      boolean | null;
+  pythonDetail?:     string | null;
 }
 
 export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   repoRoot, repoUrl, sandboxId, provider, model, role, apiKey, tree, contextFiles, autoRun, appliedPaths,
   autoSelectedFiles, searchHits, initialMessages, onMessagesChange,
   onRunCode, onFileChanges, onUploadText, onBeforeSend,
+  pythonReady = null, pythonDetail = null,
 }, ref) {
   const [messages,  setMessages]  = useState<Message[]>(() => initialMessages ?? []);
   const [input,    setInput]    = useState('');
@@ -407,11 +440,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   // still sees the updated file context afterward.
   const latestRef = useRef({
     repoRoot, repoUrl, sandboxId, provider, model, role, apiKey, tree, contextFiles, searchHits,
-    autoRun, onRunCode, onFileChanges, onBeforeSend, messages,
+    autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
   });
   latestRef.current = {
     repoRoot, repoUrl, sandboxId, provider, model, role, apiKey, tree, contextFiles, searchHits,
-    autoRun, onRunCode, onFileChanges, onBeforeSend, messages,
+    autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
   };
 
   useEffect(() => {
@@ -542,7 +575,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         lightTurn ? [] : tr,
         ctx,
         lightTurn ? [] : hits,
-        { light: lightTurn && !!root && ctx.size === 0, repoUrl: rUrl },
+        {
+          light: lightTurn && !!root && ctx.size === 0,
+          repoUrl: rUrl,
+          pythonReady: latestRef.current.pythonReady,
+          pythonDetail: latestRef.current.pythonDetail,
+        },
       );
       if (activeRole === 'plan') {
         systemPrompt +=

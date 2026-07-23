@@ -47,7 +47,11 @@ export default async function handler(req, res) {
       const py = await ensurePythonStack(sandbox);
       if (!py.ok) {
         sseEvent(res, 'stderr', `Python setup failed: ${py.error || 'unknown'}\n`);
-      } else if (!py.already) {
+        sseEvent(res, 'stderr', 'Open the repo again (left panel → Open) so Python can provision, then retry.\n');
+        sseEvent(res, 'exit', '1');
+        return;
+      }
+      if (!py.already) {
         sseEvent(res, 'status', py.detail || 'Python ready');
       }
     }
@@ -63,7 +67,13 @@ export default async function handler(req, res) {
         args: ['-lc', `test -x ${VENV_DIR}/bin/python && echo yes || echo no`],
       });
       const out = typeof venvPy.stdout === 'function' ? (await venvPy.stdout()).trim() : '';
-      if (out === 'yes') runner = [`${VENV_DIR}/bin/python`];
+      if (out === 'yes') {
+        runner = [`${VENV_DIR}/bin/python`];
+      } else {
+        sseEvent(res, 'stderr', `Python venv missing at ${VENV_DIR}/bin/python after setup.\n`);
+        sseEvent(res, 'exit', '1');
+        return;
+      }
     }
 
     const [cmd, ...args] = runner;
