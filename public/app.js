@@ -2350,13 +2350,6 @@ async function fillModelSelect(selectEl, provider, selectedModel) {
   if (pick) selectEl.value = pick;
 }
 
-function assignmentLabel(personaId) {
-  const a = modelForPersona(personaId);
-  const prov = PROVIDER_LABELS[a.provider] || a.provider || '?';
-  const model = a.model || '—';
-  return `${prov} · ${model}`;
-}
-
 async function renderGroupPersonaModels() {
   const host = els.groupPersonaModels;
   if (!host) return;
@@ -2366,151 +2359,102 @@ async function renderGroupPersonaModels() {
     return;
   }
 
-  // Ensure every persona has a saved pairing before editing
+  const list = document.createElement('div');
+  list.className = 'group-persona-scroll';
+  host.appendChild(list);
+
   for (const p of personas) {
-    const a = modelForPersona(p.id);
-    if (!personaModels[p.id]?.provider || !personaModels[p.id]?.model) {
-      setModelForPersona(
-        p.id,
-        a.provider || state.activeProvider,
-        a.model || state.activeModel || DEFAULT_MODELS[state.activeProvider],
-      );
+    const row = document.createElement('div');
+    row.className = 'group-persona-row';
+    row.dataset.personaId = p.id;
+
+    const name = document.createElement('div');
+    name.className = 'group-persona-name';
+    name.textContent = p.name;
+    row.appendChild(name);
+
+    const assigned = modelForPersona(p.id);
+
+    const provLabel = document.createElement('label');
+    provLabel.className = 'group-persona-field';
+    provLabel.textContent = 'Provider';
+    const provSelect = document.createElement('select');
+    provSelect.className = 'group-persona-provider';
+    const provPlaceholder = document.createElement('option');
+    provPlaceholder.value = '';
+    provPlaceholder.textContent = 'Select provider…';
+    provSelect.appendChild(provPlaceholder);
+    for (const id of PROVIDER_IDS) {
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = PROVIDER_LABELS[id] || id;
+      provSelect.appendChild(opt);
     }
-  }
+    const initialProvider = PROVIDER_IDS.includes(assigned.provider)
+      ? assigned.provider
+      : (state.activeProvider || '');
+    provSelect.value = initialProvider;
+    provLabel.appendChild(provSelect);
+    row.appendChild(provLabel);
 
-  const editor = document.createElement('div');
-  editor.className = 'group-persona-editor';
+    const modelLabel = document.createElement('label');
+    modelLabel.className = 'group-persona-field';
+    modelLabel.textContent = 'Model';
+    const modelSelect = document.createElement('select');
+    modelSelect.className = 'group-persona-model';
+    modelLabel.appendChild(modelSelect);
+    row.appendChild(modelLabel);
 
-  const personaLabel = document.createElement('label');
-  personaLabel.className = 'group-persona-field';
-  personaLabel.textContent = 'Persona';
-  const personaSelect = document.createElement('select');
-  personaSelect.id = 'groupAssignPersona';
-  for (const p of personas) {
-    const opt = document.createElement('option');
-    opt.value = p.id;
-    opt.textContent = p.name;
-    personaSelect.appendChild(opt);
-  }
-  personaLabel.appendChild(personaSelect);
-  editor.appendChild(personaLabel);
+    const persist = () => {
+      if (provSelect.value && modelSelect.value) {
+        setModelForPersona(p.id, provSelect.value, modelSelect.value);
+      }
+    };
 
-  const provLabel = document.createElement('label');
-  provLabel.className = 'group-persona-field';
-  provLabel.textContent = 'Provider';
-  const provSelect = document.createElement('select');
-  provSelect.id = 'groupAssignProvider';
-  const provPlaceholder = document.createElement('option');
-  provPlaceholder.value = '';
-  provPlaceholder.textContent = 'Select provider…';
-  provSelect.appendChild(provPlaceholder);
-  for (const id of PROVIDER_IDS) {
-    const opt = document.createElement('option');
-    opt.value = id;
-    opt.textContent = PROVIDER_LABELS[id] || id;
-    provSelect.appendChild(opt);
-  }
-  provLabel.appendChild(provSelect);
-  editor.appendChild(provLabel);
+    provSelect.addEventListener('change', async () => {
+      modelSelect.innerHTML = '';
+      modelSelect.disabled = true;
+      if (!provSelect.value) {
+        const empty = document.createElement('option');
+        empty.value = '';
+        empty.textContent = 'Select a provider first';
+        modelSelect.appendChild(empty);
+        return;
+      }
+      await fillModelSelect(modelSelect, provSelect.value, DEFAULT_MODELS[provSelect.value] || '');
+      persist();
+    });
+    modelSelect.addEventListener('change', persist);
 
-  const modelLabel = document.createElement('label');
-  modelLabel.className = 'group-persona-field';
-  modelLabel.textContent = 'Model';
-  const modelSelect = document.createElement('select');
-  modelSelect.id = 'groupAssignModel';
-  modelSelect.disabled = true;
-  const modelPlaceholder = document.createElement('option');
-  modelPlaceholder.value = '';
-  modelPlaceholder.textContent = 'Select a provider first';
-  modelSelect.appendChild(modelPlaceholder);
-  modelLabel.appendChild(modelSelect);
-  editor.appendChild(modelLabel);
+    list.appendChild(row);
 
-  host.appendChild(editor);
-
-  const summary = document.createElement('ul');
-  summary.className = 'group-persona-summary';
-  host.appendChild(summary);
-
-  const refreshSummary = () => {
-    summary.innerHTML = '';
-    for (const p of personas) {
-      const li = document.createElement('li');
-      li.dataset.personaId = p.id;
-      const name = document.createElement('strong');
-      name.textContent = p.name;
-      const detail = document.createElement('span');
-      detail.textContent = assignmentLabel(p.id);
-      li.appendChild(name);
-      li.appendChild(detail);
-      li.addEventListener('click', () => {
-        personaSelect.value = p.id;
-        void loadEditorForPersona(p.id);
-      });
-      if (p.id === personaSelect.value) li.classList.add('active');
-      summary.appendChild(li);
-    }
-  };
-
-  const persistCurrent = () => {
-    const id = personaSelect.value;
-    const provider = provSelect.value;
-    const model = modelSelect.value;
-    if (id && provider && model) setModelForPersona(id, provider, model);
-    refreshSummary();
-  };
-
-  async function loadEditorForPersona(personaId) {
-    const assigned = modelForPersona(personaId);
-    const provider = assigned.provider || '';
-    provSelect.value = PROVIDER_IDS.includes(provider) ? provider : '';
-    // Clear models immediately — never leave another provider's catalog visible
-    modelSelect.innerHTML = '';
-    modelSelect.disabled = true;
-    if (!provSelect.value) {
+    if (provSelect.value) {
+      await fillModelSelect(modelSelect, provSelect.value, assigned.model || DEFAULT_MODELS[provSelect.value] || '');
+      persist();
+    } else {
+      modelSelect.innerHTML = '';
+      modelSelect.disabled = true;
       const empty = document.createElement('option');
       empty.value = '';
       empty.textContent = 'Select a provider first';
       modelSelect.appendChild(empty);
-      refreshSummary();
-      return;
     }
-    await fillModelSelect(modelSelect, provSelect.value, assigned.model);
-    persistCurrent();
   }
-
-  personaSelect.addEventListener('change', () => {
-    void loadEditorForPersona(personaSelect.value);
-  });
-  provSelect.addEventListener('change', async () => {
-    const provider = provSelect.value;
-    // Wipe model list before fetching so catalogs never appear mixed
-    modelSelect.innerHTML = '';
-    modelSelect.disabled = true;
-    if (!provider) {
-      const empty = document.createElement('option');
-      empty.value = '';
-      empty.textContent = 'Select a provider first';
-      modelSelect.appendChild(empty);
-      refreshSummary();
-      return;
-    }
-    await fillModelSelect(modelSelect, provider, DEFAULT_MODELS[provider] || '');
-    persistCurrent();
-  });
-  modelSelect.addEventListener('change', persistCurrent);
-
-  personaSelect.value = personas[0].id;
-  await loadEditorForPersona(personas[0].id);
 }
 
 function collectGroupPersonaModelsFromForm() {
-  // Assignments are persisted as the user edits; return the full map.
+  const host = els.groupPersonaModels;
   const out = { ...personaModels };
-  for (const p of personas) {
-    const a = modelForPersona(p.id);
-    if (a.provider && a.model) out[p.id] = { provider: a.provider, model: a.model };
-  }
+  if (!host) return out;
+  host.querySelectorAll('.group-persona-row').forEach((row) => {
+    const id = row.dataset.personaId;
+    const provider = row.querySelector('.group-persona-provider')?.value;
+    const model = row.querySelector('.group-persona-model')?.value;
+    if (id && provider && model) {
+      out[id] = { provider, model };
+      setModelForPersona(id, provider, model);
+    }
+  });
   return out;
 }
 
