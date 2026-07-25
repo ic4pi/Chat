@@ -4,6 +4,7 @@
  * Round-table discussion with ALL personas. Client picks a mode + topic,
  * then each user message triggers one speaking round (every persona once).
  *
+ * Each persona may use its own provider/model via `personaModels`.
  * Context stays small: each speaker gets a rolling summary of the previous
  * ~10 messages plus what others already said this round — not the full history.
  *
@@ -71,6 +72,23 @@ function formatRecent(messages, limit = RECENT_WINDOW) {
     })
     .filter((line) => line.length > 8)
     .join('\n');
+}
+
+function pickKey(providerKeys, providerId, fallbackKey) {
+  const map = providerKeys && typeof providerKeys === 'object' ? providerKeys : {};
+  const fromMap = typeof map[providerId] === 'string' ? map[providerId].trim() : '';
+  if (fromMap) return fromMap;
+  return typeof fallbackKey === 'string' ? fallbackKey : '';
+}
+
+function resolveForPersona(personaModels, personaId, defaultProvider, defaultModel, providerKeys, fallbackKey) {
+  const map = personaModels && typeof personaModels === 'object' ? personaModels : {};
+  const assigned = map[personaId] && typeof map[personaId] === 'object' ? map[personaId] : {};
+  const providerId = assigned.provider || defaultProvider || 'venice';
+  const model = assigned.model || defaultModel;
+  const apiKey = pickKey(providerKeys, providerId, fallbackKey);
+  const resolved = resolveProvider(providerId, apiKey);
+  return { resolved, model, providerId };
 }
 
 async function callCompletion(resolved, model, messages, { maxTokens, signal }) {
@@ -168,6 +186,8 @@ export default async function handler(req, res) {
     model,
     provider: providerId,
     apiKey: clientKey,
+    personaModels = {},
+    providerKeys = {},
   } = req.body || {};
 
   const mode = normalizeMode(rawMode);
@@ -183,22 +203,26 @@ export default async function handler(req, res) {
       ? clientKey
       : (typeof headerKey === 'string' ? headerKey : '');
 
-  let resolved;
+  let defaultResolved;
   try {
-    resolved = resolveProvider(providerId || 'venice', clientKeyStr);
+    defaultResolved = resolveProvider(providerId || 'venice', clientKeyStr);
   } catch (err) {
     sseWrite(res, { type: 'error', error: err.message || 'Provider not configured' });
     return res.end();
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS * Math.min(MAX_PERSONAS, 8));
+  const timer = setTimeout(
+    () => controller.abort(),
+    UPSTREAM_TIMEOUT_MS * Math.min(MAX_PERSONAS + 2, 14),
+  );
   res.on('close', () => {
     if (!controller.signal.aborted) controller.abort();
   });
 
   try {
     const config = await loadConfig();
+    // All configured personas sit at the table (hard cap for latency/cost).
     const personas = (config.personas || []).slice(0, MAX_PERSONAS);
     if (!personas.length) {
       sseWrite(res, { type: 'error', error: 'No personas configured.' });
@@ -208,9 +232,13 @@ export default async function handler(req, res) {
     const modeRules = MODE_RULES[mode];
     const history = Array.isArray(messages) ? messages : [];
     const recentBlock = formatRecent(history, RECENT_WINDOW);
+    const defaultModel = model || 'venice-uncensored';
 
-    sseWrite(res, { type: 'status', message: `Updating table context (${mode})…` });
-    let rollingSummary = await refreshSummary(resolved, model, {
+    sseWrite(res, {
+      type: 'status',
+      message: `Updating table context (${mode}) · ${personas.length} personas…`,
+    });
+    let rollingSummary = await refreshSummary(defaultResolved, defaultModel, {
       priorSummary: String(clientSummary || '').trim(),
       recentBlock,
       topic: topicText,
@@ -225,14 +253,42 @@ export default async function handler(req, res) {
     for (const persona of personas) {
       if (controller.signal.aborted) break;
 
+      let turnResolved;
+      let turnModel;
+      let turnProviderId;
+      try {
+        ({
+          resolved: turnResolved,
+          model: turnModel,
+          providerId: turnProviderId,
+        } = resolveForPersona(
+          personaModels,
+          persona.id,
+          providerId || 'venice',
+          defaultModel,
+          providerKeys,
+          clientKeyStr,
+        ));
+      } catch (err) {
+        sseWrite(res, {
+          type: 'error',
+          error: err.message || `No API key for ${persona.name}`,
+          personaId: persona.id,
+          personaName: persona.name,
+        });
+        continue;
+      }
+
       sseWrite(res, {
         type: 'speaker',
         personaId: persona.id,
         personaName: persona.name,
+        provider: turnResolved.label,
+        model: turnModel,
       });
       sseWrite(res, {
         type: 'status',
-        message: `${persona.name} is speaking…`,
+        message: `${persona.name} is speaking (${turnResolved.label} · ${turnModel})…`,
       });
 
       const personaPrompt = [master, persona.systemPrompt, modeRules]
@@ -259,8 +315,8 @@ export default async function handler(req, res) {
       let reply = '';
       try {
         reply = await callCompletion(
-          resolved,
-          model,
+          turnResolved,
+          turnModel,
           [
             { role: 'system', content: personaPrompt },
             { role: 'user', content: userPayload },
@@ -284,15 +340,30 @@ export default async function handler(req, res) {
       if (!reply) reply = '…';
 
       // Stream as one token chunk so the client can reuse streaming UI
-      sseWrite(res, { type: 'token', text: reply, personaId: persona.id, personaName: persona.name });
+      sseWrite(res, {
+        type: 'token',
+        text: reply,
+        personaId: persona.id,
+        personaName: persona.name,
+        provider: turnResolved.label,
+        model: turnModel,
+      });
       sseWrite(res, {
         type: 'turn',
         personaId: persona.id,
         personaName: persona.name,
         content: reply,
+        provider: turnResolved.label,
+        model: turnModel,
       });
 
-      roundSoFar.push({ id: persona.id, name: persona.name, content: reply });
+      roundSoFar.push({
+        id: persona.id,
+        name: persona.name,
+        content: reply,
+        provider: turnProviderId,
+        model: turnModel,
+      });
     }
 
     // Fold this round into the rolling summary for the next user message
@@ -306,7 +377,7 @@ export default async function handler(req, res) {
       ...(lastUser ? [lastUser] : []),
       ...roundAsMsgs,
     ];
-    rollingSummary = await refreshSummary(resolved, model, {
+    rollingSummary = await refreshSummary(defaultResolved, defaultModel, {
       priorSummary: rollingSummary,
       recentBlock: formatRecent(forSummary, RECENT_WINDOW),
       topic: topicText,
@@ -318,8 +389,9 @@ export default async function handler(req, res) {
       type: 'done',
       summary: rollingSummary,
       turns: roundSoFar.length,
-      provider: resolved.label,
-      model,
+      expectedTurns: personas.length,
+      provider: defaultResolved.label,
+      model: defaultModel,
     });
   } catch (err) {
     const aborted = err?.name === 'AbortError' || controller.signal.aborted;

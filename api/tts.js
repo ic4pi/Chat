@@ -4,6 +4,9 @@
  *
  * Free neural TTS via Microsoft Edge online voices (no API key).
  * Returns audio/mpeg.
+ *
+ * Client is expected to chunk long replies (~1800 chars). We still enforce a
+ * hard ceiling so a single request cannot overwhelm Edge TTS.
  */
 
 import { UniversalEdgeTTS } from 'edge-tts-universal';
@@ -22,7 +25,8 @@ const ALLOWED_VOICES = new Set([
 ]);
 
 const DEFAULT_VOICE = 'en-US-AvaNeural';
-const MAX_CHARS = 2200;
+/** Soft ceiling per request — client chunks below this so full replies play. */
+const MAX_CHARS = 2400;
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -40,11 +44,16 @@ export default async function handler(req, res) {
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/[#*_`>+]+/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, MAX_CHARS);
+    .trim();
 
   if (!cleaned) {
     return res.status(400).json({ error: 'Nothing speakable after cleaning' });
+  }
+
+  if (cleaned.length > MAX_CHARS) {
+    return res.status(400).json({
+      error: `Text too long for one TTS request (${cleaned.length} > ${MAX_CHARS}). Send smaller chunks.`,
+    });
   }
 
   const voice = ALLOWED_VOICES.has(voiceIn) ? voiceIn : DEFAULT_VOICE;
