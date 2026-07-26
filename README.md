@@ -21,9 +21,10 @@ In **Vercel → Project → Settings → Environment Variables** add:
 |------|-------|---------|
 | `OPENROUTER_API_KEY` | from https://openrouter.ai/keys | OpenRouter models |
 | `VENICE_API_KEY` | from https://venice.ai/settings/api | Venice models + live catalog |
-| `NVIDIA_API_KEY` | from https://build.nvidia.com | Chat + Qwen Image + Wan 2.2 |
-| `GEMINI_API_KEY` | from https://aistudio.google.com/apikey | Gemini Nano Banana image gen |
-| `NVIDIA_MEDIA_BASE_URL` | *(optional)* default `https://integrate.api.nvidia.com` | Self-hosted Wan/Qwen NIM base URL |
+| `NVIDIA_API_KEY` | from https://build.nvidia.com (model page → Get API Key) | Chat + Qwen Image + Wan 2.2 |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare dashboard → Workers AI | Media Studio image gen (FLUX / SDXL) |
+| `CLOUDFLARE_API_TOKEN` | API token with Workers AI permission | Media Studio image gen |
+| `NVIDIA_MEDIA_BASE_URL` | *(optional)* self-hosted NIM base URL | Override for Wan/Qwen OpenAI-compatible NIM |
 | `ADMIN_USERNAME` | anything you want | Gate for `/admin` |
 | `ADMIN_PASSWORD` | anything you want | Gate for `/admin` |
 | `SITE_URL` | *(optional)* your deployment URL | Sent as OpenRouter's `HTTP-Referer` |
@@ -34,8 +35,9 @@ Add these in **Vercel → Project → Settings → Environment Variables** (Prod
 
 | Env var | Used for |
 |---------|----------|
-| `GEMINI_API_KEY` | Image · Gemini Nano Banana (**API is paid** — Google free-tier quota is 0; enable billing on the AI Studio / Cloud project) |
-| `NVIDIA_API_KEY` | Image · Qwen Image **and** Video · Wan 2.2 |
+| `CLOUDFLARE_ACCOUNT_ID` | Image · Workers AI (FLUX.1 Schnell, SDXL Lightning, SDXL) |
+| `CLOUDFLARE_API_TOKEN` | Image · Workers AI (token needs Workers AI permission) |
+| `NVIDIA_API_KEY` | Image · Qwen / FLUX **and** Video · Wan 2.2 — create via the model page on build.nvidia.com so Public API Endpoints is attached |
 | `NVIDIA_MEDIA_BASE_URL` | Optional; only if you point at a self-hosted NVIDIA NIM |
 
 Open **`/media`** (Media link in the chat topbar). Missing keys return a clear 503 for that provider only.
@@ -107,6 +109,6 @@ vercel dev
 - `lib/config.js` — persona schema, load/save from KV, built-in defaults.
 - `lib/auth.js` — shared Basic-auth check.
 - `public/index.html`, `public/app.js`, `public/styles.css` — main chat UI.
-- `public/media/` — Media Studio UI (Gemini / NVIDIA Qwen Image / Wan 2.2).
+- `public/media/` — Media Studio UI (Cloudflare Workers AI / NVIDIA Qwen Image / Wan 2.2).
 - `api/media-generate.js` — image & video generation proxy.
 - `public/admin.js`, `public/admin.css` — admin UI logic + styles (referenced by the inlined admin HTML in `api/admin.js`).

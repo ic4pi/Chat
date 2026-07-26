@@ -1,6 +1,9 @@
 const IMAGE_MODELS = [
-  { value: 'gemini:nano-banana', label: 'Gemini · Nano Banana (paid API)', kind: 'image', provider: 'gemini', model: 'nano-banana' },
+  { value: 'cloudflare:flux-schnell', label: 'Cloudflare · FLUX.1 Schnell', kind: 'image', provider: 'cloudflare', model: 'flux-schnell' },
+  { value: 'cloudflare:sdxl-lightning', label: 'Cloudflare · SDXL Lightning', kind: 'image', provider: 'cloudflare', model: 'sdxl-lightning' },
+  { value: 'cloudflare:sdxl', label: 'Cloudflare · SDXL Base', kind: 'image', provider: 'cloudflare', model: 'sdxl' },
   { value: 'nvidia:qwen-image', label: 'NVIDIA · Qwen Image', kind: 'image', provider: 'nvidia', model: 'qwen-image' },
+  { value: 'nvidia:flux-schnell', label: 'NVIDIA · FLUX.1 Schnell', kind: 'image', provider: 'nvidia', model: 'flux-schnell' },
 ];
 
 const VIDEO_MODELS = [
@@ -72,9 +75,11 @@ function selectedSpec() {
 
 function syncFields() {
   const spec = selectedSpec();
-  const nvidiaImage = kind === 'image' && spec?.provider === 'nvidia';
+  const supportsNegative =
+    kind === 'image' &&
+    (spec?.provider === 'nvidia' || /sdxl/i.test(spec?.model || ''));
   const i2v = kind === 'video' && /i2v/i.test(spec?.model || '');
-  els.negativeWrap.style.display = nvidiaImage ? '' : 'none';
+  els.negativeWrap.style.display = supportsNegative ? '' : 'none';
   const opt = els.refWrap.querySelector('.opt');
   if (opt) opt.textContent = i2v ? '(required for image→video)' : '(optional)';
 }
@@ -177,9 +182,9 @@ els.generate.addEventListener('click', async () => {
       prompt,
       size: els.size.value,
     };
-    if (spec.provider === 'nvidia' && kind === 'image') {
-      const neg = (els.negative.value || '').trim();
-      if (neg) body.negativePrompt = neg;
+    const neg = (els.negative.value || '').trim();
+    if (neg && (spec.provider === 'nvidia' || /sdxl/i.test(spec.model))) {
+      body.negativePrompt = neg;
     }
     if (refData) {
       body.imageBase64 = refData.base64;
