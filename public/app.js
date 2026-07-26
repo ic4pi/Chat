@@ -2628,12 +2628,10 @@ function openInWorkspace() {
   const messages = (chat.messages || [])
     .filter((m) => m.role === 'user' || m.role === 'assistant')
     .map((m) => ({ role: m.role, content: m.content }));
-  if (!messages.length) {
-    // Still allow opening empty workspace
-  }
   const payload = {
     v: 1,
-    title: chat.name,
+    chatId: chat.id,
+    title: chat.name || 'Untitled',
     provider: state.activeProvider,
     model: state.activeModel,
     role: state.activeRole === 'plan' ? 'write' : state.activeRole,

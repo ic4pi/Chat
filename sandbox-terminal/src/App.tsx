@@ -19,9 +19,17 @@ import {
 } from './contextBudget.js';
 import { looksLikeSuggestRequest, needsCodeContext } from './agentParse.js';
 import type { FileNode } from './types.js';
-import { loadSession, saveSession, clearSession, buildPushShellCommands } from './sessionStore.js';
+import {
+  loadSession,
+  saveSession,
+  clearSession,
+  listSessions,
+  setActiveSessionId,
+  buildPushShellCommands,
+  type StoredSession,
+} from './sessionStore.js';
 import { copyText } from './downloadFile.js';
-import { consumeWorkspaceHandoff } from './workspaceHandoff.js';
+import { peekWorkspaceHandoff } from './workspaceHandoff.js';
 import {
   PROVIDER_LIST,
   ROLE_LIST,
@@ -190,10 +198,54 @@ export function App() {
   const repo    = useRepoContext();
   /** Prevents Auto-apply from starting a second verify while one is running. */
   const verifyingRef = useRef(false);
-  const restored = useRef(loadSession());
   const roleModelsRef = useRef(loadRoleModels());
+  type Boot = { session: StoredSession | null; fromChat: boolean };
+  const bootRef = useRef<Boot | null>(null);
+  if (!bootRef.current) {
+    const handoff = peekWorkspaceHandoff();
+    if (handoff) {
+      const id = handoff.chatId || `handoff-${handoff.createdAt || Date.now()}`;
+      const title = handoff.title || 'From chat';
+      const imported = (handoff.messages || [])
+        .filter(m => m.role === 'user' || m.role === 'assistant')
+        .map(m => ({
+          id: Math.random().toString(36).slice(2, 10),
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          kind: 'imported',
+        }));
+      // Always open THIS chat’s workspace thread — never keep a previous chat’s convo.
+      const prev = loadSession(id);
+      const session: StoredSession = {
+        v: 2,
+        id,
+        title,
+        savedAt: Date.now(),
+        repoUrl: prev?.repoUrl ?? null,
+        sandboxId: prev?.sandboxId ?? null,
+        provider: handoff.provider || prev?.provider || roleModelsRef.current.write.provider || 'venice',
+        model: handoff.model || prev?.model || roleModelsRef.current.write.model || 'venice-uncensored',
+        autoApplyOn: prev?.autoApplyOn ?? true,
+        messages: imported.length ? imported : [],
+        pendingChanges: imported.length ? [] : (prev?.pendingChanges || []),
+        fromChat: true,
+      };
+      saveSession(session);
+      setActiveSessionId(id);
+      bootRef.current = { session, fromChat: true };
+    } else {
+      const session = loadSession();
+      if (session) setActiveSessionId(session.id);
+      bootRef.current = { session, fromChat: false };
+    }
+  }
+  const boot = bootRef.current;
+  const restored = useRef(boot.session);
 
-  const [role,         setRole]         = useState<RoleId>('write');
+  const [role,         setRole]         = useState<RoleId>(() => {
+    const r = boot.fromChat ? peekWorkspaceHandoff()?.role : undefined;
+    return r === 'write' || r === 'review' || r === 'plan' ? r : 'write';
+  });
   const [provider,     setProvider]     = useState(
     restored.current?.provider ?? roleModelsRef.current.write.provider ?? 'venice',
   );
@@ -221,28 +273,13 @@ export function App() {
   const [pushing,      setPushing]      = useState(false);
   const [pushError,    setPushError]    = useState<string | null>(null);
   const [pushOk,       setPushOk]       = useState<string | null>(null);
-  const handoffMeta = useRef<{
-    provider?: string; model?: string; role?: string; title?: string; fromChat?: boolean;
-  } | null>(null);
+  const [sessionId, setSessionId] = useState(
+    () => restored.current?.id || `home-${Date.now()}`,
+  );
+  const [sessionTitle, setSessionTitle] = useState(
+    () => restored.current?.title || 'Home workspace',
+  );
   const [chatMessages, setChatMessages] = useState<Message[]>(() => {
-    const handoff = consumeWorkspaceHandoff();
-    if (handoff?.messages?.length) {
-      handoffMeta.current = {
-        provider: handoff.provider,
-        model: handoff.model,
-        role: handoff.role,
-        title: handoff.title,
-        fromChat: true,
-      };
-      return handoff.messages
-        .filter(m => m.role === 'user' || m.role === 'assistant')
-        .map(m => ({
-          id: Math.random().toString(36).slice(2, 10),
-          role: m.role,
-          content: m.content,
-          kind: 'imported' as Message['kind'],
-        }));
-    }
     const m = restored.current?.messages;
     if (!m?.length) return [];
     return m.map(x => ({
@@ -252,21 +289,12 @@ export function App() {
       kind: x.kind as Message['kind'],
     }));
   });
-  const [fromChat] = useState(() => !!handoffMeta.current?.fromChat);
+  const [fromChat] = useState(() => boot.fromChat);
+  const [showHome, setShowHome] = useState(false);
+  const [homeList, setHomeList] = useState<StoredSession[]>(() => listSessions());
   const [sessionKey,   setSessionKey]   = useState(0);
   const isMobile = useIsMobile();
   const activeApiKey = (keys[provider] || '').trim();
-
-  // Apply provider/model/role from a chat → workspace handoff.
-  useEffect(() => {
-    const h = handoffMeta.current;
-    if (!h) return;
-    if (h.provider) setProvider(h.provider);
-    if (h.model) setModel(h.model);
-    if (h.role === 'write' || h.role === 'review' || h.role === 'plan') {
-      setRole(h.role);
-    }
-  }, []);
 
   // Live model catalog (same /api/models as main chat — includes GLM Heretic).
   useEffect(() => {
@@ -304,20 +332,67 @@ export function App() {
   // Persist session whenever important state changes.
   useEffect(() => {
     saveSession({
+      id: sessionId,
+      title: sessionTitle,
       repoUrl: repo.repoUrl,
       sandboxId: repo.sandboxId,
       provider,
       model,
       autoApplyOn,
+      fromChat,
       messages: chatMessages.map(m => ({
         id: m.id, role: m.role, content: m.content, kind: m.kind,
       })),
       pendingChanges: repo.pendingChanges,
     });
+    setHomeList(listSessions());
   }, [
+    sessionId, sessionTitle, fromChat,
     repo.repoUrl, repo.sandboxId, repo.pendingChanges,
     provider, model, autoApplyOn, chatMessages,
   ]);
+
+  const openStoredSession = useCallback((s: StoredSession) => {
+    setActiveSessionId(s.id);
+    setSessionId(s.id);
+    setSessionTitle(s.title || 'Workspace');
+    setProvider(s.provider || 'venice');
+    setModel(s.model || 'venice-uncensored');
+    setAutoApplyOn(s.autoApplyOn ?? true);
+    setChatMessages((s.messages || []).map(x => ({
+      id: x.id,
+      role: x.role,
+      content: x.content,
+      kind: x.kind as Message['kind'],
+    })));
+    setPushError(null);
+    setPushOk(null);
+    setShowHome(false);
+    setSessionKey(k => k + 1);
+    if (s.pendingChanges?.length) repo.setPendingChanges(s.pendingChanges);
+    else repo.clearChanges();
+    if (s.repoUrl) void repo.openRepo(s.repoUrl);
+  }, [repo]);
+
+  const startFreshHome = useCallback(() => {
+    const id = `home-${Date.now()}`;
+    const session: StoredSession = {
+      v: 2,
+      id,
+      title: 'Home workspace',
+      savedAt: Date.now(),
+      repoUrl: null,
+      sandboxId: null,
+      provider,
+      model,
+      autoApplyOn,
+      messages: [],
+      pendingChanges: [],
+      fromChat: false,
+    };
+    saveSession(session);
+    openStoredSession(session);
+  }, [provider, model, autoApplyOn, openStoredSession]);
 
   const handleProviderChange = (p: string) => {
     setProvider(p);
@@ -543,28 +618,43 @@ export function App() {
         padding: '6px 12px' }}>
         <a href="/" style={{ color: '#d4ff3f', fontSize: 12, textDecoration: 'none',
           whiteSpace: 'nowrap', padding: '2px 0', fontWeight: 700 }}>← Chat</a>
-        <span style={{ color: '#555', fontSize: 10, letterSpacing: '0.08em',
-          textTransform: 'uppercase', whiteSpace: 'nowrap' }}>// workspace</span>
+        <button type="button" onClick={() => { setHomeList(listSessions()); setShowHome(true); }}
+          title="Browse saved workspace conversations"
+          style={{ background: showHome ? 'rgba(212,255,63,0.16)' : 'transparent',
+            color: '#d4ff3f', border: '1px solid #8fa62b', borderRadius: 4,
+            padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10,
+            fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+          Home
+        </button>
+        <span style={{ color: '#d4ff3f', fontSize: 11, whiteSpace: 'nowrap',
+          overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 }}
+          title={sessionTitle}>
+          {sessionTitle}
+        </span>
         {fromChat && (
           <span style={{ fontSize: 10, color: '#8fa62b', whiteSpace: 'nowrap' }}>
-            chat imported — open a repo to build
+            from chat
           </span>
         )}
+        <button type="button" onClick={startFreshHome}
+          style={{ background: 'transparent', color: '#888', border: '1px solid #333',
+            borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
+            fontFamily: 'inherit', fontSize: 10 }}>
+          New
+        </button>
         {(repo.repoUrl || chatMessages.length > 0) && (
           <button type="button"
             onClick={() => {
-              if (!confirm('Clear saved session (chat + drafts) on this device?')) return;
-              clearSession();
-              setChatMessages([]);
-              repo.clearChanges();
-              setPushError(null);
-              setPushOk(null);
-              setSessionKey(k => k + 1);
+              if (!confirm('Delete this workspace conversation on this device?')) return;
+              clearSession(sessionId);
+              const next = listSessions()[0];
+              if (next) openStoredSession(next);
+              else startFreshHome();
             }}
             style={{ background: 'transparent', color: '#555', border: '1px solid #222',
               borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
               fontFamily: 'inherit', fontSize: 10 }}>
-            Clear session
+            Delete
           </button>
         )}
         <select value={role} onChange={e => handleRoleChange(e.target.value as RoleId)}
@@ -693,7 +783,7 @@ export function App() {
           autoRun={autoRun}
           appliedPaths={appliedPaths}
           autoSelectedFiles={autoCtxFiles}
-          initialMessages={sessionKey === 0 ? chatMessages : []}
+          initialMessages={chatMessages}
           onMessagesChange={setChatMessages}
           onRunCode={handleRunCode}
           onFileChanges={handleFileChanges}
@@ -752,6 +842,59 @@ export function App() {
       background: '#0a0a0a', fontFamily: '"JetBrains Mono",ui-monospace,monospace',
       overflow: 'hidden' }}>
       {topbar}
+
+      {showHome && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 40, background: 'rgba(0,0,0,0.72)',
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '48px 16px 16px' }}
+          onClick={() => setShowHome(false)}>
+          <div role="dialog" aria-label="Workspace home"
+            onClick={e => e.stopPropagation()}
+            style={{ width: 'min(520px, 100%)', maxHeight: 'min(80dvh, 640px)', overflow: 'auto',
+              background: '#131313', border: '1px solid #d4ff3f', borderRadius: 8, padding: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+              <h2 style={{ margin: 0, flex: 1, fontSize: 13, letterSpacing: '0.08em',
+                textTransform: 'uppercase', color: '#d4ff3f' }}>Home · Workspaces</h2>
+              <button type="button" onClick={startFreshHome}
+                style={{ background: 'rgba(212,255,63,0.12)', color: '#d4ff3f', border: '1px solid #8fa62b',
+                  borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
+                  fontSize: 11, fontWeight: 700 }}>New</button>
+              <button type="button" onClick={() => setShowHome(false)}
+                style={{ background: 'transparent', color: '#888', border: '1px solid #333',
+                  borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
+                  fontSize: 11 }}>Close</button>
+            </div>
+            <p style={{ margin: '0 0 12px', fontSize: 12, color: '#888', lineHeight: 1.4 }}>
+              Open a saved workspace conversation, or start a fresh Home workspace.
+              Opening <b style={{ color: '#d4ff3f' }}>Workspace</b> from Chat always loads that chat here.
+            </p>
+            {homeList.length === 0 ? (
+              <p style={{ color: '#666', fontSize: 12 }}>No saved workspaces yet.</p>
+            ) : (
+              <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 8 }}>
+                {homeList.map(s => (
+                  <li key={s.id}>
+                    <button type="button" onClick={() => openStoredSession(s)}
+                      style={{ width: '100%', textAlign: 'left', background: s.id === sessionId ? 'rgba(212,255,63,0.1)' : '#0a0a0a',
+                        border: `1px solid ${s.id === sessionId ? '#d4ff3f' : '#333'}`, borderRadius: 6,
+                        padding: '10px 12px', cursor: 'pointer', fontFamily: 'inherit' }}>
+                      <div style={{ color: '#d4ff3f', fontSize: 13, fontWeight: 700,
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {s.title || 'Workspace'}
+                      </div>
+                      <div style={{ color: '#666', fontSize: 11, marginTop: 4 }}>
+                        {(s.messages || []).length} messages
+                        {s.fromChat ? ' · from chat' : ''}
+                        {' · '}
+                        {s.savedAt ? new Date(s.savedAt).toLocaleString() : ''}
+                      </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
 
       {!isMobile ? (
         /* ── Desktop: 3-column grid (single ChatPane + Terminal) ── */
