@@ -22,28 +22,22 @@ const FALLBACK_PERSONAS = [
   { id: 'plain', name: 'Plain assistant', description: 'A neutral, no-nonsense assistant.', builtin: true },
 ];
 
-// Only used if the live /api/models call fails (e.g. VENICE_API_KEY missing).
-// All Venice text models are uncensored — Venice does not moderate outputs.
-const VENICE_FALLBACK_MODELS = [
-  { id: 'venice-uncensored', name: 'Venice Uncensored (Dolphin-Mistral 24B)', description: 'Venice\'s flagship uncensored fine-tune.' },
-  { id: 'olafangensan-glm-4.7-flash-heretic', name: 'GLM 4.7 Flash Heretic (200k)', description: 'Decensored GLM-4.7-Flash 30B-A3B MoE.' },
-  { id: 'dolphin-2.9.2-qwen2-72b', name: 'Dolphin 2.9.2 Qwen2 72B', description: 'Dolphin uncensored fine-tune of Qwen2 72B.' },
-  { id: 'hermes-3-llama-3.1-405b', name: 'Hermes 3 Llama 3.1 405B', description: 'Nous Hermes 3, steerable uncensored fine-tune.' },
-  { id: 'qwen3-235b-a22b-instruct-2507', name: 'Qwen3 235B Instruct', description: 'Qwen3 235B (MoE, 22B active) instruct.' },
-  { id: 'qwen3-coder-480b-a35b-instruct', name: 'Qwen3 Coder 480B', description: 'Qwen3 coder MoE, strong on code.' },
-  { id: 'qwen3-next-80b', name: 'Qwen3 Next 80B', description: 'Qwen3 Next general model.' },
-  { id: 'qwen3-4b', name: 'Qwen3 4B (Venice Small)', description: 'Small, fast Qwen3.' },
-  { id: 'llama-3.3-70b', name: 'Llama 3.3 70B', description: 'General-purpose Llama 3.3.' },
-  { id: 'mistral-31-24b', name: 'Mistral 3.1 24B (Venice Medium)', description: 'Mistral 3.1 with vision.' },
-];
-
-// Static fallback model lists when /api/models is unreachable.
+// Short per-provider lists only. Never dump a full upstream catalog in the UI.
 const PROVIDER_FALLBACKS = {
-  venice: VENICE_FALLBACK_MODELS,
+  venice: [
+    { id: 'venice-uncensored', name: 'Venice Uncensored (Dolphin 24B)' },
+    { id: 'venice-uncensored-1-2', name: 'Venice Uncensored 1.2' },
+    { id: 'olafangensan-glm-4.7-flash-heretic', name: 'GLM 4.7 Flash Heretic (200k)' },
+    { id: 'hermes-3-llama-3.1-405b', name: 'Hermes 3 Llama 3.1 405B' },
+    { id: 'qwen3-235b-a22b-instruct-2507', name: 'Qwen3 235B Instruct' },
+    { id: 'qwen3-next-80b', name: 'Qwen3 Next 80B' },
+    { id: 'llama-3.3-70b', name: 'Llama 3.3 70B' },
+    { id: 'mistral-31-24b', name: 'Mistral 3.1 24B' },
+  ],
   openrouter: [
-    { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free', name: 'Dolphin-Mistral 24B Venice Edition (free)' },
+    { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free', name: 'Dolphin-Venice 24B (free)' },
     { id: 'nousresearch/hermes-3-llama-3.1-405b:free', name: 'Hermes 3 405B (free)' },
-    { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B Instruct (free)' },
+    { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B (free)' },
     { id: 'qwen/qwen3-coder:free', name: 'Qwen3 Coder (free)' },
   ],
   cerebras: [
@@ -849,7 +843,12 @@ function renderPersonaSelect() {
 // Models
 // ---------------------------------------------------------------------------
 
+function curatedModelsFor(provider) {
+  return (PROVIDER_FALLBACKS[provider] || []).slice();
+}
+
 async function loadProviderModels(provider) {
+  const allowed = new Set(curatedModelsFor(provider).map((m) => m.id));
   const key = (providerKeys[provider] || '').trim();
   const cacheKey = `${provider}:${key ? 'byok' : 'env'}`;
   if (modelsCache[cacheKey] && !key) return modelsCache[cacheKey];
@@ -861,12 +860,14 @@ async function loadProviderModels(provider) {
     const res = await fetch(`/api/models?provider=${encodeURIComponent(provider)}`, { headers });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to load models');
-    const models = data.models || [];
-    if (!key) modelsCache[cacheKey] = models;
-    return models.length ? models : (PROVIDER_FALLBACKS[provider] || []);
+    // Hard filter: never show another provider’s / full-catalog models.
+    const models = (data.models || []).filter((m) => m && allowed.has(m.id));
+    const list = models.length ? models : curatedModelsFor(provider);
+    if (!key) modelsCache[cacheKey] = list;
+    return list;
   } catch (err) {
     console.warn(`Could not fetch ${provider} model list:`, err);
-    return PROVIDER_FALLBACKS[provider] || [];
+    return curatedModelsFor(provider);
   }
 }
 
