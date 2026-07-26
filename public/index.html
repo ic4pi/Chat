@@ -76,14 +76,20 @@
         <label class="ctrl ctrl-inline desk-only">
           <span>voice</span>
           <select id="voiceSelect" title="Voice for the current persona">
-            <option value="en-US-AvaNeural">Ava · US</option>
-            <option value="en-US-AndrewNeural">Andrew · US</option>
-            <option value="en-US-EmmaMultilingualNeural">Emma · US</option>
-            <option value="en-US-BrianMultilingualNeural">Brian · US</option>
-            <option value="en-US-JennyNeural">Jenny · US</option>
-            <option value="en-GB-SoniaNeural">Sonia · UK</option>
-            <option value="en-GB-RyanNeural">Ryan · UK</option>
-            <option value="en-AU-NatashaNeural">Natasha · AU</option>
+            <optgroup label="Female">
+              <option value="en-US-AvaNeural">Ava · US</option>
+              <option value="en-US-EmmaMultilingualNeural">Emma · US</option>
+              <option value="en-US-JennyNeural">Jenny · US</option>
+              <option value="en-GB-SoniaNeural">Sonia · UK</option>
+              <option value="en-AU-NatashaNeural">Natasha · AU</option>
+            </optgroup>
+            <optgroup label="Male">
+              <option value="en-US-AndrewNeural">Andrew · US</option>
+              <option value="en-US-BrianMultilingualNeural">Brian · US</option>
+              <option value="en-US-GuyNeural">Guy · US</option>
+              <option value="en-GB-RyanNeural">Ryan · UK</option>
+              <option value="en-AU-WilliamNeural">William · AU</option>
+            </optgroup>
           </select>
         </label>
         <button id="keysBtn" class="text-btn ctrl-btn" type="button" title="Bring your own API keys">Keys</button>
@@ -148,14 +154,20 @@
       <label>
         Voice for this persona
         <select id="toneVoiceSelect">
-          <option value="en-US-AvaNeural">Ava · US</option>
-          <option value="en-US-AndrewNeural">Andrew · US</option>
-          <option value="en-US-EmmaMultilingualNeural">Emma · US</option>
-          <option value="en-US-BrianMultilingualNeural">Brian · US</option>
-          <option value="en-US-JennyNeural">Jenny · US</option>
-          <option value="en-GB-SoniaNeural">Sonia · UK</option>
-          <option value="en-GB-RyanNeural">Ryan · UK</option>
-          <option value="en-AU-NatashaNeural">Natasha · AU</option>
+          <optgroup label="Female">
+            <option value="en-US-AvaNeural">Ava · US</option>
+            <option value="en-US-EmmaMultilingualNeural">Emma · US</option>
+            <option value="en-US-JennyNeural">Jenny · US</option>
+            <option value="en-GB-SoniaNeural">Sonia · UK</option>
+            <option value="en-AU-NatashaNeural">Natasha · AU</option>
+          </optgroup>
+          <optgroup label="Male">
+            <option value="en-US-AndrewNeural">Andrew · US</option>
+            <option value="en-US-BrianMultilingualNeural">Brian · US</option>
+            <option value="en-US-GuyNeural">Guy · US</option>
+            <option value="en-GB-RyanNeural">Ryan · UK</option>
+            <option value="en-AU-WilliamNeural">William · AU</option>
+          </optgroup>
         </select>
       </label>
       <div class="tone-actions">
@@ -173,7 +185,7 @@
       <h2>Group table</h2>
       <button id="closeGroupModal" class="icon-btn" title="Close">×</button>
     </div>
-    <p class="keys-hint">All personas join each round. Assign a provider + model per persona, pick a vibe and topic, then talk to the table. Save the session as MP3 anytime from the chat banner.</p>
+    <p class="keys-hint">All personas join each round. Assign a model per persona, pick a vibe, type what you want to say, and hit Start — that message opens the table. Save as MP3 anytime from the banner.</p>
     <div class="group-form">
       <fieldset class="group-modes">
         <legend>Mode</legend>
@@ -209,8 +221,8 @@
         <span class="group-rounds-hint">All personas speak once per round.</span>
       </div>
       <label class="group-topic-label">
-        Opening statement / topic
-        <input id="groupTopicInput" type="text" maxlength="200" placeholder="e.g. Launch pricing for the new API" />
+        Your message
+        <input id="groupTopicInput" type="text" maxlength="500" placeholder="What do you want to say to the table?" />
       </label>
       <fieldset class="group-persona-models">
         <legend>Persona models</legend>
@@ -218,7 +230,7 @@
         <div id="groupPersonaModels" class="group-persona-models-list"></div>
       </fieldset>
       <div class="tone-actions">
-        <button id="startGroupBtn" class="text-btn primary" type="button">Open the table</button>
+        <button id="startGroupBtn" class="text-btn primary" type="button">Start</button>
       </div>
     </div>
   </div>

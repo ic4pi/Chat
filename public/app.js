@@ -309,11 +309,7 @@ function createGroupChat(mode, topic, personaModels = {}, rounds = 3) {
     personaModels,
     groupRounds: rounds,
     name: `${label}: ${topic.slice(0, 36)}`,
-    messages: [{
-      role: 'info',
-      content: `${label} table · topic: ${topic}. ${rounds} round${rounds !== 1 ? 's' : ''} scheduled — send your opening statement to start.`,
-      ts: Date.now(),
-    }],
+    messages: [],
   });
   return chat;
 }
@@ -524,9 +520,32 @@ function renderChatTitle() {
   els.chatTitle.textContent = chat ? chat.name : 'Untitled';
 }
 
+/** True when the chat viewport is near the bottom (follow new messages). */
+let chatStickToBottom = true;
+
+function updateChatStickToBottom() {
+  const el = els.chat;
+  if (!el) return;
+  const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+  chatStickToBottom = dist < 100;
+}
+
+function bindChatScrollGuard() {
+  if (!els.chat || els.chat.dataset.scrollGuard === '1') return;
+  els.chat.dataset.scrollGuard = '1';
+  els.chat.addEventListener('scroll', updateChatStickToBottom, { passive: true });
+}
+
+/** Group chats: never yank the reader back to the first turn. */
+function groupScrollMode(preferred = 'bottom') {
+  if (preferred === 'none') return 'none';
+  return chatStickToBottom ? 'bottom' : 'none';
+}
+
 /** @param {{ scroll?: 'bottom' | 'assistant-start' | 'none', pinMsgTs?: number }} [opts] */
 function renderMessages(opts = {}) {
   const scroll = opts.scroll || 'bottom';
+  const prevTop = els.chat?.scrollTop || 0;
   els.chat.innerHTML = '';
   const chat = activeChat();
   if (!chat) return;
@@ -537,7 +556,7 @@ function renderMessages(opts = {}) {
     const modeLabel = GROUP_MODE_LABELS[chat.groupMode] || 'Group';
     const text = document.createElement('div');
     text.className = 'group-banner-text';
-    text.innerHTML = `<strong>${modeLabel}</strong> · ${escapeHtml(chat.topic || 'Untitled topic')} — all personas at the table. Each round uses a short summary of the last ~10 messages.`;
+    text.innerHTML = `<strong>${modeLabel}</strong> · ${escapeHtml(chat.topic || 'Untitled')} — all personas at the table.`;
     banner.appendChild(text);
     const mp3Btn = document.createElement('button');
     mp3Btn.type = 'button';
@@ -561,13 +580,20 @@ function renderMessages(opts = {}) {
     const bots = els.chat.querySelectorAll('.msg.bot');
     pinEl = bots.length ? bots[bots.length - 1] : null;
   }
-  if (scroll === 'assistant-start' && pinEl) {
-    // Put the start of the reply near the top of the chat viewport
+  if (scroll === 'none') {
+    // Keep the reader's place after a full re-render (group streaming).
+    els.chat.scrollTop = prevTop;
+  } else if (scroll === 'assistant-start' && pinEl && chat.kind !== 'group') {
+    // Single-chat only — group must not jump to an early turn.
     requestAnimationFrame(() => {
       pinEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
     });
-  } else if (scroll === 'bottom') {
-    els.chat.scrollTop = els.chat.scrollHeight;
+  } else if (scroll === 'bottom' || (scroll === 'assistant-start' && chat.kind === 'group')) {
+    if (chat.kind === 'group' && !chatStickToBottom && scroll !== 'bottom') {
+      els.chat.scrollTop = prevTop;
+    } else {
+      els.chat.scrollTop = els.chat.scrollHeight;
+    }
   }
 }
 
@@ -854,6 +880,7 @@ async function fetchPersonas() {
     state.activePersonaId = personas[0]?.id || 'nexus';
     saveState();
   }
+  ensurePersonaVoices(personas);
   renderPersonaSelect();
 }
 
@@ -1520,7 +1547,7 @@ function showMoreRoundsPrompt(chat) {
 
   if (els.chat) {
     els.chat.appendChild(div);
-    els.chat.scrollTop = els.chat.scrollHeight;
+    if (chatStickToBottom) els.chat.scrollTop = els.chat.scrollHeight;
   }
 }
 
@@ -1572,7 +1599,7 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
       model:    meta.model    || assigned.model    || state.activeModel,
       provider: meta.provider || assigned.provider || state.activeProvider,
     });
-    renderMessages({ scroll: 'assistant-start', pinMsgTs: firstPin });
+    renderMessages({ scroll: groupScrollMode('bottom') });
   };
 
   const refreshBubble = () => {
@@ -1583,8 +1610,9 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
     if (el) {
       el.innerHTML = '';
       renderMarkdownInto(el, streamBuf || '…');
+      if (chatStickToBottom) els.chat.scrollTop = els.chat.scrollHeight;
     } else {
-      renderMessages({ scroll: 'none' });
+      renderMessages({ scroll: groupScrollMode('bottom') });
     }
   };
 
@@ -1636,7 +1664,7 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
         content: friendlyNetworkError({ message: String(rawErr) }),
         ts: Date.now(),
       });
-      renderMessages({ scroll: 'bottom' });
+      renderMessages({ scroll: groupScrollMode('bottom') });
       return false;
     }
 
@@ -1649,7 +1677,7 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
         ts: Date.now(),
       });
     }
-    renderMessages({ scroll: 'assistant-start', pinMsgTs: firstPin });
+    renderMessages({ scroll: groupScrollMode('bottom') });
     for (const turn of spokenThisRound) {
       void speakReply(turn.content, { personaId: turn.personaId });
     }
@@ -1659,7 +1687,7 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
   } catch (err) {
     chat.messages.push({ role: 'error', content: err.message || 'Network error', ts: Date.now() });
     saveState();
-    renderMessages({ scroll: 'bottom' });
+    renderMessages({ scroll: groupScrollMode('bottom') });
     return false;
   }
 }
@@ -1694,7 +1722,7 @@ async function runAdditionalRounds(chat, n) {
           content: `─── Additional round ${i}/${n} complete ───`,
           ts: Date.now(),
         });
-        renderMessages({ scroll: 'bottom' });
+        renderMessages({ scroll: groupScrollMode('bottom') });
       }
     }
     showMoreRoundsPrompt(chat);
@@ -1724,6 +1752,7 @@ async function sendGroupMessage(text) {
   saveState();
   renderChatList();
   renderChatTitle();
+  chatStickToBottom = true;
   renderMessages({ scroll: 'bottom' });
 
   const totalRounds = chat.groupRounds || 3;
@@ -1756,7 +1785,7 @@ async function sendGroupMessage(text) {
           content: `─── Round ${round}/${totalRounds} complete ───`,
           ts: Date.now(),
         });
-        renderMessages({ scroll: 'bottom' });
+        renderMessages({ scroll: groupScrollMode('bottom') });
       }
     }
     // Offer more rounds after all are done
@@ -1812,6 +1841,7 @@ function clearAll() {
 
 async function renderAll() {
   ensureActiveChat();
+  bindChatScrollGuard();
   applySidebarState();
   renderChatList();
   renderChatTitle();
@@ -1820,7 +1850,7 @@ async function renderAll() {
   if (els.roleSelect) els.roleSelect.value = state.activeRole;
   els.providerSelect.value = state.activeProvider;
   await Promise.all([renderModelSelect(), fetchPersonas()]);
-  renderMessages();
+  renderMessages({ scroll: chatStickToBottom ? 'bottom' : 'none' });
   renderArtifacts();
   renderAttachPreview();
   const chat = activeChat();
@@ -1949,9 +1979,30 @@ if (els.roleSelect) {
 
 const SPEAK_PREF_KEY = 'uncensored_speak_replies_v1';
 const VOICE_PREF_KEY = 'uncensored_tts_voice_v1'; // legacy single-voice fallback
-const PERSONA_VOICES_KEY = 'uncensored_persona_voices_v1';
+const PERSONA_VOICES_KEY = 'uncensored_persona_voices_v2';
 const PERSONA_MODELS_KEY = 'uncensored_persona_models_v1';
 const DEFAULT_NEURAL_VOICE = 'en-US-AvaNeural';
+
+const FEMALE_VOICES = [
+  'en-US-AvaNeural',
+  'en-US-EmmaMultilingualNeural',
+  'en-US-JennyNeural',
+  'en-GB-SoniaNeural',
+  'en-AU-NatashaNeural',
+];
+const MALE_VOICES = [
+  'en-US-AndrewNeural',
+  'en-US-BrianMultilingualNeural',
+  'en-US-GuyNeural',
+  'en-GB-RyanNeural',
+  'en-AU-WilliamNeural',
+];
+const FEMALE_VOICE_SET = new Set(FEMALE_VOICES);
+const MALE_VOICE_SET = new Set(MALE_VOICES);
+
+const FEMALE_NAME_RE = /\b(ava|emma|jenny|sonia|natasha|sarah|sara|emily|olivia|sophia|sofia|isabella|mia|charlotte|amelia|harper|evelyn|abigail|elizabeth|ella|scarlett|grace|chloe|victoria|aria|lily|nora|zoe|zoey|penelope|aurora|willow|lucy|anna|anne|mary|jane|kate|katie|laura|lisa|michelle|nicole|rachel|rebecca|samantha|stephanie|susan|tina|wendy|yvonne|amy|bella|carmen|diana|elena|fiona|gina|hanna|helen|iris|julia|kara|lena|luna|maya|nina|rosa|ruby|stella|vera|woman|girl|lady|queen|she|her|hers|femme)\b/i;
+const MALE_NAME_RE = /\b(andrew|brian|guy|ryan|william|will|james|john|michael|david|chris|christopher|daniel|matthew|matt|joseph|joe|thomas|tom|charles|mark|paul|steven|kevin|jason|eric|keith|roger|nexus|robert|bob|richard|alex|samson|marcus|victor|hugo|leo|max|noah|owen|peter|quentin|sean|tyler|vincent|wade|xavier|zane|man|boy|king|lord|dude|he|him|his)\b/i;
+
 const DEFAULT_PERSONA_VOICES = {
   nexus: 'en-US-AndrewNeural',
   plain: 'en-US-AvaNeural',
@@ -1969,6 +2020,54 @@ function loadPersonaVoices() {
 
 function savePersonaVoices(map) {
   try { localStorage.setItem(PERSONA_VOICES_KEY, JSON.stringify(map)); } catch { /* ignore */ }
+}
+
+function guessPersonaGender(persona) {
+  const blob = `${persona?.name || ''} ${persona?.description || ''}`;
+  const f = FEMALE_NAME_RE.test(blob);
+  const m = MALE_NAME_RE.test(blob);
+  if (f && !m) return 'f';
+  if (m && !f) return 'm';
+  const first = String(persona?.name || '').trim().split(/\s+/)[0] || '';
+  if (/a$|elle$|ette$|ine$|ynn$/i.test(first) && !/ny$|by$|ty$|nexus$/i.test(first)) return 'f';
+  return 'm';
+}
+
+function pickVoiceForGender(gender, used) {
+  const pool = gender === 'f' ? FEMALE_VOICES : MALE_VOICES;
+  return pool.find((v) => !used.has(v)) || pool[used.size % pool.length] || pool[0];
+}
+
+/** Assign distinct gender-matched voices to every persona that lacks one. */
+function ensurePersonaVoices(list) {
+  const personasList = Array.isArray(list) ? list : personas;
+  if (!personasList.length) return;
+  const used = new Set();
+  let changed = false;
+  // Keep existing correct-gender assignments first.
+  for (const p of personasList) {
+    const current = personaVoices[p.id];
+    const gender = guessPersonaGender(p);
+    const ok = current && (
+      (gender === 'f' && FEMALE_VOICE_SET.has(current)) ||
+      (gender === 'm' && MALE_VOICE_SET.has(current))
+    );
+    if (ok) used.add(current);
+  }
+  for (const p of personasList) {
+    const gender = guessPersonaGender(p);
+    const current = personaVoices[p.id];
+    const ok = current && (
+      (gender === 'f' && FEMALE_VOICE_SET.has(current)) ||
+      (gender === 'm' && MALE_VOICE_SET.has(current))
+    );
+    if (ok) continue;
+    const pick = pickVoiceForGender(gender, used);
+    personaVoices[p.id] = pick;
+    used.add(pick);
+    changed = true;
+  }
+  if (changed) savePersonaVoices(personaVoices);
 }
 
 function loadPersonaModels() {
@@ -1990,10 +2089,13 @@ let personaModels = loadPersonaModels();
 
 function voiceForPersona(personaId) {
   const id = personaId || state.activePersonaId || 'nexus';
-  return personaVoices[id]
-    || personaVoices.nexus
-    || localStorage.getItem(VOICE_PREF_KEY)
-    || DEFAULT_NEURAL_VOICE;
+  if (personaVoices[id]) return personaVoices[id];
+  const persona = personas.find((p) => p.id === id) || { id, name: id };
+  const gender = guessPersonaGender(persona);
+  const used = new Set(Object.values(personaVoices));
+  const pick = pickVoiceForGender(gender, used);
+  setVoiceForPersona(id, pick);
+  return pick;
 }
 
 function setVoiceForPersona(personaId, voice) {
@@ -2749,12 +2851,13 @@ els.startGroupBtn?.addEventListener('click', async () => {
   const mode = modeEl?.value || 'brainstorm';
   const topic = (els.groupTopicInput?.value || '').trim();
   if (!topic) {
-    alert('Enter a topic for the table.');
+    alert('Type what you want to say to the table.');
     els.groupTopicInput?.focus();
     return;
   }
   const rounds = parseInt(els.roundsDisplay?.textContent || '3', 10) || 3;
   const assigned = collectGroupPersonaModelsFromForm();
+  ensurePersonaVoices(personas);
   createGroupChat(mode, topic, assigned, rounds);
   closeGroupModal();
   if (isMobileViewport()) {
@@ -2763,10 +2866,10 @@ els.startGroupBtn?.addEventListener('click', async () => {
     saveState();
   }
   await renderAll();
-  if (els.input) {
-    els.input.placeholder = 'Address the table…';
-    els.input.focus();
-  }
+  if (els.input) els.input.placeholder = 'Address the table…';
+  // Message field IS the start — don't make the user type it twice.
+  chatStickToBottom = true;
+  await sendGroupMessage(topic);
 });
 
 els.groupTopicInput?.addEventListener('keydown', (e) => {
