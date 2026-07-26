@@ -843,14 +843,9 @@ function renderPersonaSelect() {
 // Models
 // ---------------------------------------------------------------------------
 
-function curatedModelsFor(provider) {
-  return (PROVIDER_FALLBACKS[provider] || []).slice();
-}
-
 async function loadProviderModels(provider) {
-  const allowed = new Set(curatedModelsFor(provider).map((m) => m.id));
   const key = (providerKeys[provider] || '').trim();
-  const cacheKey = `${provider}:${key ? 'byok' : 'env'}`;
+  const cacheKey = `prov-v2:${provider}:${key ? 'byok' : 'env'}`;
   if (modelsCache[cacheKey] && !key) return modelsCache[cacheKey];
 
   const headers = {};
@@ -860,14 +855,13 @@ async function loadProviderModels(provider) {
     const res = await fetch(`/api/models?provider=${encodeURIComponent(provider)}`, { headers });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to load models');
-    // Hard filter: never show another provider’s / full-catalog models.
-    const models = (data.models || []).filter((m) => m && allowed.has(m.id));
-    const list = models.length ? models : curatedModelsFor(provider);
+    const models = Array.isArray(data.models) ? data.models.filter((m) => m && m.id) : [];
+    const list = models.length ? models : (PROVIDER_FALLBACKS[provider] || []);
     if (!key) modelsCache[cacheKey] = list;
     return list;
   } catch (err) {
     console.warn(`Could not fetch ${provider} model list:`, err);
-    return curatedModelsFor(provider);
+    return PROVIDER_FALLBACKS[provider] || [];
   }
 }
 
