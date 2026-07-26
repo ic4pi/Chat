@@ -25,9 +25,13 @@ const FALLBACK_PERSONAS = [
 // Fallback only if /api/models is unreachable. Live/public catalogs are preferred.
 const PROVIDER_FALLBACKS = {
   venice: [
+    { id: 'gemma-4-uncensored', name: 'Gemma 4 Uncensored' },
+    { id: 'e2ee-gemma-4-26b-a4b-uncensored-p', name: 'Gemma 4 26B A4B Uncensored' },
     { id: 'venice-uncensored', name: 'Venice Uncensored (Dolphin 24B)' },
     { id: 'venice-uncensored-1-2', name: 'Venice Uncensored 1.2' },
+    { id: 'venice-uncensored-role-play', name: 'Venice Role Play Uncensored' },
     { id: 'olafangensan-glm-4.7-flash-heretic', name: 'GLM 4.7 Flash Heretic (200k)' },
+    { id: 'e2ee-qwen3-6-35b-a3b-uncensored-p', name: 'Qwen3.6 35B A3B Uncensored' },
     { id: 'hermes-3-llama-3.1-405b', name: 'Hermes 3 Llama 3.1 405B' },
     { id: 'qwen3-235b-a22b-instruct-2507', name: 'Qwen3 235B Instruct' },
     { id: 'qwen3-next-80b', name: 'Qwen3 Next 80B' },
