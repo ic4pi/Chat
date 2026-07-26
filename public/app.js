@@ -616,10 +616,12 @@ function renderMessageInto(container, m) {
   div.className = 'msg ' + cls + (m.streaming ? ' streaming' : '') + (m.personaId ? ' group-turn' : '');
   if (m.ts) div.dataset.ts = String(m.ts);
 
+  if (m.autoContinue) div.classList.add('auto-continue');
+
   const label = document.createElement('span');
   label.className = 'role';
   label.textContent =
-    m.role === 'user' ? 'you' :
+    m.role === 'user' ? (m.autoContinue ? 'auto' : 'you') :
     m.role === 'error' ? 'error' :
     m.role === 'info' ? 'notice' :
     m.role === 'assistant'
@@ -633,7 +635,8 @@ function renderMessageInto(container, m) {
   content.className = 'content';
 
   if (m.role === 'assistant') {
-    renderMarkdownInto(content, m.content || (m.streaming ? '…' : ''));
+    const shown = stripContinueMarkers(m.content || '') || (m.streaming ? '…' : '');
+    renderMarkdownInto(content, shown);
     if (m.content && !m.streaming) {
       const speak = document.createElement('button');
       speak.type = 'button';
@@ -644,10 +647,12 @@ function renderMessageInto(container, m) {
         e.preventDefault();
         // Unlock audio in the same user gesture (no network), then speak full reply.
         void unlockTts();
-        void speakReply(m.content, { force: true, personaId: m.personaId });
+        void speakReply(stripContinueMarkers(m.content), { force: true, personaId: m.personaId });
       });
       div.appendChild(speak);
     }
+  } else if (m.autoContinue) {
+    content.textContent = 'continue →';
   } else {
     content.textContent = m.content || '';
   }
@@ -1125,7 +1130,12 @@ async function callChatStream(provider, model, messages, personaId, onEvent) {
       return {
         ok: false,
         status: 502,
-        data: { error: streamError.error, provider: streamError.provider, model: streamError.model },
+        data: {
+          error: streamError.error,
+          provider: streamError.provider,
+          model: streamError.model,
+          partialReply: streamError.partialReply,
+        },
         errText: streamError.error,
       };
     }
@@ -1140,6 +1150,8 @@ async function callChatStream(provider, model, messages, personaId, onEvent) {
         reasoning: donePayload.reasoning,
         provider: donePayload.provider,
         model: donePayload.model,
+        incomplete: donePayload.incomplete,
+        timedOut: donePayload.timedOut,
       },
       errText: null,
     };
@@ -1185,6 +1197,34 @@ function shouldFallback(attempt) {
   const msg = (attempt.data?.error || attempt.errText || '').toString().toLowerCase();
   if (/provider returned error|no endpoints|temporarily unavailable|timed out|timeout|rate limit/.test(msg)) return true;
   return false;
+}
+
+/** Markers the model uses so the client can auto-continue long work in chunks. */
+const CONTINUE_MARKER_RE = /⟦\s*(MORE|DONE)\s*⟧/gi;
+const WANTS_MORE_RE = /⟦\s*MORE\s*⟧/i;
+const AUTO_CONTINUE_MAX = 8;
+const AUTO_CONTINUE_USER_TEXT =
+  'Continue. Next small chunk only (about 2–3 items/sections). End with ⟦MORE⟧ if more remains, or ⟦DONE⟧ when finished.';
+const AUTO_CONTINUE_AFTER_TIMEOUT_TEXT =
+  'Continue from where you left off. Small chunk only. End with ⟦MORE⟧ if more remains, or ⟦DONE⟧ when finished.';
+const AUTO_CONTINUE_EMPTY_TIMEOUT_TEXT =
+  'Previous attempt timed out before any text arrived. Restart with only the first small chunk (2–3 items). End with ⟦MORE⟧ if more remains, or ⟦DONE⟧ when finished.';
+
+function stripContinueMarkers(text) {
+  return String(text || '')
+    .replace(CONTINUE_MARKER_RE, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function replyWantsMore(text, meta = {}) {
+  if (meta.incomplete || meta.timedOut) return true;
+  return WANTS_MORE_RE.test(String(text || ''));
+}
+
+function isTimeoutLikeError(msg) {
+  const s = String(msg || '').toLowerCase();
+  return /took too long|timed out|timeout|aborted/.test(s);
 }
 
 async function sendMessage(text) {
@@ -1236,121 +1276,174 @@ async function sendMessage(text) {
     updateStatusClock(base);
   }, 1000);
 
-  const apiMessages = chat.messages
-    .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .filter((m) => !m.streaming)
-    .map((m, idx, arr) => {
-      if (
-        imageParts.length
-        && idx === arr.length - 1
-        && m.role === 'user'
-      ) {
-        return {
-          role: 'user',
-          content: [
-            { type: 'text', text: m.content },
-            ...imageParts,
-          ],
-        };
-      }
-      return { role: m.role, content: m.content };
-    });
-
-  const assistantTs = Date.now();
-  let pinnedToStart = false;
-  let streamBuf = '';
-  chat.messages.push({
-    role: 'assistant',
-    content: '',
-    ts: assistantTs,
-    streaming: true,
-    model: state.activeModel,
-    provider: state.activeProvider,
-  });
-  renderMessages({ scroll: 'assistant-start', pinMsgTs: assistantTs });
-  pinnedToStart = true;
-
-  const refreshStreamingBubble = () => {
-    const msg = chat.messages.find((m) => m.ts === assistantTs && m.role === 'assistant');
-    if (!msg) return;
-    msg.content = streamBuf;
-    // Update DOM in place to avoid scroll jumps
-    const el = els.chat.querySelector(`.msg.bot[data-ts="${assistantTs}"] .content`);
-    if (el) {
-      el.innerHTML = '';
-      renderMarkdownInto(el, streamBuf || '…');
-    } else {
-      renderMessages({ scroll: 'none' });
-    }
-  };
+  let autoRound = 0;
+  let emptyTimeoutRetries = 0;
+  let firstAssistantTs = null;
 
   try {
-    updateStatusClock('Waiting for model');
-    let attempt = await callChatStream(
-      state.activeProvider,
-      state.activeModel,
-      apiMessages,
-      state.activePersonaId,
-      (evt) => {
-        if (evt.type === 'status') {
-          updateStatusClock(evt.message || 'Working…');
-        } else if (evt.type === 'thinking') {
-          appendTypingThought(evt.text || '');
-          updateStatusClock('Thinking');
-        } else if (evt.type === 'token') {
-          streamBuf += evt.text || '';
-          updateStatusClock('Writing');
+    while (true) {
+      const apiMessages = chat.messages
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .filter((m) => !m.streaming)
+        .map((m, idx, arr) => {
+          if (
+            imageParts.length
+            && autoRound === 0
+            && idx === arr.length - 1
+            && m.role === 'user'
+            && !m.autoContinue
+          ) {
+            return {
+              role: 'user',
+              content: [
+                { type: 'text', text: m.content },
+                ...imageParts,
+              ],
+            };
+          }
+          return { role: m.role, content: m.content };
+        });
+
+      const assistantTs = Date.now();
+      if (firstAssistantTs == null) firstAssistantTs = assistantTs;
+      let pinnedToStart = false;
+      let streamBuf = '';
+      chat.messages.push({
+        role: 'assistant',
+        content: '',
+        ts: assistantTs,
+        streaming: true,
+        model: state.activeModel,
+        provider: state.activeProvider,
+      });
+      renderMessages({
+        scroll: autoRound === 0 ? 'assistant-start' : 'bottom',
+        pinMsgTs: assistantTs,
+      });
+      pinnedToStart = true;
+
+      const refreshStreamingBubble = () => {
+        const msg = chat.messages.find((m) => m.ts === assistantTs && m.role === 'assistant');
+        if (!msg) return;
+        msg.content = streamBuf;
+        const el = els.chat.querySelector(`.msg.bot[data-ts="${assistantTs}"] .content`);
+        if (el) {
+          el.innerHTML = '';
+          renderMarkdownInto(el, stripContinueMarkers(streamBuf) || '…');
+        } else {
+          renderMessages({ scroll: 'none' });
+        }
+      };
+
+      updateStatusClock(autoRound > 0 ? `Auto-continuing (${autoRound + 1})` : 'Waiting for model');
+      let attempt = await callChatStream(
+        state.activeProvider,
+        state.activeModel,
+        apiMessages,
+        state.activePersonaId,
+        (evt) => {
+          if (evt.type === 'status') {
+            updateStatusClock(evt.message || 'Working…');
+          } else if (evt.type === 'thinking') {
+            appendTypingThought(evt.text || '');
+            updateStatusClock('Thinking');
+          } else if (evt.type === 'token') {
+            streamBuf += evt.text || '';
+            updateStatusClock(autoRound > 0 ? `Writing chunk ${autoRound + 1}` : 'Writing');
+            refreshStreamingBubble();
+            if (!pinnedToStart) {
+              renderMessages({ scroll: 'assistant-start', pinMsgTs: assistantTs });
+              pinnedToStart = true;
+            }
+          }
+        },
+      );
+      let usedFallback = null;
+
+      if (!attempt.ok && shouldFallback(attempt)) {
+        const fb = MODEL_FALLBACKS?.[state.activeProvider]?.[state.activeModel];
+        if (fb) {
+          updateStatusClock('Retrying on backup model');
+          streamBuf = '';
           refreshStreamingBubble();
-          if (!pinnedToStart) {
-            renderMessages({ scroll: 'assistant-start', pinMsgTs: assistantTs });
-            pinnedToStart = true;
+          const retry = await callChatStream(
+            fb.provider,
+            fb.model,
+            apiMessages,
+            state.activePersonaId,
+            (evt) => {
+              if (evt.type === 'status') updateStatusClock(evt.message || 'Working…');
+              else if (evt.type === 'thinking') appendTypingThought(evt.text || '');
+              else if (evt.type === 'token') {
+                streamBuf += evt.text || '';
+                updateStatusClock('Writing');
+                refreshStreamingBubble();
+              }
+            },
+          );
+          if (retry.ok) {
+            attempt = retry;
+            usedFallback = fb;
           }
         }
-      },
-    );
-    let usedFallback = null;
-
-    if (!attempt.ok && shouldFallback(attempt)) {
-      const fb = MODEL_FALLBACKS?.[state.activeProvider]?.[state.activeModel];
-      if (fb) {
-        updateStatusClock('Retrying on backup model');
-        streamBuf = '';
-        refreshStreamingBubble();
-        const retry = await callChatStream(
-          fb.provider,
-          fb.model,
-          apiMessages,
-          state.activePersonaId,
-          (evt) => {
-            if (evt.type === 'status') updateStatusClock(evt.message || 'Working…');
-            else if (evt.type === 'thinking') appendTypingThought(evt.text || '');
-            else if (evt.type === 'token') {
-              streamBuf += evt.text || '';
-              updateStatusClock('Writing');
-              refreshStreamingBubble();
-            }
-          },
-        );
-        if (retry.ok) {
-          attempt = retry;
-          usedFallback = fb;
-        }
       }
-    }
 
-    // Remove streaming placeholder
-    const idx = chat.messages.findIndex((m) => m.ts === assistantTs && m.role === 'assistant');
-    if (idx !== -1) chat.messages.splice(idx, 1);
+      // Remove streaming placeholder
+      const idx = chat.messages.findIndex((m) => m.ts === assistantTs && m.role === 'assistant');
+      if (idx !== -1) chat.messages.splice(idx, 1);
 
-    if (!attempt.ok) {
       const data = attempt.data || {};
-      const where = data.provider ? ` [${data.provider} · ${data.model || state.activeModel}]` : '';
-      const rawErr = data.error || attempt.errText || 'Request failed';
-      const errMsg = friendlyNetworkError({ message: String(rawErr) });
-      chat.messages.push({ role: 'error', content: errMsg + where, ts: Date.now() });
-      renderMessages({ scroll: 'bottom' });
-    } else {
-      const data = attempt.data || {};
+      const rawReply = (attempt.ok ? (data.reply || streamBuf) : (streamBuf || data.partialReply || '')).trim();
+      const timedOut = Boolean(data.timedOut) || (!attempt.ok && isTimeoutLikeError(data.error || attempt.errText));
+
+      if (!attempt.ok && !rawReply) {
+        // Empty timeout: one automatic restart with a shorter-chunk nudge.
+        if (timedOut && emptyTimeoutRetries < 1 && autoRound < AUTO_CONTINUE_MAX) {
+          emptyTimeoutRetries += 1;
+          autoRound += 1;
+          chat.messages.push({
+            role: 'info',
+            content: 'Timed out with no text — retrying a smaller first chunk…',
+            ts: Date.now(),
+          });
+          chat.messages.push({
+            role: 'user',
+            content: AUTO_CONTINUE_EMPTY_TIMEOUT_TEXT,
+            ts: Date.now(),
+            autoContinue: true,
+          });
+          renderMessages({ scroll: 'bottom' });
+          saveState();
+          continue;
+        }
+        const where = data.provider ? ` [${data.provider} · ${data.model || state.activeModel}]` : '';
+        const rawErr = data.error || attempt.errText || 'Request failed';
+        const errMsg = friendlyNetworkError({ message: String(rawErr) });
+        chat.messages.push({ role: 'error', content: errMsg + where, ts: Date.now() });
+        renderMessages({ scroll: 'bottom' });
+        break;
+      }
+
+      // Non-timeout failure with partial text: keep the text, surface the error, stop.
+      if (!attempt.ok && rawReply && !timedOut && !data.incomplete) {
+        chat.messages.push({
+          role: 'assistant',
+          content: rawReply,
+          ts: assistantTs,
+          provider: data.provider,
+          model: data.model || state.activeModel,
+        });
+        const where = data.provider ? ` [${data.provider} · ${data.model || state.activeModel}]` : '';
+        const rawErr = data.error || attempt.errText || 'Request failed';
+        chat.messages.push({
+          role: 'error',
+          content: friendlyNetworkError({ message: String(rawErr) }) + where,
+          ts: Date.now(),
+        });
+        renderMessages({ scroll: 'bottom' });
+        break;
+      }
+
       if (usedFallback) {
         chat.messages.push({
           role: 'info',
@@ -1358,15 +1451,25 @@ async function sendMessage(text) {
           ts: Date.now(),
         });
       }
-      const reply = data.reply || streamBuf || '(empty response)';
+
+      const wantsMore = replyWantsMore(rawReply, {
+        incomplete: data.incomplete,
+        timedOut,
+      });
+      // Keep markers in stored content for API history; UI strips them on render.
+      const storedReply = rawReply || '(empty response)';
+      const displayReply = stripContinueMarkers(storedReply) || '(empty response)';
+
       chat.messages.push({
         role: 'assistant',
-        content: reply,
+        content: storedReply,
         ts: assistantTs,
         provider: data.provider,
         model: data.model || state.activeModel,
+        chunk: autoRound + 1,
       });
-      const newArts = extractArtifacts(reply);
+
+      const newArts = extractArtifacts(displayReply);
       if (newArts.length) {
         chat.artifacts.push(...newArts);
         if (state.artifactsCollapsed) {
@@ -1374,15 +1477,51 @@ async function sendMessage(text) {
           applySidebarState();
         }
       }
-      // Land at the beginning of the answer, not the end
-      renderMessages({ scroll: 'assistant-start', pinMsgTs: assistantTs });
+      renderMessages({
+        scroll: autoRound === 0 ? 'assistant-start' : 'bottom',
+        pinMsgTs: firstAssistantTs,
+      });
       renderArtifacts();
-      speakReply(reply);
+      speakReply(displayReply);
+
+      if (wantsMore && autoRound + 1 < AUTO_CONTINUE_MAX) {
+        autoRound += 1;
+        chat.messages.push({
+          role: 'info',
+          content: timedOut && !WANTS_MORE_RE.test(rawReply)
+            ? `Chunk cut short — auto-continuing (${autoRound + 1})…`
+            : `Auto-continuing (${autoRound + 1})…`,
+          ts: Date.now(),
+        });
+        chat.messages.push({
+          role: 'user',
+          content: timedOut && !WANTS_MORE_RE.test(rawReply)
+            ? AUTO_CONTINUE_AFTER_TIMEOUT_TEXT
+            : AUTO_CONTINUE_USER_TEXT,
+          ts: Date.now(),
+          autoContinue: true,
+        });
+        chat.updatedAt = Date.now();
+        saveState();
+        renderMessages({ scroll: 'bottom' });
+        continue;
+      }
+
+      if (wantsMore && autoRound + 1 >= AUTO_CONTINUE_MAX) {
+        chat.messages.push({
+          role: 'info',
+          content: 'Stopped auto-continue after several chunks. Say “continue” if you want more.',
+          ts: Date.now(),
+        });
+        renderMessages({ scroll: 'bottom' });
+      }
+      break;
     }
+
     chat.updatedAt = Date.now();
     saveState();
   } catch (err) {
-    const idx = chat.messages.findIndex((m) => m.ts === assistantTs && m.role === 'assistant' && m.streaming);
+    const idx = chat.messages.findIndex((m) => m.role === 'assistant' && m.streaming);
     if (idx !== -1) chat.messages.splice(idx, 1);
     chat.messages.push({ role: 'error', content: err.message || 'Network error', ts: Date.now() });
     saveState();

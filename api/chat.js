@@ -9,6 +9,8 @@ import { resolveProvider } from '../lib/providers.js';
 
 const FALLBACK_SYSTEM_PROMPT = 'You are a helpful, direct assistant.';
 const UPSTREAM_TIMEOUT_MS = 110_000;
+/** Keep each completion short so slow models finish before the upstream timeout. */
+const CHUNK_MAX_TOKENS = 2200;
 
 /** Normal chat is conversation/planning — never a code dump. Coding happens in Workspace. */
 const NO_CODE_CHAT_RULES = `
@@ -17,6 +19,20 @@ CHANNEL RULES (this is normal chat, not the coding workspace):
 - Do NOT invent File: blocks or paste whole files.
 - Answer in plain language: steps, tradeoffs, architecture, checklists.
 - If the user needs real code or repo edits, tell them to tap Workspace (files + terminal sandbox) and continue there with this conversation.
+`.trim();
+
+/**
+ * Long asks must not be one giant reply — the proxy cuts off around 110s.
+ * The browser auto-sends "continue" when it sees ⟦MORE⟧ (same pattern as coding agents).
+ */
+const CHUNK_CONTINUE_RULES = `
+CHUNKING (required — long single replies time out):
+- Work in small chunks that you can finish quickly. Prefer ~2–3 numbered items / sections per reply, not the whole list.
+- Example: if the user asks for 1–10, do 1–3 now, then stop; later turns cover 4–6, then 7–10.
+- If more work remains after this reply, end with exactly: ⟦MORE⟧
+- When the full ask is finished, end with exactly: ⟦DONE⟧
+- Do NOT ask the user whether to continue — the app continues automatically on ⟦MORE⟧.
+- Never pad or ramble to fill a chunk; stop as soon as the chunk is coherent.
 `.trim();
 
 const ROLE_RULES = {
@@ -60,7 +76,7 @@ async function resolveSystemPrompt(personaId, role) {
 
   const roleKey = typeof role === 'string' ? role.toLowerCase() : 'write';
   const roleExtra = ROLE_RULES[roleKey] || ROLE_RULES.write;
-  return `${effectiveSystemPrompt}\n\n${NO_CODE_CHAT_RULES}\n\n${roleExtra}`;
+  return `${effectiveSystemPrompt}\n\n${NO_CODE_CHAT_RULES}\n\n${CHUNK_CONTINUE_RULES}\n\n${roleExtra}`;
 }
 
 function extractDelta(chunk) {
@@ -90,6 +106,28 @@ async function handleStream(req, res, resolved, model, messagesWithSystem) {
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+  let fullReply = '';
+  let fullReasoning = '';
+  let finishReason = '';
+
+  const finalizeReply = (opts = {}) => {
+    let reply = fullReply;
+    const incomplete = Boolean(opts.incomplete || finishReason === 'length');
+    if (incomplete && reply.trim() && !/⟦\s*MORE\s*⟧|⟦\s*DONE\s*⟧/i.test(reply)) {
+      reply = `${reply.trimEnd()}\n\n⟦MORE⟧`;
+    }
+    sseWrite(res, {
+      type: 'done',
+      reply,
+      reasoning: fullReasoning || undefined,
+      incomplete: incomplete || undefined,
+      timedOut: opts.timedOut || undefined,
+      provider: resolved.label,
+      model,
+      keySource: resolved.keySource,
+    });
+    return res.end();
+  };
 
   try {
     const upstream = await fetch(resolved.url, {
@@ -104,6 +142,7 @@ async function handleStream(req, res, resolved, model, messagesWithSystem) {
         model,
         messages: messagesWithSystem,
         stream: true,
+        max_tokens: CHUNK_MAX_TOKENS,
       }),
       signal: controller.signal,
     });
@@ -131,8 +170,6 @@ async function handleStream(req, res, resolved, model, messagesWithSystem) {
 
     const decoder = new TextDecoder();
     let buffer = '';
-    let fullReply = '';
-    let fullReasoning = '';
 
     while (true) {
       const { done, value } = await reader.read();
@@ -148,18 +185,12 @@ async function handleStream(req, res, resolved, model, messagesWithSystem) {
         if (!trimmed.startsWith('data:')) continue;
         const payload = trimmed.slice(5).trim();
         if (payload === '[DONE]') {
-          sseWrite(res, {
-            type: 'done',
-            reply: fullReply,
-            reasoning: fullReasoning || undefined,
-            provider: resolved.label,
-            model,
-            keySource: resolved.keySource,
-          });
-          return res.end();
+          return finalizeReply();
         }
         let chunk;
         try { chunk = JSON.parse(payload); } catch { continue; }
+        const fr = chunk?.choices?.[0]?.finish_reason;
+        if (typeof fr === 'string' && fr) finishReason = fr;
         const { text, reasoning } = extractDelta(chunk);
         if (reasoning) {
           fullReasoning += reasoning;
@@ -173,17 +204,13 @@ async function handleStream(req, res, resolved, model, messagesWithSystem) {
     }
 
     // Some providers close without [DONE]
-    sseWrite(res, {
-      type: 'done',
-      reply: fullReply,
-      reasoning: fullReasoning || undefined,
-      provider: resolved.label,
-      model,
-      keySource: resolved.keySource,
-    });
-    return res.end();
+    return finalizeReply();
   } catch (err) {
     const aborted = err?.name === 'AbortError' || controller.signal.aborted;
+    // Keep any streamed text and mark incomplete so the client can auto-continue.
+    if (aborted && fullReply.trim()) {
+      return finalizeReply({ incomplete: true, timedOut: true });
+    }
     sseWrite(res, {
       type: 'error',
       error: aborted
@@ -191,6 +218,7 @@ async function handleStream(req, res, resolved, model, messagesWithSystem) {
         : (err.message || 'Upstream request failed'),
       provider: resolved.label,
       model,
+      partialReply: fullReply || undefined,
     });
     return res.end();
   } finally {
@@ -214,6 +242,7 @@ async function handleJson(req, res, resolved, model, messagesWithSystem) {
         model,
         messages: messagesWithSystem,
         stream: false,
+        max_tokens: CHUNK_MAX_TOKENS,
       }),
       signal: controller.signal,
     });
@@ -241,8 +270,15 @@ async function handleJson(req, res, resolved, model, messagesWithSystem) {
     }
 
     const reply = data.choices?.[0]?.message?.content ?? '';
+    const finish = data.choices?.[0]?.finish_reason;
+    const incomplete = finish === 'length';
+    const out =
+      incomplete && reply && !/⟦\s*MORE\s*⟧|⟦\s*DONE\s*⟧/i.test(reply)
+        ? `${String(reply).trimEnd()}\n\n⟦MORE⟧`
+        : reply;
     return res.status(200).json({
-      reply,
+      reply: out,
+      incomplete: incomplete || undefined,
       provider: resolved.label,
       model,
       keySource: resolved.keySource,

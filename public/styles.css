@@ -715,6 +715,15 @@ select:focus, input[type="text"]:focus, textarea:focus {
   white-space: pre-wrap;
 }
 .msg.info .role { display: none; }
+.msg.user.auto-continue {
+  align-self: center;
+  opacity: 0.72;
+  font-size: 12px;
+  padding: 6px 12px;
+  max-width: 36ch;
+  background: #0f1610;
+  border-style: dashed;
+}
 .msg .role {
   display: block;
   font-size: 10px;
