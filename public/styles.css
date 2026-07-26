@@ -67,9 +67,13 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   border-radius: 6px;
   cursor: pointer;
 }
-a.icon-btn, a.icon-btn:visited, a.icon-btn:link, a.icon-btn:hover, a.icon-btn:active {
+a.icon-btn, a.icon-btn:visited, a.icon-btn:link, a.icon-btn:hover, a.icon-btn:active,
+a.text-btn, a.text-btn:visited, a.text-btn:link, a.text-btn:hover, a.text-btn:active {
   color: var(--text);
   text-decoration: none;
+}
+a.text-btn.primary, a.text-btn.primary:visited, a.text-btn.primary:link {
+  color: #0a0a0a;
 }
 .icon-btn:hover { border-color: var(--border-2); }
 .icon-btn.accent {

@@ -1,31 +1,31 @@
+/* Match chat UI tokens/shapes from /styles.css — no separate palette. */
+
 .media-body {
   overflow: auto;
   height: auto;
   min-height: 100dvh;
-  background:
-    radial-gradient(1200px 600px at 10% -10%, rgba(212, 255, 63, 0.08), transparent 55%),
-    radial-gradient(900px 500px at 100% 0%, rgba(90, 140, 255, 0.06), transparent 50%),
-    var(--bg);
+  background: var(--bg);
+  color: var(--text);
 }
 
 .media-topbar {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 16px;
+  padding: 10px 14px;
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
-  background: rgba(10, 10, 10, 0.92);
-  backdrop-filter: blur(8px);
+  background: var(--panel-2);
   z-index: 5;
 }
 .media-topbar h1 {
   margin: 0;
-  font-size: 14px;
-  letter-spacing: 0.08em;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--text);
   flex: 1;
 }
 .media-top-hint {
@@ -36,25 +36,28 @@
 .media-main {
   display: grid;
   grid-template-columns: minmax(280px, 420px) 1fr;
-  gap: 16px;
-  padding: 16px;
-  max-width: 1200px;
-  margin: 0 auto;
+  gap: 0;
+  max-width: none;
+  margin: 0;
+  min-height: calc(100dvh - 49px);
 }
 @media (max-width: 860px) {
   .media-main { grid-template-columns: 1fr; }
 }
 
-.media-panel, .media-results {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--panel);
+.media-panel {
+  border-right: 1px solid var(--border);
+  background: var(--panel-2);
+  padding: 14px;
+}
+.media-results {
+  background: var(--bg);
   padding: 14px;
 }
 .media-results h2 {
   margin: 0 0 12px;
   font-size: 12px;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
 }
@@ -66,11 +69,12 @@
 }
 .media-tab {
   flex: 1;
-  min-height: 40px;
-  font-weight: 700;
+  min-height: 36px;
+  font-weight: 600;
+  border-radius: 6px;
 }
 .media-tab.active {
-  border-color: var(--accent);
+  border-color: var(--accent-dim);
   color: var(--accent);
   background: rgba(212, 255, 63, 0.08);
 }
@@ -81,9 +85,9 @@
   gap: 6px;
   margin-bottom: 12px;
   font-size: 11px;
-  color: #888;
+  color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
 }
 .media-field .opt {
   text-transform: none;
@@ -92,23 +96,33 @@
   font-size: 10px;
 }
 .media-field select,
-.media-field input,
+.media-field input[type="text"],
 .media-field textarea {
-  font-size: 15px;
-  min-height: 44px;
-  padding: 10px 12px;
-  border-radius: 8px;
+  font-size: 13px;
+  min-height: 36px;
+  padding: 8px 10px;
+  border-radius: 6px;
   border: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--panel);
   color: var(--text);
   font-family: inherit;
   width: 100%;
+}
+.media-field input[type="file"] {
+  font-size: 12px;
+  color: var(--muted);
 }
 .media-field textarea {
   min-height: 110px;
   resize: vertical;
   text-transform: none;
   letter-spacing: 0;
+}
+.media-field select:focus,
+.media-field input[type="text"]:focus,
+.media-field textarea:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .media-actions {
@@ -118,12 +132,8 @@
   margin-top: 4px;
 }
 .media-actions .primary {
-  background: rgba(212, 255, 63, 0.12);
-  border-color: var(--accent-dim);
-  color: var(--accent);
-  font-weight: 700;
-  min-height: 44px;
-  padding: 0 16px;
+  min-height: 36px;
+  padding: 0 14px;
 }
 .media-status {
   font-size: 12px;
@@ -151,9 +161,10 @@
 .ref-preview img {
   max-width: 100%;
   max-height: 160px;
-  border-radius: 8px;
+  border-radius: 6px;
   border: 1px solid var(--border);
   display: block;
+  background: var(--code-bg);
 }
 .ref-preview.hidden { display: none; }
 
@@ -163,9 +174,9 @@
 }
 .media-card {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   overflow: hidden;
-  background: var(--bg);
+  background: var(--panel);
 }
 .media-card img,
 .media-card video {
@@ -173,7 +184,7 @@
   width: 100%;
   max-height: 520px;
   object-fit: contain;
-  background: #000;
+  background: var(--code-bg);
 }
 .media-card .meta {
   padding: 8px 10px;
@@ -183,8 +194,12 @@
   justify-content: space-between;
   gap: 8px;
   flex-wrap: wrap;
+  border-top: 1px solid var(--border);
+  background: var(--panel-2);
 }
-.media-card .meta a {
+.media-card .meta a,
+.media-card .meta a:visited,
+.media-card .meta a:link {
   color: var(--accent);
   text-decoration: none;
 }
