@@ -1,5 +1,5 @@
 const IMAGE_MODELS = [
-  { value: 'gemini:nano-banana', label: 'Gemini · Nano Banana (free tier)', kind: 'image', provider: 'gemini', model: 'nano-banana' },
+  { value: 'gemini:nano-banana', label: 'Gemini · Nano Banana (paid API)', kind: 'image', provider: 'gemini', model: 'nano-banana' },
   { value: 'nvidia:qwen-image', label: 'NVIDIA · Qwen Image', kind: 'image', provider: 'nvidia', model: 'qwen-image' },
 ];
 

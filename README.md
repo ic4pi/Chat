@@ -34,7 +34,7 @@ Add these in **Vercel → Project → Settings → Environment Variables** (Prod
 
 | Env var | Used for |
 |---------|----------|
-| `GEMINI_API_KEY` | Image · Gemini Nano Banana |
+| `GEMINI_API_KEY` | Image · Gemini Nano Banana (**API is paid** — Google free-tier quota is 0; enable billing on the AI Studio / Cloud project) |
 | `NVIDIA_API_KEY` | Image · Qwen Image **and** Video · Wan 2.2 |
 | `NVIDIA_MEDIA_BASE_URL` | Optional; only if you point at a self-hosted NVIDIA NIM |
 

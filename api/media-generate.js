@@ -55,6 +55,24 @@ function asDataUrl(mime, b64OrDataUrl) {
   return `data:${mime};base64,${s}`;
 }
 
+/** Google marks Nano Banana image API as Free Tier: Not available (quota limit: 0). */
+function explainGeminiQuota(raw, modelId) {
+  const text = String(raw || '');
+  if (!/quota|rate.?limit|resource.?exhausted|billing/i.test(text)) return null;
+  if (/limit:\s*0|free_tier/i.test(text)) {
+    return (
+      `Gemini image API (${modelId}) has no free-tier quota (Google sets limit: 0). ` +
+      `Your key is fine — enable billing on the Google AI / Cloud project for this key, ` +
+      `then retry. Docs: https://ai.google.dev/gemini-api/docs/rate-limits — ` +
+      `or use NVIDIA · Qwen Image with NVIDIA_API_KEY.`
+    );
+  }
+  return (
+    `Gemini quota/rate limit on ${modelId}. Check billing & limits: ` +
+    `https://ai.google.dev/gemini-api/docs/rate-limits`
+  );
+}
+
 async function generateGeminiImage({ prompt, model, imageBase64, mimeType }) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) {
@@ -87,9 +105,10 @@ async function generateGeminiImage({ prompt, model, imageBase64, mimeType }) {
   });
   const data = await upstream.json().catch(() => ({}));
   if (!upstream.ok) {
-    const msg = data?.error?.message || data?.message || `Gemini HTTP ${upstream.status}`;
+    const raw = data?.error?.message || data?.message || `Gemini HTTP ${upstream.status}`;
+    const msg = explainGeminiQuota(raw, modelId) || raw;
     const err = new Error(msg);
-    err.status = upstream.status;
+    err.status = upstream.status === 429 ? 402 : upstream.status;
     throw err;
   }
 
