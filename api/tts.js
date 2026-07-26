@@ -27,6 +27,8 @@ const ALLOWED_VOICES = new Set([
 const DEFAULT_VOICE = 'en-US-AvaNeural';
 /** Soft ceiling per request — client chunks below this so full replies play. */
 const MAX_CHARS = 2400;
+/** Retry once on failure — Edge TTS occasionally drops the WebSocket. */
+const MAX_ATTEMPTS = 2;
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -60,27 +62,38 @@ export default async function handler(req, res) {
   const rateOpt = typeof rate === 'string' && /^[+-]?\d+%$/.test(rate) ? rate : '+0%';
   const pitchOpt = typeof pitch === 'string' && /^[+-]?\d+Hz$/.test(pitch) ? pitch : '+0Hz';
 
-  try {
-    const tts = new UniversalEdgeTTS(cleaned, voice, {
-      rate: rateOpt,
-      pitch: pitchOpt,
-      volume: '+0%',
-    });
-    const result = await tts.synthesize();
-    if (!result?.audio) {
-      return res.status(502).json({ error: 'TTS returned no audio' });
+  let lastErr;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const tts = new UniversalEdgeTTS(cleaned, voice, {
+        rate: rateOpt,
+        pitch: pitchOpt,
+        volume: '+0%',
+      });
+      const result = await tts.synthesize();
+      if (!result?.audio) {
+        throw new Error('TTS returned no audio data');
+      }
+      const buf = Buffer.from(await result.audio.arrayBuffer());
+      if (!buf.length) {
+        throw new Error('TTS returned an empty audio buffer');
+      }
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-TTS-Voice', voice);
+      res.setHeader('Content-Length', String(buf.length));
+      return res.status(200).send(buf);
+    } catch (err) {
+      lastErr = err;
+      console.error(`tts attempt ${attempt}/${MAX_ATTEMPTS} failed:`, err.message);
+      if (attempt < MAX_ATTEMPTS) {
+        await new Promise((r) => setTimeout(r, 400 * attempt));
+      }
     }
-    const buf = Buffer.from(await result.audio.arrayBuffer());
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('X-TTS-Voice', voice);
-    res.setHeader('Content-Length', String(buf.length));
-    return res.status(200).send(buf);
-  } catch (err) {
-    console.error('tts error:', err);
-    return res.status(502).json({
-      error: err.message || 'Neural TTS failed',
-      hint: 'Fall back to browser speech on the client.',
-    });
   }
+
+  return res.status(502).json({
+    error: (lastErr?.message) || 'Neural TTS failed after retries',
+    hint: 'Edge TTS service may be temporarily unavailable. The client will retry.',
+  });
 }

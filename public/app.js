@@ -2326,29 +2326,65 @@ async function downloadGroupSessionMp3(chat, btn, opts = {}) {
     alert('No spoken replies in this group session yet.');
     return;
   }
-  const original = btn?.textContent;
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = 'Building…';
+
+  const originalText = btn?.textContent;
+  const updateBtn = (t) => { if (btn) btn.textContent = t; };
+  if (btn) btn.disabled = true;
+  updateBtn('Building MP3…');
+
+  /** Fetch audio with up to `retries` retries on failure. Returns Blob or null. */
+  async function fetchWithRetry(text, voice, retries = 2) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await fetchNeuralAudio(text, voice);
+      } catch (err) {
+        if (attempt < retries) {
+          // Brief back-off before retry
+          await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+        } else {
+          console.warn(`TTS chunk failed after ${retries + 1} attempts:`, err.message);
+          return null; // Skip this chunk rather than aborting the whole MP3
+        }
+      }
+    }
+    return null;
   }
+
   try {
-    await unlockTts();
     const parts = [];
+    let skipped = 0;
+    let totalChunks = 0;
+
     for (let i = 0; i < turns.length; i++) {
       const turn = turns[i];
       const name = turn.personaName || turn.personaId || 'Speaker';
       const voice = voiceForPersona(turn.personaId);
-      if (btn) btn.textContent = `MP3 ${i + 1}/${turns.length}`;
-      // Name cue so the recording is easy to follow
-      try {
-        parts.push(await fetchNeuralAudio(`${name}.`, voice));
-      } catch { /* skip cue if TTS fails */ }
+      updateBtn(`MP3 ${i + 1}/${turns.length} — ${name}`);
+
+      // Name cue (best-effort; skip silently if it fails)
+      const cueBlob = await fetchWithRetry(`${name}.`, voice, 1);
+      if (cueBlob) parts.push(cueBlob);
+
+      // Content chunks — each is retried and skipped on persistent failure
       const chunks = chunkSpeech(turn.content);
+      totalChunks += chunks.length;
       for (const chunk of chunks) {
-        parts.push(await fetchNeuralAudio(chunk, voice));
+        const blob = await fetchWithRetry(chunk, voice, 2);
+        if (blob) {
+          parts.push(blob);
+        } else {
+          skipped++;
+        }
       }
     }
-    if (!parts.length) throw new Error('Could not synthesize any audio');
+
+    if (!parts.length) {
+      throw new Error(
+        'No audio could be synthesized — the TTS service may be temporarily unavailable. ' +
+        'Try again in a moment, or check that your Vercel deployment has a healthy /api/tts route.',
+      );
+    }
+
     const combined = new Blob(parts, { type: 'audio/mpeg' });
     const url = URL.createObjectURL(combined);
     const link = document.createElement('a');
@@ -2361,13 +2397,15 @@ async function downloadGroupSessionMp3(chat, btn, opts = {}) {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-  } catch (err) {
-    alert('Could not save MP3: ' + (err.message || err));
-  } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = original || 'Save MP3';
+
+    if (skipped > 0) {
+      console.warn(`MP3 complete — ${skipped}/${totalChunks} chunk(s) skipped due to TTS errors.`);
     }
+  } catch (err) {
+    alert('Could not save MP3:\n\n' + (err.message || String(err)));
+  } finally {
+    if (btn) btn.disabled = false;
+    updateBtn(originalText || 'Save MP3');
   }
 }
 
