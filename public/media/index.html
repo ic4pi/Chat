@@ -3,67 +3,73 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-<title>Media Studio</title>
+<title>Media</title>
 <link rel="stylesheet" href="/styles.css" />
 <link rel="stylesheet" href="/media/media.css" />
 </head>
 <body class="media-body">
   <header class="media-topbar">
-    <a class="text-btn" href="/" title="Back to chat">← Chat</a>
+    <a class="text-btn media-back" href="/" title="Back to chat">← Chat</a>
     <h1>Media</h1>
     <span class="media-top-hint">Image · Video</span>
   </header>
 
   <main class="media-main">
-    <section class="media-panel">
-      <div class="media-tabs" role="tablist">
-        <button type="button" class="media-tab active" data-kind="image">Image</button>
-        <button type="button" class="media-tab" data-kind="video">Video</button>
+    <section class="media-col">
+      <div class="media-box">
+        <div class="media-tabs" role="tablist">
+          <button type="button" class="media-tab active" data-kind="image">Image</button>
+          <button type="button" class="media-tab" data-kind="video">Video</button>
+        </div>
+
+        <label class="media-field">
+          <span>Provider / model</span>
+          <select id="mediaModel"></select>
+        </label>
+
+        <label class="media-field">
+          <span>Prompt</span>
+          <textarea id="mediaPrompt" rows="4" placeholder="Describe the image or video…"></textarea>
+        </label>
+
+        <label class="media-field" id="negativeWrap">
+          <span>Negative prompt <em class="opt">(optional · NVIDIA)</em></span>
+          <input id="mediaNegative" type="text" placeholder="blurry, low quality…" />
+        </label>
+
+        <label class="media-field" id="sizeWrap">
+          <span>Size</span>
+          <select id="mediaSize"></select>
+        </label>
+
+        <label class="media-field" id="refWrap">
+          <span>Reference image <em class="opt">(optional)</em></span>
+          <input id="mediaRef" type="file" accept="image/*" />
+        </label>
+        <div id="refPreview" class="ref-preview hidden"></div>
+
+        <div class="media-actions">
+          <button id="mediaGenerate" class="text-btn media-generate" type="button">Generate</button>
+          <span id="mediaStatus" class="media-status"></span>
+        </div>
       </div>
 
-      <label class="media-field">
-        Provider / model
-        <select id="mediaModel"></select>
-      </label>
-
-      <label class="media-field">
-        Prompt
-        <textarea id="mediaPrompt" rows="4" placeholder="Describe the image or video…"></textarea>
-      </label>
-
-      <label class="media-field" id="negativeWrap">
-        Negative prompt <span class="opt">(optional · NVIDIA)</span>
-        <input id="mediaNegative" type="text" placeholder="blurry, low quality…" />
-      </label>
-
-      <label class="media-field" id="sizeWrap">
-        Size
-        <select id="mediaSize"></select>
-      </label>
-
-      <label class="media-field" id="refWrap">
-        Reference image <span class="opt">(optional · edit / image→video)</span>
-        <input id="mediaRef" type="file" accept="image/*" />
-      </label>
-      <div id="refPreview" class="ref-preview hidden"></div>
-
-      <div class="media-actions">
-        <button id="mediaGenerate" class="text-btn primary" type="button">Generate</button>
-        <span id="mediaStatus" class="media-status"></span>
+      <div class="media-box media-keys-box">
+        <p class="media-keys-note">
+          Keys in Vercel → Settings → Environment Variables:
+          <code>GEMINI_API_KEY</code>,
+          <code>NVIDIA_API_KEY</code>.
+          Optional: <code>NVIDIA_MEDIA_BASE_URL</code>.
+        </p>
       </div>
-
-      <p class="media-keys-note">
-        Keys in <b>Vercel → Settings → Environment Variables</b>:
-        <code>GEMINI_API_KEY</code> (Nano Banana),
-        <code>NVIDIA_API_KEY</code> (Qwen Image + Wan 2.2).
-        Optional: <code>NVIDIA_MEDIA_BASE_URL</code> if you self-host the NIM.
-      </p>
     </section>
 
-    <section class="media-results">
-      <h2>Results</h2>
-      <div id="mediaGallery" class="media-gallery"></div>
-      <p id="mediaEmpty" class="media-empty">Nothing generated yet.</p>
+    <section class="media-col media-results-col">
+      <div class="media-box">
+        <h2>Results</h2>
+        <div id="mediaGallery" class="media-gallery"></div>
+        <p id="mediaEmpty" class="media-empty">Nothing generated yet.</p>
+      </div>
     </section>
   </main>
 
