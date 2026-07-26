@@ -307,11 +307,23 @@ select:focus, input[type="text"]:focus, textarea:focus {
   border-color: var(--accent);
 }
 .tone-modal { max-width: 440px; width: min(440px, 94vw); }
-.group-modal { max-width: 520px; width: min(520px, 94vw); max-height: min(92vh, 900px); overflow: auto; }
-.group-form {
+.group-modal {
+  max-width: 520px;
+  width: min(520px, 94vw);
+  max-height: min(92vh, 900px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.group-modal .group-form {
   display: grid;
   gap: 14px;
-  padding: 4px;
+  padding: 4px 4px 12px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  flex: 1;
+  min-height: 0;
 }
 .group-persona-models {
   border: 1px solid var(--border);
@@ -320,6 +332,7 @@ select:focus, input[type="text"]:focus, textarea:focus {
   margin: 0;
   display: grid;
   gap: 10px;
+  min-height: 0;
 }
 .group-persona-models legend {
   font-size: 11px;
@@ -337,16 +350,31 @@ select:focus, input[type="text"]:focus, textarea:focus {
   letter-spacing: 0;
 }
 .group-persona-models-list {
-  display: grid;
-  gap: 12px;
+  min-height: 0;
 }
-.group-persona-editor {
+.group-persona-scroll {
   display: grid;
   gap: 10px;
+  max-height: min(50vh, 420px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  padding-right: 2px;
+}
+.group-persona-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel);
+}
+.group-persona-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
 }
 .group-persona-field {
   display: flex;
@@ -356,56 +384,32 @@ select:focus, input[type="text"]:focus, textarea:focus {
   color: #888;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  position: relative;
+  z-index: 2;
 }
 .group-persona-field select {
-  font-size: 15px;
-  min-height: 42px;
+  font-size: 16px;
+  min-height: 44px;
   padding: 8px 10px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
   width: 100%;
+  pointer-events: auto;
+  touch-action: manipulation;
 }
 .group-persona-field select:disabled {
   opacity: 0.55;
 }
-.group-persona-summary {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 6px;
-  max-height: 180px;
-  overflow: auto;
-}
-.group-persona-summary li {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  cursor: pointer;
-  background: var(--bg);
-}
-.group-persona-summary li.active,
-.group-persona-summary li:hover {
-  border-color: var(--accent-dim);
-}
-.group-persona-summary strong {
-  font-size: 13px;
-  color: var(--text);
-  font-weight: 600;
-  text-transform: none;
-  letter-spacing: 0;
-}
-.group-persona-summary span {
-  font-size: 12px;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+@media (min-width: 520px) {
+  .group-persona-row {
+    grid-template-columns: 100px 1fr 1.5fr;
+    align-items: end;
+  }
+  .group-persona-name {
+    padding-bottom: 12px;
+  }
 }
 .group-modes {
   border: 1px solid var(--border);
