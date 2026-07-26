@@ -1,11 +1,12 @@
-/* Same tokens / boxes / accent as chat (group modal, tone-btn, group-btn). */
+/* Neon-green chrome — same accent language as Group / Workspace buttons. */
 
 .media-body {
   overflow: auto;
   height: auto;
   min-height: 100dvh;
   background: var(--bg);
-  color: var(--text);
+  color: var(--accent);
+  color-scheme: dark;
 }
 
 .media-topbar {
@@ -13,7 +14,7 @@
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--accent-dim);
   position: sticky;
   top: 0;
   background: var(--bg);
@@ -30,19 +31,21 @@
 }
 .media-top-hint {
   font-size: 11px;
-  color: var(--muted);
+  color: var(--accent);
+  opacity: 0.75;
 }
 .media-back,
 .media-back:visited,
-.media-back:link {
+.media-back:link,
+.media-back:hover,
+.media-back:active {
   color: var(--accent);
-  border-color: var(--accent-dim);
+  border-color: var(--accent);
   font-weight: 700;
+  background: rgba(212, 255, 63, 0.08);
 }
 .media-back:hover {
   background: rgba(212, 255, 63, 0.16);
-  border-color: var(--accent);
-  color: var(--accent);
 }
 
 .media-main {
@@ -63,21 +66,21 @@
   align-content: start;
 }
 
-/* Same boxed modules as group-persona-models / group-modes */
 .media-box {
-  border: 1px solid var(--border);
+  border: 1px solid var(--accent);
   border-radius: 8px;
   padding: 12px;
   background: var(--panel);
   display: grid;
   gap: 12px;
+  box-shadow: 0 0 0 1px rgba(212, 255, 63, 0.12);
 }
 .media-box h2 {
   margin: 0;
   font-size: 11px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #888;
+  color: var(--accent);
   padding: 0 2px;
 }
 
@@ -90,8 +93,8 @@
   min-height: 40px;
   font-weight: 700;
   border-radius: 6px;
-  color: var(--text);
-  border-color: var(--border);
+  color: var(--accent);
+  border: 1px solid var(--accent-dim);
   background: transparent;
 }
 .media-tab.active {
@@ -100,26 +103,28 @@
   background: rgba(212, 255, 63, 0.16);
 }
 .media-tab:hover {
-  border-color: var(--accent-dim);
+  border-color: var(--accent);
+  background: rgba(212, 255, 63, 0.08);
 }
 
-/* Same field pattern as group-persona-field / group-topic-label */
 .media-field {
   display: flex;
   flex-direction: column;
   gap: 6px;
   font-size: 11px;
-  color: #888;
+  color: var(--accent);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
 .media-field > span {
   padding: 0 2px;
+  color: var(--accent);
 }
 .media-field .opt {
   text-transform: none;
   letter-spacing: 0;
-  color: var(--muted);
+  color: var(--accent);
+  opacity: 0.7;
   font-style: normal;
   font-size: 11px;
 }
@@ -130,11 +135,12 @@
   min-height: 44px;
   padding: 10px 12px;
   border-radius: 8px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--accent-dim);
   background: var(--bg);
   color: var(--text);
   font-family: inherit;
   width: 100%;
+  color-scheme: dark;
 }
 .media-field textarea {
   min-height: 120px;
@@ -145,17 +151,19 @@
 }
 .media-field input[type="file"] {
   font-size: 13px;
-  color: var(--text);
+  color: var(--accent);
   padding: 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--accent-dim);
   border-radius: 8px;
   background: var(--bg);
+  color-scheme: dark;
 }
 .media-field select:focus,
 .media-field input[type="text"]:focus,
 .media-field textarea:focus {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
+  border-color: var(--accent);
 }
 
 .media-actions {
@@ -167,7 +175,7 @@
 .media-generate,
 .media-generate:visited {
   color: var(--accent);
-  border-color: var(--accent-dim);
+  border-color: var(--accent);
   font-weight: 700;
   min-height: 40px;
   padding: 0 16px;
@@ -180,7 +188,8 @@
 }
 .media-status {
   font-size: 12px;
-  color: var(--muted);
+  color: var(--accent);
+  opacity: 0.8;
   text-transform: none;
   letter-spacing: 0;
 }
@@ -191,7 +200,7 @@
 .media-keys-note {
   margin: 0;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--accent);
   line-height: 1.45;
   text-transform: none;
   letter-spacing: 0;
@@ -199,13 +208,14 @@
 .media-keys-note code {
   color: var(--accent);
   font-size: 12px;
+  font-weight: 700;
 }
 
 .ref-preview img {
   max-width: 100%;
   max-height: 160px;
   border-radius: 8px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--accent-dim);
   display: block;
   background: var(--bg);
 }
@@ -216,7 +226,7 @@
   gap: 12px;
 }
 .media-card {
-  border: 1px solid var(--border);
+  border: 1px solid var(--accent);
   border-radius: 8px;
   overflow: hidden;
   background: var(--bg);
@@ -232,12 +242,12 @@
 .media-card .meta {
   padding: 8px 10px;
   font-size: 11px;
-  color: var(--muted);
+  color: var(--accent);
   display: flex;
   justify-content: space-between;
   gap: 8px;
   flex-wrap: wrap;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--accent-dim);
   background: var(--panel);
 }
 .media-card .meta a,
@@ -249,7 +259,8 @@
 }
 .media-empty {
   margin: 0;
-  color: var(--muted);
+  color: var(--accent);
+  opacity: 0.75;
   font-size: 13px;
 }
 .media-empty.hidden { display: none; }

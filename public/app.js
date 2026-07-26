@@ -35,10 +35,22 @@ const PROVIDER_FALLBACKS = {
     { id: 'venice-uncensored', name: 'Dolphin Mistral 24B Venice Edition' },
   ],
   openrouter: [
-    { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free', name: 'Dolphin-Venice 24B (free)' },
-    { id: 'nousresearch/hermes-3-llama-3.1-405b:free', name: 'Hermes 3 405B (free)' },
-    { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B (free)' },
-    { id: 'qwen/qwen3-coder:free', name: 'Qwen3 Coder (free)' },
+    { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition', name: 'Venice Uncensored (Dolphin 24B)' },
+    { id: 'nousresearch/hermes-4-405b', name: 'Hermes 4 405B' },
+    { id: 'nousresearch/hermes-4-70b', name: 'Hermes 4 70B' },
+    { id: 'nousresearch/hermes-3-llama-3.1-405b', name: 'Hermes 3 405B' },
+    { id: 'gryphe/mythomax-l2-13b', name: 'MythoMax 13B' },
+    { id: 'openrouter/free', name: 'Free Models Router' },
+    { id: 'google/gemma-4-31b-it:free', name: 'Gemma 4 31B (free)' },
+    { id: 'google/gemma-4-26b-a4b-it:free', name: 'Gemma 4 26B A4B (free)' },
+    { id: 'openai/gpt-oss-20b:free', name: 'GPT OSS 20B (free)' },
+    { id: 'nvidia/nemotron-3-nano-30b-a3b:free', name: 'Nemotron 3 Nano 30B (free)' },
+    { id: 'meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 70B Instruct' },
+    { id: 'qwen/qwen3-coder', name: 'Qwen3 Coder' },
+    { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5' },
+    { id: 'openai/gpt-4.1', name: 'GPT-4.1' },
+    { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
+    { id: 'deepseek/deepseek-chat-v3.1', name: 'DeepSeek Chat V3.1' },
   ],
   cerebras: [
     { id: 'gpt-oss-120b', name: 'OpenAI GPT OSS 120B' },
@@ -79,7 +91,7 @@ const PROVIDER_FALLBACKS = {
 
 const DEFAULT_MODELS = {
   venice: 'venice-uncensored-1-2',
-  openrouter: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
+  openrouter: 'cognitivecomputations/dolphin-mistral-24b-venice-edition',
   cerebras: 'gpt-oss-120b',
   groq: 'llama-3.3-70b-versatile',
   nvidia: 'meta/llama-3.3-70b-instruct',
@@ -144,10 +156,11 @@ const modelsCache = {};
 // user's Venice credits.
 const MODEL_FALLBACKS = {
   openrouter: {
+    // Legacy :free slug retired by OpenRouter — bounce to Venice’s copy.
     'cognitivecomputations/dolphin-mistral-24b-venice-edition:free': {
       provider: 'venice',
       model: 'venice-uncensored',
-      reason: 'OpenRouter free Dolphin-Venice unavailable — used your Venice key on venice-uncensored instead.',
+      reason: 'OpenRouter free Dolphin-Venice retired — used your Venice key on venice-uncensored instead.',
     },
   },
 };
@@ -863,7 +876,7 @@ function renderPersonaSelect() {
 
 async function loadProviderModels(provider) {
   const key = (providerKeys[provider] || '').trim();
-  const cacheKey = `prov-v5:${provider}:${key ? 'byok' : 'env'}`;
+  const cacheKey = `prov-v6:${provider}:${key ? 'byok' : 'env'}`;
   if (modelsCache[cacheKey] && !key) return modelsCache[cacheKey];
 
   const headers = { Accept: 'application/json' };
@@ -886,15 +899,21 @@ async function loadProviderModels(provider) {
   }
 }
 
+function sortModelsForProvider(provider, models) {
+  return models.slice().sort((a, b) => {
+    if (provider === 'openrouter') {
+      if (!!a.free !== !!b.free) return a.free ? -1 : 1;
+    }
+    if (!!a.uncensored !== !!b.uncensored) return a.uncensored ? -1 : 1;
+    return (a.name || a.id).localeCompare(b.name || b.id);
+  });
+}
+
 async function renderModelSelect() {
   els.modelSelect.innerHTML = '';
   const provider = state.activeProvider;
   const models = await loadProviderModels(provider);
-
-  const sorted = models.slice().sort((a, b) => {
-    if (!!a.uncensored !== !!b.uncensored) return a.uncensored ? -1 : 1;
-    return (a.name || a.id).localeCompare(b.name || b.id);
-  });
+  const sorted = sortModelsForProvider(provider, models);
 
   const grp = document.createElement('optgroup');
   grp.label = `${PROVIDER_LABELS[provider] || provider}${provider === 'venice' ? ' — all uncensored' : ''}`;
@@ -903,8 +922,19 @@ async function renderModelSelect() {
   els.modelSelect.appendChild(grp);
 
   const available = Array.from(els.modelSelect.options).map((o) => o.value);
+  // Migrate retired OpenRouter :free Dolphin slug → current non-free id.
+  if (
+    provider === 'openrouter' &&
+    state.activeModel === 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free' &&
+    available.includes('cognitivecomputations/dolphin-mistral-24b-venice-edition')
+  ) {
+    state.activeModel = 'cognitivecomputations/dolphin-mistral-24b-venice-edition';
+    saveState();
+  }
   if (!available.includes(state.activeModel)) {
-    state.activeModel = available[0] || DEFAULT_MODELS[provider] || state.activeModel;
+    state.activeModel = available.includes(DEFAULT_MODELS[provider])
+      ? DEFAULT_MODELS[provider]
+      : (available[0] || DEFAULT_MODELS[provider] || state.activeModel);
     saveState();
   }
   els.modelSelect.value = state.activeModel;
@@ -2356,7 +2386,7 @@ async function fillModelSelect(selectEl, provider, selectedModel) {
   if (selectEl.dataset.provider !== provider) return;
 
   selectEl.innerHTML = '';
-  const sorted = models.slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+  const sorted = sortModelsForProvider(provider, models);
   if (!sorted.length) {
     const empty = document.createElement('option');
     empty.value = '';

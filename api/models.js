@@ -120,9 +120,8 @@ export default async function handler(req, res) {
   const curated = FALLBACK_MODELS[providerId] || [];
 
   // Prefer authenticated catalog; else public catalog when the provider has one.
-  const catalogUrl = apiKey
-    ? provider.modelsUrl
-    : (provider.publicModelsUrl || null);
+  // Prefer live modelsUrl (works unauthenticated for OpenRouter + public NVIDIA/Cerebras).
+  const catalogUrl = provider.modelsUrl || provider.publicModelsUrl || null;
 
   if (!catalogUrl) {
     return res.status(200).json({
