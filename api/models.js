@@ -2,10 +2,7 @@
  * GET /api/models?provider=venice|openrouter|cerebras|groq|nvidia
  * Optional header: X-Provider-Key (BYOK for listing)
  *
- * Each provider returns THAT provider’s catalog:
- *   - OpenRouter / NVIDIA / Cerebras: live (or public) full lists
- *   - Groq: live when keyed, else expanded static list
- *   - Venice: live Venice models (drops proxied OpenAI/Claude/Gemini/Grok clones)
+ * Each provider returns THAT provider’s full catalog from its own API.
  */
 
 import {
@@ -14,14 +11,10 @@ import {
   resolveProvider,
 } from '../lib/providers.js';
 
-/** Venice also lists proxied frontier APIs — drop those, keep Venice’s own slate. */
-const VENICE_DROP = /^(openai-|claude-|gemini-|anthropic|grok-|e2ee-gpt)/i;
-
 function normalizeVenice(data) {
   const list = Array.isArray(data?.data) ? data.data : [];
-  return list
-    .filter((m) => m?.type === 'text' && m?.model_spec?.offline !== true)
-    .filter((m) => m?.id && !VENICE_DROP.test(m.id))
+  const models = list
+    .filter((m) => m?.type === 'text' && m?.model_spec?.offline !== true && m?.id)
     .map((m) => {
       const spec = m.model_spec || {};
       const traits = Array.isArray(spec.traits) ? spec.traits : [];
@@ -31,14 +24,26 @@ function normalizeVenice(data) {
         description: spec.description || '',
         contextTokens: spec.availableContextTokens || null,
         uncensored:
-          traits.some((t) => /uncensored|most_uncensored|abliterated/i.test(String(t))) ||
-          /uncensored|dolphin|hermes|heretic|abliterated|decensored/i.test(m.id),
+          traits.some((t) => /uncensored|most_uncensored|abliterated|heretic/i.test(String(t))) ||
+          /uncensored|dolphin|hermes|heretic|abliterated|decensored/i.test(`${m.id} ${spec.name || ''}`),
       };
-    })
-    .sort((a, b) => {
-      if (!!a.uncensored !== !!b.uncensored) return a.uncensored ? -1 : 1;
-      return (a.name || a.id).localeCompare(b.name || b.id);
     });
+
+  // Keep classic alias even if Venice renamed the catalog entry
+  if (!models.some((m) => m.id === 'venice-uncensored')) {
+    const twin = models.find((m) => /venice-uncensored/i.test(m.id));
+    models.unshift({
+      id: 'venice-uncensored',
+      name: 'Venice Uncensored (Dolphin 24B)',
+      description: twin?.description || 'Venice flagship uncensored',
+      uncensored: true,
+    });
+  }
+
+  return models.sort((a, b) => {
+    if (!!a.uncensored !== !!b.uncensored) return a.uncensored ? -1 : 1;
+    return (a.name || a.id).localeCompare(b.name || b.id);
+  });
 }
 
 function normalizeOpenAIStyle(data) {
