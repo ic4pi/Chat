@@ -25,14 +25,14 @@ const FALLBACK_PERSONAS = [
 // Fallback only if /api/models is unreachable. Live/public catalogs are preferred.
 const PROVIDER_FALLBACKS = {
   venice: [
-    { id: 'venice-uncensored', name: 'Venice Uncensored (Dolphin 24B)' },
     { id: 'venice-uncensored-1-2', name: 'Venice Uncensored 1.2' },
-    { id: 'olafangensan-glm-4.7-flash-heretic', name: 'GLM 4.7 Flash Heretic (200k)' },
-    { id: 'hermes-3-llama-3.1-405b', name: 'Hermes 3 Llama 3.1 405B' },
-    { id: 'qwen3-235b-a22b-instruct-2507', name: 'Qwen3 235B Instruct' },
-    { id: 'qwen3-next-80b', name: 'Qwen3 Next 80B' },
-    { id: 'llama-3.3-70b', name: 'Llama 3.3 70B' },
-    { id: 'mistral-31-24b', name: 'Mistral 3.1 24B' },
+    { id: 'e2ee-venice-uncensored-24b-p', name: 'Venice Uncensored 1.1' },
+    { id: 'venice-uncensored-role-play', name: 'Venice Role Play Uncensored' },
+    { id: 'olafangensan-glm-4.7-flash-heretic', name: 'GLM 4.7 Flash Heretic' },
+    { id: 'gemma-4-uncensored', name: 'Gemma 4 Uncensored' },
+    { id: 'e2ee-gemma-4-26b-a4b-uncensored-p', name: 'Gemma 4 26B A4B Uncensored' },
+    { id: 'e2ee-qwen3-6-35b-a3b-uncensored-p', name: 'Qwen3.6 35B A3B Uncensored' },
+    { id: 'venice-uncensored', name: 'Dolphin Mistral 24B Venice Edition' },
   ],
   openrouter: [
     { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free', name: 'Dolphin-Venice 24B (free)' },
@@ -78,7 +78,7 @@ const PROVIDER_FALLBACKS = {
 };
 
 const DEFAULT_MODELS = {
-  venice: 'venice-uncensored',
+  venice: 'venice-uncensored-1-2',
   openrouter: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
   cerebras: 'gpt-oss-120b',
   groq: 'llama-3.3-70b-versatile',
@@ -863,7 +863,7 @@ function renderPersonaSelect() {
 
 async function loadProviderModels(provider) {
   const key = (providerKeys[provider] || '').trim();
-  const cacheKey = `prov-v4:${provider}:${key ? 'byok' : 'env'}`;
+  const cacheKey = `prov-v5:${provider}:${key ? 'byok' : 'env'}`;
   if (modelsCache[cacheKey] && !key) return modelsCache[cacheKey];
 
   const headers = { Accept: 'application/json' };
@@ -898,7 +898,8 @@ async function renderModelSelect() {
 
   const grp = document.createElement('optgroup');
   grp.label = `${PROVIDER_LABELS[provider] || provider}${provider === 'venice' ? ' — all uncensored' : ''}`;
-  for (const m of sorted) grp.appendChild(makeModelOption(m));
+  const showId = provider === 'openrouter';
+  for (const m of sorted) grp.appendChild(makeModelOption(m, { showId }));
   els.modelSelect.appendChild(grp);
 
   const available = Array.from(els.modelSelect.options).map((o) => o.value);
@@ -909,16 +910,18 @@ async function renderModelSelect() {
   els.modelSelect.value = state.activeModel;
 }
 
-function makeModelOption(m) {
+function makeModelOption(m, { showId = true } = {}) {
   const opt = document.createElement('option');
   opt.value = m.id;
   const tags = [];
   if (m.free) tags.push('free');
-  if (m.uncensored) tags.push('uncensored');
   if (m.traits && m.traits.length) tags.push(...m.traits);
   const tagStr = tags.length ? `  [${tags.join(', ')}]` : '';
-  // Show id when name differs so OpenRouter slugs stay obvious
-  const label = m.name && m.name !== m.id ? `${m.name} · ${m.id}` : (m.name || m.id);
+  // Venice list is short + curated — show clean names only.
+  // OpenRouter keeps id so slugs stay obvious.
+  const label = (!showId || !m.name || m.name === m.id)
+    ? (m.name || m.id)
+    : `${m.name} · ${m.id}`;
   opt.textContent = `${label}${tagStr}`;
   opt.title = m.description || m.id;
   return opt;
@@ -2363,7 +2366,8 @@ async function fillModelSelect(selectEl, provider, selectedModel) {
     return;
   }
 
-  for (const m of sorted) selectEl.appendChild(makeModelOption(m));
+  const showId = provider === 'openrouter';
+  for (const m of sorted) selectEl.appendChild(makeModelOption(m, { showId }));
   selectEl.disabled = false;
   const values = Array.from(selectEl.options).map((o) => o.value);
   const pick = values.includes(selectedModel)

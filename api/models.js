@@ -11,38 +11,36 @@ import {
   resolveProvider,
 } from '../lib/providers.js';
 
+/** Exact Venice models the app exposes — nothing else. */
+const VENICE_ONLY = FALLBACK_MODELS.venice || [];
+const VENICE_ONLY_IDS = new Set(VENICE_ONLY.map((m) => m.id));
+
 function normalizeVenice(data) {
   const list = Array.isArray(data?.data) ? data.data : [];
-  const models = list
-    .filter((m) => m?.type === 'text' && m?.model_spec?.offline !== true && m?.id)
-    .map((m) => {
-      const spec = m.model_spec || {};
-      const traits = Array.isArray(spec.traits) ? spec.traits : [];
-      return {
-        id: m.id,
-        name: spec.name || m.id,
-        description: spec.description || '',
-        contextTokens: spec.availableContextTokens || null,
-        uncensored:
-          traits.some((t) => /uncensored|most_uncensored|abliterated|heretic/i.test(String(t))) ||
-          /uncensored|dolphin|hermes|heretic|abliterated|decensored/i.test(`${m.id} ${spec.name || ''}`),
-      };
-    });
-
-  // Keep classic alias even if Venice renamed the catalog entry
-  if (!models.some((m) => m.id === 'venice-uncensored')) {
-    const twin = models.find((m) => /venice-uncensored/i.test(m.id));
-    models.unshift({
-      id: 'venice-uncensored',
-      name: 'Venice Uncensored (Dolphin 24B)',
-      description: twin?.description || 'Venice flagship uncensored',
+  const liveById = new Map();
+  for (const m of list) {
+    if (!m?.id || m?.type !== 'text' || m?.model_spec?.offline === true) continue;
+    if (!VENICE_ONLY_IDS.has(m.id)) continue;
+    const spec = m.model_spec || {};
+    liveById.set(m.id, {
+      id: m.id,
+      name: spec.name || m.id,
+      description: spec.description || '',
+      contextTokens: spec.availableContextTokens || null,
       uncensored: true,
     });
   }
 
-  return models.sort((a, b) => {
-    if (!!a.uncensored !== !!b.uncensored) return a.uncensored ? -1 : 1;
-    return (a.name || a.id).localeCompare(b.name || b.id);
+  // Preserve the user’s order; keep curated names even if catalog labels differ.
+  return VENICE_ONLY.map((curated) => {
+    const live = liveById.get(curated.id);
+    return {
+      id: curated.id,
+      name: curated.name,
+      description: live?.description || curated.description || '',
+      contextTokens: live?.contextTokens ?? null,
+      uncensored: true,
+    };
   });
 }
 
