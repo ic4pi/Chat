@@ -21,9 +21,26 @@ In **Vercel → Project → Settings → Environment Variables** add:
 |------|-------|---------|
 | `OPENROUTER_API_KEY` | from https://openrouter.ai/keys | OpenRouter models |
 | `VENICE_API_KEY` | from https://venice.ai/settings/api | Venice models + live catalog |
+| `NVIDIA_API_KEY` | from https://build.nvidia.com | Chat + Qwen Image in Media Studio |
+| `GEMINI_API_KEY` | from https://aistudio.google.com/apikey | Gemini Nano Banana image gen |
+| `DASHSCOPE_API_KEY` | from Alibaba Model Studio / DashScope | Wan 2.2 video gen |
+| `DASHSCOPE_BASE_URL` | *(optional)* default `https://dashscope-intl.aliyuncs.com` | Use `https://dashscope.aliyuncs.com` for China region |
 | `ADMIN_USERNAME` | anything you want | Gate for `/admin` |
 | `ADMIN_PASSWORD` | anything you want | Gate for `/admin` |
 | `SITE_URL` | *(optional)* your deployment URL | Sent as OpenRouter's `HTTP-Referer` |
+
+### Media Studio keys (Vercel secrets)
+
+Add these in **Vercel → Project → Settings → Environment Variables** (Production), then redeploy:
+
+| Env var | Used for |
+|---------|----------|
+| `GEMINI_API_KEY` | Image · Gemini Nano Banana / Nano Banana 2 |
+| `NVIDIA_API_KEY` | Image · Qwen Image (same key as NVIDIA chat) |
+| `DASHSCOPE_API_KEY` | Video · Wan 2.2 text→video / image→video |
+| `DASHSCOPE_BASE_URL` | Optional DashScope host (intl default above) |
+
+Open **`/media`** (Media link in the chat topbar). Missing keys return a clear 503 for that provider only.
 
 If any of `OPENROUTER_API_KEY` / `VENICE_API_KEY` is missing, the app still runs — the missing provider just returns a clear error. If `ADMIN_USERNAME` or `ADMIN_PASSWORD` is missing, `/admin` refuses to serve — never falls open.
 
@@ -64,8 +81,10 @@ Chat history, active chat / persona / model selection, sidebar preferences, and 
 | Path | Purpose | Auth |
 |------|---------|------|
 | `/` | Main chat UI | none |
+| `/media` | Image / video Media Studio | none (keys server-side) |
 | `/admin` | Persona + master-prompt editor | HTTP Basic auth (`ADMIN_USERNAME` / `ADMIN_PASSWORD`) |
 | `/api/chat` | Chat completions proxy | none (relies on API keys server-side) |
+| `/api/media-generate` | Image/video generation proxy | none (keys server-side) |
 | `/api/models?provider=venice` | Live Venice model catalog | none |
 | `/api/public-config` | Persona IDs and names (no prompts) | none |
 | `/api/admin-config` | Full config incl. system prompts | HTTP Basic auth |
@@ -90,4 +109,6 @@ vercel dev
 - `lib/config.js` — persona schema, load/save from KV, built-in defaults.
 - `lib/auth.js` — shared Basic-auth check.
 - `public/index.html`, `public/app.js`, `public/styles.css` — main chat UI.
+- `public/media/` — Media Studio UI (Gemini / NVIDIA Qwen Image / Wan 2.2).
+- `api/media-generate.js` — image & video generation proxy.
 - `public/admin.js`, `public/admin.css` — admin UI logic + styles (referenced by the inlined admin HTML in `api/admin.js`).

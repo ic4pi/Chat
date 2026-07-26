@@ -162,7 +162,7 @@ function freshState() {
     // Venice by default — OpenRouter free-tier models routinely hang / 429,
     // which on iOS shows up as a multi-minute "thinking…" then "Load failed".
     activeProvider: 'venice',
-    activeModel: 'venice-uncensored',
+    activeModel: 'venice-uncensored-1-2',
     chatsCollapsed: false,
     chatsCollapsedExplicit: false,
     artifactsCollapsed: true,

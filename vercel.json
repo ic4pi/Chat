@@ -3,9 +3,11 @@
   "buildCommand": null,
   "installCommand": "npm install --ignore-scripts",
   "rewrites": [
-    { "source": "/",      "destination": "/index.html" },
-    { "source": "/admin", "destination": "/api/admin"  },
-    { "source": "/agent", "destination": "/agent/index.html" }
+    { "source": "/",       "destination": "/index.html" },
+    { "source": "/admin",  "destination": "/api/admin" },
+    { "source": "/agent",  "destination": "/agent/index.html" },
+    { "source": "/media",  "destination": "/media/index.html" },
+    { "source": "/media/", "destination": "/media/index.html" }
   ],
   "functions": {
     "api/chat.js":                 { "maxDuration": 120 },
@@ -20,6 +22,7 @@
     "api/detect-test-command.js":  { "maxDuration": 30  },
     "api/agent-chat.js":           { "maxDuration": 120 },
     "api/group-chat.js":           { "maxDuration": 300 },
-    "api/tts.js":                  { "maxDuration": 60  }
+    "api/tts.js":                  { "maxDuration": 60  },
+    "api/media-generate.js":       { "maxDuration": 300 }
   }
 }
