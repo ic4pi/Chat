@@ -75,6 +75,13 @@ a.text-btn, a.text-btn:visited, a.text-btn:link, a.text-btn:hover, a.text-btn:ac
 a.text-btn.primary, a.text-btn.primary:visited, a.text-btn.primary:link {
   color: #0a0a0a;
 }
+a.text-btn.group-btn,
+a.text-btn.group-btn:visited,
+a.text-btn.group-btn:link,
+a.text-btn.group-btn:hover,
+a.text-btn.group-btn:active {
+  color: var(--accent);
+}
 .icon-btn:hover { border-color: var(--border-2); }
 .icon-btn.accent {
   color: var(--accent);

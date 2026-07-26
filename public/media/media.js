@@ -75,9 +75,8 @@ function syncFields() {
   const nvidiaImage = kind === 'image' && spec?.provider === 'nvidia';
   const i2v = kind === 'video' && /i2v/i.test(spec?.model || '');
   els.negativeWrap.style.display = nvidiaImage ? '' : 'none';
-  els.refWrap.querySelector('.opt').textContent = i2v
-    ? '(required for image→video)'
-    : '(optional)';
+  const opt = els.refWrap.querySelector('.opt');
+  if (opt) opt.textContent = i2v ? '(required for image→video)' : '(optional)';
 }
 
 function setStatus(msg) {
