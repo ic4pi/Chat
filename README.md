@@ -21,10 +21,9 @@ In **Vercel → Project → Settings → Environment Variables** add:
 |------|-------|---------|
 | `OPENROUTER_API_KEY` | from https://openrouter.ai/keys | OpenRouter models |
 | `VENICE_API_KEY` | from https://venice.ai/settings/api | Venice models + live catalog |
-| `NVIDIA_API_KEY` | from https://build.nvidia.com | Chat + Qwen Image in Media Studio |
+| `NVIDIA_API_KEY` | from https://build.nvidia.com | Chat + Qwen Image + Wan 2.2 |
 | `GEMINI_API_KEY` | from https://aistudio.google.com/apikey | Gemini Nano Banana image gen |
-| `DASHSCOPE_API_KEY` | from Alibaba Model Studio / DashScope | Wan 2.2 video gen |
-| `DASHSCOPE_BASE_URL` | *(optional)* default `https://dashscope-intl.aliyuncs.com` | Use `https://dashscope.aliyuncs.com` for China region |
+| `NVIDIA_MEDIA_BASE_URL` | *(optional)* default `https://integrate.api.nvidia.com` | Self-hosted Wan/Qwen NIM base URL |
 | `ADMIN_USERNAME` | anything you want | Gate for `/admin` |
 | `ADMIN_PASSWORD` | anything you want | Gate for `/admin` |
 | `SITE_URL` | *(optional)* your deployment URL | Sent as OpenRouter's `HTTP-Referer` |
@@ -35,10 +34,9 @@ Add these in **Vercel → Project → Settings → Environment Variables** (Prod
 
 | Env var | Used for |
 |---------|----------|
-| `GEMINI_API_KEY` | Image · Gemini Nano Banana / Nano Banana 2 |
-| `NVIDIA_API_KEY` | Image · Qwen Image (same key as NVIDIA chat) |
-| `DASHSCOPE_API_KEY` | Video · Wan 2.2 text→video / image→video |
-| `DASHSCOPE_BASE_URL` | Optional DashScope host (intl default above) |
+| `GEMINI_API_KEY` | Image · Gemini Nano Banana |
+| `NVIDIA_API_KEY` | Image · Qwen Image **and** Video · Wan 2.2 |
+| `NVIDIA_MEDIA_BASE_URL` | Optional; only if you point at a self-hosted NVIDIA NIM |
 
 Open **`/media`** (Media link in the chat topbar). Missing keys return a clear 503 for that provider only.
 

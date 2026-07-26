@@ -1,13 +1,11 @@
 const IMAGE_MODELS = [
-  { value: 'gemini:nano-banana', label: 'Gemini · Nano Banana (free-tier friendly)', kind: 'image', provider: 'gemini', model: 'nano-banana' },
-  { value: 'gemini:nano-banana-2', label: 'Gemini · Nano Banana 2', kind: 'image', provider: 'gemini', model: 'nano-banana-2' },
+  { value: 'gemini:nano-banana', label: 'Gemini · Nano Banana (free tier)', kind: 'image', provider: 'gemini', model: 'nano-banana' },
   { value: 'nvidia:qwen-image', label: 'NVIDIA · Qwen Image', kind: 'image', provider: 'nvidia', model: 'qwen-image' },
-  { value: 'nvidia:qwen-image-2512', label: 'NVIDIA · Qwen Image 2512', kind: 'image', provider: 'nvidia', model: 'qwen-image-2512' },
 ];
 
 const VIDEO_MODELS = [
-  { value: 'wan:wan2.2-t2v', label: 'Wan 2.2 · Text → Video', kind: 'video', provider: 'wan', model: 'wan2.2-t2v' },
-  { value: 'wan:wan2.2-i2v', label: 'Wan 2.2 · Image → Video', kind: 'video', provider: 'wan', model: 'wan2.2-i2v' },
+  { value: 'nvidia:wan2.2-t2v', label: 'NVIDIA · Wan 2.2 · Text → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-t2v' },
+  { value: 'nvidia:wan2.2-i2v', label: 'NVIDIA · Wan 2.2 · Image → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-i2v' },
 ];
 
 const IMAGE_SIZES = [
@@ -17,9 +15,8 @@ const IMAGE_SIZES = [
 ];
 
 const VIDEO_SIZES = [
-  { value: '832*480', label: '480p · 832×480' },
-  { value: '1280*720', label: '720p · 1280×720' },
-  { value: '1920*1080', label: '1080p · 1920×1080' },
+  { value: '832x480', label: '480p · 832×480' },
+  { value: '480x832', label: 'Portrait · 480×832' },
 ];
 
 const els = {
@@ -75,12 +72,12 @@ function selectedSpec() {
 
 function syncFields() {
   const spec = selectedSpec();
-  const nvidia = spec?.provider === 'nvidia';
+  const nvidiaImage = kind === 'image' && spec?.provider === 'nvidia';
   const i2v = kind === 'video' && /i2v/i.test(spec?.model || '');
-  els.negativeWrap.style.display = nvidia ? '' : 'none';
+  els.negativeWrap.style.display = nvidiaImage ? '' : 'none';
   els.refWrap.querySelector('.opt').textContent = i2v
     ? '(required for image→video)'
-    : '(optional · edit / image→video)';
+    : '(optional)';
 }
 
 function setStatus(msg) {
@@ -181,7 +178,7 @@ els.generate.addEventListener('click', async () => {
       prompt,
       size: els.size.value,
     };
-    if (spec.provider === 'nvidia') {
+    if (spec.provider === 'nvidia' && kind === 'image') {
       const neg = (els.negative.value || '').trim();
       if (neg) body.negativePrompt = neg;
     }
@@ -228,9 +225,14 @@ els.generate.addEventListener('click', async () => {
     } else if (data.kind === 'video') {
       const open = document.createElement('a');
       open.href = data.videoUrl;
-      open.target = '_blank';
-      open.rel = 'noopener';
-      open.textContent = 'Open / download';
+      if (String(data.videoUrl || '').startsWith('data:')) {
+        open.download = `wan-${Date.now()}.mp4`;
+        open.textContent = 'Download';
+      } else {
+        open.target = '_blank';
+        open.rel = 'noopener';
+        open.textContent = 'Open / download';
+      }
       const { card } = cardShell(`${data.provider} · ${data.model}`, open);
       const vid = document.createElement('video');
       vid.src = data.videoUrl;

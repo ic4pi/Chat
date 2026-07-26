@@ -4,45 +4,42 @@
  * Body:
  *   {
  *     kind: 'image' | 'video',
- *     provider: 'gemini' | 'nvidia' | 'wan',
+ *     provider: 'gemini' | 'nvidia',
  *     model?: string,
  *     prompt: string,
  *     negativePrompt?: string,
- *     size?: string,          // image: 1024x1024 | video: 832*480 / 1920*1080
+ *     size?: string,          // image: 1024x1024 | video: 832x480 / 480x832
+ *     seconds?: number,       // wan video length (1–12, default 4)
  *     imageBase64?: string,   // optional reference / i2v frame (data URL or raw b64)
  *     mimeType?: string
  *   }
  *
  * Env (Vercel → Settings → Environment Variables):
- *   GEMINI_API_KEY      — Gemini Nano Banana image gen
- *   NVIDIA_API_KEY      — Qwen-Image on NVIDIA
- *   DASHSCOPE_API_KEY   — Wan 2.2 video (Alibaba Model Studio / DashScope)
- *   DASHSCOPE_BASE_URL  — optional, default https://dashscope-intl.aliyuncs.com
+ *   GEMINI_API_KEY         — Gemini Nano Banana image gen
+ *   NVIDIA_API_KEY         — Qwen Image + Wan 2.2 video (build.nvidia.com)
+ *   NVIDIA_MEDIA_BASE_URL  — optional; default https://integrate.api.nvidia.com
+ *                            point at a self-hosted Wan/Qwen NIM if needed
  */
 
 const GEMINI_IMAGE_MODELS = {
   'nano-banana': 'gemini-2.5-flash-image',
-  'nano-banana-2': 'gemini-3.1-flash-image-preview',
   'gemini-2.5-flash-image': 'gemini-2.5-flash-image',
-  'gemini-3.1-flash-image-preview': 'gemini-3.1-flash-image-preview',
 };
 
 const NVIDIA_IMAGE_MODELS = {
   'qwen-image': 'qwen/qwen-image',
   'qwen/qwen-image': 'qwen/qwen-image',
-  'qwen-image-2512': 'qwen/qwen-image-2512',
-  'qwen/qwen-image-2512': 'qwen/qwen-image-2512',
 };
 
-const WAN_VIDEO_MODELS = {
-  'wan2.2-t2v': 'wan2.2-t2v-plus',
-  'wan2.2-t2v-plus': 'wan2.2-t2v-plus',
-  'wan2.2-i2v': 'wan2.2-i2v-plus',
-  'wan2.2-i2v-plus': 'wan2.2-i2v-plus',
+const NVIDIA_VIDEO_MODELS = {
+  'wan2.2': 'wan-ai/wan2.2',
+  'wan-ai/wan2.2': 'wan-ai/wan2.2',
+  'wan2.2-t2v': 'wan-ai/wan2.2',
+  'wan2.2-i2v': 'wan-ai/wan2.2',
 };
 
-function dashBase() {
-  return (process.env.DASHSCOPE_BASE_URL || 'https://dashscope-intl.aliyuncs.com').replace(/\/$/, '');
+function nvidiaBase() {
+  return (process.env.NVIDIA_MEDIA_BASE_URL || 'https://integrate.api.nvidia.com').replace(/\/$/, '');
 }
 
 function stripDataUrl(input) {
@@ -50,6 +47,12 @@ function stripDataUrl(input) {
   const m = s.match(/^data:([^;]+);base64,(.+)$/);
   if (m) return { mime: m[1], b64: m[2] };
   return { mime: null, b64: s.replace(/\s+/g, '') };
+}
+
+function asDataUrl(mime, b64OrDataUrl) {
+  const s = String(b64OrDataUrl || '');
+  if (s.startsWith('data:')) return s;
+  return `data:${mime};base64,${s}`;
 }
 
 async function generateGeminiImage({ prompt, model, imageBase64, mimeType }) {
@@ -126,7 +129,12 @@ async function generateGeminiImage({ prompt, model, imageBase64, mimeType }) {
 function parseNvidiaImages(data) {
   const fromOpenAi = (data?.data || [])
     .map((d) => {
-      if (d.b64_json) return { mimeType: 'image/png', base64: String(d.b64_json).replace(/^data:image\/\w+;base64,/, '') };
+      if (d.b64_json) {
+        return {
+          mimeType: 'image/png',
+          base64: String(d.b64_json).replace(/^data:image\/\w+;base64,/, ''),
+        };
+      }
       if (d.url) return { mimeType: 'image/png', url: d.url };
       return null;
     })
@@ -146,6 +154,35 @@ function parseNvidiaImages(data) {
     .filter(Boolean);
 }
 
+async function nvidiaPost(path, body, key) {
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${key}`,
+    Accept: 'application/json',
+  };
+  const urls = [
+    `${nvidiaBase()}${path}`,
+    // Hosted catalog sometimes serves visual models on ai.api
+    `https://ai.api.nvidia.com${path}`,
+  ];
+  // de-dupe if NVIDIA_MEDIA_BASE_URL already is ai.api
+  const seen = new Set();
+  let last = { ok: false, status: 0, data: {} };
+  for (const url of urls) {
+    if (seen.has(url)) continue;
+    seen.add(url);
+    const upstream = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+    const data = await upstream.json().catch(() => ({}));
+    last = { ok: upstream.ok, status: upstream.status, data, url };
+    if (upstream.ok) return last;
+  }
+  return last;
+}
+
 async function generateNvidiaQwenImage({ prompt, model, size, negativePrompt }) {
   const key = process.env.NVIDIA_API_KEY;
   if (!key) {
@@ -154,13 +191,6 @@ async function generateNvidiaQwenImage({ prompt, model, size, negativePrompt }) 
     throw err;
   }
   const modelId = NVIDIA_IMAGE_MODELS[model] || NVIDIA_IMAGE_MODELS['qwen-image'];
-  const headers = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${key}`,
-    Accept: 'application/json',
-  };
-
-  // Preferred: OpenAI-compatible hosted images API
   const openaiBody = {
     model: modelId,
     prompt,
@@ -170,15 +200,11 @@ async function generateNvidiaQwenImage({ prompt, model, size, negativePrompt }) 
   if (size) openaiBody.size = size;
   if (negativePrompt) openaiBody.negative_prompt = negativePrompt;
 
-  let upstream = await fetch('https://integrate.api.nvidia.com/v1/images/generations', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(openaiBody),
-  });
-  let data = await upstream.json().catch(() => ({}));
+  let result = await nvidiaPost('/v1/images/generations', openaiBody, key);
+  let images = result.ok ? parseNvidiaImages(result.data) : [];
 
-  // Fallback: Visual GenAI invoke path used by some build.nvidia.com samples
-  if (!upstream.ok || !parseNvidiaImages(data).length) {
+  if (!images.length) {
+    // Visual GenAI invoke shape used by some build.nvidia.com samples
     const slug = modelId.replace(/^qwen\//, '');
     const genaiBody = {
       prompt,
@@ -190,43 +216,26 @@ async function generateNvidiaQwenImage({ prompt, model, size, negativePrompt }) 
     if (size) {
       const [w, h] = String(size).split(/[x*]/).map(Number);
       if (w && h) {
-        // map common sizes to aspect_ratio
         const ratio = w / h;
         genaiBody.aspect_ratio =
           Math.abs(ratio - 1) < 0.05 ? '1:1' : ratio > 1 ? '16:9' : '9:16';
       }
     }
-    const genai = await fetch(`https://ai.api.nvidia.com/v1/genai/qwen/${slug}`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(genaiBody),
-    });
-    const genaiData = await genai.json().catch(() => ({}));
-    if (genai.ok && parseNvidiaImages(genaiData).length) {
-      upstream = genai;
-      data = genaiData;
-    } else if (!upstream.ok) {
-      const msg =
-        data?.error?.message ||
-        data?.detail ||
-        data?.message ||
-        genaiData?.error?.message ||
-        genaiData?.detail ||
-        `NVIDIA HTTP ${upstream.status}`;
-      const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
-      err.status = upstream.status;
-      throw err;
-    }
+    result = await nvidiaPost(`/v1/genai/qwen/${slug}`, genaiBody, key);
+    images = result.ok ? parseNvidiaImages(result.data) : [];
   }
 
-  const images = parseNvidiaImages(data);
   if (!images.length) {
-    const err = new Error(
-      'NVIDIA Qwen-Image returned no image. Confirm the key has access to qwen/qwen-image on build.nvidia.com.'
-    );
-    err.status = 502;
+    const msg =
+      result.data?.error?.message ||
+      result.data?.detail ||
+      result.data?.message ||
+      `NVIDIA Qwen-Image HTTP ${result.status || 'error'}. Enable qwen/qwen-image on build.nvidia.com for this key.`;
+    const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    err.status = result.status || 502;
     throw err;
   }
+
   return {
     kind: 'image',
     provider: 'nvidia',
@@ -235,105 +244,93 @@ async function generateNvidiaQwenImage({ prompt, model, size, negativePrompt }) 
   };
 }
 
-async function pollWanTask(taskId, apiKey, { timeoutMs = 240_000, intervalMs = 3000 } = {}) {
-  const started = Date.now();
-  const url = `${dashBase()}/api/v1/tasks/${encodeURIComponent(taskId)}`;
-  while (Date.now() - started < timeoutMs) {
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const msg = data?.message || data?.code || `Wan poll HTTP ${res.status}`;
-      const err = new Error(msg);
-      err.status = res.status;
-      throw err;
-    }
-    const status = data?.output?.task_status || data?.task_status;
-    if (status === 'SUCCEEDED') {
-      const videoUrl = data?.output?.video_url || data?.output?.results?.[0]?.url;
-      if (!videoUrl) {
-        const err = new Error('Wan succeeded but returned no video_url.');
-        err.status = 502;
-        throw err;
-      }
-      return { videoUrl, raw: data };
-    }
-    if (status === 'FAILED' || status === 'CANCELED' || status === 'UNKNOWN') {
-      const msg = data?.output?.message || data?.message || `Wan task ${status}`;
-      const err = new Error(msg);
-      err.status = 502;
-      throw err;
-    }
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-  const err = new Error('Wan video generation timed out.');
-  err.status = 504;
-  throw err;
-}
-
-async function generateWanVideo({ prompt, model, size, imageBase64, mimeType }) {
-  const key = process.env.DASHSCOPE_API_KEY;
+async function generateNvidiaWanVideo({
+  prompt,
+  model,
+  size,
+  seconds,
+  imageBase64,
+  mimeType,
+  negativePrompt,
+}) {
+  const key = process.env.NVIDIA_API_KEY;
   if (!key) {
-    const err = new Error('Missing DASHSCOPE_API_KEY in Vercel env.');
+    const err = new Error('Missing NVIDIA_API_KEY in Vercel env.');
     err.status = 503;
     throw err;
   }
 
-  const hasImage = Boolean(imageBase64);
-  const modelId = hasImage
-    ? (WAN_VIDEO_MODELS[model] || WAN_VIDEO_MODELS['wan2.2-i2v'])
-    : (WAN_VIDEO_MODELS[model] || WAN_VIDEO_MODELS['wan2.2-t2v']);
+  const modelId = NVIDIA_VIDEO_MODELS[model] || NVIDIA_VIDEO_MODELS['wan2.2'];
+  const dims = (size || '832x480').includes('*')
+    ? size.replace('*', 'x')
+    : size || '832x480';
+  const allowed = new Set(['832x480', '480x832']);
+  const finalSize = allowed.has(dims) ? dims : '832x480';
 
-  // i2v models need img_url — DashScope accepts public URLs; for uploads we
-  // pass a data URL when the region supports it, else fail clearly.
-  const input = { prompt };
-  if (hasImage) {
-    const { mime, b64 } = stripDataUrl(imageBase64);
-    const mt = mimeType || mime || 'image/png';
-    input.img_url = `data:${mt};base64,${b64}`;
-  }
-
-  const parameters = {
-    prompt_extend: true,
+  const body = {
+    model: modelId,
+    prompt,
+    size: finalSize,
+    seconds: Math.min(12, Math.max(1, Number(seconds) || 4)),
   };
-  if (size) parameters.size = size.includes('*') ? size : size.replace('x', '*');
-
-  const submitUrl = `${dashBase()}/api/v1/services/aigc/video-generation/video-synthesis`;
-  const submit = await fetch(submitUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${key}`,
-      'X-DashScope-Async': 'enable',
-    },
-    body: JSON.stringify({
-      model: modelId,
-      input,
-      parameters,
-    }),
-  });
-  const submitData = await submit.json().catch(() => ({}));
-  if (!submit.ok) {
-    const msg = submitData?.message || submitData?.code || `Wan submit HTTP ${submit.status}`;
-    const err = new Error(msg);
-    err.status = submit.status;
-    throw err;
-  }
-  const taskId = submitData?.output?.task_id;
-  if (!taskId) {
-    const err = new Error('Wan submit returned no task_id.');
-    err.status = 502;
-    throw err;
+  if (imageBase64) {
+    const { mime, b64 } = stripDataUrl(imageBase64);
+    const mt = (mimeType || mime || 'image/png').replace('image/jpg', 'image/jpeg');
+    body.input_reference = asDataUrl(mt, b64);
   }
 
-  const { videoUrl } = await pollWanTask(taskId, key);
+  // OpenAI-compatible video endpoint (NVIDIA NIM Wan 2.2)
+  let result = await nvidiaPost('/v1/videos/generations', body, key);
+  let b64 =
+    result.ok &&
+    (result.data?.data?.b64_json ||
+      result.data?.data?.[0]?.b64_json ||
+      result.data?.b64_json);
+
+  // Native /v1/infer fallback (self-hosted NIM shape)
+  if (!b64) {
+    const [w, h] = finalSize.split('x').map(Number);
+    const inferBody = {
+      prompt,
+      width: w || 832,
+      height: h || 480,
+      num_frames: Math.min(201, Math.max(1, (Number(seconds) || 4) * 16 + 1)),
+      fps: 16,
+      cfg_scale: 5.0,
+      seed: 0,
+    };
+    if (negativePrompt) inferBody.negative_prompt = negativePrompt;
+    if (imageBase64) {
+      const { mime, b64: raw } = stripDataUrl(imageBase64);
+      const mt = (mimeType || mime || 'image/png').replace('image/jpg', 'image/jpeg');
+      inferBody.image = asDataUrl(mt, raw);
+    }
+    result = await nvidiaPost('/v1/infer', inferBody, key);
+    b64 =
+      result.ok &&
+      (result.data?.artifacts?.[0]?.base64 ||
+        result.data?.data?.b64_json ||
+        result.data?.b64_json);
+  }
+
+  if (!b64) {
+    const msg =
+      result.data?.error?.message ||
+      result.data?.detail ||
+      result.data?.message ||
+      `NVIDIA Wan 2.2 HTTP ${result.status || 'error'}. Use NVIDIA_API_KEY from build.nvidia.com (model wan-ai/wan2.2). If your account only has the downloadable NIM, set NVIDIA_MEDIA_BASE_URL to that NIM host.`;
+    const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    err.status = result.status || 502;
+    throw err;
+  }
+
+  const clean = String(b64).replace(/^data:video\/\w+;base64,/, '');
   return {
     kind: 'video',
-    provider: 'wan',
+    provider: 'nvidia',
     model: modelId,
-    taskId,
-    videoUrl,
+    videoUrl: `data:video/mp4;base64,${clean}`,
+    mime: 'video/mp4',
   };
 }
 
@@ -351,6 +348,7 @@ export default async function handler(req, res) {
     prompt,
     negativePrompt,
     size,
+    seconds,
     imageBase64,
     mimeType,
   } = req.body || {};
@@ -370,7 +368,6 @@ export default async function handler(req, res) {
         });
         return res.status(200).json(out);
       }
-      // Default image path: Gemini Nano Banana (also used when provider omitted)
       const out = await generateGeminiImage({
         prompt: prompt.trim(),
         model: model || 'nano-banana',
@@ -381,12 +378,15 @@ export default async function handler(req, res) {
     }
 
     if (kind === 'video') {
-      const out = await generateWanVideo({
+      // Wan 2.2 on NVIDIA — not DashScope
+      const out = await generateNvidiaWanVideo({
         prompt: prompt.trim(),
-        model: model || (imageBase64 ? 'wan2.2-i2v' : 'wan2.2-t2v'),
-        size: size || '832*480',
+        model: model || 'wan2.2',
+        size: size || '832x480',
+        seconds,
         imageBase64,
         mimeType,
+        negativePrompt,
       });
       return res.status(200).json(out);
     }
