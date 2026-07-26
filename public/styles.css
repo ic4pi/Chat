@@ -307,11 +307,82 @@ select:focus, input[type="text"]:focus, textarea:focus {
   border-color: var(--accent);
 }
 .tone-modal { max-width: 440px; width: min(440px, 94vw); }
-.group-modal { max-width: 480px; width: min(480px, 94vw); }
+.group-modal { max-width: 520px; width: min(520px, 94vw); max-height: min(92vh, 900px); overflow: auto; }
 .group-form {
   display: grid;
   gap: 14px;
   padding: 4px;
+}
+.group-persona-models {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+.group-persona-models legend {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0 4px;
+}
+.group-persona-models-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.35;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.group-persona-models-list {
+  display: grid;
+  gap: 10px;
+  max-height: 240px;
+  overflow: auto;
+}
+.group-persona-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.group-persona-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.group-persona-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.group-persona-field select {
+  font-size: 15px;
+  min-height: 42px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  width: 100%;
+}
+@media (min-width: 520px) {
+  .group-persona-row {
+    grid-template-columns: 110px 1fr 1.4fr;
+    align-items: end;
+  }
+  .group-persona-name {
+    padding-bottom: 10px;
+  }
 }
 .group-modes {
   border: 1px solid var(--border);
@@ -411,10 +482,26 @@ select:focus, input[type="text"]:focus, textarea:focus {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
   line-height: 1.4;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.group-banner-text {
+  flex: 1;
+  min-width: 180px;
 }
 .group-banner strong {
   color: var(--text);
   font-weight: 600;
+}
+.group-mp3-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.chat-list li .save-mp3 {
+  color: var(--accent);
 }
 .tone-form {
   display: grid;

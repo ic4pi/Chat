@@ -198,6 +198,13 @@ function migrate(s) {
   merged.chats = merged.chats.map((c) => ({
     id: c.id,
     name: c.name || 'Untitled',
+    kind: c.kind || 'chat',
+    groupMode: c.groupMode || null,
+    topic: c.topic || null,
+    groupSummary: c.groupSummary || '',
+    personaModels: (c.personaModels && typeof c.personaModels === 'object')
+      ? c.personaModels
+      : {},
     provider: c.provider || 'venice',
     model: c.model || 'venice-uncensored',
     personaId: c.personaId || 'nexus',
@@ -243,6 +250,9 @@ function createChat(opts = {}) {
     groupMode: opts.groupMode || null,
     topic: opts.topic || null,
     groupSummary: opts.groupSummary || '',
+    personaModels: (opts.personaModels && typeof opts.personaModels === 'object')
+      ? opts.personaModels
+      : {},
     provider: state.activeProvider,
     model: state.activeModel,
     personaId: state.activePersonaId,
@@ -263,12 +273,13 @@ const GROUP_MODE_LABELS = {
   freechat: 'Free chat',
 };
 
-function createGroupChat(mode, topic) {
+function createGroupChat(mode, topic, personaModels = {}) {
   const label = GROUP_MODE_LABELS[mode] || 'Group';
   const chat = createChat({
     kind: 'group',
     groupMode: mode,
     topic,
+    personaModels,
     name: `${label}: ${topic.slice(0, 36)}`,
     messages: [{
       role: 'info',
@@ -330,6 +341,7 @@ const els = {
   groupModal: $('groupModal'),
   closeGroupModal: $('closeGroupModal'),
   groupTopicInput: $('groupTopicInput'),
+  groupPersonaModels: $('groupPersonaModels'),
   startGroupBtn: $('startGroupBtn'),
   attachBtn: $('attachBtn'),
   attachInput: $('attachInput'),
@@ -426,6 +438,18 @@ function renderChatList() {
       downloadChat(c);
     });
 
+    if (c.kind === 'group') {
+      const mp3 = document.createElement('button');
+      mp3.className = 'chat-action save-mp3';
+      mp3.textContent = '♫';
+      mp3.title = 'Save group session as MP3';
+      mp3.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void downloadGroupSessionMp3(c, mp3);
+      });
+      li.appendChild(mp3);
+    }
+
     const del = document.createElement('button');
     del.className = 'chat-action delete-chat';
     del.textContent = '×';
@@ -480,7 +504,17 @@ function renderMessages(opts = {}) {
     const banner = document.createElement('div');
     banner.className = 'group-banner';
     const modeLabel = GROUP_MODE_LABELS[chat.groupMode] || 'Group';
-    banner.innerHTML = `<strong>${modeLabel}</strong> · ${escapeHtml(chat.topic || 'Untitled topic')} — all personas at the table. Each round uses a short summary of the last ~10 messages.`;
+    const text = document.createElement('div');
+    text.className = 'group-banner-text';
+    text.innerHTML = `<strong>${modeLabel}</strong> · ${escapeHtml(chat.topic || 'Untitled topic')} — all personas at the table. Each round uses a short summary of the last ~10 messages.`;
+    banner.appendChild(text);
+    const mp3Btn = document.createElement('button');
+    mp3Btn.type = 'button';
+    mp3Btn.className = 'text-btn group-mp3-btn';
+    mp3Btn.textContent = 'Save MP3';
+    mp3Btn.title = 'Download this group session as an MP3';
+    mp3Btn.addEventListener('click', () => void downloadGroupSessionMp3(chat, mp3Btn));
+    banner.appendChild(mp3Btn);
     els.chat.appendChild(banner);
   }
 
@@ -548,11 +582,12 @@ function renderMessageInto(container, m) {
       speak.type = 'button';
       speak.className = 'text-btn msg-speak';
       speak.textContent = 'Read aloud';
-      speak.title = 'Speak this reply (works on iPhone)';
+      speak.title = 'Speak this entire reply (available even when auto-speak is off)';
       speak.addEventListener('click', (e) => {
         e.preventDefault();
-        unlockTts();
-        setTimeout(() => speakReply(m.content, { force: true, personaId: m.personaId }), 120);
+        // Unlock audio in the same user gesture (no network), then speak full reply.
+        void unlockTts();
+        void speakReply(m.content, { force: true, personaId: m.personaId });
       });
       div.appendChild(speak);
     }
@@ -1281,6 +1316,10 @@ async function callGroupStream(chat, apiMessages, onEvent) {
   const apiKey = (providerKeys[state.activeProvider] || '').trim();
   const headers = { 'Content-Type': 'application/json', Accept: 'text/event-stream' };
   if (apiKey) headers['X-Provider-Key'] = apiKey;
+  const personaModelMap = {
+    ...personaModels,
+    ...((chat.personaModels && typeof chat.personaModels === 'object') ? chat.personaModels : {}),
+  };
 
   try {
     const res = await fetch('/api/group-chat', {
@@ -1294,6 +1333,8 @@ async function callGroupStream(chat, apiMessages, onEvent) {
         model: state.activeModel,
         provider: state.activeProvider,
         apiKey: apiKey || undefined,
+        personaModels: personaModelMap,
+        providerKeys,
       }),
       signal: controller.signal,
     });
@@ -1401,7 +1442,7 @@ async function sendGroupMessage(text) {
   let firstPin = null;
   const spokenThisRound = [];
 
-  const ensureBubble = (personaId, personaName) => {
+  const ensureBubble = (personaId, personaName, meta = {}) => {
     if (currentTs && currentPersonaId === personaId) return;
     // Finalize previous streaming bubble if any
     if (currentTs) {
@@ -1415,6 +1456,9 @@ async function sendGroupMessage(text) {
     currentPersonaId = personaId;
     currentTs = Date.now() + Math.random();
     if (!firstPin) firstPin = currentTs;
+    const assigned = (chat.personaModels && chat.personaModels[personaId])
+      || personaModels[personaId]
+      || {};
     chat.messages.push({
       role: 'assistant',
       content: '',
@@ -1422,8 +1466,8 @@ async function sendGroupMessage(text) {
       streaming: true,
       personaId,
       personaName,
-      model: state.activeModel,
-      provider: state.activeProvider,
+      model: meta.model || assigned.model || state.activeModel,
+      provider: meta.provider || assigned.provider || state.activeProvider,
     });
     renderMessages({ scroll: 'assistant-start', pinMsgTs: firstPin });
   };
@@ -1448,15 +1492,18 @@ async function sendGroupMessage(text) {
       } else if (evt.type === 'summary' && typeof evt.summary === 'string') {
         chat.groupSummary = evt.summary;
       } else if (evt.type === 'speaker') {
-        ensureBubble(evt.personaId, evt.personaName);
+        ensureBubble(evt.personaId, evt.personaName, { model: evt.model, provider: evt.provider });
         updateStatusClock(`${evt.personaName || 'Persona'} speaking`);
       } else if (evt.type === 'token') {
-        ensureBubble(evt.personaId || currentPersonaId, evt.personaName);
+        ensureBubble(evt.personaId || currentPersonaId, evt.personaName, {
+          model: evt.model,
+          provider: evt.provider,
+        });
         streamBuf = evt.text || streamBuf;
         refreshBubble();
         updateStatusClock(`${evt.personaName || 'Persona'} speaking`);
       } else if (evt.type === 'turn') {
-        ensureBubble(evt.personaId, evt.personaName);
+        ensureBubble(evt.personaId, evt.personaName, { model: evt.model, provider: evt.provider });
         streamBuf = evt.content || streamBuf;
         const msg = chat.messages.find((m) => m.ts === currentTs && m.role === 'assistant');
         if (msg) {
@@ -1464,6 +1511,8 @@ async function sendGroupMessage(text) {
           msg.streaming = false;
           msg.personaId = evt.personaId;
           msg.personaName = evt.personaName;
+          if (evt.model) msg.model = evt.model;
+          if (evt.provider) msg.provider = evt.provider;
         }
         refreshBubble();
         spokenThisRound.push({ content: streamBuf, personaId: evt.personaId });
@@ -1488,10 +1537,18 @@ async function sendGroupMessage(text) {
       renderMessages({ scroll: 'bottom' });
     } else {
       if (attempt.data?.summary) chat.groupSummary = attempt.data.summary;
+      const expected = attempt.data?.expectedTurns;
+      if (typeof expected === 'number' && spokenThisRound.length < expected) {
+        chat.messages.push({
+          role: 'info',
+          content: `${spokenThisRound.length} of ${expected} personas spoke this round (some turns may have failed).`,
+          ts: Date.now(),
+        });
+      }
       renderMessages({ scroll: 'assistant-start', pinMsgTs: firstPin });
-      // Speak first reply of the round if voice is on (avoid stacking every persona)
-      if (spokenThisRound[0]) {
-        speakReply(spokenThisRound[0].content, { personaId: spokenThisRound[0].personaId });
+      // Auto-speak every persona turn in order when spoken replies are on
+      for (const turn of spokenThisRound) {
+        void speakReply(turn.content, { personaId: turn.personaId });
       }
     }
     chat.updatedAt = Date.now();
@@ -1689,6 +1746,7 @@ if (els.roleSelect) {
 const SPEAK_PREF_KEY = 'uncensored_speak_replies_v1';
 const VOICE_PREF_KEY = 'uncensored_tts_voice_v1'; // legacy single-voice fallback
 const PERSONA_VOICES_KEY = 'uncensored_persona_voices_v1';
+const PERSONA_MODELS_KEY = 'uncensored_persona_models_v1';
 const DEFAULT_NEURAL_VOICE = 'en-US-AvaNeural';
 const DEFAULT_PERSONA_VOICES = {
   nexus: 'en-US-AndrewNeural',
@@ -1709,7 +1767,22 @@ function savePersonaVoices(map) {
   try { localStorage.setItem(PERSONA_VOICES_KEY, JSON.stringify(map)); } catch { /* ignore */ }
 }
 
+function loadPersonaModels() {
+  try {
+    const raw = localStorage.getItem(PERSONA_MODELS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePersonaModels(map) {
+  try { localStorage.setItem(PERSONA_MODELS_KEY, JSON.stringify(map)); } catch { /* ignore */ }
+}
+
 let personaVoices = loadPersonaVoices();
+let personaModels = loadPersonaModels();
 
 function voiceForPersona(personaId) {
   const id = personaId || state.activePersonaId || 'nexus';
@@ -1725,6 +1798,20 @@ function setVoiceForPersona(personaId, voice) {
   personaVoices = { ...personaVoices, [id]: voice };
   savePersonaVoices(personaVoices);
   try { localStorage.setItem(VOICE_PREF_KEY, voice); } catch { /* ignore */ }
+}
+
+function modelForPersona(personaId) {
+  const id = personaId || state.activePersonaId || 'nexus';
+  const assigned = personaModels[id];
+  if (assigned && assigned.provider && assigned.model) return assigned;
+  return { provider: state.activeProvider, model: state.activeModel };
+}
+
+function setModelForPersona(personaId, provider, model) {
+  const id = personaId || state.activePersonaId;
+  if (!id || !provider || !model) return;
+  personaModels = { ...personaModels, [id]: { provider, model } };
+  savePersonaModels(personaModels);
 }
 
 function syncVoiceSelectToPersona() {
@@ -1815,14 +1902,19 @@ try { speakReplies = localStorage.getItem(SPEAK_PREF_KEY) === '1'; } catch { /* 
 let ttsUnlocked = false;
 let activeAudio = null;
 let speakQueue = Promise.resolve();
+let speakGeneration = 0;
+
+/** Tiny silent MP3 (no network) — unlocks HTMLAudioElement playback in a user gesture. */
+const SILENT_MP3_DATA_URI =
+  'data:audio/mpeg;base64,SUQzBAAAAAABEFRYWFgAAAAtAAADY29tbWVudABCaWdTb3VuZEJhbmsuY29tIC8gTGFTb25vdGhlcXVlLm9yZwBURU5DAAAAHQAAA1N3aXRjaCBQbHVzIMKpIE5DSCBTb2Z0d2FyZQBUSVQyAAAABgAAAzIyMzUAVFNTRQAAAA8AAANMYXZmNTguMTMuMTAwAAAAAAAAAAAAAAD/80DEAAAAA0gAAAAATEFN//8AAAAA//tQxAAACwAAAAAAAAAABAAAAAAAAAD/80DEAAAAA0gAAAAATEFN//8AAAAA//tQxAAACwAAAAAAAAAABAAAAAAAAAA=';
 
 function syncSpeakBtn() {
   if (!els.speakBtn) return;
   els.speakBtn.classList.toggle('speak-on', speakReplies);
   els.speakBtn.setAttribute('aria-pressed', speakReplies ? 'true' : 'false');
   els.speakBtn.title = speakReplies
-    ? 'Neural spoken replies on — tap to mute'
-    : 'Tap to enable neural spoken replies (per persona)';
+    ? 'Auto-speak on — full replies play automatically. Tap to turn off (Read aloud still works).'
+    : 'Tap to auto-speak full replies. Read aloud still works when this is off.';
 }
 syncSpeakBtn();
 
@@ -1835,6 +1927,7 @@ function cleanForSpeech(text) {
     .trim();
 }
 
+/** Split long text into speakable chunks. No hard cap — entire reply is spoken. */
 function chunkSpeech(text, max = 1800) {
   const clean = cleanForSpeech(text);
   if (!clean) return [];
@@ -1843,16 +1936,19 @@ function chunkSpeech(text, max = 1800) {
   let rest = clean;
   while (rest.length > max) {
     let cut = rest.lastIndexOf('. ', max);
+    if (cut < max * 0.4) cut = rest.lastIndexOf('? ', max);
+    if (cut < max * 0.4) cut = rest.lastIndexOf('! ', max);
     if (cut < max * 0.4) cut = rest.lastIndexOf(' ', max);
     if (cut < max * 0.3) cut = max;
     parts.push(rest.slice(0, cut + 1).trim());
     rest = rest.slice(cut + 1).trim();
   }
   if (rest) parts.push(rest);
-  return parts.slice(0, 4);
+  return parts;
 }
 
 function stopNeuralSpeech() {
+  speakGeneration += 1;
   try {
     if (activeAudio) {
       activeAudio.pause();
@@ -1880,9 +1976,18 @@ async function fetchNeuralAudio(text, voice) {
   return res.blob();
 }
 
-function playBlob(blob) {
+function playBlob(blob, { interrupt = true } = {}) {
   return new Promise((resolve, reject) => {
-    stopNeuralSpeech();
+    if (interrupt) {
+      try {
+        if (activeAudio) {
+          activeAudio.pause();
+          activeAudio.src = '';
+          activeAudio = null;
+        }
+      } catch { /* ignore */ }
+      try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
+    }
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
     activeAudio = audio;
@@ -1906,21 +2011,41 @@ function playBlob(blob) {
   });
 }
 
-/** Fallback robotic browser voice — only if neural TTS fails. */
+/** Fallback robotic browser voice — only if neural TTS fails. Speaks full text in chunks. */
 function speakBrowserFallback(text) {
   if (!window.speechSynthesis) return;
   try {
     window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(cleanForSpeech(text).slice(0, 1200));
-    u.rate = 1.02;
+    const chunks = chunkSpeech(text, 1100);
     const voices = window.speechSynthesis.getVoices?.() || [];
     const en = voices.find(v => /en[-_]/i.test(v.lang) && /enhanced|premium|neural|samantha|google/i.test(v.name))
       || voices.find(v => /en[-_]/i.test(v.lang));
-    if (en) u.voice = en;
-    window.speechSynthesis.speak(u);
+    for (const chunk of chunks) {
+      const u = new SpeechSynthesisUtterance(chunk);
+      u.rate = 1.02;
+      if (en) u.voice = en;
+      window.speechSynthesis.speak(u);
+    }
   } catch (err) {
     console.warn('browser TTS fallback failed', err);
   }
+}
+
+/** Latest assistant turn(s) to auto-speak when enabling 🔊. */
+function lastSpeakableTurns() {
+  const chat = activeChat();
+  if (!chat) return [];
+  const msgs = chat.messages || [];
+  if (chat.kind === 'group') {
+    let lastUser = -1;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'user') { lastUser = i; break; }
+    }
+    const slice = lastUser >= 0 ? msgs.slice(lastUser + 1) : msgs;
+    return slice.filter((m) => m.role === 'assistant' && cleanForSpeech(m.content));
+  }
+  const last = [...msgs].reverse().find((m) => m.role === 'assistant' && cleanForSpeech(m.content));
+  return last ? [last] : [];
 }
 
 async function speakReply(text, { force = false, personaId = null } = {}) {
@@ -1930,16 +2055,34 @@ async function speakReply(text, { force = false, personaId = null } = {}) {
 
   const voice = voiceForPersona(personaId || state.activePersonaId);
 
-  speakQueue = speakQueue.then(async () => {
+  if (force) {
+    // Cut any in-progress audio and start this reply immediately.
     try {
-      for (const chunk of chunks) {
-        const blob = await fetchNeuralAudio(chunk, voice);
-        await playBlob(blob);
+      if (activeAudio) {
+        activeAudio.pause();
+        activeAudio.src = '';
+        activeAudio = null;
+      }
+    } catch { /* ignore */ }
+    try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
+    speakGeneration += 1;
+    speakQueue = Promise.resolve();
+  }
+
+  const gen = speakGeneration;
+  speakQueue = speakQueue.then(async () => {
+    if (gen !== speakGeneration) return;
+    try {
+      for (let i = 0; i < chunks.length; i++) {
+        if (gen !== speakGeneration) return;
+        const blob = await fetchNeuralAudio(chunks[i], voice);
+        if (gen !== speakGeneration) return;
+        await playBlob(blob, { interrupt: i === 0 });
       }
       ttsUnlocked = true;
     } catch (err) {
       console.warn('Neural TTS failed, falling back:', err);
-      speakBrowserFallback(chunks.join(' '));
+      if (gen === speakGeneration) speakBrowserFallback(chunks.join(' '));
     }
   }).catch(() => { /* queue continues */ });
 
@@ -1950,8 +2093,7 @@ async function speakReply(text, { force = false, personaId = null } = {}) {
 async function unlockTts() {
   ttsUnlocked = true;
   try {
-    const blob = await fetchNeuralAudio('Ready.', voiceForPersona(state.activePersonaId));
-    const audio = new Audio(URL.createObjectURL(blob));
+    const audio = new Audio(SILENT_MP3_DATA_URI);
     audio.volume = 0.001;
     await audio.play().catch(() => {});
     audio.pause();
@@ -1968,6 +2110,61 @@ async function unlockTts() {
   }
 }
 
+/**
+ * Build an MP3 of a group session: each persona turn in their voice,
+ * with a short name cue between speakers. MPEG streams are concatenated.
+ */
+async function downloadGroupSessionMp3(chat, btn) {
+  const turns = (chat.messages || []).filter(
+    (m) => m.role === 'assistant' && cleanForSpeech(m.content),
+  );
+  if (!turns.length) {
+    alert('No spoken replies in this group session yet.');
+    return;
+  }
+  const original = btn?.textContent;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Building…';
+  }
+  try {
+    await unlockTts();
+    const parts = [];
+    for (let i = 0; i < turns.length; i++) {
+      const turn = turns[i];
+      const name = turn.personaName || turn.personaId || 'Speaker';
+      const voice = voiceForPersona(turn.personaId);
+      if (btn) btn.textContent = `MP3 ${i + 1}/${turns.length}`;
+      // Name cue so the recording is easy to follow
+      try {
+        parts.push(await fetchNeuralAudio(`${name}.`, voice));
+      } catch { /* skip cue if TTS fails */ }
+      const chunks = chunkSpeech(turn.content);
+      for (const chunk of chunks) {
+        parts.push(await fetchNeuralAudio(chunk, voice));
+      }
+    }
+    if (!parts.length) throw new Error('Could not synthesize any audio');
+    const combined = new Blob(parts, { type: 'audio/mpeg' });
+    const url = URL.createObjectURL(combined);
+    const link = document.createElement('a');
+    const safeName = (chat.name || 'group').replace(/[^\w\-]+/g, '_').slice(0, 60) || 'group';
+    link.href = url;
+    link.download = `${safeName}-${new Date(chat.updatedAt || Date.now()).toISOString().slice(0, 10)}.mp3`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert('Could not save MP3: ' + (err.message || err));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = original || 'Save MP3';
+    }
+  }
+}
+
 els.speakBtn?.addEventListener('click', async () => {
   const turningOn = !speakReplies;
   speakReplies = turningOn;
@@ -1980,25 +2177,36 @@ els.speakBtn?.addEventListener('click', async () => {
   }
 
   syncSpeakBtn();
-  const personaName = personas.find(p => p.id === state.activePersonaId)?.name || 'your persona';
+  // Unlock in this tap, then immediately speak the latest full reply/round.
+  await unlockTts();
+  const turns = lastSpeakableTurns();
+  if (turns.length) {
+    for (const t of turns) {
+      void speakReply(t.content, { force: t === turns[0], personaId: t.personaId });
+    }
+    return;
+  }
   try {
+    const personaName = personas.find(p => p.id === state.activePersonaId)?.name || 'your persona';
     const blob = await fetchNeuralAudio(
-      `Spoken replies are on. I'll speak as ${personaName}.`,
+      `Spoken replies are on. I'll speak full replies as ${personaName}.`,
       voiceForPersona(state.activePersonaId),
     );
     ttsUnlocked = true;
     await playBlob(blob);
   } catch (err) {
     console.warn(err);
-    unlockTts();
-    speakBrowserFallback('Spoken replies are on, but the neural voice failed to load. Using the phone voice for now.');
+    speakBrowserFallback('Spoken replies are on. Read aloud is always available.');
   }
 });
 
 els.speakBtn?.addEventListener('dblclick', () => {
-  const chat = activeChat();
-  const last = [...(chat?.messages || [])].reverse().find(m => m.role === 'assistant');
-  if (last) void speakReply(last.content, { force: true });
+  const turns = lastSpeakableTurns();
+  if (!turns.length) return;
+  void unlockTts();
+  for (const t of turns) {
+    void speakReply(t.content, { force: t === turns[0], personaId: t.personaId });
+  }
 });
 
 let recognition = null;
@@ -2097,18 +2305,112 @@ function openInWorkspace() {
 
 els.workspaceBtn?.addEventListener('click', openInWorkspace);
 
-function openGroupModal() {
+async function fillModelSelect(selectEl, provider, selectedModel) {
+  if (!selectEl) return;
+  selectEl.innerHTML = '';
+  const models = await loadProviderModels(provider);
+  const sorted = models.slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+  for (const m of sorted) selectEl.appendChild(makeModelOption(m));
+  const values = Array.from(selectEl.options).map((o) => o.value);
+  const pick = values.includes(selectedModel)
+    ? selectedModel
+    : (DEFAULT_MODELS[provider] || values[0] || '');
+  if (pick) selectEl.value = pick;
+}
+
+async function renderGroupPersonaModels() {
+  const host = els.groupPersonaModels;
+  if (!host) return;
+  host.innerHTML = '';
+  if (!personas.length) {
+    host.textContent = 'No personas loaded yet.';
+    return;
+  }
+  for (const p of personas) {
+    const row = document.createElement('div');
+    row.className = 'group-persona-row';
+    row.dataset.personaId = p.id;
+
+    const name = document.createElement('div');
+    name.className = 'group-persona-name';
+    name.textContent = p.name;
+    row.appendChild(name);
+
+    const assigned = modelForPersona(p.id);
+
+    const provLabel = document.createElement('label');
+    provLabel.className = 'group-persona-field';
+    provLabel.textContent = 'Provider';
+    const provSelect = document.createElement('select');
+    provSelect.className = 'group-persona-provider';
+    for (const id of PROVIDER_IDS) {
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = PROVIDER_LABELS[id] || id;
+      provSelect.appendChild(opt);
+    }
+    provSelect.value = assigned.provider || state.activeProvider;
+    provLabel.appendChild(provSelect);
+    row.appendChild(provLabel);
+
+    const modelLabel = document.createElement('label');
+    modelLabel.className = 'group-persona-field';
+    modelLabel.textContent = 'Model';
+    const modelSelect = document.createElement('select');
+    modelSelect.className = 'group-persona-model';
+    modelLabel.appendChild(modelSelect);
+    row.appendChild(modelLabel);
+
+    const persist = () => setModelForPersona(p.id, provSelect.value, modelSelect.value);
+    provSelect.addEventListener('change', async () => {
+      await fillModelSelect(
+        modelSelect,
+        provSelect.value,
+        DEFAULT_MODELS[provSelect.value] || state.activeModel,
+      );
+      persist();
+    });
+    modelSelect.addEventListener('change', persist);
+
+    host.appendChild(row);
+    await fillModelSelect(modelSelect, provSelect.value, assigned.model || state.activeModel);
+    persist();
+  }
+}
+
+function collectGroupPersonaModelsFromForm() {
+  const host = els.groupPersonaModels;
+  const out = { ...personaModels };
+  if (!host) return out;
+  host.querySelectorAll('.group-persona-row').forEach((row) => {
+    const id = row.dataset.personaId;
+    const provider = row.querySelector('.group-persona-provider')?.value;
+    const model = row.querySelector('.group-persona-model')?.value;
+    if (id && provider && model) {
+      out[id] = { provider, model };
+      setModelForPersona(id, provider, model);
+    }
+  });
+  return out;
+}
+
+async function openGroupModal() {
   if (!els.groupModal) return;
   els.groupModal.classList.remove('hidden');
   if (els.groupTopicInput) {
     els.groupTopicInput.value = '';
     setTimeout(() => els.groupTopicInput.focus(), 50);
   }
+  try {
+    await renderGroupPersonaModels();
+  } catch (err) {
+    console.warn('Could not render persona model assignments:', err);
+  }
 }
 function closeGroupModal() {
   els.groupModal?.classList.add('hidden');
 }
-els.groupBtn?.addEventListener('click', openGroupModal);
+els.groupBtn?.addEventListener('click', () => { void openGroupModal(); });
 els.closeGroupModal?.addEventListener('click', closeGroupModal);
 els.groupModal?.addEventListener('click', (e) => {
   if (e.target === els.groupModal) closeGroupModal();
@@ -2122,7 +2424,8 @@ els.startGroupBtn?.addEventListener('click', async () => {
     els.groupTopicInput?.focus();
     return;
   }
-  createGroupChat(mode, topic);
+  const assigned = collectGroupPersonaModelsFromForm();
+  createGroupChat(mode, topic, assigned);
   closeGroupModal();
   if (isMobileViewport()) {
     state.chatsCollapsed = true;

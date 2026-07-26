@@ -105,7 +105,7 @@
         <textarea id="input" rows="1" placeholder="Plan or ask… (code builds in Workspace)" autofocus></textarea>
         <button id="sendBtn" type="submit">Send</button>
       </div>
-      <div id="voiceHint" class="voice-hint">Tap <b>Persona · Voice</b> to set role / persona / a voice per persona. Tap <b>🔊</b> to hear replies in that persona’s voice.</div>
+      <div id="voiceHint" class="voice-hint">Tap <b>Persona · Voice</b> for role / persona / voice. <b>🔊</b> auto-speaks full replies; <b>Read aloud</b> still works when it’s off. In <b>Group</b>, pair each persona with a model and save the session as MP3.</div>
     </form>
   </main>
 
@@ -172,7 +172,7 @@
       <h2>Group table</h2>
       <button id="closeGroupModal" class="icon-btn" title="Close">×</button>
     </div>
-    <p class="keys-hint">All personas join one conversation. Pick a vibe, set the topic, then talk to the table.</p>
+    <p class="keys-hint">All personas join each round. Assign a provider + model per persona, pick a vibe and topic, then talk to the table. Save the session as MP3 anytime from the chat banner.</p>
     <div class="group-form">
       <fieldset class="group-modes">
         <legend>Mode</legend>
@@ -202,6 +202,11 @@
         Topic
         <input id="groupTopicInput" type="text" maxlength="200" placeholder="e.g. Launch pricing for the new API" />
       </label>
+      <fieldset class="group-persona-models">
+        <legend>Persona models</legend>
+        <p class="group-persona-models-hint">Each persona pairs with its own LLM for group rounds.</p>
+        <div id="groupPersonaModels" class="group-persona-models-list"></div>
+      </fieldset>
       <div class="tone-actions">
         <button id="startGroupBtn" class="text-btn primary" type="button">Open the table</button>
       </div>
