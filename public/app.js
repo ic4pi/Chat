@@ -227,6 +227,7 @@ function migrate(s) {
     groupMode: c.groupMode || null,
     topic: c.topic || null,
     groupSummary: c.groupSummary || '',
+    groupRounds: typeof c.groupRounds === 'number' ? c.groupRounds : 3,
     personaModels: (c.personaModels && typeof c.personaModels === 'object')
       ? c.personaModels
       : {},
@@ -275,6 +276,7 @@ function createChat(opts = {}) {
     groupMode: opts.groupMode || null,
     topic: opts.topic || null,
     groupSummary: opts.groupSummary || '',
+    groupRounds: typeof opts.groupRounds === 'number' ? opts.groupRounds : 3,
     personaModels: (opts.personaModels && typeof opts.personaModels === 'object')
       ? opts.personaModels
       : {},
@@ -298,17 +300,18 @@ const GROUP_MODE_LABELS = {
   freechat: 'Free chat',
 };
 
-function createGroupChat(mode, topic, personaModels = {}) {
+function createGroupChat(mode, topic, personaModels = {}, rounds = 3) {
   const label = GROUP_MODE_LABELS[mode] || 'Group';
   const chat = createChat({
     kind: 'group',
     groupMode: mode,
     topic,
     personaModels,
+    groupRounds: rounds,
     name: `${label}: ${topic.slice(0, 36)}`,
     messages: [{
       role: 'info',
-      content: `${label} table · topic: ${topic}. Everyone is here — say something to start the round.`,
+      content: `${label} table · topic: ${topic}. ${rounds} round${rounds !== 1 ? 's' : ''} scheduled — send your opening statement to start.`,
       ts: Date.now(),
     }],
   });
@@ -368,6 +371,9 @@ const els = {
   groupTopicInput: $('groupTopicInput'),
   groupPersonaModels: $('groupPersonaModels'),
   startGroupBtn: $('startGroupBtn'),
+  roundsMinus: $('roundsMinus'),
+  roundsPlus: $('roundsPlus'),
+  roundsDisplay: $('roundsDisplay'),
   attachBtn: $('attachBtn'),
   attachInput: $('attachInput'),
   attachPreview: $('attachPreview'),
@@ -470,7 +476,7 @@ function renderChatList() {
       mp3.title = 'Save group session as MP3';
       mp3.addEventListener('click', (e) => {
         e.stopPropagation();
-        void downloadGroupSessionMp3(c, mp3);
+        void downloadGroupSessionMp3(c, mp3, { useKeywords: true });
       });
       li.appendChild(mp3);
     }
@@ -538,7 +544,7 @@ function renderMessages(opts = {}) {
     mp3Btn.className = 'text-btn group-mp3-btn';
     mp3Btn.textContent = 'Save MP3';
     mp3Btn.title = 'Download this group session as an MP3';
-    mp3Btn.addEventListener('click', () => void downloadGroupSessionMp3(chat, mp3Btn));
+    mp3Btn.addEventListener('click', () => void downloadGroupSessionMp3(chat, mp3Btn, { useKeywords: true }));
     banner.appendChild(mp3Btn);
     els.chat.appendChild(banner);
   }
@@ -1451,37 +1457,77 @@ async function callGroupStream(chat, apiMessages, onEvent) {
   }
 }
 
-async function sendGroupMessage(text) {
-  const chat = ensureActiveChat();
-  const displayText = (text || '').trim();
-  if (!displayText) return;
+// ---------------------------------------------------------------------------
+// Topic keyword extractor — used for MP3 filename
+// ---------------------------------------------------------------------------
+function topicKeywords(topic) {
+  const stop = new Set([
+    'a','an','the','and','or','but','is','are','was','were','in','on','at','to','for',
+    'of','with','by','from','as','that','this','these','those','i','we','you','they',
+    'it','its','my','your','our','their','be','do','have','has','had','will','would',
+    'can','could','should','about','what','how','why','when','where','who','which',
+  ]);
+  return String(topic || '')
+    .toLowerCase()
+    .replace(/[^\w\s]/g, '')
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !stop.has(w))
+    .slice(0, 5)
+    .join('-') || 'group';
+}
 
-  chat.messages.push({ role: 'user', content: displayText, ts: Date.now() });
-  if (chat.name.startsWith('Boardroom:') || chat.name.startsWith('Brainstorm:') || chat.name.startsWith('Free chat:')) {
-    /* keep topic-based name */
+// ---------------------------------------------------------------------------
+// "More rounds?" prompt injected into chat after all rounds finish
+// ---------------------------------------------------------------------------
+function showMoreRoundsPrompt(chat) {
+  // Remove any stale prompt from a previous run
+  els.chat?.querySelector('.rounds-prompt')?.remove();
+
+  const div = document.createElement('div');
+  div.className = 'rounds-prompt';
+
+  const label = document.createElement('span');
+  label.className = 'rounds-prompt-label';
+  label.textContent = 'All rounds complete. Add more rounds or finish and save the MP3.';
+  div.appendChild(label);
+
+  const actions = document.createElement('div');
+  actions.className = 'rounds-prompt-actions';
+
+  [['+1', 1], ['+3', 3], ['+5', 5]].forEach(([lbl, n]) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'text-btn';
+    btn.textContent = lbl;
+    btn.title = `Add ${n} more round${n > 1 ? 's' : ''}`;
+    btn.addEventListener('click', () => {
+      div.remove();
+      void runAdditionalRounds(chat, n);
+    });
+    actions.appendChild(btn);
+  });
+
+  const finishBtn = document.createElement('button');
+  finishBtn.type = 'button';
+  finishBtn.className = 'text-btn primary';
+  finishBtn.textContent = 'Finish & Save MP3';
+  finishBtn.addEventListener('click', () => {
+    div.remove();
+    void downloadGroupSessionMp3(chat, finishBtn, { useKeywords: true });
+  });
+  actions.appendChild(finishBtn);
+  div.appendChild(actions);
+
+  if (els.chat) {
+    els.chat.appendChild(div);
+    els.chat.scrollTop = els.chat.scrollHeight;
   }
-  chat.provider = state.activeProvider;
-  chat.model = state.activeModel;
-  chat.updatedAt = Date.now();
-  saveState();
-  renderChatList();
-  renderChatTitle();
-  renderMessages({ scroll: 'bottom' });
+}
 
-  els.sendBtn.disabled = true;
-  const startedAt = Date.now();
-  let tickTimer = null;
-  const updateStatusClock = (base) => {
-    const secs = Math.floor((Date.now() - startedAt) / 1000);
-    setTypingActive(true, `${base} · ${secs}s`);
-  };
-  setTypingActive(true, 'Gathering the table…');
-  tickTimer = setInterval(() => {
-    const cur = els.typingStatus?.textContent || 'Waiting…';
-    const base = cur.replace(/\s·\s\d+s$/, '');
-    updateStatusClock(base);
-  }, 1000);
-
+// ---------------------------------------------------------------------------
+// Execute a single group round (all personas speak once). Returns true on success.
+// ---------------------------------------------------------------------------
+async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) {
   const apiMessages = chat.messages
     .filter((m) => m.role === 'user' || m.role === 'assistant')
     .map((m) => ({
@@ -1491,15 +1537,14 @@ async function sendGroupMessage(text) {
       personaName: m.personaName,
     }));
 
-  let currentTs = null;
+  let currentTs        = null;
   let currentPersonaId = null;
-  let streamBuf = '';
-  let firstPin = null;
+  let streamBuf        = '';
+  let firstPin         = overallFirstPin[0] || null;
   const spokenThisRound = [];
 
   const ensureBubble = (personaId, personaName, meta = {}) => {
     if (currentTs && currentPersonaId === personaId) return;
-    // Finalize previous streaming bubble if any
     if (currentTs) {
       const prev = chat.messages.find((m) => m.ts === currentTs && m.role === 'assistant');
       if (prev) {
@@ -1507,10 +1552,13 @@ async function sendGroupMessage(text) {
         if (!prev.content) prev.content = streamBuf || '…';
       }
     }
-    streamBuf = '';
+    streamBuf        = '';
     currentPersonaId = personaId;
-    currentTs = Date.now() + Math.random();
-    if (!firstPin) firstPin = currentTs;
+    currentTs        = Date.now() + Math.random();
+    if (!firstPin) {
+      firstPin = currentTs;
+      overallFirstPin[0] = firstPin;
+    }
     const assigned = (chat.personaModels && chat.personaModels[personaId])
       || personaModels[personaId]
       || {};
@@ -1521,7 +1569,7 @@ async function sendGroupMessage(text) {
       streaming: true,
       personaId,
       personaName,
-      model: meta.model || assigned.model || state.activeModel,
+      model:    meta.model    || assigned.model    || state.activeModel,
       provider: meta.provider || assigned.provider || state.activeProvider,
     });
     renderMessages({ scroll: 'assistant-start', pinMsgTs: firstPin });
@@ -1562,22 +1610,21 @@ async function sendGroupMessage(text) {
         streamBuf = evt.content || streamBuf;
         const msg = chat.messages.find((m) => m.ts === currentTs && m.role === 'assistant');
         if (msg) {
-          msg.content = streamBuf;
+          msg.content   = streamBuf;
           msg.streaming = false;
           msg.personaId = evt.personaId;
           msg.personaName = evt.personaName;
-          if (evt.model) msg.model = evt.model;
+          if (evt.model)    msg.model    = evt.model;
           if (evt.provider) msg.provider = evt.provider;
         }
         refreshBubble();
         spokenThisRound.push({ content: streamBuf, personaId: evt.personaId });
-        currentTs = null;
+        currentTs        = null;
         currentPersonaId = null;
-        streamBuf = '';
+        streamBuf        = '';
       }
     });
 
-    // Clear any leftover streaming flag
     for (const m of chat.messages) {
       if (m.streaming) m.streaming = false;
     }
@@ -1590,33 +1637,135 @@ async function sendGroupMessage(text) {
         ts: Date.now(),
       });
       renderMessages({ scroll: 'bottom' });
-    } else {
-      if (attempt.data?.summary) chat.groupSummary = attempt.data.summary;
-      const expected = attempt.data?.expectedTurns;
-      if (typeof expected === 'number' && spokenThisRound.length < expected) {
-        chat.messages.push({
-          role: 'info',
-          content: `${spokenThisRound.length} of ${expected} personas spoke this round (some turns may have failed).`,
-          ts: Date.now(),
-        });
-      }
-      renderMessages({ scroll: 'assistant-start', pinMsgTs: firstPin });
-      // Auto-speak every persona turn in order when spoken replies are on
-      for (const turn of spokenThisRound) {
-        void speakReply(turn.content, { personaId: turn.personaId });
-      }
+      return false;
+    }
+
+    if (attempt.data?.summary) chat.groupSummary = attempt.data.summary;
+    const expected = attempt.data?.expectedTurns;
+    if (typeof expected === 'number' && spokenThisRound.length < expected) {
+      chat.messages.push({
+        role: 'info',
+        content: `${spokenThisRound.length} of ${expected} personas spoke this round (some turns may have failed).`,
+        ts: Date.now(),
+      });
+    }
+    renderMessages({ scroll: 'assistant-start', pinMsgTs: firstPin });
+    for (const turn of spokenThisRound) {
+      void speakReply(turn.content, { personaId: turn.personaId });
     }
     chat.updatedAt = Date.now();
     saveState();
+    return true;
   } catch (err) {
     chat.messages.push({ role: 'error', content: err.message || 'Network error', ts: Date.now() });
     saveState();
     renderMessages({ scroll: 'bottom' });
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Run additional rounds (called from the "more rounds?" prompt buttons)
+// ---------------------------------------------------------------------------
+async function runAdditionalRounds(chat, n) {
+  const startedAt   = Date.now();
+  const firstPin    = [null];
+  els.sendBtn.disabled = true;
+  const updateStatusClock = (base) => {
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    setTypingActive(true, `${base} · ${secs}s`);
+  };
+  setTypingActive(true, `Starting ${n} additional round${n > 1 ? 's' : ''}…`);
+
+  const tickTimer = setInterval(() => {
+    const cur  = els.typingStatus?.textContent || 'Waiting…';
+    const base = cur.replace(/\s·\s\d+s$/, '');
+    updateStatusClock(base);
+  }, 1000);
+
+  try {
+    for (let i = 1; i <= n; i++) {
+      if (n > 1) updateStatusClock(`Additional round ${i}/${n} — gathering personas`);
+      const ok = await runOneRound(chat, updateStatusClock, startedAt, firstPin);
+      if (!ok) break;
+      if (i < n) {
+        chat.messages.push({
+          role: 'info',
+          content: `─── Additional round ${i}/${n} complete ───`,
+          ts: Date.now(),
+        });
+        renderMessages({ scroll: 'bottom' });
+      }
+    }
+    showMoreRoundsPrompt(chat);
   } finally {
-    if (tickTimer) clearInterval(tickTimer);
+    clearInterval(tickTimer);
     els.sendBtn.disabled = false;
     setTypingActive(false);
-    els.input.focus();
+    els.input?.focus();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Group message send — runs all scheduled rounds, then prompts for more
+// ---------------------------------------------------------------------------
+async function sendGroupMessage(text) {
+  const chat = ensureActiveChat();
+  const displayText = (text || '').trim();
+  if (!displayText) return;
+
+  // Remove any pending "more rounds?" prompt
+  els.chat?.querySelector('.rounds-prompt')?.remove();
+
+  chat.messages.push({ role: 'user', content: displayText, ts: Date.now() });
+  chat.provider  = state.activeProvider;
+  chat.model     = state.activeModel;
+  chat.updatedAt = Date.now();
+  saveState();
+  renderChatList();
+  renderChatTitle();
+  renderMessages({ scroll: 'bottom' });
+
+  const totalRounds = chat.groupRounds || 3;
+  els.sendBtn.disabled = true;
+  const startedAt = Date.now();
+  const overallFirstPin = [null];
+
+  const updateStatusClock = (base) => {
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    setTypingActive(true, `${base} · ${secs}s`);
+  };
+
+  setTypingActive(true, 'Gathering the table…');
+  const tickTimer = setInterval(() => {
+    const cur  = els.typingStatus?.textContent || 'Waiting…';
+    const base = cur.replace(/\s·\s\d+s$/, '');
+    updateStatusClock(base);
+  }, 1000);
+
+  try {
+    for (let round = 1; round <= totalRounds; round++) {
+      if (totalRounds > 1) {
+        updateStatusClock(`Round ${round}/${totalRounds} — gathering personas`);
+      }
+      const ok = await runOneRound(chat, updateStatusClock, startedAt, overallFirstPin);
+      if (!ok) break;
+      if (round < totalRounds) {
+        chat.messages.push({
+          role: 'info',
+          content: `─── Round ${round}/${totalRounds} complete ───`,
+          ts: Date.now(),
+        });
+        renderMessages({ scroll: 'bottom' });
+      }
+    }
+    // Offer more rounds after all are done
+    showMoreRoundsPrompt(chat);
+  } finally {
+    clearInterval(tickTimer);
+    els.sendBtn.disabled = false;
+    setTypingActive(false);
+    els.input?.focus();
   }
 }
 
@@ -2169,7 +2318,7 @@ async function unlockTts() {
  * Build an MP3 of a group session: each persona turn in their voice,
  * with a short name cue between speakers. MPEG streams are concatenated.
  */
-async function downloadGroupSessionMp3(chat, btn) {
+async function downloadGroupSessionMp3(chat, btn, opts = {}) {
   const turns = (chat.messages || []).filter(
     (m) => m.role === 'assistant' && cleanForSpeech(m.content),
   );
@@ -2203,9 +2352,11 @@ async function downloadGroupSessionMp3(chat, btn) {
     const combined = new Blob(parts, { type: 'audio/mpeg' });
     const url = URL.createObjectURL(combined);
     const link = document.createElement('a');
-    const safeName = (chat.name || 'group').replace(/[^\w\-]+/g, '_').slice(0, 60) || 'group';
+    const base = opts.useKeywords
+      ? topicKeywords(chat.topic || chat.name || 'group')
+      : (chat.name || 'group').replace(/[^\w\-]+/g, '_').slice(0, 60) || 'group';
     link.href = url;
-    link.download = `${safeName}-${new Date(chat.updatedAt || Date.now()).toISOString().slice(0, 10)}.mp3`;
+    link.download = `${base}-${new Date(chat.updatedAt || Date.now()).toISOString().slice(0, 10)}.mp3`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -2521,6 +2672,8 @@ async function openGroupModal() {
     els.groupTopicInput.value = '';
     setTimeout(() => els.groupTopicInput.focus(), 50);
   }
+  // Reset rounds stepper to 3 each time the modal opens
+  if (els.roundsDisplay) els.roundsDisplay.textContent = '3';
   try {
     await renderGroupPersonaModels();
   } catch (err) {
@@ -2535,6 +2688,24 @@ els.closeGroupModal?.addEventListener('click', closeGroupModal);
 els.groupModal?.addEventListener('click', (e) => {
   if (e.target === els.groupModal) closeGroupModal();
 });
+
+// Rounds stepper
+const MIN_ROUNDS = 1;
+const MAX_ROUNDS = 20;
+els.roundsMinus?.addEventListener('click', () => {
+  const cur = parseInt(els.roundsDisplay?.textContent || '3', 10);
+  const next = Math.max(MIN_ROUNDS, cur - 1);
+  if (els.roundsDisplay) els.roundsDisplay.textContent = String(next);
+  if (els.roundsMinus) els.roundsMinus.disabled = next <= MIN_ROUNDS;
+  if (els.roundsPlus)  els.roundsPlus.disabled  = false;
+});
+els.roundsPlus?.addEventListener('click', () => {
+  const cur = parseInt(els.roundsDisplay?.textContent || '3', 10);
+  const next = Math.min(MAX_ROUNDS, cur + 1);
+  if (els.roundsDisplay) els.roundsDisplay.textContent = String(next);
+  if (els.roundsPlus)  els.roundsPlus.disabled  = next >= MAX_ROUNDS;
+  if (els.roundsMinus) els.roundsMinus.disabled = false;
+});
 els.startGroupBtn?.addEventListener('click', async () => {
   const modeEl = document.querySelector('input[name="groupMode"]:checked');
   const mode = modeEl?.value || 'brainstorm';
@@ -2544,8 +2715,9 @@ els.startGroupBtn?.addEventListener('click', async () => {
     els.groupTopicInput?.focus();
     return;
   }
+  const rounds = parseInt(els.roundsDisplay?.textContent || '3', 10) || 3;
   const assigned = collectGroupPersonaModelsFromForm();
-  createGroupChat(mode, topic, assigned);
+  createGroupChat(mode, topic, assigned, rounds);
   closeGroupModal();
   if (isMobileViewport()) {
     state.chatsCollapsed = true;

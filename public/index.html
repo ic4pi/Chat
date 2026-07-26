@@ -199,8 +199,17 @@
           </span>
         </label>
       </fieldset>
+      <div class="group-rounds-row">
+        <span class="group-rounds-label">Rounds</span>
+        <div class="rounds-stepper">
+          <button id="roundsMinus" type="button" class="stepper-btn" aria-label="Fewer rounds">−</button>
+          <span id="roundsDisplay" class="rounds-display">3</span>
+          <button id="roundsPlus"  type="button" class="stepper-btn" aria-label="More rounds">+</button>
+        </div>
+        <span class="group-rounds-hint">All personas speak once per round.</span>
+      </div>
       <label class="group-topic-label">
-        Topic
+        Opening statement / topic
         <input id="groupTopicInput" type="text" maxlength="200" placeholder="e.g. Launch pricing for the new API" />
       </label>
       <fieldset class="group-persona-models">
