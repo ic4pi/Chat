@@ -22,7 +22,7 @@ const FALLBACK_PERSONAS = [
   { id: 'plain', name: 'Plain assistant', description: 'A neutral, no-nonsense assistant.', builtin: true },
 ];
 
-// Short per-provider lists only. Never dump a full upstream catalog in the UI.
+// Fallback only if /api/models is unreachable. Live/public catalogs are preferred.
 const PROVIDER_FALLBACKS = {
   venice: [
     { id: 'venice-uncensored', name: 'Venice Uncensored (Dolphin 24B)' },
@@ -41,6 +41,9 @@ const PROVIDER_FALLBACKS = {
     { id: 'qwen/qwen3-coder:free', name: 'Qwen3 Coder (free)' },
   ],
   cerebras: [
+    { id: 'gpt-oss-120b', name: 'OpenAI GPT OSS 120B' },
+    { id: 'zai-glm-4.7', name: 'Z.ai GLM 4.7' },
+    { id: 'gemma-4-31b', name: 'Gemma 4 31B' },
     { id: 'llama-3.3-70b', name: 'Llama 3.3 70B' },
     { id: 'qwen-3-32b', name: 'Qwen 3 32B' },
     { id: 'llama3.1-8b', name: 'Llama 3.1 8B' },
@@ -48,21 +51,36 @@ const PROVIDER_FALLBACKS = {
   groq: [
     { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B Versatile' },
     { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B Instant' },
+    { id: 'openai/gpt-oss-120b', name: 'GPT OSS 120B' },
+    { id: 'openai/gpt-oss-20b', name: 'GPT OSS 20B' },
+    { id: 'qwen/qwen3.6-27b', name: 'Qwen3.6 27B' },
     { id: 'qwen/qwen3-32b', name: 'Qwen3 32B' },
     { id: 'moonshotai/kimi-k2-instruct', name: 'Kimi K2 Instruct' },
+    { id: 'meta-llama/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout 17B' },
+    { id: 'groq/compound', name: 'Groq Compound' },
+    { id: 'groq/compound-mini', name: 'Groq Compound Mini' },
+    { id: 'minimaxai/minimax-m2.7', name: 'MiniMax M2.7' },
   ],
   nvidia: [
     { id: 'meta/llama-3.3-70b-instruct', name: 'Llama 3.3 70B Instruct' },
     { id: 'meta/llama-3.1-405b-instruct', name: 'Llama 3.1 405B Instruct' },
+    { id: 'meta/llama-3.1-70b-instruct', name: 'Llama 3.1 70B Instruct' },
+    { id: 'meta/llama-3.1-8b-instruct', name: 'Llama 3.1 8B Instruct' },
+    { id: 'meta/llama-4-maverick-17b-128e-instruct', name: 'Llama 4 Maverick 17B' },
     { id: 'qwen/qwen3-235b-a22b', name: 'Qwen3 235B' },
     { id: 'nvidia/llama-3.1-nemotron-70b-instruct', name: 'Nemotron 70B Instruct' },
+    { id: 'deepseek-ai/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+    { id: 'deepseek-ai/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+    { id: 'google/gemma-4-31b-it', name: 'Gemma 4 31B' },
+    { id: 'mistralai/mistral-large-2-instruct', name: 'Mistral Large 2' },
+    { id: 'mistralai/mixtral-8x22b-instruct', name: 'Mixtral 8x22B' },
   ],
 };
 
 const DEFAULT_MODELS = {
   venice: 'venice-uncensored',
   openrouter: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
-  cerebras: 'llama-3.3-70b',
+  cerebras: 'gpt-oss-120b',
   groq: 'llama-3.3-70b-versatile',
   nvidia: 'meta/llama-3.3-70b-instruct',
 };
@@ -845,7 +863,7 @@ function renderPersonaSelect() {
 
 async function loadProviderModels(provider) {
   const key = (providerKeys[provider] || '').trim();
-  const cacheKey = `prov-v2:${provider}:${key ? 'byok' : 'env'}`;
+  const cacheKey = `prov-v3:${provider}:${key ? 'byok' : 'env'}`;
   if (modelsCache[cacheKey] && !key) return modelsCache[cacheKey];
 
   const headers = {};
@@ -891,9 +909,15 @@ async function renderModelSelect() {
 function makeModelOption(m) {
   const opt = document.createElement('option');
   opt.value = m.id;
-  const traitStr = m.traits && m.traits.length ? `  [${m.traits.join(', ')}]` : '';
-  opt.textContent = `${m.name || m.id}${traitStr}`;
-  if (m.description) opt.title = m.description;
+  const tags = [];
+  if (m.free) tags.push('free');
+  if (m.uncensored) tags.push('uncensored');
+  if (m.traits && m.traits.length) tags.push(...m.traits);
+  const tagStr = tags.length ? `  [${tags.join(', ')}]` : '';
+  // Show id when name differs so OpenRouter slugs stay obvious
+  const label = m.name && m.name !== m.id ? `${m.name} · ${m.id}` : (m.name || m.id);
+  opt.textContent = `${label}${tagStr}`;
+  opt.title = m.description || m.id;
   return opt;
 }
 
