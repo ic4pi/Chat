@@ -35,10 +35,10 @@ Add these in **Vercel → Project → Settings → Environment Variables** (Prod
 
 | Env var | Used for |
 |---------|----------|
-| `CLOUDFLARE_ACCOUNT_ID` | Image · Workers AI (FLUX.1 Schnell, SDXL Lightning, SDXL) |
+| `CLOUDFLARE_ACCOUNT_ID` | Image · Workers AI (FLUX.1 Schnell, SDXL Lightning, SDXL) — recommended |
 | `CLOUDFLARE_API_TOKEN` | Image · Workers AI (token needs Workers AI permission) |
-| `NVIDIA_API_KEY` | Image · Qwen / FLUX **and** Video · Wan 2.2 — create via the model page on build.nvidia.com so Public API Endpoints is attached |
-| `NVIDIA_MEDIA_BASE_URL` | Optional; only if you point at a self-hosted NVIDIA NIM |
+| `NVIDIA_API_KEY` | Image · hosted FLUX.1 / SDXL on `ai.api.nvidia.com` (Qwen Image is **not** on the free hosted API) |
+| `NVIDIA_MEDIA_BASE_URL` | Required for Wan 2.2 / Qwen Image (self-hosted NIM). Leave unset to use Cloudflare for images. |
 
 Open **`/media`** (Media link in the chat topbar). Missing keys return a clear 503 for that provider only.
 

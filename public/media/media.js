@@ -2,13 +2,13 @@ const IMAGE_MODELS = [
   { value: 'cloudflare:flux-schnell', label: 'Cloudflare · FLUX.1 Schnell', kind: 'image', provider: 'cloudflare', model: 'flux-schnell' },
   { value: 'cloudflare:sdxl-lightning', label: 'Cloudflare · SDXL Lightning', kind: 'image', provider: 'cloudflare', model: 'sdxl-lightning' },
   { value: 'cloudflare:sdxl', label: 'Cloudflare · SDXL Base', kind: 'image', provider: 'cloudflare', model: 'sdxl' },
-  { value: 'nvidia:qwen-image', label: 'NVIDIA · Qwen Image', kind: 'image', provider: 'nvidia', model: 'qwen-image' },
   { value: 'nvidia:flux-schnell', label: 'NVIDIA · FLUX.1 Schnell', kind: 'image', provider: 'nvidia', model: 'flux-schnell' },
+  { value: 'nvidia:sdxl', label: 'NVIDIA · SDXL', kind: 'image', provider: 'nvidia', model: 'sdxl' },
 ];
 
 const VIDEO_MODELS = [
-  { value: 'nvidia:wan2.2-t2v', label: 'NVIDIA · Wan 2.2 · Text → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-t2v' },
-  { value: 'nvidia:wan2.2-i2v', label: 'NVIDIA · Wan 2.2 · Image → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-i2v' },
+  { value: 'nvidia:wan2.2-t2v', label: 'NVIDIA · Wan 2.2 · Text → Video (self-hosted NIM)', kind: 'video', provider: 'nvidia', model: 'wan2.2-t2v' },
+  { value: 'nvidia:wan2.2-i2v', label: 'NVIDIA · Wan 2.2 · Image → Video (self-hosted NIM)', kind: 'video', provider: 'nvidia', model: 'wan2.2-i2v' },
 ];
 
 const IMAGE_SIZES = [
@@ -200,9 +200,12 @@ els.generate.addEventListener('click', async () => {
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
 
     if (data.kind === 'image') {
+      if (data.fallbackNote) {
+        setStatus(data.fallbackNote);
+      }
       for (const img of data.images || []) {
         const { card, meta } = cardShell(
-          `${data.provider} · ${data.model}`,
+          `${data.provider} · ${data.model}${data.fallbackFrom ? ' (fallback)' : ''}`,
           new Date().toLocaleTimeString(),
         );
         const el = document.createElement('img');
