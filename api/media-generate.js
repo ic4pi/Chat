@@ -165,6 +165,17 @@ function explainNvidiaAuth(status, detail, modelId) {
   );
 }
 
+function isNvidiaSafetyBlock(detail) {
+  return /nsfw|safety|content.?filter|blocked|moderated|inappropriate/i.test(String(detail || ''));
+}
+
+function cleanMediaError(msg) {
+  return String(msg || '')
+    .replace(/^(AIError:\s*)+/gi, '')
+    .replace(/\s*\([0-9a-f-]{20,}\)\s*$/i, '')
+    .trim();
+}
+
 function parseNvidiaImages(data) {
   const fromOpenAi = (data?.data || [])
     .map((d) => {
@@ -575,6 +586,8 @@ function buildNvidiaImageBody(modelId, prompt, negativePrompt, size) {
       cfg_scale: 5,
       width: Math.min(1024, width),
       height: Math.min(1024, height),
+      // Hosted NVIDIA often ignores this, but some NIM builds honor it.
+      enable_safety_checker: false,
     };
   }
 
@@ -584,6 +597,7 @@ function buildNvidiaImageBody(modelId, prompt, negativePrompt, size) {
     steps: /flux\.1-schnell/i.test(modelId) ? 4 : 20,
     cfg_scale: /flux/i.test(modelId) ? 0 : 4.0,
     aspect_ratio: aspect,
+    enable_safety_checker: false,
   };
   if (negativePrompt) body.negative_prompt = negativePrompt;
   return body;
@@ -652,11 +666,142 @@ async function generateNvidiaImage({ prompt, model, size, negativePrompt }) {
   const detail =
     attempts.map((a) => extractErrorDetail(a.data) || `HTTP ${a.status}`).filter(Boolean).join(' · ') ||
     `NVIDIA image HTTP ${result.status || 'error'}`;
+  const cleaned = cleanMediaError(detail);
   const msg =
-    explainNvidiaAuth(result.status, detail, modelId) ||
-    `${detail}. Prefer Cloudflare Workers AI for images.`;
+    explainNvidiaAuth(result.status, cleaned, modelId) ||
+    (isNvidiaSafetyBlock(cleaned)
+      ? `NVIDIA safety filter blocked this prompt (${cleaned}). Trying Cloudflare next.`
+      : `${cleaned}. Prefer Cloudflare Workers AI for images.`);
   const err = new Error(msg);
   err.status = result.status || 502;
+  err.code = isNvidiaSafetyBlock(cleaned) ? 'NVIDIA_NSFW' : undefined;
+  throw err;
+}
+
+async function generateFalFluxImage({ prompt, size, negativePrompt }) {
+  const key = (process.env.FAL_KEY || process.env.FAL_API_KEY || '').trim();
+  if (!key) {
+    const err = new Error('Missing FAL_KEY for fal.ai image fallback.');
+    err.status = 503;
+    throw err;
+  }
+
+  const { width, height } = parseSize(size, 1024, 1024);
+  const modelId = 'fal-ai/flux/schnell';
+  const input = {
+    prompt,
+    image_size: {
+      width: Math.min(1536, width),
+      height: Math.min(1536, height),
+    },
+    num_images: 1,
+  };
+  if (negativePrompt) input.negative_prompt = negativePrompt;
+
+  const submitUrl = `https://queue.fal.run/${modelId}`;
+  const submit = await fetch(submitUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Key ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  });
+  const submitted = await submit.json().catch(() => ({}));
+  if (!submit.ok) {
+    const detail = extractErrorDetail(submitted) || `fal.ai HTTP ${submit.status}`;
+    const err = new Error(cleanMediaError(detail));
+    err.status = submit.status || 502;
+    throw err;
+  }
+
+  let imageUrl =
+    submitted?.images?.[0]?.url ||
+    submitted?.data?.images?.[0]?.url ||
+    submitted?.output?.images?.[0]?.url;
+
+  if (!imageUrl) {
+    const requestId = submitted.request_id || submitted.requestId;
+    const statusUrl = submitted.status_url || (requestId ? `https://queue.fal.run/${modelId}/requests/${requestId}/status` : null);
+    const resultUrl = submitted.response_url || (requestId ? `https://queue.fal.run/${modelId}/requests/${requestId}` : null);
+    if (!statusUrl || !resultUrl) {
+      const err = new Error('fal.ai Flux did not return a request id.');
+      err.status = 502;
+      throw err;
+    }
+    const started = Date.now();
+    let delay = 1200;
+    while (Date.now() - started < 120_000) {
+      const st = await fetch(statusUrl, { headers: { Authorization: `Key ${key}` } });
+      const statusBody = await st.json().catch(() => ({}));
+      const status = String(statusBody.status || statusBody.state || '').toUpperCase();
+      if (status === 'COMPLETED' || status === 'OK') {
+        const done = await fetch(resultUrl, { headers: { Authorization: `Key ${key}` } });
+        const result = await done.json().catch(() => ({}));
+        imageUrl =
+          result?.images?.[0]?.url ||
+          result?.data?.images?.[0]?.url ||
+          result?.output?.images?.[0]?.url;
+        break;
+      }
+      if (status === 'FAILED' || status === 'ERROR') {
+        const detail = extractErrorDetail(statusBody) || 'fal.ai Flux job failed';
+        const err = new Error(cleanMediaError(detail));
+        err.status = 502;
+        throw err;
+      }
+      await new Promise((r) => setTimeout(r, delay));
+      delay = Math.min(6000, Math.floor(delay * 1.25));
+    }
+  }
+
+  if (!imageUrl) {
+    const err = new Error('fal.ai Flux finished without an image URL.');
+    err.status = 502;
+    throw err;
+  }
+
+  return {
+    kind: 'image',
+    provider: 'fal',
+    model: modelId,
+    images: [{ mimeType: 'image/jpeg', url: imageUrl }],
+  };
+}
+
+/** Try Cloudflare models, then fal Flux, so image gen keeps working when NVIDIA safety-blocks. */
+async function generateImageWithFallbacks({ prompt, size, negativePrompt, preferredCfModel = 'flux-schnell' }) {
+  const cfModels = [
+    preferredCfModel,
+    'flux-schnell',
+    'sdxl-lightning',
+    'sdxl',
+  ].filter((m, i, arr) => arr.indexOf(m) === i);
+
+  const errors = [];
+  for (const model of cfModels) {
+    try {
+      return await generateCloudflareImage({
+        prompt,
+        model,
+        size,
+        negativePrompt,
+      });
+    } catch (err) {
+      errors.push(`Cloudflare ${model}: ${cleanMediaError(err.message)}`);
+    }
+  }
+
+  if ((process.env.FAL_KEY || process.env.FAL_API_KEY || '').trim()) {
+    try {
+      return await generateFalFluxImage({ prompt, size, negativePrompt });
+    } catch (err) {
+      errors.push(`fal Flux: ${cleanMediaError(err.message)}`);
+    }
+  }
+
+  const err = new Error(errors.join(' · ') || 'All image backends failed.');
+  err.status = 502;
   throw err;
 }
 
@@ -900,27 +1045,50 @@ export default async function handler(req, res) {
           });
           return res.status(200).json(out);
         } catch (nvidiaErr) {
-          console.warn('nvidia image failed, falling back to Cloudflare:', nvidiaErr.message);
-          const out = await generateCloudflareImage({
-            prompt: prompt.trim(),
-            model: 'flux-schnell',
-            size,
-            negativePrompt,
-          });
-          out.fallbackFrom = 'nvidia';
-          out.fallbackNote =
-            nvidiaErr.message ||
-            'NVIDIA image failed; used Cloudflare · FLUX.1 Schnell instead.';
-          return res.status(200).json(out);
+          console.warn('nvidia image failed, falling back:', nvidiaErr.message);
+          try {
+            const out = await generateImageWithFallbacks({
+              prompt: prompt.trim(),
+              size,
+              negativePrompt,
+              preferredCfModel: /sdxl/i.test(String(model || '')) ? 'sdxl-lightning' : 'flux-schnell',
+            });
+            out.fallbackFrom = 'nvidia';
+            out.fallbackNote = isNvidiaSafetyBlock(nvidiaErr.message)
+              ? `NVIDIA blocked this prompt (false NSFW). Used ${out.provider} · ${out.model} instead.`
+              : `NVIDIA failed; used ${out.provider} · ${out.model} instead.`;
+            return res.status(200).json(out);
+          } catch (fbErr) {
+            const err = new Error(
+              `${cleanMediaError(nvidiaErr.message)} Fallback also failed: ${cleanMediaError(fbErr.message)}`
+            );
+            err.status = fbErr.status || nvidiaErr.status || 502;
+            throw err;
+          }
         }
       }
-      const out = await generateCloudflareImage({
-        prompt: prompt.trim(),
-        model: model || 'flux-schnell',
-        size,
-        negativePrompt,
-      });
-      return res.status(200).json(out);
+      try {
+        const out = await generateCloudflareImage({
+          prompt: prompt.trim(),
+          model: model || 'flux-schnell',
+          size,
+          negativePrompt,
+        });
+        return res.status(200).json(out);
+      } catch (cfErr) {
+        console.warn('cloudflare image failed, trying other backends:', cfErr.message);
+        const out = await generateImageWithFallbacks({
+          prompt: prompt.trim(),
+          size,
+          negativePrompt,
+          preferredCfModel: model || 'flux-schnell',
+        });
+        if (out.provider !== 'cloudflare' || out.model !== (CLOUDFLARE_IMAGE_MODELS[model] || model)) {
+          out.fallbackFrom = 'cloudflare';
+          out.fallbackNote = `Primary Cloudflare model failed; used ${out.provider} · ${out.model}.`;
+        }
+        return res.status(200).json(out);
+      }
     }
 
     if (kind === 'video') {
@@ -1004,7 +1172,7 @@ export default async function handler(req, res) {
   } catch (err) {
     console.error('media-generate error:', err);
     return res.status(err.status || 502).json({
-      error: err.message || 'Media generation failed',
+      error: cleanMediaError(err.message) || 'Media generation failed',
     });
   }
 }
