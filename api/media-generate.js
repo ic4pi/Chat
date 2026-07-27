@@ -413,6 +413,8 @@ async function generateCloudflareVideo({
     input.image = asDataUrl(mt, b64);
   }
 
+  const base = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run`;
+
   const tryOnce = async (url, body) => {
     const upstream = await fetch(url, {
       method: 'POST',
