@@ -17,6 +17,7 @@
  * Env (Vercel → Settings → Environment Variables):
  *   CLOUDFLARE_ACCOUNT_ID  — Workers AI account id (images + Seedance video)
  *   CLOUDFLARE_API_TOKEN   — API token with Workers AI permission
+ *   FAL_KEY                — Wan 2.2 video via fal.ai (recommended)
  *   NVIDIA_API_KEY         — hosted FLUX/SDXL image (optional)
  *   NVIDIA_MEDIA_BASE_URL  — self-hosted Wan NIM only (OpenAI-compatible base URL)
  */
@@ -70,6 +71,21 @@ const NVIDIA_VIDEO_MODELS = {
   'wan2.2-t2v': 'wan-ai/wan2.2',
   'wan2.2-i2v': 'wan-ai/wan2.2',
 };
+
+/** Hosted Wan 2.2 on fal.ai (NVIDIA’s free genai host 404s for Wan). */
+const FAL_VIDEO_MODELS = {
+  'wan2.2': 'fal-ai/wan/v2.2-5b/text-to-video',
+  'wan2.2-t2v': 'fal-ai/wan/v2.2-5b/text-to-video',
+  'wan2.2-5b': 'fal-ai/wan/v2.2-5b/text-to-video',
+  'wan2.2-a14b': 'fal-ai/wan/v2.2-a14b/text-to-video',
+  'wan2.2-i2v': 'fal-ai/wan/v2.2-5b/image-to-video',
+  'fal-wan-t2v': 'fal-ai/wan/v2.2-5b/text-to-video',
+  'fal-wan-i2v': 'fal-ai/wan/v2.2-5b/image-to-video',
+  'fal-ai/wan/v2.2-5b/text-to-video': 'fal-ai/wan/v2.2-5b/text-to-video',
+  'fal-ai/wan/v2.2-a14b/text-to-video': 'fal-ai/wan/v2.2-a14b/text-to-video',
+  'fal-ai/wan/v2.2-5b/image-to-video': 'fal-ai/wan/v2.2-5b/image-to-video',
+};
+
 
 const NVIDIA_GEN_BASE = 'https://ai.api.nvidia.com/v1';
 const NVIDIA_NVCF_STATUS = 'https://api.nvcf.nvidia.com/v2/nvcf/pexec/status';
@@ -397,63 +413,32 @@ async function generateCloudflareVideo({
     input.image = asDataUrl(mt, b64);
   }
 
-  const base = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run`;
-  const attempts = [];
-
-  // 1) Universal envelope (Cloudflare AI / partner models)
-  attempts.push(
-    fetch(base, {
+  const tryOnce = async (url, body) => {
+    const upstream = await fetch(url, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ model: modelId, input }),
-    }),
-  );
+      body: JSON.stringify(body),
+    });
+    const data = await upstream.json().catch(() => ({}));
+    return { upstream, data };
+  };
 
-  // 2) Path style with encoded model id (slashes must be %2F)
-  attempts.push(
-    fetch(`${base}/${encodeURIComponent(modelId)}`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(input),
-    }),
-  );
-
-  // 3) Path style with raw slashes (some CF routers accept this like @cf/…)
-  attempts.push(
-    fetch(`${base}/${modelId}`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(input),
-    }),
-  );
+  const candidates = [
+    { url: base, body: { model: modelId, input } },
+    { url: `${base}/${encodeURIComponent(modelId)}`, body: input },
+    { url: `${base}/${modelId}`, body: input },
+  ];
 
   let lastDetail = 'Cloudflare video failed';
   let lastStatus = 502;
 
-  for (const pending of attempts) {
-    const upstream = await pending;
-    const data = await upstream.json().catch(() => ({}));
+  for (const c of candidates) {
+    const { upstream, data } = await tryOnce(c.url, c.body);
     const videoUrl = extractCloudflareVideoUrl(data);
-    if (upstream.ok && videoUrl) {
-      return {
-        kind: 'video',
-        provider: 'cloudflare',
-        model: modelId,
-        videoUrl,
-        mime: 'video/mp4',
-      };
-    }
-    // Completed-style envelope without success:false
-    if (videoUrl && data.success !== false) {
+    if ((upstream.ok || data.success !== false) && videoUrl) {
       return {
         kind: 'video',
         provider: 'cloudflare',
@@ -582,6 +567,125 @@ async function generateNvidiaImage({ prompt, model, size, negativePrompt }) {
   throw err;
 }
 
+async function generateFalWanVideo({
+  prompt,
+  model,
+  imageBase64,
+  mimeType,
+}) {
+  const key = (process.env.FAL_KEY || process.env.FAL_API_KEY || '').trim();
+  if (!key) {
+    const err = new Error(
+      'Missing FAL_KEY in Vercel env. Hosted Wan 2.2 runs on fal.ai — get a key at https://fal.ai/dashboard/keys'
+    );
+    err.status = 503;
+    throw err;
+  }
+
+  const wantsI2v = /i2v|image-to-video/i.test(String(model || ''));
+  let modelId = FAL_VIDEO_MODELS[model] || FAL_VIDEO_MODELS['wan2.2-t2v'];
+  if (wantsI2v || imageBase64) {
+    modelId = FAL_VIDEO_MODELS['wan2.2-i2v'] || 'fal-ai/wan/v2.2-5b/image-to-video';
+  }
+
+  const input = { prompt };
+  if (imageBase64) {
+    const { mime, b64 } = stripDataUrl(imageBase64);
+    const mt = (mimeType || mime || 'image/png').replace('image/jpg', 'image/jpeg');
+    input.image_url = asDataUrl(mt, b64);
+  } else if (wantsI2v) {
+    const err = new Error('Wan image→video needs a reference image.');
+    err.status = 400;
+    throw err;
+  }
+
+  // Queue submit
+  const submitUrl = `https://queue.fal.run/${modelId}`;
+  const submit = await fetch(submitUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Key ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  });
+  const submitted = await submit.json().catch(() => ({}));
+  if (!submit.ok) {
+    const detail = extractErrorDetail(submitted) || `fal.ai HTTP ${submit.status}`;
+    const err = new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+    err.status = submit.status || 502;
+    throw err;
+  }
+
+  // Sync-ish: some endpoints return the result immediately
+  let videoUrl =
+    submitted?.video?.url ||
+    submitted?.data?.video?.url ||
+    submitted?.output?.video?.url;
+  if (videoUrl) {
+    return {
+      kind: 'video',
+      provider: 'fal',
+      model: modelId,
+      videoUrl,
+      mime: 'video/mp4',
+    };
+  }
+
+  const requestId = submitted.request_id || submitted.requestId;
+  const statusUrl = submitted.status_url || (requestId ? `https://queue.fal.run/${modelId}/requests/${requestId}/status` : null);
+  const resultUrl = submitted.response_url || (requestId ? `https://queue.fal.run/${modelId}/requests/${requestId}` : null);
+  if (!statusUrl || !resultUrl) {
+    const err = new Error('fal.ai did not return a request id for Wan video.');
+    err.status = 502;
+    throw err;
+  }
+
+  const started = Date.now();
+  let delay = 2000;
+  while (Date.now() - started < 280_000) {
+    const st = await fetch(statusUrl, {
+      headers: { Authorization: `Key ${key}` },
+    });
+    const statusBody = await st.json().catch(() => ({}));
+    const status = String(statusBody.status || statusBody.state || '').toUpperCase();
+    if (status === 'COMPLETED' || status === 'OK') {
+      const done = await fetch(resultUrl, {
+        headers: { Authorization: `Key ${key}` },
+      });
+      const result = await done.json().catch(() => ({}));
+      videoUrl =
+        result?.video?.url ||
+        result?.data?.video?.url ||
+        result?.output?.video?.url;
+      if (!videoUrl) {
+        const err = new Error('fal.ai Wan finished but returned no video URL.');
+        err.status = 502;
+        throw err;
+      }
+      return {
+        kind: 'video',
+        provider: 'fal',
+        model: modelId,
+        videoUrl,
+        mime: 'video/mp4',
+      };
+    }
+    if (status === 'FAILED' || status === 'ERROR') {
+      const detail = extractErrorDetail(statusBody) || 'fal.ai Wan job failed';
+      const err = new Error(detail);
+      err.status = 502;
+      throw err;
+    }
+    await new Promise((r) => setTimeout(r, delay));
+    delay = Math.min(8000, Math.floor(delay * 1.25));
+  }
+
+  const err = new Error('fal.ai Wan video timed out waiting for the queue.');
+  err.status = 504;
+  throw err;
+}
+
 async function generateNvidiaWanVideo({
   prompt,
   model,
@@ -591,9 +695,17 @@ async function generateNvidiaWanVideo({
   mimeType,
   negativePrompt,
 }) {
+  // Prefer fal hosted Wan when FAL_KEY is set (NVIDIA hosted genai 404s).
+  if ((process.env.FAL_KEY || process.env.FAL_API_KEY || '').trim()) {
+    return generateFalWanVideo({ prompt, model, imageBase64, mimeType });
+  }
+
   const key = (process.env.NVIDIA_API_KEY || process.env.NVIDIA_NIM_API_KEY || '').trim();
   if (!key) {
-    const err = new Error('Missing NVIDIA_API_KEY in Vercel env.');
+    const err = new Error(
+      'Wan 2.2 needs FAL_KEY (hosted on fal.ai) or NVIDIA_MEDIA_BASE_URL (self-hosted NIM). ' +
+        'NVIDIA’s free ai.api.nvidia.com host returns 404 for Wan.'
+    );
     err.status = 503;
     throw err;
   }
@@ -609,9 +721,8 @@ async function generateNvidiaWanVideo({
 
   if (!selfHost) {
     const err = new Error(
-      'Wan 2.2 is not on NVIDIA’s free hosted API (ai.api.nvidia.com returns 404). ' +
-        'Use Cloudflare · Seedance for video, or set NVIDIA_MEDIA_BASE_URL to your own Wan NIM host ' +
-        '(not ai.api.nvidia.com / integrate.api.nvidia.com).'
+      'Wan 2.2 is not on NVIDIA’s free hosted API. Add FAL_KEY for hosted Wan on fal.ai, ' +
+        'or set NVIDIA_MEDIA_BASE_URL to your own Wan NIM (not ai.api.nvidia.com).'
     );
     err.status = 404;
     throw err;
@@ -645,8 +756,7 @@ async function generateNvidiaWanVideo({
   if (!b64) {
     const detail = extractErrorDetail(result.data) || `Wan NIM HTTP ${result.status || 'error'}`;
     const err = new Error(
-      `${detail}. Check NVIDIA_MEDIA_BASE_URL points at a running Wan 2.2 NIM. ` +
-        `Otherwise use Cloudflare · Seedance.`
+      `${detail}. Or add FAL_KEY for hosted Wan 2.2 on fal.ai.`
     );
     err.status = result.status || 502;
     throw err;
@@ -721,12 +831,13 @@ export default async function handler(req, res) {
     }
 
     if (kind === 'video') {
-      // Default video = Cloudflare Seedance. Wan only when explicitly nvidia + self-hosted.
-      if (provider === 'nvidia') {
+      const isWan = provider === 'nvidia' || provider === 'fal' || /wan/i.test(String(model || ''));
+
+      if (isWan) {
         try {
           const out = await generateNvidiaWanVideo({
             prompt: prompt.trim(),
-            model: model || 'wan2.2',
+            model: model || 'wan2.2-t2v',
             size: size || '832x480',
             seconds,
             imageBase64,
@@ -734,21 +845,28 @@ export default async function handler(req, res) {
             negativePrompt,
           });
           return res.status(200).json(out);
-        } catch (nvidiaErr) {
-          console.warn('nvidia video failed, falling back to Cloudflare Seedance:', nvidiaErr.message);
-          const out = await generateCloudflareVideo({
-            prompt: prompt.trim(),
-            model: 'seedance-mini',
-            size: size || '832x480',
-            seconds,
-            imageBase64,
-            mimeType,
-          });
-          out.fallbackFrom = 'nvidia';
-          out.fallbackNote =
-            nvidiaErr.message ||
-            'NVIDIA Wan unavailable; used Cloudflare · Seedance Mini instead.';
-          return res.status(200).json(out);
+        } catch (wanErr) {
+          // Fall through to Cloudflare Seedance if configured
+          console.warn('Wan video failed, trying Cloudflare Seedance:', wanErr.message);
+          try {
+            const out = await generateCloudflareVideo({
+              prompt: prompt.trim(),
+              model: 'seedance-mini',
+              size: size || '832x480',
+              seconds,
+              imageBase64,
+              mimeType,
+            });
+            out.fallbackFrom = provider || 'nvidia';
+            out.fallbackNote = wanErr.message || 'Wan unavailable; used Cloudflare · Seedance Mini.';
+            return res.status(200).json(out);
+          } catch (cfErr) {
+            const err = new Error(
+              `${wanErr.message} Also tried Cloudflare Seedance: ${cfErr.message}`
+            );
+            err.status = wanErr.status || cfErr.status || 502;
+            throw err;
+          }
         }
       }
 

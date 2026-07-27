@@ -7,11 +7,10 @@ const IMAGE_MODELS = [
 ];
 
 const VIDEO_MODELS = [
+  { value: 'fal:wan2.2-t2v', label: 'Wan 2.2 · Text → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-t2v' },
+  { value: 'fal:wan2.2-i2v', label: 'Wan 2.2 · Image → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-i2v' },
   { value: 'cloudflare:seedance-mini', label: 'Cloudflare · Seedance 2.0 Mini', kind: 'video', provider: 'cloudflare', model: 'seedance-mini' },
   { value: 'cloudflare:seedance-fast', label: 'Cloudflare · Seedance 2.0 Fast', kind: 'video', provider: 'cloudflare', model: 'seedance-fast' },
-  { value: 'cloudflare:seedance', label: 'Cloudflare · Seedance 2.0', kind: 'video', provider: 'cloudflare', model: 'seedance' },
-  { value: 'nvidia:wan2.2-t2v', label: 'NVIDIA · Wan 2.2 · Text → Video (self-hosted NIM)', kind: 'video', provider: 'nvidia', model: 'wan2.2-t2v' },
-  { value: 'nvidia:wan2.2-i2v', label: 'NVIDIA · Wan 2.2 · Image → Video (self-hosted NIM)', kind: 'video', provider: 'nvidia', model: 'wan2.2-i2v' },
 ];
 
 const IMAGE_SIZES = [
@@ -169,7 +168,7 @@ els.generate.addEventListener('click', async () => {
     return;
   }
   const spec = selectedSpec();
-  if (kind === 'video' && /i2v/i.test(spec.model) && !refData) {
+  if (kind === 'video' && /i2v/i.test(spec?.model || '') && !refData) {
     alert('Image → Video needs a reference image.');
     return;
   }
