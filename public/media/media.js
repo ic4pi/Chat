@@ -7,6 +7,9 @@ const IMAGE_MODELS = [
 ];
 
 const VIDEO_MODELS = [
+  { value: 'cloudflare:seedance-mini', label: 'Cloudflare · Seedance 2.0 Mini', kind: 'video', provider: 'cloudflare', model: 'seedance-mini' },
+  { value: 'cloudflare:seedance-fast', label: 'Cloudflare · Seedance 2.0 Fast', kind: 'video', provider: 'cloudflare', model: 'seedance-fast' },
+  { value: 'cloudflare:seedance', label: 'Cloudflare · Seedance 2.0', kind: 'video', provider: 'cloudflare', model: 'seedance' },
   { value: 'nvidia:wan2.2-t2v', label: 'NVIDIA · Wan 2.2 · Text → Video (self-hosted NIM)', kind: 'video', provider: 'nvidia', model: 'wan2.2-t2v' },
   { value: 'nvidia:wan2.2-i2v', label: 'NVIDIA · Wan 2.2 · Image → Video (self-hosted NIM)', kind: 'video', provider: 'nvidia', model: 'wan2.2-i2v' },
 ];
@@ -18,8 +21,8 @@ const IMAGE_SIZES = [
 ];
 
 const VIDEO_SIZES = [
-  { value: '832x480', label: '480p · 832×480' },
-  { value: '480x832', label: 'Portrait · 480×832' },
+  { value: '832x480', label: 'Landscape · 16:9' },
+  { value: '480x832', label: 'Portrait · 9:16' },
 ];
 
 const els = {
@@ -78,10 +81,10 @@ function syncFields() {
   const supportsNegative =
     kind === 'image' &&
     (spec?.provider === 'nvidia' || /sdxl/i.test(spec?.model || ''));
-  const i2v = kind === 'video' && /i2v/i.test(spec?.model || '');
+  const i2v = kind === 'video' && (/i2v/i.test(spec?.model || '') || /wan2\.2-i2v/i.test(spec?.value || ''));
   els.negativeWrap.style.display = supportsNegative ? '' : 'none';
   const opt = els.refWrap.querySelector('.opt');
-  if (opt) opt.textContent = i2v ? '(required for image→video)' : '(optional)';
+  if (opt) opt.textContent = i2v ? '(required for image→video)' : '(optional · image→video)';
 }
 
 function setStatus(msg) {
@@ -202,6 +205,8 @@ els.generate.addEventListener('click', async () => {
     if (data.kind === 'image') {
       if (data.fallbackNote) {
         setStatus(data.fallbackNote);
+      } else {
+        setStatus('Done.');
       }
       for (const img of data.images || []) {
         const { card, meta } = cardShell(
@@ -228,26 +233,30 @@ els.generate.addEventListener('click', async () => {
         card.insertBefore(el, card.firstChild);
         prependCard(card);
       }
-      setStatus('Done.');
+      if (!data.fallbackNote) setStatus('Done.');
     } else if (data.kind === 'video') {
+      if (data.fallbackNote) setStatus(data.fallbackNote);
       const open = document.createElement('a');
       open.href = data.videoUrl;
       if (String(data.videoUrl || '').startsWith('data:')) {
-        open.download = `wan-${Date.now()}.mp4`;
+        open.download = `video-${Date.now()}.mp4`;
         open.textContent = 'Download';
       } else {
         open.target = '_blank';
         open.rel = 'noopener';
         open.textContent = 'Open / download';
       }
-      const { card } = cardShell(`${data.provider} · ${data.model}`, open);
+      const { card } = cardShell(
+        `${data.provider} · ${data.model}${data.fallbackFrom ? ' (fallback)' : ''}`,
+        open,
+      );
       const vid = document.createElement('video');
       vid.src = data.videoUrl;
       vid.controls = true;
       vid.playsInline = true;
       card.insertBefore(vid, card.firstChild);
       prependCard(card);
-      setStatus('Done.');
+      if (!data.fallbackNote) setStatus('Done.');
     } else {
       setStatus('Unexpected response.');
     }

@@ -9,16 +9,16 @@
  *     prompt: string,
  *     negativePrompt?: string,
  *     size?: string,          // image: 1024x1024 | video: 832x480 / 480x832
- *     seconds?: number,       // wan video length (1–12, default 4)
+ *     seconds?: number,       // video length
  *     imageBase64?: string,   // optional reference / i2v frame (data URL or raw b64)
  *     mimeType?: string
  *   }
  *
  * Env (Vercel → Settings → Environment Variables):
- *   CLOUDFLARE_ACCOUNT_ID  — Workers AI account id
+ *   CLOUDFLARE_ACCOUNT_ID  — Workers AI account id (images + Seedance video)
  *   CLOUDFLARE_API_TOKEN   — API token with Workers AI permission
- *   NVIDIA_API_KEY         — Qwen Image + Wan 2.2 (build.nvidia.com → Get API Key)
- *   NVIDIA_MEDIA_BASE_URL  — optional override for self-hosted NIM (OpenAI-compatible)
+ *   NVIDIA_API_KEY         — hosted FLUX/SDXL image (optional)
+ *   NVIDIA_MEDIA_BASE_URL  — self-hosted Wan NIM only (OpenAI-compatible base URL)
  */
 
 const CLOUDFLARE_IMAGE_MODELS = {
@@ -29,6 +29,18 @@ const CLOUDFLARE_IMAGE_MODELS = {
   '@cf/bytedance/stable-diffusion-xl-lightning': '@cf/bytedance/stable-diffusion-xl-lightning',
   'sdxl': '@cf/stabilityai/stable-diffusion-xl-base-1.0',
   '@cf/stabilityai/stable-diffusion-xl-base-1.0': '@cf/stabilityai/stable-diffusion-xl-base-1.0',
+};
+
+const CLOUDFLARE_VIDEO_MODELS = {
+  'seedance-mini': 'bytedance/seedance-2.0-mini',
+  'seedance-2.0-mini': 'bytedance/seedance-2.0-mini',
+  'bytedance/seedance-2.0-mini': 'bytedance/seedance-2.0-mini',
+  'seedance-fast': 'bytedance/seedance-2.0-fast',
+  'seedance-2.0-fast': 'bytedance/seedance-2.0-fast',
+  'bytedance/seedance-2.0-fast': 'bytedance/seedance-2.0-fast',
+  'seedance': 'bytedance/seedance-2.0',
+  'seedance-2.0': 'bytedance/seedance-2.0',
+  'bytedance/seedance-2.0': 'bytedance/seedance-2.0',
 };
 
 /** Hosted on ai.api.nvidia.com/v1/genai (401 without key). Qwen/Wan are NIM-download only → 404. */
@@ -62,9 +74,18 @@ const NVIDIA_VIDEO_MODELS = {
 const NVIDIA_GEN_BASE = 'https://ai.api.nvidia.com/v1';
 const NVIDIA_NVCF_STATUS = 'https://api.nvcf.nvidia.com/v2/nvcf/pexec/status';
 
+function cloudflareCreds() {
+  const accountId = (process.env.CLOUDFLARE_ACCOUNT_ID || process.env.CF_ACCOUNT_ID || '').trim();
+  const token = (process.env.CLOUDFLARE_API_TOKEN || process.env.CF_API_TOKEN || '').trim();
+  return { accountId, token };
+}
+
 function nvidiaSelfHostBase() {
   const raw = (process.env.NVIDIA_MEDIA_BASE_URL || '').trim().replace(/\/$/, '');
-  return raw || null;
+  // Guard: people sometimes paste the public NVIDIA host here — that is NOT a Wan NIM.
+  if (!raw) return null;
+  if (/ai\.api\.nvidia\.com|integrate\.api\.nvidia\.com/i.test(raw)) return null;
+  return raw;
 }
 
 function stripDataUrl(input) {
@@ -87,6 +108,14 @@ function parseSize(size, fallbackW = 1024, fallbackH = 1024) {
     width: Math.max(256, Math.min(1920, Number(m[1]) || fallbackW)),
     height: Math.max(256, Math.min(1920, Number(m[2]) || fallbackH)),
   };
+}
+
+function videoAspectFromSize(size) {
+  const dims = String(size || '832x480').replace('*', 'x');
+  if (dims === '480x832') return '9:16';
+  if (dims === '832x480') return '16:9';
+  const { width, height } = parseSize(dims, 832, 480);
+  return width >= height ? '16:9' : '9:16';
 }
 
 function extractErrorDetail(data) {
@@ -115,10 +144,8 @@ function explainNvidiaAuth(status, detail, modelId) {
   }
   return (
     `NVIDIA denied access to ${modelId} (${status}${text ? `: ${text}` : ''}). ` +
-    `Image/video models need a key from build.nvidia.com (open the model page → Get API Key) ` +
-    `so “Public API Endpoints” is attached — NGC-only keys often fail here. ` +
-    `For self-hosted NIM, set NVIDIA_MEDIA_BASE_URL. ` +
-    `For free image gen without NVIDIA, use Cloudflare Workers AI (CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN).`
+    `Image models need a key from build.nvidia.com (model page → Get API Key). ` +
+    `For video, use Cloudflare · Seedance (CLOUDFLARE_* keys) — Wan is self-hosted NIM only.`
   );
 }
 
@@ -238,8 +265,7 @@ async function nvidiaGenai(modelId, body, key) {
 }
 
 async function generateCloudflareImage({ prompt, model, size, negativePrompt }) {
-  const accountId = (process.env.CLOUDFLARE_ACCOUNT_ID || process.env.CF_ACCOUNT_ID || '').trim();
-  const token = (process.env.CLOUDFLARE_API_TOKEN || process.env.CF_API_TOKEN || '').trim();
+  const { accountId, token } = cloudflareCreds();
   if (!accountId || !token) {
     const err = new Error(
       'Missing CLOUDFLARE_ACCOUNT_ID or CLOUDFLARE_API_TOKEN in Vercel env. ' +
@@ -257,7 +283,6 @@ async function generateCloudflareImage({ prompt, model, size, negativePrompt }) 
   if (/flux-1-schnell/i.test(modelId)) {
     body.steps = 4;
   } else {
-    // SDXL / lightning accept width/height + optional negative
     body.width = width;
     body.height = height;
     if (negativePrompt) body.negative_prompt = negativePrompt;
@@ -273,7 +298,6 @@ async function generateCloudflareImage({ prompt, model, size, negativePrompt }) 
   });
 
   const ctype = (upstream.headers.get('content-type') || '').toLowerCase();
-  // Some SD models return raw image bytes
   if (upstream.ok && ctype.startsWith('image/')) {
     const buf = Buffer.from(await upstream.arrayBuffer());
     return {
@@ -302,7 +326,6 @@ async function generateCloudflareImage({ prompt, model, size, negativePrompt }) 
     b64 = result.image;
     mime = 'image/jpeg';
   } else if (typeof result === 'string') {
-    // Some models return raw base64 string in result
     b64 = result;
   } else if (result?.image_base64) {
     b64 = result.image_base64;
@@ -325,13 +348,122 @@ async function generateCloudflareImage({ prompt, model, size, negativePrompt }) 
   };
 }
 
+function extractCloudflareVideoUrl(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  const candidates = [
+    payload.result?.video,
+    payload.result?.result?.video,
+    payload.video,
+    payload.result?.url,
+    payload.url,
+  ];
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.trim()) return c.trim();
+  }
+  return null;
+}
+
+async function generateCloudflareVideo({
+  prompt,
+  model,
+  size,
+  seconds,
+  imageBase64,
+  mimeType,
+}) {
+  const { accountId, token } = cloudflareCreds();
+  if (!accountId || !token) {
+    const err = new Error(
+      'Missing CLOUDFLARE_ACCOUNT_ID or CLOUDFLARE_API_TOKEN in Vercel env (needed for Seedance video).'
+    );
+    err.status = 503;
+    throw err;
+  }
+
+  const modelId = CLOUDFLARE_VIDEO_MODELS[model] || CLOUDFLARE_VIDEO_MODELS['seedance-mini'];
+  const duration = Math.min(12, Math.max(4, Number(seconds) || 5));
+  const aspect_ratio = videoAspectFromSize(size);
+  const resolution = '480p';
+
+  const input = {
+    prompt,
+    aspect_ratio,
+    duration,
+    resolution,
+  };
+  if (imageBase64) {
+    const { mime, b64 } = stripDataUrl(imageBase64);
+    const mt = (mimeType || mime || 'image/png').replace('image/jpg', 'image/jpeg');
+    input.image = asDataUrl(mt, b64);
+  }
+
+  // Unified AI gateway style: POST .../ai/run with { model, input }
+  const runUrl = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run`;
+  let upstream = await fetch(runUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ model: modelId, input }),
+  });
+  let data = await upstream.json().catch(() => ({}));
+
+  // Fallback: Workers AI path .../ai/run/{model} with flat body
+  if (!upstream.ok || (data.success === false && !extractCloudflareVideoUrl(data))) {
+    const pathUrl = `${runUrl}/${modelId}`;
+    upstream = await fetch(pathUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(input),
+    });
+    data = await upstream.json().catch(() => ({}));
+  }
+
+  if (!upstream.ok || data.success === false) {
+    const detail =
+      extractErrorDetail(data) ||
+      (Array.isArray(data.errors) && data.errors[0]?.message) ||
+      `Cloudflare video HTTP ${upstream.status}`;
+    const err = new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+    err.status = upstream.status || 502;
+    throw err;
+  }
+
+  const videoUrl = extractCloudflareVideoUrl(data);
+  const state = data.result?.state || data.state;
+  if (!videoUrl && state && /pending|queued|running|processing/i.test(String(state))) {
+    const err = new Error(
+      `Cloudflare video job is still ${state}. Retry in a moment, or try Seedance Mini.`
+    );
+    err.status = 202;
+    throw err;
+  }
+
+  if (!videoUrl) {
+    const err = new Error('Cloudflare Seedance returned no video URL.');
+    err.status = 502;
+    throw err;
+  }
+
+  return {
+    kind: 'video',
+    provider: 'cloudflare',
+    model: modelId,
+    videoUrl,
+    mime: 'video/mp4',
+  };
+}
+
 function buildNvidiaImageBody(modelId, prompt, negativePrompt, size) {
   const { width, height } = parseSize(size, 1024, 1024);
   const aspect =
     Math.abs(width / height - 1) < 0.05 ? '1:1' : width > height ? '16:9' : '9:16';
   const seed = Math.floor(Math.random() * 1_000_000);
 
-  // SDXL hosted schema uses text_prompts, not prompt.
   if (/stable-diffusion-xl/i.test(modelId)) {
     const text_prompts = [{ text: prompt, weight: 1.0 }];
     if (negativePrompt) text_prompts.push({ text: negativePrompt, weight: -1.0 });
@@ -368,12 +500,10 @@ async function generateNvidiaImage({ prompt, model, size, negativePrompt }) {
   const selfHost = nvidiaSelfHostBase();
   const hosted = NVIDIA_HOSTED_IMAGE.has(modelId);
 
-  // Qwen Image (and friends) are downloadable NIMs — not on ai.api.nvidia.com.
   if (!hosted && !selfHost) {
     const err = new Error(
-      `${modelId} is not on NVIDIA’s free hosted API (HTTP 404 at ai.api.nvidia.com/v1/genai/…). ` +
-        `Use Cloudflare · FLUX / SDXL, or NVIDIA · FLUX.1 Schnell / SDXL. ` +
-        `For Qwen Image you need a self-hosted NIM and NVIDIA_MEDIA_BASE_URL.`
+      `${modelId} is not on NVIDIA’s free hosted API. ` +
+        `Use Cloudflare · FLUX / SDXL, or NVIDIA · FLUX.1 Schnell / SDXL.`
     );
     err.status = 404;
     err.code = 'NVIDIA_MODEL_NOT_HOSTED';
@@ -409,7 +539,6 @@ async function generateNvidiaImage({ prompt, model, size, negativePrompt }) {
       return { kind: 'image', provider: 'nvidia', model: modelId, images };
     }
 
-    // Native NIM infer
     const infer = await nvidiaFetch(`${selfHost}/v1/infer`, key, genaiBody);
     attempts.push(infer);
     const inferImages = infer.ok ? parseNvidiaImages(infer.data) : [];
@@ -424,11 +553,9 @@ async function generateNvidiaImage({ prompt, model, size, negativePrompt }) {
     `NVIDIA image HTTP ${result.status || 'error'}`;
   const msg =
     explainNvidiaAuth(result.status, detail, modelId) ||
-    `${detail}. Hosted path: ai.api.nvidia.com/v1/genai/${modelId}. ` +
-      `If this keeps failing, use Cloudflare Workers AI (already configured) or set NVIDIA_MEDIA_BASE_URL.`;
+    `${detail}. Prefer Cloudflare Workers AI for images.`;
   const err = new Error(msg);
   err.status = result.status || 502;
-  err.code = result.status === 404 ? 'NVIDIA_MODEL_NOT_HOSTED' : 'NVIDIA_IMAGE_FAILED';
   throw err;
 }
 
@@ -454,68 +581,34 @@ async function generateNvidiaWanVideo({
     : size || '832x480';
   const allowed = new Set(['832x480', '480x832']);
   const finalSize = allowed.has(dims) ? dims : '832x480';
-  const [w, h] = finalSize.split('x').map(Number);
   const secs = Math.min(12, Math.max(1, Number(seconds) || 4));
   const selfHost = nvidiaSelfHostBase();
 
-  // Wan is downloadable NIM only on the public catalog right now (hosted genai → 404).
   if (!selfHost) {
     const err = new Error(
-      `Wan 2.2 (${modelId}) is not on NVIDIA’s free hosted API. ` +
-        `Point NVIDIA_MEDIA_BASE_URL at a self-hosted Wan NIM (OpenAI-compatible /v1/videos/generations), ` +
-        `or use Cloudflare for images.`
+      'Wan 2.2 is not on NVIDIA’s free hosted API (ai.api.nvidia.com returns 404). ' +
+        'Use Cloudflare · Seedance for video, or set NVIDIA_MEDIA_BASE_URL to your own Wan NIM host ' +
+        '(not ai.api.nvidia.com / integrate.api.nvidia.com).'
     );
     err.status = 404;
     throw err;
   }
 
-  const genaiBody = {
+  const body = {
+    model: modelId,
     prompt,
-    width: w || 832,
-    height: h || 480,
+    size: finalSize,
     seconds: secs,
-    num_frames: Math.min(201, Math.max(1, secs * 16 + 1)),
-    fps: 16,
-    seed: Math.floor(Math.random() * 1_000_000),
   };
-  if (negativePrompt) genaiBody.negative_prompt = negativePrompt;
+  if (negativePrompt) body.negative_prompt = negativePrompt;
   if (imageBase64) {
-    const { mime, b64 } = stripDataUrl(imageBase64);
+    const { mime, b64: raw } = stripDataUrl(imageBase64);
     const mt = (mimeType || mime || 'image/png').replace('image/jpg', 'image/jpeg');
-    genaiBody.image = asDataUrl(mt, b64);
-    genaiBody.input_reference = genaiBody.image;
+    body.input_reference = asDataUrl(mt, raw);
   }
 
-  let result = { ok: false, status: 0, data: {} };
-  let b64 = null;
-
-  // Self-hosted OpenAI-compatible video endpoint
-  if (!b64 && selfHost) {
-    const body = {
-      model: modelId,
-      prompt,
-      size: finalSize,
-      seconds: secs,
-    };
-    if (imageBase64) {
-      const { mime, b64: raw } = stripDataUrl(imageBase64);
-      const mt = (mimeType || mime || 'image/png').replace('image/jpg', 'image/jpeg');
-      body.input_reference = asDataUrl(mt, raw);
-    }
-    result = await nvidiaFetch(`${selfHost}/v1/videos/generations`, key, body);
-    if (result.data?.__binary) {
-      return {
-        kind: 'video',
-        provider: 'nvidia',
-        model: modelId,
-        videoUrl: `data:${result.data.__contentType || 'video/mp4'};base64,${result.data.__binary.toString('base64')}`,
-        mime: result.data.__contentType || 'video/mp4',
-      };
-    }
-    b64 = result.ok ? parseNvidiaVideoB64(result.data) : null;
-  }
-
-  if (!b64 && result.data?.__binary) {
+  const result = await nvidiaFetch(`${selfHost}/v1/videos/generations`, key, body);
+  if (result.data?.__binary) {
     return {
       kind: 'video',
       provider: 'nvidia',
@@ -525,13 +618,13 @@ async function generateNvidiaWanVideo({
     };
   }
 
+  const b64 = result.ok ? parseNvidiaVideoB64(result.data) : null;
   if (!b64) {
-    const detail = extractErrorDetail(result.data) || `NVIDIA Wan 2.2 HTTP ${result.status || 'error'}`;
-    const msg =
-      explainNvidiaAuth(result.status, detail, modelId) ||
-      `${detail}. Hosted path: ai.api.nvidia.com/v1/genai/${modelId}. ` +
-      `Get a key from the Wan 2.2 page on build.nvidia.com, or set NVIDIA_MEDIA_BASE_URL to a self-hosted NIM.`;
-    const err = new Error(msg);
+    const detail = extractErrorDetail(result.data) || `Wan NIM HTTP ${result.status || 'error'}`;
+    const err = new Error(
+      `${detail}. Check NVIDIA_MEDIA_BASE_URL points at a running Wan 2.2 NIM. ` +
+        `Otherwise use Cloudflare · Seedance.`
+    );
     err.status = result.status || 502;
     throw err;
   }
@@ -581,7 +674,6 @@ export default async function handler(req, res) {
           });
           return res.status(200).json(out);
         } catch (nvidiaErr) {
-          // Auto-fallback so a dead NVIDIA catalog slug (e.g. qwen-image 404) still delivers.
           console.warn('nvidia image failed, falling back to Cloudflare:', nvidiaErr.message);
           const out = await generateCloudflareImage({
             prompt: prompt.trim(),
@@ -596,7 +688,6 @@ export default async function handler(req, res) {
           return res.status(200).json(out);
         }
       }
-      // Default + explicit cloudflare
       const out = await generateCloudflareImage({
         prompt: prompt.trim(),
         model: model || 'flux-schnell',
@@ -607,26 +698,46 @@ export default async function handler(req, res) {
     }
 
     if (kind === 'video') {
-      try {
-        const out = await generateNvidiaWanVideo({
-          prompt: prompt.trim(),
-          model: model || 'wan2.2',
-          size: size || '832x480',
-          seconds,
-          imageBase64,
-          mimeType,
-          negativePrompt,
-        });
-        return res.status(200).json(out);
-      } catch (err) {
-        if (err.status === 404 || /404|not found|not on NVIDIA/i.test(err.message || '')) {
-          err.message =
-            (err.message || 'NVIDIA video failed.') +
-            ' Wan 2.2 is not on the free hosted API — set NVIDIA_MEDIA_BASE_URL to a self-hosted Wan NIM, ' +
-            'or generate images with Cloudflare meanwhile.';
+      // Default video = Cloudflare Seedance. Wan only when explicitly nvidia + self-hosted.
+      if (provider === 'nvidia') {
+        try {
+          const out = await generateNvidiaWanVideo({
+            prompt: prompt.trim(),
+            model: model || 'wan2.2',
+            size: size || '832x480',
+            seconds,
+            imageBase64,
+            mimeType,
+            negativePrompt,
+          });
+          return res.status(200).json(out);
+        } catch (nvidiaErr) {
+          console.warn('nvidia video failed, falling back to Cloudflare Seedance:', nvidiaErr.message);
+          const out = await generateCloudflareVideo({
+            prompt: prompt.trim(),
+            model: 'seedance-mini',
+            size: size || '832x480',
+            seconds,
+            imageBase64,
+            mimeType,
+          });
+          out.fallbackFrom = 'nvidia';
+          out.fallbackNote =
+            nvidiaErr.message ||
+            'NVIDIA Wan unavailable; used Cloudflare · Seedance Mini instead.';
+          return res.status(200).json(out);
         }
-        throw err;
       }
+
+      const out = await generateCloudflareVideo({
+        prompt: prompt.trim(),
+        model: model || 'seedance-mini',
+        size: size || '832x480',
+        seconds,
+        imageBase64,
+        mimeType,
+      });
+      return res.status(200).json(out);
     }
 
     return res.status(400).json({ error: `Unknown kind: ${kind}` });
