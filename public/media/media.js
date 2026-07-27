@@ -2,8 +2,6 @@ const IMAGE_MODELS = [
   { value: 'cloudflare:flux-schnell', label: 'Cloudflare · FLUX.1 Schnell', kind: 'image', provider: 'cloudflare', model: 'flux-schnell' },
   { value: 'cloudflare:sdxl-lightning', label: 'Cloudflare · SDXL Lightning', kind: 'image', provider: 'cloudflare', model: 'sdxl-lightning' },
   { value: 'cloudflare:sdxl', label: 'Cloudflare · SDXL Base', kind: 'image', provider: 'cloudflare', model: 'sdxl' },
-  { value: 'nvidia:flux-schnell', label: 'NVIDIA · FLUX.1 Schnell (strict filter)', kind: 'image', provider: 'nvidia', model: 'flux-schnell' },
-  { value: 'nvidia:sdxl', label: 'NVIDIA · SDXL (strict filter)', kind: 'image', provider: 'nvidia', model: 'sdxl' },
 ];
 
 const VIDEO_MODELS = [

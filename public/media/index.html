@@ -56,13 +56,11 @@
 
       <div class="media-box media-keys-box">
         <p class="media-keys-note">
-          Prefer <b>Cloudflare · FLUX</b> for images (NVIDIA has a strict safety filter that false-flags normal prompts).
+          Images: Cloudflare Workers AI (FLUX / SDXL).
+          Video: Wan 2.2 on fal.ai (recommended) or Seedance if enabled on your Cloudflare account.
           Keys in Vercel → Settings → Environment Variables:
-          <code>CLOUDFLARE_ACCOUNT_ID</code> (32-char hex) + <code>CLOUDFLARE_API_TOKEN</code>
-          (Workers AI),
-          <code>FAL_KEY</code> for Wan 2.2 video + Flux image fallback,
-          optional <code>NVIDIA_API_KEY</code> for hosted FLUX/SDXL (filtered).
-          Seedance needs Cloudflare AI → Models → bytedance/seedance-2.0-mini enabled.
+          <code>CLOUDFLARE_ACCOUNT_ID</code> (32-char hex) + <code>CLOUDFLARE_API_TOKEN</code>,
+          <code>FAL_KEY</code> for Wan video (+ Flux image fallback).
         </p>
       </div>
     </section>

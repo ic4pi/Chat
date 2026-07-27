@@ -1042,67 +1042,63 @@ export default async function handler(req, res) {
           ? (model || 'flux-schnell')
           : (/sdxl/i.test(String(model || '')) ? 'sdxl-lightning' : 'flux-schnell');
 
-      try {
-        if (provider === 'cloudflare') {
-          try {
-            const out = await generateCloudflareImage({
-              prompt: prompt.trim(),
-              model: preferredCf,
-              size,
-              negativePrompt,
-            });
-            return res.status(200).json(out);
-          } catch (cfPrimaryErr) {
-            console.warn('cloudflare primary failed:', cfPrimaryErr.message);
-            const out = await generateImageWithFallbacks({
-              prompt: prompt.trim(),
-              size,
-              negativePrompt,
-              preferredCfModel: preferredCf,
-            });
-            out.fallbackFrom = 'cloudflare';
-            out.fallbackNote = `Primary Cloudflare model failed; used ${out.provider} · ${out.model}.`;
-            return res.status(200).json(out);
-          }
-        }
-
-        // nvidia (or anything else): Cloudflare/fal first, NVIDIA last resort only.
+      if (provider === 'cloudflare') {
         try {
+          const out = await generateCloudflareImage({
+            prompt: prompt.trim(),
+            model: preferredCf,
+            size,
+            negativePrompt,
+          });
+          return res.status(200).json(out);
+        } catch (cfPrimaryErr) {
+          console.warn('cloudflare primary failed:', cfPrimaryErr.message);
           const out = await generateImageWithFallbacks({
             prompt: prompt.trim(),
             size,
             negativePrompt,
             preferredCfModel: preferredCf,
           });
-          if (provider === 'nvidia') {
-            out.fallbackFrom = 'nvidia';
-            out.fallbackNote =
-              `Used ${out.provider} · ${out.model} (NVIDIA safety filter is too strict for many normal prompts).`;
-          }
+          out.fallbackFrom = 'cloudflare';
+          out.fallbackNote = `Primary Cloudflare model failed; used ${out.provider} · ${out.model}.`;
           return res.status(200).json(out);
-        } catch (fbErr) {
-          if (provider !== 'nvidia') throw fbErr;
-          console.warn('CF/fal image failed, last-resort NVIDIA:', fbErr.message);
-          try {
-            const out = await generateNvidiaImage({
-              prompt: prompt.trim(),
-              model,
-              size,
-              negativePrompt,
-            });
-            out.fallbackFrom = 'cloudflare';
-            out.fallbackNote = `Cloudflare/fal failed; used NVIDIA · ${out.model}.`;
-            return res.status(200).json(out);
-          } catch (nvidiaErr) {
-            const err = new Error(
-              `${cleanMediaError(fbErr.message)} Also NVIDIA: ${cleanMediaError(nvidiaErr.message)}`
-            );
-            err.status = fbErr.status || nvidiaErr.status || 502;
-            throw err;
-          }
         }
-      } catch (imgErr) {
-        throw imgErr;
+      }
+
+      // nvidia (or anything else): Cloudflare/fal first, NVIDIA last resort only.
+      try {
+        const out = await generateImageWithFallbacks({
+          prompt: prompt.trim(),
+          size,
+          negativePrompt,
+          preferredCfModel: preferredCf,
+        });
+        if (provider === 'nvidia') {
+          out.fallbackFrom = 'nvidia';
+          out.fallbackNote =
+            `Used ${out.provider} · ${out.model} (NVIDIA safety filter is too strict for many normal prompts).`;
+        }
+        return res.status(200).json(out);
+      } catch (fbErr) {
+        if (provider !== 'nvidia') throw fbErr;
+        console.warn('CF/fal image failed, last-resort NVIDIA:', fbErr.message);
+        try {
+          const out = await generateNvidiaImage({
+            prompt: prompt.trim(),
+            model,
+            size,
+            negativePrompt,
+          });
+          out.fallbackFrom = 'cloudflare';
+          out.fallbackNote = `Cloudflare/fal failed; used NVIDIA · ${out.model}.`;
+          return res.status(200).json(out);
+        } catch (nvidiaErr) {
+          const err = new Error(
+            `${cleanMediaError(fbErr.message)} Also NVIDIA: ${cleanMediaError(nvidiaErr.message)}`
+          );
+          err.status = fbErr.status || nvidiaErr.status || 502;
+          throw err;
+        }
       }
     }
 
