@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vercel dev"
+    "dev": "vercel dev",
+    "animate": "node scripts/animate-sequence.mjs",
+    "test:animate": "node scripts/test-animate-local.mjs"
   },
   "dependencies": {
     "@vercel/sandbox": "^2.6.0",

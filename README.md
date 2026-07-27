@@ -86,6 +86,7 @@ Chat history, active chat / persona / model selection, sidebar preferences, and 
 | `/admin` | Persona + master-prompt editor | HTTP Basic auth (`ADMIN_USERNAME` / `ADMIN_PASSWORD`) |
 | `/api/chat` | Chat completions proxy | none (relies on API keys server-side) |
 | `/api/media-generate` | Image/video generation proxy | none (keys server-side) |
+| `/api/animate-sequence` | Frame-chain AI animation → video | none (keys server-side; prefer local CLI) |
 | `/api/models?provider=venice` | Live Venice model catalog | none |
 | `/api/public-config` | Persona IDs and names (no prompts) | none |
 | `/api/admin-config` | Full config incl. system prompts | HTTP Basic auth |
@@ -112,4 +113,7 @@ vercel dev
 - `public/index.html`, `public/app.js`, `public/styles.css` — main chat UI.
 - `public/media/` — Media Studio UI (Cloudflare Workers AI / NVIDIA Qwen Image / Wan 2.2).
 - `api/media-generate.js` — image & video generation proxy.
+- `lib/animate/` — frame-chain animation workflow (NVIDIA/Venice providers, interpolation, ffmpeg stitch). See `lib/animate/README.md`.
+- `scripts/animate-sequence.mjs` — CLI: `npm run animate -- --prompt "…"`.
+- `api/animate-sequence.js` — optional HTTP entry for the same workflow.
 - `public/admin.js`, `public/admin.css` — admin UI logic + styles (referenced by the inlined admin HTML in `api/admin.js`).

@@ -23,6 +23,7 @@
     "api/agent-chat.js":           { "maxDuration": 120 },
     "api/group-chat.js":           { "maxDuration": 300 },
     "api/tts.js":                  { "maxDuration": 60  },
-    "api/media-generate.js":       { "maxDuration": 300 }
+    "api/media-generate.js":       { "maxDuration": 300 },
+    "api/animate-sequence.js":     { "maxDuration": 300 }
   }
 }
