@@ -1035,59 +1035,74 @@ export default async function handler(req, res) {
 
   try {
     if (kind === 'image') {
-      if (provider === 'nvidia') {
-        try {
-          const out = await generateNvidiaImage({
-            prompt: prompt.trim(),
-            model,
-            size,
-            negativePrompt,
-          });
-          return res.status(200).json(out);
-        } catch (nvidiaErr) {
-          console.warn('nvidia image failed, falling back:', nvidiaErr.message);
+      // Prefer Cloudflare / fal first. NVIDIA’s hosted SDXL/FLUX safety filter
+      // false-flags normal prompts (album covers, etc.) and is not usable as primary.
+      const preferredCf =
+        provider === 'cloudflare'
+          ? (model || 'flux-schnell')
+          : (/sdxl/i.test(String(model || '')) ? 'sdxl-lightning' : 'flux-schnell');
+
+      try {
+        if (provider === 'cloudflare') {
           try {
+            const out = await generateCloudflareImage({
+              prompt: prompt.trim(),
+              model: preferredCf,
+              size,
+              negativePrompt,
+            });
+            return res.status(200).json(out);
+          } catch (cfPrimaryErr) {
+            console.warn('cloudflare primary failed:', cfPrimaryErr.message);
             const out = await generateImageWithFallbacks({
               prompt: prompt.trim(),
               size,
               negativePrompt,
-              preferredCfModel: /sdxl/i.test(String(model || '')) ? 'sdxl-lightning' : 'flux-schnell',
+              preferredCfModel: preferredCf,
             });
-            out.fallbackFrom = 'nvidia';
-            out.fallbackNote = isNvidiaSafetyBlock(nvidiaErr.message)
-              ? `NVIDIA blocked this prompt (false NSFW). Used ${out.provider} · ${out.model} instead.`
-              : `NVIDIA failed; used ${out.provider} · ${out.model} instead.`;
+            out.fallbackFrom = 'cloudflare';
+            out.fallbackNote = `Primary Cloudflare model failed; used ${out.provider} · ${out.model}.`;
             return res.status(200).json(out);
-          } catch (fbErr) {
+          }
+        }
+
+        // nvidia (or anything else): Cloudflare/fal first, NVIDIA last resort only.
+        try {
+          const out = await generateImageWithFallbacks({
+            prompt: prompt.trim(),
+            size,
+            negativePrompt,
+            preferredCfModel: preferredCf,
+          });
+          if (provider === 'nvidia') {
+            out.fallbackFrom = 'nvidia';
+            out.fallbackNote =
+              `Used ${out.provider} · ${out.model} (NVIDIA safety filter is too strict for many normal prompts).`;
+          }
+          return res.status(200).json(out);
+        } catch (fbErr) {
+          if (provider !== 'nvidia') throw fbErr;
+          console.warn('CF/fal image failed, last-resort NVIDIA:', fbErr.message);
+          try {
+            const out = await generateNvidiaImage({
+              prompt: prompt.trim(),
+              model,
+              size,
+              negativePrompt,
+            });
+            out.fallbackFrom = 'cloudflare';
+            out.fallbackNote = `Cloudflare/fal failed; used NVIDIA · ${out.model}.`;
+            return res.status(200).json(out);
+          } catch (nvidiaErr) {
             const err = new Error(
-              `${cleanMediaError(nvidiaErr.message)} Fallback also failed: ${cleanMediaError(fbErr.message)}`
+              `${cleanMediaError(fbErr.message)} Also NVIDIA: ${cleanMediaError(nvidiaErr.message)}`
             );
             err.status = fbErr.status || nvidiaErr.status || 502;
             throw err;
           }
         }
-      }
-      try {
-        const out = await generateCloudflareImage({
-          prompt: prompt.trim(),
-          model: model || 'flux-schnell',
-          size,
-          negativePrompt,
-        });
-        return res.status(200).json(out);
-      } catch (cfErr) {
-        console.warn('cloudflare image failed, trying other backends:', cfErr.message);
-        const out = await generateImageWithFallbacks({
-          prompt: prompt.trim(),
-          size,
-          negativePrompt,
-          preferredCfModel: model || 'flux-schnell',
-        });
-        if (out.provider !== 'cloudflare' || out.model !== (CLOUDFLARE_IMAGE_MODELS[model] || model)) {
-          out.fallbackFrom = 'cloudflare';
-          out.fallbackNote = `Primary Cloudflare model failed; used ${out.provider} · ${out.model}.`;
-        }
-        return res.status(200).json(out);
+      } catch (imgErr) {
+        throw imgErr;
       }
     }
 
