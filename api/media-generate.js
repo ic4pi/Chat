@@ -397,65 +397,88 @@ async function generateCloudflareVideo({
     input.image = asDataUrl(mt, b64);
   }
 
-  // Unified AI gateway style: POST .../ai/run with { model, input }
-  const runUrl = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run`;
-  let upstream = await fetch(runUrl, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ model: modelId, input }),
-  });
-  let data = await upstream.json().catch(() => ({}));
+  const base = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run`;
+  const attempts = [];
 
-  // Fallback: Workers AI path .../ai/run/{model} with flat body
-  if (!upstream.ok || (data.success === false && !extractCloudflareVideoUrl(data))) {
-    const pathUrl = `${runUrl}/${modelId}`;
-    upstream = await fetch(pathUrl, {
+  // 1) Universal envelope (Cloudflare AI / partner models)
+  attempts.push(
+    fetch(base, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ model: modelId, input }),
+    }),
+  );
+
+  // 2) Path style with encoded model id (slashes must be %2F)
+  attempts.push(
+    fetch(`${base}/${encodeURIComponent(modelId)}`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(input),
-    });
-    data = await upstream.json().catch(() => ({}));
-  }
+    }),
+  );
 
-  if (!upstream.ok || data.success === false) {
-    const detail =
+  // 3) Path style with raw slashes (some CF routers accept this like @cf/…)
+  attempts.push(
+    fetch(`${base}/${modelId}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(input),
+    }),
+  );
+
+  let lastDetail = 'Cloudflare video failed';
+  let lastStatus = 502;
+
+  for (const pending of attempts) {
+    const upstream = await pending;
+    const data = await upstream.json().catch(() => ({}));
+    const videoUrl = extractCloudflareVideoUrl(data);
+    if (upstream.ok && videoUrl) {
+      return {
+        kind: 'video',
+        provider: 'cloudflare',
+        model: modelId,
+        videoUrl,
+        mime: 'video/mp4',
+      };
+    }
+    // Completed-style envelope without success:false
+    if (videoUrl && data.success !== false) {
+      return {
+        kind: 'video',
+        provider: 'cloudflare',
+        model: modelId,
+        videoUrl,
+        mime: 'video/mp4',
+      };
+    }
+    lastStatus = upstream.status || lastStatus;
+    lastDetail =
       extractErrorDetail(data) ||
       (Array.isArray(data.errors) && data.errors[0]?.message) ||
       `Cloudflare video HTTP ${upstream.status}`;
-    const err = new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
-    err.status = upstream.status || 502;
-    throw err;
   }
 
-  const videoUrl = extractCloudflareVideoUrl(data);
-  const state = data.result?.state || data.state;
-  if (!videoUrl && state && /pending|queued|running|processing/i.test(String(state))) {
-    const err = new Error(
-      `Cloudflare video job is still ${state}. Retry in a moment, or try Seedance Mini.`
-    );
-    err.status = 202;
-    throw err;
-  }
+  const hint =
+    /no route|not found|404|does not exist|unknown model/i.test(String(lastDetail))
+      ? ` Enable ByteDance Seedance in the Cloudflare dashboard (AI → Models → ${modelId}), ` +
+        `and ensure the API token has Workers AI / Cloudflare AI permissions. ` +
+        `FLUX images use Workers AI (@cf/…); Seedance is a partner model on the same account.`
+      : '';
 
-  if (!videoUrl) {
-    const err = new Error('Cloudflare Seedance returned no video URL.');
-    err.status = 502;
-    throw err;
-  }
-
-  return {
-    kind: 'video',
-    provider: 'cloudflare',
-    model: modelId,
-    videoUrl,
-    mime: 'video/mp4',
-  };
+  const err = new Error(`${lastDetail}.${hint}`);
+  err.status = lastStatus;
+  throw err;
 }
 
 function buildNvidiaImageBody(modelId, prompt, negativePrompt, size) {
