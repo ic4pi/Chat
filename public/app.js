@@ -650,6 +650,21 @@ function renderMessageInto(container, m) {
         void speakReply(stripContinueMarkers(m.content), { force: true, personaId: m.personaId });
       });
       div.appendChild(speak);
+
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'text-btn msg-speak';
+      copyBtn.textContent = 'Copy';
+      copyBtn.title = 'Copy this entire reply';
+      copyBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const toCopy = stripContinueMarkers(m.content);
+        void copyTextToClipboard(toCopy).then((ok) =>
+          flashButton(copyBtn, ok ? 'Copied' : 'Copy failed')
+        );
+      });
+      div.appendChild(copyBtn);
     }
   } else if (m.autoContinue) {
     content.textContent = 'continue →';
@@ -807,7 +822,9 @@ function renderArtifacts() {
     copyBtn.textContent = 'Copy';
     copyBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      navigator.clipboard.writeText(a.content).then(() => flashButton(copyBtn, 'Copied'));
+      void copyTextToClipboard(a.content).then((ok) =>
+        flashButton(copyBtn, ok ? 'Copied' : 'Copy failed')
+      );
     });
 
     const dlBtn = document.createElement('button');
@@ -831,6 +848,35 @@ function flashButton(btn, text) {
   const original = btn.textContent;
   btn.textContent = text;
   setTimeout(() => { btn.textContent = original; }, 1200);
+}
+
+async function copyTextToClipboard(text) {
+  const s = String(text ?? '');
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(s);
+      return true;
+    }
+  } catch {
+    // Fall through to legacy copy.
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = s;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-9999px';
+    ta.style.left = '-9999px';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = typeof document.execCommand === 'function' ? document.execCommand('copy') : false;
+    document.body.removeChild(ta);
+    return Boolean(ok);
+  } catch {
+    return false;
+  }
 }
 
 function downloadArtifact(a) {
@@ -3113,7 +3159,9 @@ els.keysModal?.addEventListener('click', (e) => {
 els.closeArtifactModal.addEventListener('click', closeArtifactModal);
 els.artifactCopyBtn.addEventListener('click', () => {
   if (!currentArtifact) return;
-  navigator.clipboard.writeText(currentArtifact.content).then(() => flashButton(els.artifactCopyBtn, 'Copied'));
+  void copyTextToClipboard(currentArtifact.content).then((ok) =>
+    flashButton(els.artifactCopyBtn, ok ? 'Copied' : 'Copy failed')
+  );
 });
 els.artifactDownloadBtn.addEventListener('click', () => {
   if (currentArtifact) downloadArtifact(currentArtifact);
