@@ -369,16 +369,63 @@ function extractCloudflareVideoUrl(payload) {
   const candidates = [
     payload.result?.video,
     payload.result?.result?.video,
+    payload.result?.video_url,
+    payload.result?.output?.video,
+    payload.result?.output?.url,
+    payload.result?.outputs?.[0]?.url,
+    payload.result?.outputs?.[0]?.video,
     payload.video,
+    payload.video_url,
     payload.result?.url,
     payload.url,
   ];
   for (const c of candidates) {
-    if (typeof c === 'string' && c.trim()) return c.trim();
+    if (typeof c === 'string' && /^https?:\/\//i.test(c.trim())) return c.trim();
+    if (typeof c === 'string' && c.trim().startsWith('data:video')) return c.trim();
   }
+  // Nested { video: { url } }
+  const nested = payload.result?.video?.url || payload.video?.url;
+  if (typeof nested === 'string' && nested.trim()) return nested.trim();
   return null;
 }
 
+function extractCloudflareRequestId(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  const id =
+    payload.result?.request_id ||
+    payload.result?.id ||
+    payload.request_id ||
+    payload.id;
+  return typeof id === 'string' && id.trim() ? id.trim() : null;
+}
+
+function cloudflareAiDetail(data, status) {
+  return (
+    extractErrorDetail(data) ||
+    (Array.isArray(data?.errors) && data.errors[0]?.message) ||
+    `Cloudflare video HTTP ${status || 'error'}`
+  );
+}
+
+async function cloudflareAiPost(url, token, body) {
+  const upstream = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  const data = await upstream.json().catch(() => ({}));
+  return { ok: upstream.ok, status: upstream.status, data };
+}
+
+/**
+ * Seedance is a Cloudflare AI partner model.
+ * Official REST shape: POST /accounts/{id}/ai/run/{model_name} with flat params
+ * (model_name keeps the slash: bytedance/seedance-2.0-mini — do NOT encode it).
+ * Docs also show envelope POST /ai/run { model, input } for some partner UIs.
+ */
 async function generateCloudflareVideo({
   prompt,
   model,
@@ -395,11 +442,20 @@ async function generateCloudflareVideo({
     err.status = 503;
     throw err;
   }
+  if (!/^[a-f0-9]{32}$/i.test(accountId)) {
+    const err = new Error(
+      `CLOUDFLARE_ACCOUNT_ID looks invalid (${accountId.slice(0, 8)}…). ` +
+        `It must be the 32-character hex Account ID from the Cloudflare dashboard. ` +
+        `Wrong IDs return Cloudflare error 7003 “No route for that URI”.`
+    );
+    err.status = 503;
+    throw err;
+  }
 
   const modelId = CLOUDFLARE_VIDEO_MODELS[model] || CLOUDFLARE_VIDEO_MODELS['seedance-mini'];
   const duration = Math.min(12, Math.max(4, Number(seconds) || 5));
   const aspect_ratio = videoAspectFromSize(size);
-  const resolution = '480p';
+  const resolution = '720p';
 
   const input = {
     prompt,
@@ -413,34 +469,24 @@ async function generateCloudflareVideo({
     input.image = asDataUrl(mt, b64);
   }
 
-  const base = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run`;
+  const runBase = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run`;
+  // Keep slash in model path — Cloudflare routes /ai/run/bytedance/seedance-2.0-mini
+  const modelUrl = `${runBase}/${modelId}`;
 
-  const tryOnce = async (url, body) => {
-    const upstream = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    });
-    const data = await upstream.json().catch(() => ({}));
-    return { upstream, data };
-  };
-
-  const candidates = [
-    { url: base, body: { model: modelId, input } },
-    { url: `${base}/${encodeURIComponent(modelId)}`, body: input },
-    { url: `${base}/${modelId}`, body: input },
+  const attempts = [
+    { label: 'path+flat', url: modelUrl, body: input },
+    { label: 'path+envelope', url: modelUrl, body: { model: modelId, input } },
+    { label: 'root+envelope', url: runBase, body: { model: modelId, input } },
   ];
 
   let lastDetail = 'Cloudflare video failed';
   let lastStatus = 502;
+  let accepted = null;
 
-  for (const c of candidates) {
-    const { upstream, data } = await tryOnce(c.url, c.body);
-    const videoUrl = extractCloudflareVideoUrl(data);
-    if ((upstream.ok || data.success !== false) && videoUrl) {
+  for (const attempt of attempts) {
+    const res = await cloudflareAiPost(attempt.url, token, attempt.body);
+    const videoUrl = extractCloudflareVideoUrl(res.data);
+    if (res.ok && videoUrl) {
       return {
         kind: 'video',
         provider: 'cloudflare',
@@ -449,18 +495,63 @@ async function generateCloudflareVideo({
         mime: 'video/mp4',
       };
     }
-    lastStatus = upstream.status || lastStatus;
-    lastDetail =
-      extractErrorDetail(data) ||
-      (Array.isArray(data.errors) && data.errors[0]?.message) ||
-      `Cloudflare video HTTP ${upstream.status}`;
+
+    const reqId = extractCloudflareRequestId(res.data);
+    const statusText = String(
+      res.data?.result?.status || res.data?.status || ''
+    ).toLowerCase();
+    if (res.ok && reqId && (statusText.includes('queue') || statusText.includes('run') || !videoUrl)) {
+      accepted = { url: attempt.url, requestId: reqId, label: attempt.label };
+      break;
+    }
+
+    lastStatus = res.status || lastStatus;
+    lastDetail = cloudflareAiDetail(res.data, res.status);
+    // Path route exists but model/token problem — stop guessing other URLs.
+    if (res.status === 400 || res.status === 401 || res.status === 403) break;
+    if (attempt.label === 'path+flat' && res.status !== 404 && !/no route/i.test(lastDetail)) break;
   }
 
-  const hint =
-    /no route|not found|404|does not exist|unknown model/i.test(String(lastDetail))
-      ? ` Enable ByteDance Seedance in the Cloudflare dashboard (AI → Models → ${modelId}), ` +
-        `and ensure the API token has Workers AI / Cloudflare AI permissions. ` +
-        `FLUX images use Workers AI (@cf/…); Seedance is a partner model on the same account.`
+  if (accepted) {
+    const started = Date.now();
+    let delay = 2500;
+    while (Date.now() - started < 280_000) {
+      await new Promise((r) => setTimeout(r, delay));
+      const poll = await cloudflareAiPost(accepted.url, token, {
+        request_id: accepted.requestId,
+      });
+      const videoUrl = extractCloudflareVideoUrl(poll.data);
+      if (poll.ok && videoUrl) {
+        return {
+          kind: 'video',
+          provider: 'cloudflare',
+          model: modelId,
+          videoUrl,
+          mime: 'video/mp4',
+        };
+      }
+      const st = String(poll.data?.result?.status || poll.data?.status || '').toLowerCase();
+      if (st.includes('fail') || st.includes('error') || poll.status >= 400) {
+        lastStatus = poll.status || 502;
+        lastDetail = cloudflareAiDetail(poll.data, poll.status);
+        break;
+      }
+      delay = Math.min(10_000, Math.floor(delay * 1.25));
+    }
+    if (!/timed out|fail/i.test(lastDetail)) {
+      lastDetail = `Seedance job ${accepted.requestId} timed out waiting for video.`;
+      lastStatus = 504;
+    }
+  }
+
+  const noRoute = /no route|7003/i.test(String(lastDetail));
+  const hint = noRoute
+    ? ` Check CLOUDFLARE_ACCOUNT_ID is the 32-char hex Account ID. ` +
+      `Then enable ${modelId} under Cloudflare AI → Models, and use a token with Workers AI permissions. ` +
+      `Or switch Media → Video to Wan 2.2 (fal.ai) if FAL_KEY is set.`
+    : /not found|404|does not exist|unknown model|not enabled|not available/i.test(String(lastDetail))
+      ? ` Enable ${modelId} in the Cloudflare dashboard (AI → Models), ` +
+        `or use Wan 2.2 · fal.ai for video.`
       : '';
 
   const err = new Error(`${lastDetail}.${hint}`);
@@ -872,15 +963,41 @@ export default async function handler(req, res) {
         }
       }
 
-      const out = await generateCloudflareVideo({
-        prompt: prompt.trim(),
-        model: model || 'seedance-mini',
-        size: size || '832x480',
-        seconds,
-        imageBase64,
-        mimeType,
-      });
-      return res.status(200).json(out);
+      try {
+        const out = await generateCloudflareVideo({
+          prompt: prompt.trim(),
+          model: model || 'seedance-mini',
+          size: size || '832x480',
+          seconds,
+          imageBase64,
+          mimeType,
+        });
+        return res.status(200).json(out);
+      } catch (cfErr) {
+        // Seedance often needs dashboard enablement — fall back to fal Wan if key exists.
+        if ((process.env.FAL_KEY || process.env.FAL_API_KEY || '').trim()) {
+          console.warn('Cloudflare Seedance failed, falling back to fal Wan:', cfErr.message);
+          try {
+            const out = await generateFalWanVideo({
+              prompt: prompt.trim(),
+              model: imageBase64 ? 'wan2.2-i2v' : 'wan2.2-t2v',
+              imageBase64,
+              mimeType,
+            });
+            out.fallbackFrom = 'cloudflare';
+            out.fallbackNote =
+              cfErr.message || 'Cloudflare Seedance unavailable; used Wan 2.2 on fal.ai.';
+            return res.status(200).json(out);
+          } catch (falErr) {
+            const err = new Error(
+              `${cfErr.message} Also tried fal Wan: ${falErr.message}`
+            );
+            err.status = cfErr.status || falErr.status || 502;
+            throw err;
+          }
+        }
+        throw cfErr;
+      }
     }
 
     return res.status(400).json({ error: `Unknown kind: ${kind}` });
