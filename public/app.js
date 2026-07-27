@@ -1199,16 +1199,16 @@ function shouldFallback(attempt) {
   return false;
 }
 
-/** Markers the model uses so the client can auto-continue long work in chunks. */
+/** Markers the model uses so the client can auto-continue when a reply was cut short. */
 const CONTINUE_MARKER_RE = /⟦\s*(MORE|DONE)\s*⟧/gi;
 const WANTS_MORE_RE = /⟦\s*MORE\s*⟧/i;
 const AUTO_CONTINUE_MAX = 8;
 const AUTO_CONTINUE_USER_TEXT =
-  'Continue. Next small chunk only (about 2–3 items/sections). End with ⟦MORE⟧ if more remains, or ⟦DONE⟧ when finished.';
+  'Continue from where you left off. Finish as much as you can in this reply. End with ⟦MORE⟧ only if a large amount still remains; otherwise finish and end with ⟦DONE⟧.';
 const AUTO_CONTINUE_AFTER_TIMEOUT_TEXT =
-  'Continue from where you left off. Small chunk only. End with ⟦MORE⟧ if more remains, or ⟦DONE⟧ when finished.';
+  'Continue from where you left off. Finish as much as you can in this reply. End with ⟦MORE⟧ only if a large amount still remains; otherwise finish and end with ⟦DONE⟧.';
 const AUTO_CONTINUE_EMPTY_TIMEOUT_TEXT =
-  'Previous attempt timed out before any text arrived. Restart with only the first small chunk (2–3 items). End with ⟦MORE⟧ if more remains, or ⟦DONE⟧ when finished.';
+  'Previous attempt timed out before any text arrived. Restart and answer as fully as you can in one reply. End with ⟦MORE⟧ only if the ask is too large to finish; otherwise end with ⟦DONE⟧.';
 
 function stripContinueMarkers(text) {
   return String(text || '')
@@ -1335,7 +1335,7 @@ async function sendMessage(text) {
         }
       };
 
-      updateStatusClock(autoRound > 0 ? `Auto-continuing (${autoRound + 1})` : 'Waiting for model');
+      updateStatusClock(autoRound > 0 ? `Continuing (${autoRound + 1})` : 'Waiting for model');
       let attempt = await callChatStream(
         state.activeProvider,
         state.activeModel,
@@ -1349,7 +1349,7 @@ async function sendMessage(text) {
             updateStatusClock('Thinking');
           } else if (evt.type === 'token') {
             streamBuf += evt.text || '';
-            updateStatusClock(autoRound > 0 ? `Writing chunk ${autoRound + 1}` : 'Writing');
+            updateStatusClock(autoRound > 0 ? `Writing (${autoRound + 1})` : 'Writing');
             refreshStreamingBubble();
             if (!pinnedToStart) {
               renderMessages({ scroll: 'assistant-start', pinMsgTs: assistantTs });
@@ -1397,13 +1397,13 @@ async function sendMessage(text) {
       const timedOut = Boolean(data.timedOut) || (!attempt.ok && isTimeoutLikeError(data.error || attempt.errText));
 
       if (!attempt.ok && !rawReply) {
-        // Empty timeout: one automatic restart with a shorter-chunk nudge.
+        // Empty timeout: one automatic restart with a continue nudge.
         if (timedOut && emptyTimeoutRetries < 1 && autoRound < AUTO_CONTINUE_MAX) {
           emptyTimeoutRetries += 1;
           autoRound += 1;
           chat.messages.push({
             role: 'info',
-            content: 'Timed out with no text — retrying a smaller first chunk…',
+            content: 'Timed out with no text — retrying…',
             ts: Date.now(),
           });
           chat.messages.push({
@@ -1489,8 +1489,8 @@ async function sendMessage(text) {
         chat.messages.push({
           role: 'info',
           content: timedOut && !WANTS_MORE_RE.test(rawReply)
-            ? `Chunk cut short — auto-continuing (${autoRound + 1})…`
-            : `Auto-continuing (${autoRound + 1})…`,
+            ? `Reply cut short — continuing (${autoRound + 1})…`
+            : `Continuing (${autoRound + 1})…`,
           ts: Date.now(),
         });
         chat.messages.push({
@@ -1510,7 +1510,7 @@ async function sendMessage(text) {
       if (wantsMore && autoRound + 1 >= AUTO_CONTINUE_MAX) {
         chat.messages.push({
           role: 'info',
-          content: 'Stopped auto-continue after several chunks. Say “continue” if you want more.',
+          content: 'Stopped continuing after several parts. Say “continue” if you want more.',
           ts: Date.now(),
         });
         renderMessages({ scroll: 'bottom' });

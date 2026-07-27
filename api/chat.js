@@ -9,8 +9,11 @@ import { resolveProvider } from '../lib/providers.js';
 
 const FALLBACK_SYSTEM_PROMPT = 'You are a helpful, direct assistant.';
 const UPSTREAM_TIMEOUT_MS = 110_000;
-/** Keep each completion short so slow models finish before the upstream timeout. */
-const CHUNK_MAX_TOKENS = 2200;
+/**
+ * Room for a full normal reply (lyrics, essays, short plans) in one message.
+ * Auto-continue only kicks in on hard cutoffs (length / timeout), not by design.
+ */
+const CHUNK_MAX_TOKENS = 8192;
 
 /** Normal chat is conversation/planning — never a code dump. Coding happens in Workspace. */
 const NO_CODE_CHAT_RULES = `
@@ -22,17 +25,16 @@ CHANNEL RULES (this is normal chat, not the coding workspace):
 `.trim();
 
 /**
- * Long asks must not be one giant reply — the proxy cuts off around 110s.
- * The browser auto-sends "continue" when it sees ⟦MORE⟧ (same pattern as coding agents).
+ * Prefer one complete message. Chunking is a last resort for huge asks that
+ * would otherwise hit the ~110s proxy timeout — the browser auto-continues on ⟦MORE⟧.
  */
 const CHUNK_CONTINUE_RULES = `
-CHUNKING (required — long single replies time out):
-- Work in small chunks that you can finish quickly. Prefer ~2–3 numbered items / sections per reply, not the whole list.
-- Example: if the user asks for 1–10, do 1–3 now, then stop; later turns cover 4–6, then 7–10.
-- If more work remains after this reply, end with exactly: ⟦MORE⟧
-- When the full ask is finished, end with exactly: ⟦DONE⟧
-- Do NOT ask the user whether to continue — the app continues automatically on ⟦MORE⟧.
-- Never pad or ramble to fill a chunk; stop as soon as the chunk is coherent.
+REPLY LENGTH (important):
+- Default: answer the full ask in ONE message. Song lyrics, poems, short lists, Q&A, plans, and normal chat must not be split.
+- Do NOT end early with ⟦MORE⟧ just to be tidy. Finish the whole reply when it fits.
+- Only use ⟦MORE⟧ for genuinely huge multi-part work (e.g. a long report with many large sections) that you cannot finish in one pass without risking a timeout.
+- If you must split: deliver a substantial portion (not 2–3 tiny scraps), then end with exactly: ⟦MORE⟧
+- When the full ask is finished, you may end with ⟦DONE⟧ (optional). Never ask the user whether to continue — the app continues automatically on ⟦MORE⟧.
 `.trim();
 
 const ROLE_RULES = {
