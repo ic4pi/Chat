@@ -1,12 +1,18 @@
 const IMAGE_MODELS = [
+  // fal returns HTTPS URLs — safe under Vercel’s 4.5MB limit (no HTTP 413).
+  { value: 'fal:flux-schnell', label: 'fal · FLUX.1 Schnell (recommended)', kind: 'image', provider: 'fal', model: 'flux-schnell' },
+  { value: 'fal:flux-dev', label: 'fal · FLUX.1 Dev', kind: 'image', provider: 'fal', model: 'flux-dev' },
+  { value: 'fal:fast-sdxl', label: 'fal · Fast SDXL', kind: 'image', provider: 'fal', model: 'fast-sdxl' },
+  // Cloudflare kept — auto-falls back to fal if the PNG/JPEG would 413.
   { value: 'cloudflare:flux-schnell', label: 'Cloudflare · FLUX.1 Schnell', kind: 'image', provider: 'cloudflare', model: 'flux-schnell' },
   { value: 'cloudflare:sdxl-lightning', label: 'Cloudflare · SDXL Lightning', kind: 'image', provider: 'cloudflare', model: 'sdxl-lightning' },
   { value: 'cloudflare:sdxl', label: 'Cloudflare · SDXL Base', kind: 'image', provider: 'cloudflare', model: 'sdxl' },
 ];
 
 const VIDEO_MODELS = [
-  { value: 'fal:wan2.2-t2v', label: 'Wan 2.2 · Text → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-t2v' },
-  { value: 'fal:wan2.2-i2v', label: 'Wan 2.2 · Image → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-i2v' },
+  { value: 'fal:ltx-video', label: 'fal · LTX Video (fast / cheap)', kind: 'video', provider: 'fal', model: 'ltx-video' },
+  { value: 'fal:wan2.2-t2v', label: 'fal · Wan 2.2 Text → Video', kind: 'video', provider: 'fal', model: 'wan2.2-t2v' },
+  { value: 'fal:wan2.2-i2v', label: 'fal · Wan 2.2 Image → Video', kind: 'video', provider: 'fal', model: 'wan2.2-i2v' },
   { value: 'cloudflare:seedance-mini', label: 'Cloudflare · Seedance 2.0 Mini', kind: 'video', provider: 'cloudflare', model: 'seedance-mini' },
   { value: 'cloudflare:seedance-fast', label: 'Cloudflare · Seedance 2.0 Fast', kind: 'video', provider: 'cloudflare', model: 'seedance-fast' },
 ];
@@ -21,6 +27,10 @@ const VIDEO_SIZES = [
   { value: '832x480', label: 'Landscape · 16:9' },
   { value: '480x832', label: 'Portrait · 9:16' },
 ];
+
+/** Vercel Functions reject bodies over 4.5MB (HTTP 413). Keep refs well under. */
+const REF_MAX_EDGE = 1280;
+const REF_MAX_BYTES = 2_200_000;
 
 const els = {
   tabs: [...document.querySelectorAll('.media-tab')],
@@ -77,7 +87,9 @@ function syncFields() {
   const spec = selectedSpec();
   const supportsNegative =
     kind === 'image' &&
-    (spec?.provider === 'nvidia' || /sdxl/i.test(spec?.model || ''));
+    (spec?.provider === 'nvidia' ||
+      spec?.provider === 'fal' ||
+      /sdxl/i.test(spec?.model || ''));
   const i2v = kind === 'video' && (/i2v/i.test(spec?.model || '') || /wan2\.2-i2v/i.test(spec?.value || ''));
   els.negativeWrap.style.display = supportsNegative ? '' : 'none';
   const opt = els.refWrap.querySelector('.opt');
@@ -88,13 +100,58 @@ function setStatus(msg) {
   els.status.textContent = msg || '';
 }
 
-function readFileAsDataUrl(file) {
+function loadImageElement(fileOrUrl) {
   return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result || ''));
-    r.onerror = () => reject(new Error('Failed to read image'));
-    r.readAsDataURL(file);
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Failed to decode image'));
+    if (typeof fileOrUrl === 'string') {
+      img.src = fileOrUrl;
+    } else {
+      img.src = URL.createObjectURL(fileOrUrl);
+    }
   });
+}
+
+function canvasToJpegDataUrl(canvas, quality) {
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
+/**
+ * Resize + JPEG-compress so reference uploads stay under Vercel’s 4.5MB body limit.
+ */
+async function compressImageFile(file) {
+  const img = await loadImageElement(file);
+  try {
+    const scale = Math.min(1, REF_MAX_EDGE / Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height));
+    const w = Math.max(1, Math.round((img.naturalWidth || img.width) * scale));
+    const h = Math.max(1, Math.round((img.naturalHeight || img.height) * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, w, h);
+
+    let quality = 0.85;
+    let dataUrl = canvasToJpegDataUrl(canvas, quality);
+    while (dataUrl.length > REF_MAX_BYTES && quality > 0.45) {
+      quality -= 0.1;
+      dataUrl = canvasToJpegDataUrl(canvas, quality);
+    }
+    if (dataUrl.length > REF_MAX_BYTES) {
+      // Last resort: shrink further.
+      canvas.width = Math.max(1, Math.round(w * 0.7));
+      canvas.height = Math.max(1, Math.round(h * 0.7));
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      dataUrl = canvasToJpegDataUrl(canvas, 0.7);
+    }
+    if (dataUrl.length > REF_MAX_BYTES) {
+      throw new Error('Image is still too large after compression (Vercel max ~3MB). Try a smaller photo.');
+    }
+    return { mimeType: 'image/jpeg', base64: dataUrl };
+  } finally {
+    if (img.src && img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
+  }
 }
 
 els.tabs.forEach((tab) => {
@@ -117,22 +174,25 @@ els.ref.addEventListener('change', async () => {
     els.refPreview.innerHTML = '';
     return;
   }
-  if (file.size > 8_000_000) {
-    alert('Image too large (max 8MB)');
+  if (file.size > 20_000_000) {
+    alert('Image too large (max 20MB before compression)');
     els.ref.value = '';
     return;
   }
   try {
-    const dataUrl = await readFileAsDataUrl(file);
-    const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-    refData = { mimeType: m?.[1] || file.type || 'image/png', base64: dataUrl };
+    setStatus('Compressing reference image…');
+    refData = await compressImageFile(file);
     els.refPreview.classList.remove('hidden');
     els.refPreview.innerHTML = '';
     const img = document.createElement('img');
-    img.src = dataUrl;
+    img.src = refData.base64;
     img.alt = 'Reference';
     els.refPreview.appendChild(img);
+    setStatus('');
   } catch (err) {
+    refData = null;
+    els.ref.value = '';
+    setStatus('');
     alert(err.message || 'Could not read image');
   }
 });
@@ -156,6 +216,16 @@ function cardShell(metaLeft, metaRight) {
   meta.appendChild(right);
   card.appendChild(meta);
   return { card, meta };
+}
+
+function friendlyHttpError(status, data) {
+  if (status === 413 || data?.code === 'PAYLOAD_TOO_LARGE') {
+    return (
+      data?.error ||
+      'Payload too large (HTTP 413). Vercel caps bodies at 4.5MB — pick fal · FLUX (URL) or a smaller size/reference.'
+    );
+  }
+  return data?.error || `HTTP ${status}`;
 }
 
 els.generate.addEventListener('click', async () => {
@@ -184,7 +254,7 @@ els.generate.addEventListener('click', async () => {
       size: els.size.value,
     };
     const neg = (els.negative.value || '').trim();
-    if (neg && (spec.provider === 'nvidia' || /sdxl/i.test(spec.model))) {
+    if (neg && (spec.provider === 'nvidia' || spec.provider === 'fal' || /sdxl/i.test(spec.model))) {
       body.negativePrompt = neg;
     }
     if (refData) {
@@ -198,7 +268,7 @@ els.generate.addEventListener('click', async () => {
       body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!res.ok) throw new Error(friendlyHttpError(res.status, data));
 
     if (data.kind === 'image') {
       if (data.fallbackNote) {
@@ -212,20 +282,20 @@ els.generate.addEventListener('click', async () => {
           new Date().toLocaleTimeString(),
         );
         const el = document.createElement('img');
-        if (img.base64) {
-          el.src = `data:${img.mimeType || 'image/png'};base64,${img.base64}`;
-          const a = document.createElement('a');
-          a.href = el.src;
-          a.download = `media-${Date.now()}.png`;
-          a.textContent = 'Download';
-          meta.lastChild.replaceWith(a);
-        } else if (img.url) {
+        if (img.url) {
           el.src = img.url;
           const a = document.createElement('a');
           a.href = img.url;
           a.target = '_blank';
           a.rel = 'noopener';
           a.textContent = 'Open';
+          meta.lastChild.replaceWith(a);
+        } else if (img.base64) {
+          el.src = `data:${img.mimeType || 'image/png'};base64,${img.base64}`;
+          const a = document.createElement('a');
+          a.href = el.src;
+          a.download = `media-${Date.now()}.jpg`;
+          a.textContent = 'Download';
           meta.lastChild.replaceWith(a);
         }
         card.insertBefore(el, card.firstChild);
@@ -261,7 +331,8 @@ els.generate.addEventListener('click', async () => {
   } catch (err) {
     console.error(err);
     setStatus('');
-    alert(String(err.message || 'Generation failed').replace(/^(AIError:\s*)+/gi, ''));
+    const msg = String(err.message || 'Generation failed').replace(/^(AIError:\s*)+/gi, '');
+    alert(msg);
   } finally {
     els.generate.disabled = false;
     els.generate.textContent = 'Generate';

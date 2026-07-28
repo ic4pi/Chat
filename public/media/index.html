@@ -56,11 +56,12 @@
 
       <div class="media-box media-keys-box">
         <p class="media-keys-note">
-          Images: Cloudflare Workers AI (FLUX / SDXL).
-          Video: Wan 2.2 on fal.ai (recommended) or Seedance if enabled on your Cloudflare account.
+          Recommended: <strong>fal · FLUX</strong> (images) and <strong>fal · LTX / Wan</strong> (video) —
+          they return URLs and avoid Vercel’s 4.5MB HTTP 413 limit on base64.
+          Cloudflare FLUX/SDXL is still available and auto-falls back to fal when the image is too large.
           Keys in Vercel → Settings → Environment Variables:
-          <code>CLOUDFLARE_ACCOUNT_ID</code> (32-char hex) + <code>CLOUDFLARE_API_TOKEN</code>,
-          <code>FAL_KEY</code> for Wan video (+ Flux image fallback).
+          <code>FAL_KEY</code> (images + video),
+          <code>CLOUDFLARE_ACCOUNT_ID</code> (32-char hex) + <code>CLOUDFLARE_API_TOKEN</code> (optional).
         </p>
       </div>
     </section>

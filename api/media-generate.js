@@ -4,7 +4,7 @@
  * Body:
  *   {
  *     kind: 'image' | 'video',
- *     provider: 'cloudflare' | 'nvidia',
+ *     provider: 'cloudflare' | 'fal' | 'nvidia',
  *     model?: string,
  *     prompt: string,
  *     negativePrompt?: string,
@@ -17,10 +17,17 @@
  * Env (Vercel → Settings → Environment Variables):
  *   CLOUDFLARE_ACCOUNT_ID  — Workers AI account id (images + Seedance video)
  *   CLOUDFLARE_API_TOKEN   — API token with Workers AI permission
- *   FAL_KEY                — Wan 2.2 video via fal.ai (recommended)
+ *   FAL_KEY                — fal.ai images (Flux) + video (Wan / LTX) — returns URLs (avoids Vercel 413)
  *   NVIDIA_API_KEY         — hosted FLUX/SDXL image (optional)
  *   NVIDIA_MEDIA_BASE_URL  — self-hosted Wan NIM only (OpenAI-compatible base URL)
+ *
+ * Vercel Functions hard-limit request/response bodies at 4.5MB. Returning big
+ * base64 images triggers HTTP 413 — prefer URL responses (fal) and refuse
+ * oversized base64 payloads in favor of fal fallback.
  */
+
+/** Stay under Vercel’s 4.5MB JSON body limit (request + response). */
+const SAFE_JSON_BYTES = 3_200_000;
 
 const CLOUDFLARE_IMAGE_MODELS = {
   'flux-schnell': '@cf/black-forest-labs/flux-1-schnell',
@@ -72,7 +79,21 @@ const NVIDIA_VIDEO_MODELS = {
   'wan2.2-i2v': 'wan-ai/wan2.2',
 };
 
-/** Hosted Wan 2.2 on fal.ai (NVIDIA’s free genai host 404s for Wan). */
+/** Hosted images on fal.ai — responses are HTTPS URLs (safe for Vercel 4.5MB limit). */
+const FAL_IMAGE_MODELS = {
+  'flux-schnell': 'fal-ai/flux/schnell',
+  'flux': 'fal-ai/flux/schnell',
+  'fal-flux-schnell': 'fal-ai/flux/schnell',
+  'fal-ai/flux/schnell': 'fal-ai/flux/schnell',
+  'flux-dev': 'fal-ai/flux/dev',
+  'fal-flux-dev': 'fal-ai/flux/dev',
+  'fal-ai/flux/dev': 'fal-ai/flux/dev',
+  'fast-sdxl': 'fal-ai/fast-sdxl',
+  'fal-fast-sdxl': 'fal-ai/fast-sdxl',
+  'fal-ai/fast-sdxl': 'fal-ai/fast-sdxl',
+};
+
+/** Hosted video on fal.ai (NVIDIA’s free genai host 404s for Wan). */
 const FAL_VIDEO_MODELS = {
   'wan2.2': 'fal-ai/wan/v2.2-5b/text-to-video',
   'wan2.2-t2v': 'fal-ai/wan/v2.2-5b/text-to-video',
@@ -84,6 +105,11 @@ const FAL_VIDEO_MODELS = {
   'fal-ai/wan/v2.2-5b/text-to-video': 'fal-ai/wan/v2.2-5b/text-to-video',
   'fal-ai/wan/v2.2-a14b/text-to-video': 'fal-ai/wan/v2.2-a14b/text-to-video',
   'fal-ai/wan/v2.2-5b/image-to-video': 'fal-ai/wan/v2.2-5b/image-to-video',
+  // Cheap / fast text→video on fal
+  'ltx': 'fal-ai/ltx-video',
+  'ltx-video': 'fal-ai/ltx-video',
+  'fal-ltx': 'fal-ai/ltx-video',
+  'fal-ai/ltx-video': 'fal-ai/ltx-video',
 };
 
 
@@ -109,6 +135,41 @@ function stripDataUrl(input) {
   const m = s.match(/^data:([^;]+);base64,(.+)$/);
   if (m) return { mime: m[1], b64: m[2] };
   return { mime: null, b64: s.replace(/\s+/g, '') };
+}
+
+function falKey() {
+  return (process.env.FAL_KEY || process.env.FAL_API_KEY || '').trim();
+}
+
+function approxJsonBytes(value) {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), 'utf8');
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+/** True when a media JSON payload would trip Vercel’s 4.5MB limit. */
+function payloadTooLarge(payload) {
+  return approxJsonBytes(payload) > SAFE_JSON_BYTES;
+}
+
+function imageResultTooLarge(out) {
+  if (!out || out.kind !== 'image' || !Array.isArray(out.images)) return false;
+  // URL-only responses are tiny and always safe.
+  const hasOnlyUrls = out.images.every((img) => img?.url && !img?.base64);
+  if (hasOnlyUrls) return false;
+  return payloadTooLarge(out);
+}
+
+function oversizeError(kind = 'image') {
+  const err = new Error(
+    `Generated ${kind} is too large to return through Vercel (4.5MB limit / HTTP 413). ` +
+      `Use fal.ai (URL responses) or a smaller size.`
+  );
+  err.status = 413;
+  err.code = 'PAYLOAD_TOO_LARGE';
+  return err;
 }
 
 function asDataUrl(mime, b64OrDataUrl) {
@@ -327,12 +388,18 @@ async function generateCloudflareImage({ prompt, model, size, negativePrompt }) 
   const ctype = (upstream.headers.get('content-type') || '').toLowerCase();
   if (upstream.ok && ctype.startsWith('image/')) {
     const buf = Buffer.from(await upstream.arrayBuffer());
-    return {
+    // Raw binary over ~2.4MB becomes >3.2MB base64 JSON → Vercel 413.
+    if (buf.length > 2_400_000) {
+      throw oversizeError('image');
+    }
+    const out = {
       kind: 'image',
       provider: 'cloudflare',
       model: modelId,
       images: [{ mimeType: ctype.split(';')[0] || 'image/png', base64: buf.toString('base64') }],
     };
+    if (imageResultTooLarge(out)) throw oversizeError('image');
+    return out;
   }
 
   const data = await upstream.json().catch(() => ({}));
@@ -364,15 +431,21 @@ async function generateCloudflareImage({ prompt, model, size, negativePrompt }) 
     throw err;
   }
 
-  return {
+  const clean = String(b64).replace(/^data:image\/\w+;base64,/, '');
+  // base64 length ≈ 4/3 of bytes; refuse before Vercel 413s the response.
+  if (clean.length > 3_000_000) throw oversizeError('image');
+
+  const out = {
     kind: 'image',
     provider: 'cloudflare',
     model: modelId,
     images: [{
       mimeType: mime,
-      base64: String(b64).replace(/^data:image\/\w+;base64,/, ''),
+      base64: clean,
     }],
   };
+  if (imageResultTooLarge(out)) throw oversizeError('image');
+  return out;
 }
 
 function extractCloudflareVideoUrl(payload) {
@@ -678,25 +751,15 @@ async function generateNvidiaImage({ prompt, model, size, negativePrompt }) {
   throw err;
 }
 
-async function generateFalFluxImage({ prompt, size, negativePrompt }) {
-  const key = (process.env.FAL_KEY || process.env.FAL_API_KEY || '').trim();
+async function falQueue(modelId, input, { timeoutMs = 180_000 } = {}) {
+  const key = falKey();
   if (!key) {
-    const err = new Error('Missing FAL_KEY for fal.ai image fallback.');
+    const err = new Error(
+      'Missing FAL_KEY in Vercel env. Get a key at https://fal.ai/dashboard/keys'
+    );
     err.status = 503;
     throw err;
   }
-
-  const { width, height } = parseSize(size, 1024, 1024);
-  const modelId = 'fal-ai/flux/schnell';
-  const input = {
-    prompt,
-    image_size: {
-      width: Math.min(1536, width),
-      height: Math.min(1536, height),
-    },
-    num_images: 1,
-  };
-  if (negativePrompt) input.negative_prompt = negativePrompt;
 
   const submitUrl = `https://queue.fal.run/${modelId}`;
   const submit = await fetch(submitUrl, {
@@ -715,48 +778,105 @@ async function generateFalFluxImage({ prompt, size, negativePrompt }) {
     throw err;
   }
 
-  let imageUrl =
-    submitted?.images?.[0]?.url ||
-    submitted?.data?.images?.[0]?.url ||
-    submitted?.output?.images?.[0]?.url;
+  // Some endpoints return the result inline.
+  if (
+    submitted?.images ||
+    submitted?.video ||
+    submitted?.data?.images ||
+    submitted?.data?.video ||
+    submitted?.output?.images ||
+    submitted?.output?.video
+  ) {
+    return submitted;
+  }
 
-  if (!imageUrl) {
-    const requestId = submitted.request_id || submitted.requestId;
-    const statusUrl = submitted.status_url || (requestId ? `https://queue.fal.run/${modelId}/requests/${requestId}/status` : null);
-    const resultUrl = submitted.response_url || (requestId ? `https://queue.fal.run/${modelId}/requests/${requestId}` : null);
-    if (!statusUrl || !resultUrl) {
-      const err = new Error('fal.ai Flux did not return a request id.');
+  const requestId = submitted.request_id || submitted.requestId;
+  const statusUrl =
+    submitted.status_url ||
+    (requestId ? `https://queue.fal.run/${modelId}/requests/${requestId}/status` : null);
+  const resultUrl =
+    submitted.response_url ||
+    (requestId ? `https://queue.fal.run/${modelId}/requests/${requestId}` : null);
+  if (!statusUrl || !resultUrl) {
+    const err = new Error(`fal.ai ${modelId} did not return a request id.`);
+    err.status = 502;
+    throw err;
+  }
+
+  const started = Date.now();
+  let delay = 1200;
+  while (Date.now() - started < timeoutMs) {
+    const st = await fetch(statusUrl, { headers: { Authorization: `Key ${key}` } });
+    const statusBody = await st.json().catch(() => ({}));
+    const status = String(statusBody.status || statusBody.state || '').toUpperCase();
+    if (status === 'COMPLETED' || status === 'OK') {
+      const done = await fetch(resultUrl, { headers: { Authorization: `Key ${key}` } });
+      const result = await done.json().catch(() => ({}));
+      if (!done.ok) {
+        const detail = extractErrorDetail(result) || `fal.ai result HTTP ${done.status}`;
+        const err = new Error(cleanMediaError(detail));
+        err.status = done.status || 502;
+        throw err;
+      }
+      return result;
+    }
+    if (status === 'FAILED' || status === 'ERROR') {
+      const detail = extractErrorDetail(statusBody) || `fal.ai job failed (${modelId})`;
+      const err = new Error(cleanMediaError(detail));
       err.status = 502;
       throw err;
     }
-    const started = Date.now();
-    let delay = 1200;
-    while (Date.now() - started < 120_000) {
-      const st = await fetch(statusUrl, { headers: { Authorization: `Key ${key}` } });
-      const statusBody = await st.json().catch(() => ({}));
-      const status = String(statusBody.status || statusBody.state || '').toUpperCase();
-      if (status === 'COMPLETED' || status === 'OK') {
-        const done = await fetch(resultUrl, { headers: { Authorization: `Key ${key}` } });
-        const result = await done.json().catch(() => ({}));
-        imageUrl =
-          result?.images?.[0]?.url ||
-          result?.data?.images?.[0]?.url ||
-          result?.output?.images?.[0]?.url;
-        break;
-      }
-      if (status === 'FAILED' || status === 'ERROR') {
-        const detail = extractErrorDetail(statusBody) || 'fal.ai Flux job failed';
-        const err = new Error(cleanMediaError(detail));
-        err.status = 502;
-        throw err;
-      }
-      await new Promise((r) => setTimeout(r, delay));
-      delay = Math.min(6000, Math.floor(delay * 1.25));
-    }
+    await new Promise((r) => setTimeout(r, delay));
+    delay = Math.min(8000, Math.floor(delay * 1.25));
   }
 
+  const err = new Error(`fal.ai ${modelId} timed out waiting for the queue.`);
+  err.status = 504;
+  throw err;
+}
+
+function pickFalImageUrl(result) {
+  return (
+    result?.images?.[0]?.url ||
+    result?.data?.images?.[0]?.url ||
+    result?.output?.images?.[0]?.url ||
+    result?.image?.url ||
+    null
+  );
+}
+
+function pickFalVideoUrl(result) {
+  return (
+    result?.video?.url ||
+    result?.data?.video?.url ||
+    result?.output?.video?.url ||
+    result?.video_url ||
+    null
+  );
+}
+
+async function generateFalImage({ prompt, model, size, negativePrompt }) {
+  const modelId = FAL_IMAGE_MODELS[model] || FAL_IMAGE_MODELS['flux-schnell'];
+  const { width, height } = parseSize(size, 1024, 1024);
+  const input = {
+    prompt,
+    num_images: 1,
+  };
+
+  if (/fast-sdxl/i.test(modelId)) {
+    input.image_size = `${Math.min(1024, width)}x${Math.min(1024, height)}`;
+  } else {
+    input.image_size = {
+      width: Math.min(1536, width),
+      height: Math.min(1536, height),
+    };
+  }
+  if (negativePrompt) input.negative_prompt = negativePrompt;
+
+  const result = await falQueue(modelId, input, { timeoutMs: 120_000 });
+  const imageUrl = pickFalImageUrl(result);
   if (!imageUrl) {
-    const err = new Error('fal.ai Flux finished without an image URL.');
+    const err = new Error('fal.ai finished without an image URL.');
     err.status = 502;
     throw err;
   }
@@ -769,7 +889,12 @@ async function generateFalFluxImage({ prompt, size, negativePrompt }) {
   };
 }
 
-/** Try Cloudflare models, then fal Flux, so image gen keeps working when NVIDIA safety-blocks. */
+/** @deprecated name kept for older call sites */
+async function generateFalFluxImage(opts) {
+  return generateFalImage({ ...opts, model: 'flux-schnell' });
+}
+
+/** Try Cloudflare models, then fal Flux (URL), so image gen keeps working past NSFW / 413. */
 async function generateImageWithFallbacks({ prompt, size, negativePrompt, preferredCfModel = 'flux-schnell' }) {
   const cfModels = [
     preferredCfModel,
@@ -781,20 +906,27 @@ async function generateImageWithFallbacks({ prompt, size, negativePrompt, prefer
   const errors = [];
   for (const model of cfModels) {
     try {
-      return await generateCloudflareImage({
+      const out = await generateCloudflareImage({
         prompt,
         model,
         size,
         negativePrompt,
       });
+      if (imageResultTooLarge(out)) {
+        errors.push(`Cloudflare ${model}: response would exceed Vercel 4.5MB (413)`);
+        continue;
+      }
+      return out;
     } catch (err) {
       errors.push(`Cloudflare ${model}: ${cleanMediaError(err.message)}`);
+      // Oversized CF payloads won't shrink by switching SDXL/FLUX variants — go to fal.
+      if (err.code === 'PAYLOAD_TOO_LARGE' || err.status === 413) break;
     }
   }
 
-  if ((process.env.FAL_KEY || process.env.FAL_API_KEY || '').trim()) {
+  if (falKey()) {
     try {
-      return await generateFalFluxImage({ prompt, size, negativePrompt });
+      return await generateFalImage({ prompt, size, negativePrompt, model: 'flux-schnell' });
     } catch (err) {
       errors.push(`fal Flux: ${cleanMediaError(err.message)}`);
     }
@@ -811,8 +943,7 @@ async function generateFalWanVideo({
   imageBase64,
   mimeType,
 }) {
-  const key = (process.env.FAL_KEY || process.env.FAL_API_KEY || '').trim();
-  if (!key) {
+  if (!falKey()) {
     const err = new Error(
       'Missing FAL_KEY in Vercel env. Hosted Wan 2.2 runs on fal.ai — get a key at https://fal.ai/dashboard/keys'
     );
@@ -837,91 +968,57 @@ async function generateFalWanVideo({
     throw err;
   }
 
-  // Queue submit
-  const submitUrl = `https://queue.fal.run/${modelId}`;
-  const submit = await fetch(submitUrl, {
-    method: 'POST',
-    headers: {
-      Authorization: `Key ${key}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(input),
-  });
-  const submitted = await submit.json().catch(() => ({}));
-  if (!submit.ok) {
-    const detail = extractErrorDetail(submitted) || `fal.ai HTTP ${submit.status}`;
-    const err = new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
-    err.status = submit.status || 502;
-    throw err;
-  }
-
-  // Sync-ish: some endpoints return the result immediately
-  let videoUrl =
-    submitted?.video?.url ||
-    submitted?.data?.video?.url ||
-    submitted?.output?.video?.url;
-  if (videoUrl) {
-    return {
-      kind: 'video',
-      provider: 'fal',
-      model: modelId,
-      videoUrl,
-      mime: 'video/mp4',
-    };
-  }
-
-  const requestId = submitted.request_id || submitted.requestId;
-  const statusUrl = submitted.status_url || (requestId ? `https://queue.fal.run/${modelId}/requests/${requestId}/status` : null);
-  const resultUrl = submitted.response_url || (requestId ? `https://queue.fal.run/${modelId}/requests/${requestId}` : null);
-  if (!statusUrl || !resultUrl) {
-    const err = new Error('fal.ai did not return a request id for Wan video.');
+  const result = await falQueue(modelId, input, { timeoutMs: 280_000 });
+  const videoUrl = pickFalVideoUrl(result);
+  if (!videoUrl) {
+    const err = new Error('fal.ai Wan finished but returned no video URL.');
     err.status = 502;
     throw err;
   }
+  return {
+    kind: 'video',
+    provider: 'fal',
+    model: modelId,
+    videoUrl,
+    mime: 'video/mp4',
+  };
+}
 
-  const started = Date.now();
-  let delay = 2000;
-  while (Date.now() - started < 280_000) {
-    const st = await fetch(statusUrl, {
-      headers: { Authorization: `Key ${key}` },
-    });
-    const statusBody = await st.json().catch(() => ({}));
-    const status = String(statusBody.status || statusBody.state || '').toUpperCase();
-    if (status === 'COMPLETED' || status === 'OK') {
-      const done = await fetch(resultUrl, {
-        headers: { Authorization: `Key ${key}` },
-      });
-      const result = await done.json().catch(() => ({}));
-      videoUrl =
-        result?.video?.url ||
-        result?.data?.video?.url ||
-        result?.output?.video?.url;
-      if (!videoUrl) {
-        const err = new Error('fal.ai Wan finished but returned no video URL.');
-        err.status = 502;
-        throw err;
-      }
-      return {
-        kind: 'video',
-        provider: 'fal',
-        model: modelId,
-        videoUrl,
-        mime: 'video/mp4',
-      };
-    }
-    if (status === 'FAILED' || status === 'ERROR') {
-      const detail = extractErrorDetail(statusBody) || 'fal.ai Wan job failed';
-      const err = new Error(detail);
-      err.status = 502;
-      throw err;
-    }
-    await new Promise((r) => setTimeout(r, delay));
-    delay = Math.min(8000, Math.floor(delay * 1.25));
+async function generateFalLtxVideo({ prompt, model, size, seconds }) {
+  if (!falKey()) {
+    const err = new Error(
+      'Missing FAL_KEY in Vercel env for LTX video — https://fal.ai/dashboard/keys'
+    );
+    err.status = 503;
+    throw err;
   }
 
-  const err = new Error('fal.ai Wan video timed out waiting for the queue.');
-  err.status = 504;
-  throw err;
+  const modelId = FAL_VIDEO_MODELS[model] || FAL_VIDEO_MODELS['ltx-video'];
+  const aspect = videoAspectFromSize(size);
+  const input = {
+    prompt,
+    aspect_ratio: aspect === '9:16' ? '9:16' : '16:9',
+  };
+  const secs = Number(seconds);
+  if (Number.isFinite(secs) && secs > 0) {
+    // LTX accepts num_frames on some builds; keep mild if present.
+    input.num_frames = Math.min(161, Math.max(25, Math.round(secs * 16)));
+  }
+
+  const result = await falQueue(modelId, input, { timeoutMs: 240_000 });
+  const videoUrl = pickFalVideoUrl(result);
+  if (!videoUrl) {
+    const err = new Error('fal.ai LTX finished without a video URL.');
+    err.status = 502;
+    throw err;
+  }
+  return {
+    kind: 'video',
+    provider: 'fal',
+    model: modelId,
+    videoUrl,
+    mime: 'video/mp4',
+  };
 }
 
 async function generateNvidiaWanVideo({
@@ -934,7 +1031,7 @@ async function generateNvidiaWanVideo({
   negativePrompt,
 }) {
   // Prefer fal hosted Wan when FAL_KEY is set (NVIDIA hosted genai 404s).
-  if ((process.env.FAL_KEY || process.env.FAL_API_KEY || '').trim()) {
+  if (falKey()) {
     return generateFalWanVideo({ prompt, model, imageBase64, mimeType });
   }
 
@@ -1033,10 +1130,50 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'prompt is required' });
   }
 
+  // Reject huge reference images early — Vercel returns opaque 413 otherwise.
+  if (imageBase64 && approxJsonBytes({ imageBase64 }) > SAFE_JSON_BYTES) {
+    return res.status(413).json({
+      error:
+        'Reference image is too large for Vercel (max ~3MB after encode). ' +
+        'Use a smaller JPEG (Media Studio compresses uploads automatically).',
+    });
+  }
+
+  const respondImage = async (out) => {
+    if (imageResultTooLarge(out)) {
+      if (falKey() && out.provider !== 'fal') {
+        console.warn('image payload too large for Vercel; falling back to fal URL');
+        const falOut = await generateFalImage({
+          prompt: prompt.trim(),
+          model: 'flux-schnell',
+          size,
+          negativePrompt,
+        });
+        falOut.fallbackFrom = out.provider;
+        falOut.fallbackNote =
+          `Primary ${out.provider} image was too large for Vercel (would 413); used fal · ${falOut.model}.`;
+        return res.status(200).json(falOut);
+      }
+      throw oversizeError('image');
+    }
+    return res.status(200).json(out);
+  };
+
   try {
     if (kind === 'image') {
-      // Prefer Cloudflare / fal first. NVIDIA’s hosted SDXL/FLUX safety filter
-      // false-flags normal prompts (album covers, etc.) and is not usable as primary.
+      // fal first-class: cheap Flux/SDXL with URL responses (no Vercel 413).
+      if (provider === 'fal') {
+        const out = await generateFalImage({
+          prompt: prompt.trim(),
+          model: model || 'flux-schnell',
+          size,
+          negativePrompt,
+        });
+        return respondImage(out);
+      }
+
+      // Prefer Cloudflare / fal. NVIDIA’s hosted SDXL/FLUX safety filter
+      // false-flags normal prompts and is not usable as primary.
       const preferredCf =
         provider === 'cloudflare'
           ? (model || 'flux-schnell')
@@ -1050,7 +1187,7 @@ export default async function handler(req, res) {
             size,
             negativePrompt,
           });
-          return res.status(200).json(out);
+          return respondImage(out);
         } catch (cfPrimaryErr) {
           console.warn('cloudflare primary failed:', cfPrimaryErr.message);
           const out = await generateImageWithFallbacks({
@@ -1061,7 +1198,7 @@ export default async function handler(req, res) {
           });
           out.fallbackFrom = 'cloudflare';
           out.fallbackNote = `Primary Cloudflare model failed; used ${out.provider} · ${out.model}.`;
-          return res.status(200).json(out);
+          return respondImage(out);
         }
       }
 
@@ -1078,7 +1215,7 @@ export default async function handler(req, res) {
           out.fallbackNote =
             `Used ${out.provider} · ${out.model} (NVIDIA safety filter is too strict for many normal prompts).`;
         }
-        return res.status(200).json(out);
+        return respondImage(out);
       } catch (fbErr) {
         if (provider !== 'nvidia') throw fbErr;
         console.warn('CF/fal image failed, last-resort NVIDIA:', fbErr.message);
@@ -1091,7 +1228,7 @@ export default async function handler(req, res) {
           });
           out.fallbackFrom = 'cloudflare';
           out.fallbackNote = `Cloudflare/fal failed; used NVIDIA · ${out.model}.`;
-          return res.status(200).json(out);
+          return respondImage(out);
         } catch (nvidiaErr) {
           const err = new Error(
             `${cleanMediaError(fbErr.message)} Also NVIDIA: ${cleanMediaError(nvidiaErr.message)}`
@@ -1103,7 +1240,44 @@ export default async function handler(req, res) {
     }
 
     if (kind === 'video') {
-      const isWan = provider === 'nvidia' || provider === 'fal' || /wan/i.test(String(model || ''));
+      const isLtx = provider === 'fal' && /ltx/i.test(String(model || ''));
+      const isWan =
+        !isLtx &&
+        (provider === 'nvidia' || provider === 'fal' || /wan/i.test(String(model || '')));
+
+      if (isLtx) {
+        try {
+          const out = await generateFalLtxVideo({
+            prompt: prompt.trim(),
+            model: model || 'ltx-video',
+            size: size || '832x480',
+            seconds,
+          });
+          return res.status(200).json(out);
+        } catch (ltxErr) {
+          console.warn('LTX video failed, trying Wan:', ltxErr.message);
+          if (falKey()) {
+            try {
+              const out = await generateFalWanVideo({
+                prompt: prompt.trim(),
+                model: imageBase64 ? 'wan2.2-i2v' : 'wan2.2-t2v',
+                imageBase64,
+                mimeType,
+              });
+              out.fallbackFrom = 'fal-ltx';
+              out.fallbackNote = ltxErr.message || 'LTX failed; used Wan 2.2 on fal.ai.';
+              return res.status(200).json(out);
+            } catch (wanErr) {
+              const err = new Error(
+                `${ltxErr.message} Also tried Wan: ${wanErr.message}`
+              );
+              err.status = ltxErr.status || wanErr.status || 502;
+              throw err;
+            }
+          }
+          throw ltxErr;
+        }
+      }
 
       if (isWan) {
         try {
@@ -1116,6 +1290,9 @@ export default async function handler(req, res) {
             mimeType,
             negativePrompt,
           });
+          if (out.videoUrl && String(out.videoUrl).startsWith('data:') && payloadTooLarge(out)) {
+            throw oversizeError('video');
+          }
           return res.status(200).json(out);
         } catch (wanErr) {
           // Fall through to Cloudflare Seedance if configured
@@ -1153,23 +1330,33 @@ export default async function handler(req, res) {
         });
         return res.status(200).json(out);
       } catch (cfErr) {
-        // Seedance often needs dashboard enablement — fall back to fal Wan if key exists.
-        if ((process.env.FAL_KEY || process.env.FAL_API_KEY || '').trim()) {
-          console.warn('Cloudflare Seedance failed, falling back to fal Wan:', cfErr.message);
+        // Seedance often needs dashboard enablement — fall back to fal Wan/LTX if key exists.
+        if (falKey()) {
+          console.warn('Cloudflare Seedance failed, falling back to fal video:', cfErr.message);
           try {
-            const out = await generateFalWanVideo({
-              prompt: prompt.trim(),
-              model: imageBase64 ? 'wan2.2-i2v' : 'wan2.2-t2v',
-              imageBase64,
-              mimeType,
-            });
+            let out;
+            try {
+              out = await generateFalLtxVideo({
+                prompt: prompt.trim(),
+                model: 'ltx-video',
+                size: size || '832x480',
+                seconds,
+              });
+            } catch {
+              out = await generateFalWanVideo({
+                prompt: prompt.trim(),
+                model: imageBase64 ? 'wan2.2-i2v' : 'wan2.2-t2v',
+                imageBase64,
+                mimeType,
+              });
+            }
             out.fallbackFrom = 'cloudflare';
             out.fallbackNote =
-              cfErr.message || 'Cloudflare Seedance unavailable; used Wan 2.2 on fal.ai.';
+              cfErr.message || 'Cloudflare Seedance unavailable; used fal.ai video.';
             return res.status(200).json(out);
           } catch (falErr) {
             const err = new Error(
-              `${cfErr.message} Also tried fal Wan: ${falErr.message}`
+              `${cfErr.message} Also tried fal video: ${falErr.message}`
             );
             err.status = cfErr.status || falErr.status || 502;
             throw err;
@@ -1182,8 +1369,10 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: `Unknown kind: ${kind}` });
   } catch (err) {
     console.error('media-generate error:', err);
-    return res.status(err.status || 502).json({
+    const status = err.status || 502;
+    return res.status(status).json({
       error: cleanMediaError(err.message) || 'Media generation failed',
+      code: err.code || undefined,
     });
   }
 }

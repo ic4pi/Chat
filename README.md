@@ -22,9 +22,10 @@ In **Vercel → Project → Settings → Environment Variables** add:
 | `OPENROUTER_API_KEY` | from https://openrouter.ai/keys | OpenRouter models |
 | `VENICE_API_KEY` | from https://venice.ai/settings/api | Venice models + live catalog |
 | `NVIDIA_API_KEY` | from https://build.nvidia.com (model page → Get API Key) | Chat + Qwen Image + Wan 2.2 |
-| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare dashboard → Workers AI | Media Studio image gen (FLUX / SDXL) |
-| `CLOUDFLARE_API_TOKEN` | API token with Workers AI permission | Media Studio image gen |
-| `NVIDIA_MEDIA_BASE_URL` | *(optional)* self-hosted NIM base URL | Override for Wan/Qwen OpenAI-compatible NIM |
+| `FAL_KEY` | https://fal.ai/dashboard/keys | Media Studio images (Flux) + video (LTX / Wan) — preferred |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare dashboard → Workers AI | Optional Media Studio images (FLUX / SDXL) |
+| `CLOUDFLARE_API_TOKEN` | API token with Workers AI permission | Optional Media Studio images |
+| `NVIDIA_MEDIA_BASE_URL` | *(optional)* self-hosted NIM base URL | Override for Wan OpenAI-compatible NIM |
 | `ADMIN_USERNAME` | anything you want | Gate for `/admin` |
 | `ADMIN_PASSWORD` | anything you want | Gate for `/admin` |
 | `SITE_URL` | *(optional)* your deployment URL | Sent as OpenRouter's `HTTP-Referer` |
@@ -35,13 +36,15 @@ Add these in **Vercel → Project → Settings → Environment Variables** (Prod
 
 | Env var | Used for |
 |---------|----------|
-| `CLOUDFLARE_ACCOUNT_ID` | Image · FLUX/SDXL (optional video · Seedance if enabled on the account) |
+| `FAL_KEY` | **Preferred** · Image (Flux Schnell/Dev, Fast SDXL) + Video (LTX, Wan 2.2) — returns URLs (no Vercel 413) |
+| `CLOUDFLARE_ACCOUNT_ID` | Optional image · FLUX/SDXL (auto-falls back to fal if response would exceed 4.5MB) |
 | `CLOUDFLARE_API_TOKEN` | Workers AI permission |
-| `FAL_KEY` | **Video · Wan 2.2** via fal.ai (NVIDIA free hosted API 404s for Wan) |
-| `NVIDIA_API_KEY` | Optional image · hosted FLUX/SDXL |
+| `NVIDIA_API_KEY` | Optional last-resort image · hosted FLUX/SDXL |
 | `NVIDIA_MEDIA_BASE_URL` | Optional self-hosted Wan NIM only |
 
-Open **`/media`** (Media link in the chat topbar). Missing keys return a clear 503 for that provider only.
+Open **`/media`** (Media link in the chat topbar). Default picks are fal Flux (image) and fal LTX (video). Missing keys return a clear 503 for that provider only.
+
+**Why fal first:** Vercel Functions hard-cap request/response bodies at **4.5MB**. Returning Cloudflare images as base64 JSON often hits **HTTP 413**. fal returns HTTPS URLs, so the API response stays tiny.
 
 If any of `OPENROUTER_API_KEY` / `VENICE_API_KEY` is missing, the app still runs — the missing provider just returns a clear error. If `ADMIN_USERNAME` or `ADMIN_PASSWORD` is missing, `/admin` refuses to serve — never falls open.
 
