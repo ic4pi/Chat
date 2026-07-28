@@ -38,13 +38,15 @@ Add these in **Vercel → Project → Settings → Environment Variables** (Prod
 |---------|----------|
 | `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN` | Image · FLUX/SDXL (primary) |
 | `VENICE_API_KEY` | Image variety · SD3.5 / Qwen + **Edit** (uploaded image). Same key as chat. Supports `negative_prompt`. |
-| `FAL_KEY` | Video · Wan 2.2 only (already used) |
+| `FAL_KEY` | Video · Wan 2.2 hosted fallback |
+| `RUNPOD_API_KEY` + `RUNPOD_ENDPOINT_ID` | **Cheap self-host video** · Wan 2.2 TI2V 5B via RunPod ComfyUI (see `docs/RUNPOD_WAN22.md`) |
+| `COMFYUI_BASE_URL` | Optional direct ComfyUI Pod URL instead of serverless |
 | `NVIDIA_API_KEY` | Optional last-resort image · hosted FLUX/SDXL |
 | `NVIDIA_MEDIA_BASE_URL` | Optional self-hosted Wan NIM only |
 
-Open **`/media`**. Default image model is Cloudflare FLUX. For uploaded images use **Venice · Edit**.
+Open **`/media`**. Default image model is Cloudflare FLUX. For uploaded images use **Venice · Edit**. For cheap Wan video use **RunPod · Wan 2.2 5B** after following `docs/RUNPOD_WAN22.md`.
 
-**HTTP 413 fix:** Vercel caps bodies at 4.5MB. Reference uploads are no longer attached to text-to-image requests (they were ignored anyway and blew the limit). Oversized Cloudflare responses fall back to Venice webp.
+**HTTP 413 fix:** Vercel caps bodies at 4.5MB. Reference uploads are no longer attached to text-to-image requests (they were ignored anyway and blew the limit). Oversized Cloudflare responses fall back to Venice webp. For long RunPod videos, enable S3/R2 on the worker so results are URLs.
 
 If any of `OPENROUTER_API_KEY` / `VENICE_API_KEY` is missing, the app still runs — the missing provider just returns a clear error. If `ADMIN_USERNAME` or `ADMIN_PASSWORD` is missing, `/admin` refuses to serve — never falls open.
 
@@ -114,8 +116,11 @@ vercel dev
 - `lib/config.js` — persona schema, load/save from KV, built-in defaults.
 - `lib/auth.js` — shared Basic-auth check.
 - `public/index.html`, `public/app.js`, `public/styles.css` — main chat UI.
-- `public/media/` — Media Studio UI (Cloudflare Workers AI / NVIDIA Qwen Image / Wan 2.2).
+- `public/media/` — Media Studio UI (Cloudflare / Venice / RunPod Wan / fal).
 - `api/media-generate.js` — image & video generation proxy.
+- `lib/comfy/` — Wan 2.2 ComfyUI workflow builder + RunPod client.
+- `docs/RUNPOD_WAN22.md` — RunPod ComfyUI setup (5B, cheap path).
+- `scripts/runpod/` — model download + endpoint smoke test.
 - `lib/animate/` — frame-chain animation workflow (NVIDIA/Venice providers, interpolation, ffmpeg stitch). See `lib/animate/README.md`.
 - `scripts/animate-sequence.mjs` — CLI: `npm run animate -- --prompt "…"`.
 - `api/animate-sequence.js` — optional HTTP entry for the same workflow.
