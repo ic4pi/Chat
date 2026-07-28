@@ -373,8 +373,9 @@ async function generateCloudflareImage({ prompt, model, size, negativePrompt }) 
   } else {
     body.width = width;
     body.height = height;
-    if (negativePrompt) body.negative_prompt = negativePrompt;
   }
+  // Always forward negative when provided (SDXL uses it; Flux may ignore).
+  if (negativePrompt) body.negative_prompt = negativePrompt;
 
   const upstream = await fetch(url, {
     method: 'POST',
