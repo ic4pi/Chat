@@ -17,7 +17,7 @@
  */
 
 import { loadConfig } from '../lib/config.js';
-import { resolveProvider } from '../lib/providers.js';
+import { resolveProvider, withProviderChatExtras } from '../lib/providers.js';
 
 const UPSTREAM_TIMEOUT_MS = 90_000;
 const MAX_PERSONAS = 12;
@@ -91,7 +91,7 @@ function resolveForPersona(personaModels, personaId, defaultProvider, defaultMod
   return { resolved, model, providerId };
 }
 
-async function callCompletion(resolved, model, messages, { maxTokens, signal }) {
+async function callCompletion(resolved, model, messages, { maxTokens, signal, providerId }) {
   const upstream = await fetch(resolved.url, {
     method: 'POST',
     headers: {
@@ -99,13 +99,18 @@ async function callCompletion(resolved, model, messages, { maxTokens, signal }) 
       Authorization: `Bearer ${resolved.apiKey}`,
       ...resolved.extraHeaders(),
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      stream: false,
-      max_tokens: maxTokens,
-      temperature: 0.75,
-    }),
+    body: JSON.stringify(
+      withProviderChatExtras(
+        {
+          model,
+          messages,
+          stream: false,
+          max_tokens: maxTokens,
+          temperature: 0.75,
+        },
+        providerId || resolved.id,
+      ),
+    ),
     signal,
   });
 
@@ -156,7 +161,7 @@ async function refreshSummary(resolved, model, {
         { role: 'system', content: 'You write terse discussion summaries for group chat context.' },
         { role: 'user', content: prompt },
       ],
-      { maxTokens: 220, signal },
+      { maxTokens: 220, signal, providerId: resolved.id },
     );
   } catch {
     // Fallback: keep prior + truncate recent if summarizer fails
@@ -321,7 +326,11 @@ export default async function handler(req, res) {
             { role: 'system', content: personaPrompt },
             { role: 'user', content: userPayload },
           ],
-          { maxTokens: MAX_TOKENS_PER_TURN, signal: controller.signal },
+          {
+            maxTokens: MAX_TOKENS_PER_TURN,
+            signal: controller.signal,
+            providerId: turnProviderId || turnResolved.id,
+          },
         );
       } catch (err) {
         const aborted = err?.name === 'AbortError' || controller.signal.aborted;

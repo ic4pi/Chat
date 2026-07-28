@@ -7,7 +7,7 @@
  */
 
 import { estimateTokens } from '../lib/context-filters.js';
-import { resolveProvider } from '../lib/providers.js';
+import { resolveProvider, withProviderChatExtras } from '../lib/providers.js';
 
 /** Stay under Venice/Dolphin ~131k with room for the completion. */
 const MAX_INPUT_TOKENS = 100_000;
@@ -105,11 +105,16 @@ export default async function handler(req, res) {
         Authorization: `Bearer ${resolved.apiKey}`,
         ...resolved.extraHeaders(),
       },
-      body: JSON.stringify({
-        model: model || 'dolphin-3.0-mistral-24b',
-        messages: messagesWithSystem,
-        stream: false,
-      }),
+      body: JSON.stringify(
+        withProviderChatExtras(
+          {
+            model: model || 'dolphin-3.0-mistral-24b',
+            messages: messagesWithSystem,
+            stream: false,
+          },
+          providerId || resolved.id || 'venice',
+        ),
+      ),
       signal: controller.signal,
     });
 

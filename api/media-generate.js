@@ -44,7 +44,7 @@ const CLOUDFLARE_VIDEO_MODELS = {
   'bytedance/seedance-2.0': 'bytedance/seedance-2.0',
 };
 
-/** Hosted on ai.api.nvidia.com/v1/genai (401 without key). Qwen/Wan are NIM-download only → 404. */
+/** Hosted on ai.api.nvidia.com/v1/genai (401 without key). Qwen needs a self-hosted NIM base URL. */
 const NVIDIA_IMAGE_MODELS = {
   'flux-schnell': 'black-forest-labs/flux.1-schnell',
   'black-forest-labs/flux.1-schnell': 'black-forest-labs/flux.1-schnell',
@@ -617,8 +617,9 @@ async function generateNvidiaImage({ prompt, model, size, negativePrompt }) {
 
   if (!hosted && !selfHost) {
     const err = new Error(
-      `${modelId} is not on NVIDIA’s free hosted API. ` +
-        `Use Cloudflare · FLUX / SDXL, or NVIDIA · FLUX.1 Schnell / SDXL.`
+      `${modelId} is not on NVIDIA’s free hosted genai catalog. ` +
+        `Set NVIDIA_NIM_BASE_URL (or WAN_NIM_BASE_URL) to your self-hosted NIM, ` +
+        `or pick NVIDIA · FLUX.1 Schnell / SDXL which are hosted.`
     );
     err.status = 404;
     err.code = 'NVIDIA_MODEL_NOT_HOSTED';
@@ -670,8 +671,8 @@ async function generateNvidiaImage({ prompt, model, size, negativePrompt }) {
   const msg =
     explainNvidiaAuth(result.status, cleaned, modelId) ||
     (isNvidiaSafetyBlock(cleaned)
-      ? `NVIDIA safety filter blocked this prompt (${cleaned}). Trying Cloudflare next.`
-      : `${cleaned}. Prefer Cloudflare Workers AI for images.`);
+      ? `NVIDIA returned a safety/content error (${cleaned}).`
+      : cleaned);
   const err = new Error(msg);
   err.status = result.status || 502;
   err.code = isNvidiaSafetyBlock(cleaned) ? 'NVIDIA_NSFW' : undefined;
@@ -769,7 +770,7 @@ async function generateFalFluxImage({ prompt, size, negativePrompt }) {
   };
 }
 
-/** Try Cloudflare models, then fal Flux, so image gen keeps working when NVIDIA safety-blocks. */
+/** Optional Cloudflare/fal chain — only used when those providers are selected. */
 async function generateImageWithFallbacks({ prompt, size, negativePrompt, preferredCfModel = 'flux-schnell' }) {
   const cfModels = [
     preferredCfModel,
@@ -1035,70 +1036,47 @@ export default async function handler(req, res) {
 
   try {
     if (kind === 'image') {
-      // Prefer Cloudflare / fal first. NVIDIA’s hosted SDXL/FLUX safety filter
-      // false-flags normal prompts (album covers, etc.) and is not usable as primary.
-      const preferredCf =
-        provider === 'cloudflare'
-          ? (model || 'flux-schnell')
-          : (/sdxl/i.test(String(model || '')) ? 'sdxl-lightning' : 'flux-schnell');
-
-      if (provider === 'cloudflare') {
-        try {
-          const out = await generateCloudflareImage({
-            prompt: prompt.trim(),
-            model: preferredCf,
-            size,
-            negativePrompt,
-          });
-          return res.status(200).json(out);
-        } catch (cfPrimaryErr) {
-          console.warn('cloudflare primary failed:', cfPrimaryErr.message);
-          const out = await generateImageWithFallbacks({
-            prompt: prompt.trim(),
-            size,
-            negativePrompt,
-            preferredCfModel: preferredCf,
-          });
-          out.fallbackFrom = 'cloudflare';
-          out.fallbackNote = `Primary Cloudflare model failed; used ${out.provider} · ${out.model}.`;
-          return res.status(200).json(out);
-        }
+      // Honor the user's selected provider. Never silently skip NVIDIA or swap models.
+      if (provider === 'nvidia') {
+        const out = await generateNvidiaImage({
+          prompt: prompt.trim(),
+          model,
+          size,
+          negativePrompt,
+        });
+        return res.status(200).json(out);
       }
 
-      // nvidia (or anything else): Cloudflare/fal first, NVIDIA last resort only.
+      if (provider === 'fal') {
+        const out = await generateFalFluxImage({
+          prompt: prompt.trim(),
+          size,
+          negativePrompt,
+        });
+        return res.status(200).json(out);
+      }
+
+      // Default / cloudflare
+      const preferredCf = model || 'flux-schnell';
       try {
+        const out = await generateCloudflareImage({
+          prompt: prompt.trim(),
+          model: preferredCf,
+          size,
+          negativePrompt,
+        });
+        return res.status(200).json(out);
+      } catch (cfPrimaryErr) {
+        console.warn('cloudflare primary failed:', cfPrimaryErr.message);
         const out = await generateImageWithFallbacks({
           prompt: prompt.trim(),
           size,
           negativePrompt,
           preferredCfModel: preferredCf,
         });
-        if (provider === 'nvidia') {
-          out.fallbackFrom = 'nvidia';
-          out.fallbackNote =
-            `Used ${out.provider} · ${out.model} (NVIDIA safety filter is too strict for many normal prompts).`;
-        }
+        out.fallbackFrom = 'cloudflare';
+        out.fallbackNote = `Primary Cloudflare model failed; used ${out.provider} · ${out.model}.`;
         return res.status(200).json(out);
-      } catch (fbErr) {
-        if (provider !== 'nvidia') throw fbErr;
-        console.warn('CF/fal image failed, last-resort NVIDIA:', fbErr.message);
-        try {
-          const out = await generateNvidiaImage({
-            prompt: prompt.trim(),
-            model,
-            size,
-            negativePrompt,
-          });
-          out.fallbackFrom = 'cloudflare';
-          out.fallbackNote = `Cloudflare/fal failed; used NVIDIA · ${out.model}.`;
-          return res.status(200).json(out);
-        } catch (nvidiaErr) {
-          const err = new Error(
-            `${cleanMediaError(fbErr.message)} Also NVIDIA: ${cleanMediaError(nvidiaErr.message)}`
-          );
-          err.status = fbErr.status || nvidiaErr.status || 502;
-          throw err;
-        }
       }
     }
 

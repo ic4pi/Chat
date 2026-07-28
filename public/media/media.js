@@ -2,11 +2,16 @@ const IMAGE_MODELS = [
   { value: 'cloudflare:flux-schnell', label: 'Cloudflare · FLUX.1 Schnell', kind: 'image', provider: 'cloudflare', model: 'flux-schnell' },
   { value: 'cloudflare:sdxl-lightning', label: 'Cloudflare · SDXL Lightning', kind: 'image', provider: 'cloudflare', model: 'sdxl-lightning' },
   { value: 'cloudflare:sdxl', label: 'Cloudflare · SDXL Base', kind: 'image', provider: 'cloudflare', model: 'sdxl' },
+  { value: 'nvidia:flux-schnell', label: 'NVIDIA · FLUX.1 Schnell', kind: 'image', provider: 'nvidia', model: 'flux-schnell' },
+  { value: 'nvidia:sdxl', label: 'NVIDIA · SDXL', kind: 'image', provider: 'nvidia', model: 'sdxl' },
+  { value: 'nvidia:qwen-image', label: 'NVIDIA · Qwen Image', kind: 'image', provider: 'nvidia', model: 'qwen-image' },
 ];
 
 const VIDEO_MODELS = [
   { value: 'fal:wan2.2-t2v', label: 'Wan 2.2 · Text → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-t2v' },
   { value: 'fal:wan2.2-i2v', label: 'Wan 2.2 · Image → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-i2v' },
+  { value: 'nvidia:wan2.2-t2v', label: 'NVIDIA · Wan 2.2 · Text → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-t2v' },
+  { value: 'nvidia:wan2.2-i2v', label: 'NVIDIA · Wan 2.2 · Image → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-i2v' },
   { value: 'cloudflare:seedance-mini', label: 'Cloudflare · Seedance 2.0 Mini', kind: 'video', provider: 'cloudflare', model: 'seedance-mini' },
   { value: 'cloudflare:seedance-fast', label: 'Cloudflare · Seedance 2.0 Fast', kind: 'video', provider: 'cloudflare', model: 'seedance-fast' },
 ];
@@ -75,11 +80,9 @@ function selectedSpec() {
 
 function syncFields() {
   const spec = selectedSpec();
-  const supportsNegative =
-    kind === 'image' &&
-    (spec?.provider === 'nvidia' || /sdxl/i.test(spec?.model || ''));
+  // Always show negative prompt for images — never hide controls based on provider.
+  els.negativeWrap.style.display = kind === 'image' ? '' : 'none';
   const i2v = kind === 'video' && (/i2v/i.test(spec?.model || '') || /wan2\.2-i2v/i.test(spec?.value || ''));
-  els.negativeWrap.style.display = supportsNegative ? '' : 'none';
   const opt = els.refWrap.querySelector('.opt');
   if (opt) opt.textContent = i2v ? '(required for image→video)' : '(optional · image→video)';
 }
@@ -184,7 +187,7 @@ els.generate.addEventListener('click', async () => {
       size: els.size.value,
     };
     const neg = (els.negative.value || '').trim();
-    if (neg && (spec.provider === 'nvidia' || /sdxl/i.test(spec.model))) {
+    if (neg && kind === 'image') {
       body.negativePrompt = neg;
     }
     if (refData) {

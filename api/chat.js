@@ -2,12 +2,12 @@
 // Groq / NVIDIA. Supports JSON (stream:false) and SSE (stream:true).
 //
 // System-prompt handling: the browser sends a personaId. The server looks up
-// that persona's system prompt in KV and prepends the master prompt.
+// that persona's system prompt in KV and prepends the master prompt — and
+// nothing else. Uncensored models get no channel/role/safety rules injected.
 
 import { loadConfig } from '../lib/config.js';
-import { resolveProvider } from '../lib/providers.js';
+import { resolveProvider, withProviderChatExtras } from '../lib/providers.js';
 
-const FALLBACK_SYSTEM_PROMPT = 'You are a helpful, direct assistant.';
 const UPSTREAM_TIMEOUT_MS = 110_000;
 /**
  * Room for a full normal reply (lyrics, essays, short plans) in one message.
@@ -15,53 +15,16 @@ const UPSTREAM_TIMEOUT_MS = 110_000;
  */
 const CHUNK_MAX_TOKENS = 8192;
 
-/** Normal chat is conversation/planning — never a code dump. Coding happens in Workspace. */
-const NO_CODE_CHAT_RULES = `
-CHANNEL RULES (this is normal chat, not the coding workspace):
-- Do NOT write code, scripts, configs, SQL, HTML, or fenced code blocks.
-- Do NOT invent File: blocks or paste whole files.
-- Answer in plain language: steps, tradeoffs, architecture, checklists.
-- If the user needs real code or repo edits, tell them to tap Workspace (files + terminal sandbox) and continue there with this conversation.
-`.trim();
-
-/**
- * Prefer one complete message. Chunking is a last resort for huge asks that
- * would otherwise hit the ~110s proxy timeout — the browser auto-continues on ⟦MORE⟧.
- */
-const CHUNK_CONTINUE_RULES = `
-REPLY LENGTH (important):
-- Default: answer the full ask in ONE message. Song lyrics, poems, short lists, Q&A, plans, and normal chat must not be split.
-- Do NOT end early with ⟦MORE⟧ just to be tidy. Finish the whole reply when it fits.
-- Only use ⟦MORE⟧ for genuinely huge multi-part work (e.g. a long report with many large sections) that you cannot finish in one pass without risking a timeout.
-- If you must split: deliver a substantial portion (not 2–3 tiny scraps), then end with exactly: ⟦MORE⟧
-- When the full ask is finished, you may end with ⟦DONE⟧ (optional). Never ask the user whether to continue — the app continues automatically on ⟦MORE⟧.
-`.trim();
-
-const ROLE_RULES = {
-  plan: `
-ROLE: PLAN
-- Focus on goals, approach, risks, and a short ordered plan.
-- No code. No pseudo-code that is basically code.
-- Prefer bullets and decisions the user can approve before building.
-`.trim(),
-  review: `
-ROLE: REVIEW
-- Critique ideas and approaches in prose.
-- No replacement code dumps. Point out issues and what to change conceptually.
-`.trim(),
-  write: `
-ROLE: WRITE (chat mode)
-- Still no code in this channel. Explain what to build and how.
-- For actual implementation, direct them to Workspace.
-`.trim(),
-};
-
 function sseWrite(res, obj) {
   res.write(`data: ${JSON.stringify(obj)}\n\n`);
 }
 
-async function resolveSystemPrompt(personaId, role) {
-  let effectiveSystemPrompt = FALLBACK_SYSTEM_PROMPT;
+/**
+ * Only the admin master prompt + selected persona. Nothing else is injected —
+ * no channel rules, role rules, or soft safety hedges on top of uncensored models.
+ * Returns '' when neither is set so the request can omit a system message entirely.
+ */
+async function resolveSystemPrompt(personaId) {
   try {
     const config = await loadConfig();
     const persona =
@@ -71,14 +34,11 @@ async function resolveSystemPrompt(personaId, role) {
     const parts = [config.masterPrompt, persona?.systemPrompt].filter(
       (s) => typeof s === 'string' && s.trim().length > 0,
     );
-    if (parts.length > 0) effectiveSystemPrompt = parts.join('\n\n');
+    return parts.join('\n\n');
   } catch (err) {
     console.error('loadConfig failed:', err);
+    return '';
   }
-
-  const roleKey = typeof role === 'string' ? role.toLowerCase() : 'write';
-  const roleExtra = ROLE_RULES[roleKey] || ROLE_RULES.write;
-  return `${effectiveSystemPrompt}\n\n${NO_CODE_CHAT_RULES}\n\n${CHUNK_CONTINUE_RULES}\n\n${roleExtra}`;
 }
 
 function extractDelta(chunk) {
@@ -97,7 +57,7 @@ function extractDelta(chunk) {
   return { text, reasoning };
 }
 
-async function handleStream(req, res, resolved, model, messagesWithSystem) {
+async function handleStream(req, res, resolved, model, messagesWithSystem, providerId) {
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
@@ -140,12 +100,17 @@ async function handleStream(req, res, resolved, model, messagesWithSystem) {
         Accept: 'text/event-stream',
         ...resolved.extraHeaders(),
       },
-      body: JSON.stringify({
-        model,
-        messages: messagesWithSystem,
-        stream: true,
-        max_tokens: CHUNK_MAX_TOKENS,
-      }),
+      body: JSON.stringify(
+        withProviderChatExtras(
+          {
+            model,
+            messages: messagesWithSystem,
+            stream: true,
+            max_tokens: CHUNK_MAX_TOKENS,
+          },
+          providerId || resolved.id,
+        ),
+      ),
       signal: controller.signal,
     });
 
@@ -228,7 +193,7 @@ async function handleStream(req, res, resolved, model, messagesWithSystem) {
   }
 }
 
-async function handleJson(req, res, resolved, model, messagesWithSystem) {
+async function handleJson(req, res, resolved, model, messagesWithSystem, providerId) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
@@ -240,12 +205,17 @@ async function handleJson(req, res, resolved, model, messagesWithSystem) {
         Authorization: `Bearer ${resolved.apiKey}`,
         ...resolved.extraHeaders(),
       },
-      body: JSON.stringify({
-        model,
-        messages: messagesWithSystem,
-        stream: false,
-        max_tokens: CHUNK_MAX_TOKENS,
-      }),
+      body: JSON.stringify(
+        withProviderChatExtras(
+          {
+            model,
+            messages: messagesWithSystem,
+            stream: false,
+            max_tokens: CHUNK_MAX_TOKENS,
+          },
+          providerId || resolved.id,
+        ),
+      ),
       signal: controller.signal,
     });
 
@@ -313,7 +283,6 @@ export default async function handler(req, res) {
     model,
     provider: providerId,
     personaId,
-    role,
     apiKey: clientKey,
     stream: wantStream,
   } = req.body || {};
@@ -335,14 +304,17 @@ export default async function handler(req, res) {
     });
   }
 
-  const effectiveSystemPrompt = await resolveSystemPrompt(personaId, role);
-  const messagesWithSystem = [
-    { role: 'system', content: effectiveSystemPrompt },
-    ...messages.map((m) => ({ role: m.role, content: m.content })),
-  ];
+  const effectiveSystemPrompt = await resolveSystemPrompt(personaId);
+  const messagesWithSystem = effectiveSystemPrompt
+    ? [
+        { role: 'system', content: effectiveSystemPrompt },
+        ...messages.map((m) => ({ role: m.role, content: m.content })),
+      ]
+    : messages.map((m) => ({ role: m.role, content: m.content }));
 
+  const pid = providerId || resolved.id || 'openrouter';
   if (wantStream) {
-    return handleStream(req, res, resolved, model, messagesWithSystem);
+    return handleStream(req, res, resolved, model, messagesWithSystem, pid);
   }
-  return handleJson(req, res, resolved, model, messagesWithSystem);
+  return handleJson(req, res, resolved, model, messagesWithSystem, pid);
 }
