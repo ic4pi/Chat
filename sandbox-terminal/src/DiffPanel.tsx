@@ -141,7 +141,20 @@ export function DiffPanel({
   onApply, onDismiss, onDismissAll, onPush, onCopyGitCommands,
 }: Props) {
   const [showPush, setShowPush] = useState(false);
-  const [token, setToken] = useState(() => sessionStorage.getItem('gh_push_token') || '');
+  const [token, setToken] = useState(() => {
+    try {
+      // Prefer localStorage so the token survives workspace reopen / new tabs.
+      const persisted = localStorage.getItem('gh_push_token');
+      if (persisted) return persisted;
+      const sessionOnly = sessionStorage.getItem('gh_push_token');
+      if (sessionOnly) {
+        localStorage.setItem('gh_push_token', sessionOnly);
+        sessionStorage.removeItem('gh_push_token');
+        return sessionOnly;
+      }
+    } catch { /* private mode / blocked storage */ }
+    return '';
+  });
   const [commitMsg, setCommitMsg] = useState('Apply agent changes from sandbox');
 
   if (changes.length === 0) return null;
@@ -213,12 +226,21 @@ export function DiffPanel({
             <div style={{ fontSize: 11, color: '#ccc', marginBottom: 8, lineHeight: 1.45 }}>
               Paste a GitHub token with <code style={{ color: '#d4ff3f' }}>repo</code> access
               (github.com → Settings → Developer settings → Personal access tokens).
-              Used once for this push — kept only in this browser tab.
+              Saved in this browser so you do not have to re-enter it when you reopen the workspace.
+              Never sent to our servers except for the push request.
             </div>
             <input
               type="password"
               value={token}
-              onChange={e => setToken(e.target.value)}
+              onChange={e => {
+                const next = e.target.value;
+                setToken(next);
+                try {
+                  const trimmed = next.trim();
+                  if (trimmed) localStorage.setItem('gh_push_token', trimmed);
+                  else localStorage.removeItem('gh_push_token');
+                } catch { /* ignore */ }
+              }}
               placeholder="ghp_… or github_pat_…"
               autoComplete="off"
               style={{ width: '100%', boxSizing: 'border-box', marginBottom: 6,
@@ -233,19 +255,39 @@ export function DiffPanel({
                 background: '#111', color: '#e8e8e8', border: '1px solid #333',
                 borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 12 }}
             />
+            <div style={{ display: 'flex', gap: 8, marginBottom: pushError || pushOk ? 8 : 0 }}>
             <button type="button"
               disabled={pushing || !token.trim()}
               onClick={() => {
-                sessionStorage.setItem('gh_push_token', token.trim());
+                try {
+                  localStorage.setItem('gh_push_token', token.trim());
+                  sessionStorage.removeItem('gh_push_token');
+                } catch { /* ignore */ }
                 onPush(token.trim(), commitMsg.trim() || 'Apply agent changes from sandbox');
               }}
-              style={{ background: token.trim() && !pushing ? '#d4ff3f' : '#1a1a1a',
+              style={{ flex: 1, background: token.trim() && !pushing ? '#d4ff3f' : '#1a1a1a',
                 color: token.trim() && !pushing ? '#0a0a0a' : '#555',
                 border: 'none', borderRadius: 4, padding: '7px 14px',
                 cursor: token.trim() && !pushing ? 'pointer' : 'default',
-                fontFamily: 'inherit', fontSize: 12, fontWeight: 700, width: '100%' }}>
+                fontFamily: 'inherit', fontSize: 12, fontWeight: 700 }}>
               {pushing ? 'Pushing to GitHub…' : 'Commit & push'}
             </button>
+            {token.trim() && (
+              <button type="button"
+                onClick={() => {
+                  setToken('');
+                  try {
+                    localStorage.removeItem('gh_push_token');
+                    sessionStorage.removeItem('gh_push_token');
+                  } catch { /* ignore */ }
+                }}
+                style={{ background: 'transparent', color: '#888',
+                  border: '1px solid #333', borderRadius: 4, padding: '7px 10px',
+                  cursor: 'pointer', fontFamily: 'inherit', fontSize: 11 }}>
+                Clear token
+              </button>
+            )}
+            </div>
             {pushError && (
               <div style={{ marginTop: 8, fontSize: 11, color: '#ff6a6a', lineHeight: 1.4 }}>
                 {pushError}

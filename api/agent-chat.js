@@ -8,8 +8,6 @@
 
 import { estimateTokens } from '../lib/context-filters.js';
 import { resolveProvider } from '../lib/providers.js';
-import { get } from '../lib/kv.js';
-import { KV_ENABLED } from '../lib/kv.js';
 
 /** Stay under Venice/Dolphin ~131k with room for the completion. */
 const MAX_INPUT_TOKENS = 100_000;
@@ -48,18 +46,14 @@ function budgetMessages(systemPrompt, messages) {
 
   const hist = messages.map((m) => ({
     role: m.role,
+    // Preserve multimodal arrays for vision models; budget uses string length.
     content: m.content,
   }));
-  
   let histTokens = hist.reduce((n, m) => n + estimateTokens(contentToString(m.content)), 0);
-  
-  let messageIndex = 0;
   while (hist.length > 1 && histTokens > MAX_HISTORY_TOKENS) {
     const removed = hist.shift();
     histTokens -= estimateTokens(contentToString(removed.content));
-    messageIndex++;
   }
-
   for (const m of hist) {
     if (typeof m.content === 'string' && estimateTokens(m.content) > 8_000) {
       m.content = truncateToTokens(m.content, 8_000);
@@ -88,16 +82,8 @@ export default async function handler(req, res) {
   }
 
   let resolved;
-  let weatherKey = clientKey || req.headers['x-provider-key'];
-
   try {
-    // Try to get a persisted key if available from KV
-    if (KV_ENABLED && providerId) {
-      const staffKey = await get(`auth:hub:${providerId}`);
-      if (staffKey) weatherKey = staffKey;
-    }
-    
-    resolved = resolveProvider(providerId || 'venice', weatherKey);
+    resolved = resolveProvider(providerId || 'venice', clientKey || req.headers['x-provider-key']);
   } catch (err) {
     return res.status(500).json({ error: err.message || 'Provider not configured' });
   }
@@ -127,20 +113,16 @@ export default async function handler(req, res) {
       signal: controller.signal,
     });
 
-    const rawResponse = await upstream.text();
+    const rawText = await upstream.text();
     let data;
-    try {
-      data = JSON.parse(rawResponse);
-    } catch {
-      data = { error: { message: rawResponse } };
-    }
+    try { data = JSON.parse(rawText); } catch { data = { error: { message: rawText } }; }
 
     if (!upstream.ok) {
-      const error = data?.error?.message || data?.error || `${resolved.label} error ${upstream.status}`;
+      const detail = data?.error?.message || data?.error || `Upstream HTTP ${upstream.status}`;
       return res.status(upstream.status).json({
-        error: `Upstream service error: ${error}`,
+        error: `${resolved.label} error (${upstream.status}): ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`,
         provider: resolved.label,
-        model: model,
+        model,
         tokens: budgeted.tokens,
       });
     }
@@ -148,7 +130,7 @@ export default async function handler(req, res) {
     const reply = data.choices?.[0]?.message?.content ?? '';
     return res.status(200).json({
       reply,
-      model: model || 'dolphin-3.0-mistral-24b',
+      model,
       provider: resolved.label,
       tokens: budgeted.tokens,
       keySource: resolved.keySource,
@@ -156,16 +138,12 @@ export default async function handler(req, res) {
   } catch (err) {
     if (err?.name === 'AbortError') {
       return res.status(504).json({
-        error: `${resolved.label} timed out after ${UPSTREAM_TIMEOUT_MS / 1000}s. Try a faster model or a shorter prompt.`,
+        error: `${resolved.label} timed out after ${UPSTREAM_TIMEOUT_MS / 1000}s.`,
         provider: resolved.label,
         model,
       });
     }
-    return res.status(500).json({
-      error: err.message || 'Unknown error occurred',
-      provider: resolved?.label,
-      model,
-    });
+    return res.status(502).json({ error: err.message || 'Upstream request failed' });
   } finally {
     clearTimeout(timer);
   }
