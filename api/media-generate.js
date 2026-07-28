@@ -4,7 +4,7 @@
  * Body:
  *   {
  *     kind: 'image' | 'video',
- *     provider: 'cloudflare' | 'fal' | 'nvidia',
+ *     provider: 'cloudflare' | 'fal' | 'nvidia' | 'venice' | 'runpod',
  *     model?: string,
  *     prompt: string,
  *     negativePrompt?: string,
@@ -18,7 +18,10 @@
  *   CLOUDFLARE_ACCOUNT_ID  — Workers AI account id (images + Seedance video)
  *   CLOUDFLARE_API_TOKEN   — API token with Workers AI permission
  *   VENICE_API_KEY         — Venice image generate/edit (same key as chat; negative_prompt)
- *   FAL_KEY                — Wan 2.2 video only (already used by Media Studio)
+ *   FAL_KEY                — Wan 2.2 video fallback (hosted)
+ *   RUNPOD_API_KEY         — RunPod serverless ComfyUI (Wan 2.2 TI2V 5B — cheap self-host)
+ *   RUNPOD_ENDPOINT_ID     — Serverless endpoint id for worker-comfyui
+ *   COMFYUI_BASE_URL       — Optional direct ComfyUI pod URL (:8188)
  *   NVIDIA_API_KEY         — hosted FLUX/SDXL image (optional)
  *   NVIDIA_MEDIA_BASE_URL  — self-hosted Wan NIM only (OpenAI-compatible base URL)
  *
@@ -26,6 +29,8 @@
  * reference images to text-to-image requests (that caused HTTP 413). Oversized
  * Cloudflare responses fall back to Venice webp (existing key).
  */
+
+import { generateRunpodWan22, runpodConfigured } from '../lib/comfy/runpod-comfy.js';
 
 /** Stay under Vercel’s 4.5MB JSON body limit (request + response). */
 const SAFE_JSON_BYTES = 3_200_000;
@@ -1315,7 +1320,57 @@ export default async function handler(req, res) {
     }
 
     if (kind === 'video') {
-      const isWan = provider === 'nvidia' || provider === 'fal' || /wan/i.test(String(model || ''));
+      const isRunpod =
+        provider === 'runpod' ||
+        /runpod|ti2v|comfy/i.test(String(model || ''));
+      const isWan =
+        !isRunpod &&
+        (provider === 'nvidia' || provider === 'fal' || /wan/i.test(String(model || '')));
+
+      if (isRunpod) {
+        if (!runpodConfigured()) {
+          const err = new Error(
+            'RunPod Wan is not configured. Set RUNPOD_API_KEY + RUNPOD_ENDPOINT_ID, ' +
+              'or COMFYUI_BASE_URL. See docs/RUNPOD_WAN22.md'
+          );
+          err.status = 503;
+          throw err;
+        }
+        try {
+          const out = await generateRunpodWan22({
+            prompt: prompt.trim(),
+            negativePrompt,
+            size: size || '832x480',
+            seconds: seconds || 3,
+            imageBase64,
+            mimeType,
+          });
+          return res.status(200).json(out);
+        } catch (rpErr) {
+          console.warn('RunPod Wan failed:', rpErr.message);
+          // Fall back to fal Wan if available
+          if (falKey()) {
+            try {
+              const out = await generateFalWanVideo({
+                prompt: prompt.trim(),
+                model: imageBase64 ? 'wan2.2-i2v' : 'wan2.2-t2v',
+                imageBase64,
+                mimeType,
+              });
+              out.fallbackFrom = 'runpod';
+              out.fallbackNote = rpErr.message || 'RunPod Wan failed; used fal Wan.';
+              return res.status(200).json(out);
+            } catch (falErr) {
+              const err = new Error(
+                `${rpErr.message} Also fal Wan: ${falErr.message}`
+              );
+              err.status = rpErr.status || falErr.status || 502;
+              throw err;
+            }
+          }
+          throw rpErr;
+        }
+      }
 
       if (isWan) {
         try {

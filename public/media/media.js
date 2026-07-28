@@ -12,9 +12,11 @@ const IMAGE_MODELS = [
 ];
 
 const VIDEO_MODELS = [
-  // fal Wan was already in the app (FAL_KEY). No new video stacks.
-  { value: 'fal:wan2.2-t2v', label: 'Wan 2.2 · Text → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-t2v', usesRef: false },
-  { value: 'fal:wan2.2-i2v', label: 'Wan 2.2 · Image → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-i2v', usesRef: true },
+  // Cheap self-host: Wan 2.2 TI2V 5B on RunPod ComfyUI (see docs/RUNPOD_WAN22.md)
+  { value: 'runpod:wan2.2-5b-t2v', label: 'RunPod · Wan 2.2 5B Text → Video', kind: 'video', provider: 'runpod', model: 'wan2.2-5b-t2v', usesRef: false },
+  { value: 'runpod:wan2.2-5b-i2v', label: 'RunPod · Wan 2.2 5B Image → Video', kind: 'video', provider: 'runpod', model: 'wan2.2-5b-i2v', usesRef: true },
+  { value: 'fal:wan2.2-t2v', label: 'fal · Wan 2.2 Text → Video', kind: 'video', provider: 'fal', model: 'wan2.2-t2v', usesRef: false },
+  { value: 'fal:wan2.2-i2v', label: 'fal · Wan 2.2 Image → Video', kind: 'video', provider: 'fal', model: 'wan2.2-i2v', usesRef: true },
   { value: 'cloudflare:seedance-mini', label: 'Cloudflare · Seedance 2.0 Mini', kind: 'video', provider: 'cloudflare', model: 'seedance-mini', usesRef: false },
   { value: 'cloudflare:seedance-fast', label: 'Cloudflare · Seedance 2.0 Fast', kind: 'video', provider: 'cloudflare', model: 'seedance-fast', usesRef: false },
 ];
@@ -26,8 +28,16 @@ const IMAGE_SIZES = [
 ];
 
 const VIDEO_SIZES = [
-  { value: '832x480', label: 'Landscape · 16:9' },
-  { value: '480x832', label: 'Portrait · 9:16' },
+  { value: '832x480', label: 'Landscape · 16:9 (cheap)' },
+  { value: '480x832', label: 'Portrait · 9:16 (cheap)' },
+  { value: '1280x704', label: '720p-ish · needs more VRAM' },
+];
+
+const VIDEO_SECONDS = [
+  { value: '2', label: '2 sec (cheapest)' },
+  { value: '3', label: '3 sec (default)' },
+  { value: '4', label: '4 sec' },
+  { value: '5', label: '5 sec (max practical)' },
 ];
 
 /** Vercel Functions reject bodies over 4.5MB (HTTP 413). Keep refs well under. */
@@ -42,6 +52,8 @@ const els = {
   negativeWrap: document.getElementById('negativeWrap'),
   size: document.getElementById('mediaSize'),
   sizeWrap: document.getElementById('sizeWrap'),
+  seconds: document.getElementById('mediaSeconds'),
+  secondsWrap: document.getElementById('secondsWrap'),
   ref: document.getElementById('mediaRef'),
   refWrap: document.getElementById('refWrap'),
   refPreview: document.getElementById('refPreview'),
@@ -78,6 +90,16 @@ function fillSizes() {
     opt.textContent = s.label;
     els.size.appendChild(opt);
   }
+  if (els.seconds) {
+    els.seconds.innerHTML = '';
+    for (const s of VIDEO_SECONDS) {
+      const opt = document.createElement('option');
+      opt.value = s.value;
+      opt.textContent = s.label;
+      if (s.value === '3') opt.selected = true;
+      els.seconds.appendChild(opt);
+    }
+  }
 }
 
 function selectedSpec() {
@@ -88,13 +110,15 @@ function selectedSpec() {
 function modelUsesRef(spec) {
   if (!spec) return false;
   if (spec.usesRef) return true;
-  return kind === 'video' && /i2v/i.test(spec.model || '');
+  return kind === 'video' && (/i2v/i.test(spec.model || '') || /5b-i2v/i.test(spec.value || ''));
 }
 
 function syncFields() {
   const spec = selectedSpec();
-  // Always show negative prompt for images.
-  els.negativeWrap.style.display = kind === 'image' ? '' : 'none';
+  // Negative for images always; also for RunPod Wan video.
+  const showNeg = kind === 'image' || (kind === 'video' && spec?.provider === 'runpod');
+  els.negativeWrap.style.display = showNeg ? '' : 'none';
+  if (els.secondsWrap) els.secondsWrap.hidden = kind !== 'video';
   const usesRef = modelUsesRef(spec);
   const opt = els.refWrap.querySelector('.opt');
   if (opt) {
@@ -267,8 +291,11 @@ els.generate.addEventListener('click', async () => {
       prompt,
       size: els.size.value,
     };
+    if (kind === 'video' && els.seconds?.value) {
+      body.seconds = Number(els.seconds.value) || 3;
+    }
     const neg = (els.negative.value || '').trim();
-    if (neg && kind === 'image') {
+    if (neg && (kind === 'image' || spec.provider === 'runpod')) {
       body.negativePrompt = neg;
     }
     // ONLY attach the upload when the selected model actually uses it.

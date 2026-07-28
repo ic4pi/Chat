@@ -33,13 +33,18 @@
         </label>
 
         <label class="media-field" id="negativeWrap">
-          <span>Negative prompt <em class="opt">(optional · all image models)</em></span>
+          <span>Negative prompt <em class="opt">(optional)</em></span>
           <input id="mediaNegative" type="text" placeholder="blurry, low quality, watermark…" />
         </label>
 
         <label class="media-field" id="sizeWrap">
           <span>Size</span>
           <select id="mediaSize"></select>
+        </label>
+
+        <label class="media-field" id="secondsWrap" hidden>
+          <span>Duration</span>
+          <select id="mediaSeconds"></select>
         </label>
 
         <label class="media-field" id="refWrap">
@@ -56,9 +61,9 @@
 
       <div class="media-box media-keys-box">
         <p class="media-keys-note">
-          Images: Cloudflare (existing) + Venice SD3.5 / Qwen / Edit (same <code>VENICE_API_KEY</code> as chat).
-          Uploaded images are only sent for <strong>Venice · Edit</strong> or Wan image→video — not for text-to-image (that was the HTTP 413).
-          Video: Wan 2.2 (<code>FAL_KEY</code>) or Cloudflare Seedance.
+          Images: Cloudflare + Venice (existing keys). Uploads only for <strong>Venice · Edit</strong> / image→video.
+          Video (cheap self-host): <strong>RunPod · Wan 2.2 5B</strong> — set <code>RUNPOD_API_KEY</code> + <code>RUNPOD_ENDPOINT_ID</code>
+          (see <code>docs/RUNPOD_WAN22.md</code>). fal Wan / Seedance remain as fallbacks.
         </p>
       </div>
     </section>
