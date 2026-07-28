@@ -96,10 +96,12 @@ function selectPersona(id) {
   els.personaNameInput.value = p.name;
   els.personaDescriptionInput.value = p.description || '';
   els.personaPromptInput.value = p.systemPrompt || '';
-  els.personaNameInput.disabled = !!p.builtin;
-  els.personaDescriptionInput.disabled = !!p.builtin;
-  els.personaPromptInput.disabled = !!p.builtin;
-  els.savePersonaBtn.disabled = !!p.builtin;
+  // Built-ins are editable — your saved prompt is what chat uses.
+  els.personaNameInput.disabled = false;
+  els.personaDescriptionInput.disabled = false;
+  els.personaPromptInput.disabled = false;
+  els.savePersonaBtn.disabled = false;
+  // Keep built-ins from being deleted; clear/replace their prompt instead.
   els.deletePersonaBtn.disabled = !!p.builtin;
   renderPersonaList();
 }
@@ -123,7 +125,8 @@ async function commit() {
   try {
     const updated = await apiPut({
       masterPrompt: data.masterPrompt,
-      personas: data.personas.filter((p) => !p.builtin),
+      // Save every persona, including NEXUS / Plain overrides.
+      personas: data.personas,
     });
     data = { masterPrompt: updated.masterPrompt || '', personas: updated.personas || [] };
     if (!data.personas.some((p) => p.id === selectedPersonaId)) {
@@ -149,7 +152,7 @@ function newPersona() {
 
 async function savePersona() {
   const p = data.personas.find((x) => x.id === selectedPersonaId);
-  if (!p || p.builtin) return;
+  if (!p) return;
   p.name = els.personaNameInput.value.trim() || 'Untitled persona';
   p.description = els.personaDescriptionInput.value.trim();
   p.systemPrompt = els.personaPromptInput.value;

@@ -53,8 +53,8 @@ const ADMIN_HTML = `<!DOCTYPE html>
     <p class="admin-hint">
       Named system prompts. The chat page has a persona selector — whichever
       one is selected is what the model gets (after the master prompt above).
-      NEXUS and Plain assistant are built-in and read-only; add your own for
-      anything else.
+      Edit any persona here — including NEXUS and Plain. What you save is exactly
+      what the model receives. Nothing else is added on top.
     </p>
     <div class="persona-manager">
       <div class="persona-list-pane">
