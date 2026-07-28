@@ -9,6 +9,9 @@
  *
  * Commits sandbox changes and pushes to the cloned GitHub remote.
  * Token is used only for this request (not stored server-side).
+ *
+ * Before commit, runs scripts/check-api.mjs or npm run check / npm test when
+ * present. A failing check returns 400 and does not push.
  */
 
 import { requireSession, REPO_DIR } from '../lib/sandbox-session.js';
@@ -85,6 +88,47 @@ export default async function handler(req, res) {
         ok: true,
         pushed: false,
         message: 'Nothing to commit — sandbox already matches the last commit.',
+      });
+    }
+
+    // Hard gate: never push code that fails the repo contract smoke test.
+    // Prefer scripts/check-api.mjs (this Chat repo), else npm run check / npm test.
+    const prePush = await run(
+      sandbox,
+      [
+        'set -e',
+        'run_check() {',
+        '  if [ -f scripts/check-api.mjs ] && command -v node >/dev/null 2>&1; then',
+        '    echo "pre-push: node scripts/check-api.mjs"',
+        '    node scripts/check-api.mjs',
+        '    return $?',
+        '  fi',
+        '  if [ -f package.json ] && command -v npm >/dev/null 2>&1; then',
+        '    if node --input-type=module -e "import fs from \\"fs\\"; const s=JSON.parse(fs.readFileSync(\\"package.json\\",\\"utf8\\")).scripts||{}; process.exit(s.check?0:2)"; then',
+        '      echo "pre-push: npm run check"',
+        '      npm run check',
+        '      return $?',
+        '    fi',
+        '    if node --input-type=module -e "import fs from \\"fs\\"; const s=JSON.parse(fs.readFileSync(\\"package.json\\",\\"utf8\\")).scripts||{}; process.exit(s.test?0:2)"; then',
+        '      echo "pre-push: npm test"',
+        '      npm test',
+        '      return $?',
+        '    fi',
+        '  fi',
+        '  echo "pre-push: no check/test script found — allowing push (add npm run check to gate future pushes)"',
+        '  return 0',
+        '}',
+        'run_check',
+      ].join('\n'),
+    );
+    if (prePush.exitCode !== 0) {
+      const detail = `${prePush.stdout || ''}\n${prePush.stderr || ''}`.trim().slice(0, 1200);
+      return res.status(400).json({
+        error:
+          'Pre-push check failed — not pushing broken code to GitHub.\n' +
+          'Fix the failures (keep Auto-test on so the agent can iterate), then try Push again.\n\n' +
+          detail,
+        checkFailed: true,
       });
     }
 

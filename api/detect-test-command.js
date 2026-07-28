@@ -31,10 +31,17 @@ export default async function handler(req, res) {
       try {
         const pkg = JSON.parse(pkgRaw);
         const scripts = pkg.scripts ?? {};
+        // Prefer a fast contract check over heavy/domain-specific scripts
+        // (e.g. test:animate) so Auto-test and pre-push catch API breaks.
+        if (scripts.check && !scripts.check.startsWith('echo') && !scripts.check.includes('exit 1')) {
+          return res.json({ command: 'npm run check', source: 'package.json scripts.check', confidence: 'detected', note: scripts.check });
+        }
         if (scripts.test && !scripts.test.startsWith('echo') && !scripts.test.includes('exit 1')) {
           return res.json({ command: 'npm test', source: 'package.json scripts.test', confidence: 'detected', note: scripts.test });
         }
-        const testKey = Object.keys(scripts).find(k => k.includes('test') || k === 'check');
+        const testKey = Object.keys(scripts).find(k =>
+          (k === 'check' || k.includes('test')) && !k.includes('animate'),
+        );
         if (testKey) {
           return res.json({ command: `npm run ${testKey}`, source: `package.json scripts.${testKey}`, confidence: 'detected' });
         }

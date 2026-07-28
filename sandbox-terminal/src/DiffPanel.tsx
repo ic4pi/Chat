@@ -227,7 +227,8 @@ export function DiffPanel({
               Paste a GitHub token with <code style={{ color: '#d4ff3f' }}>repo</code> access
               (github.com → Settings → Developer settings → Personal access tokens).
               Saved in this browser so you do not have to re-enter it when you reopen the workspace.
-              Never sent to our servers except for the push request.
+              Push always runs <code style={{ color: '#d4ff3f' }}>npm run check</code> first and
+              will refuse to push if checks fail.
             </div>
             <input
               type="password"

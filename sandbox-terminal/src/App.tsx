@@ -263,7 +263,7 @@ export function App() {
   // Auto-save ON — generated files go to the sandbox immediately so you can download/push.
   const [autoRun,      setAutoRun]      = useState(false);
   const [autoApplyOn,  setAutoApplyOn]  = useState(restored.current?.autoApplyOn ?? true);
-  const [autoVerifyOn, setAutoVerifyOn] = useState(false);
+  const [autoVerifyOn, setAutoVerifyOn] = useState(true);
   const [applying,     setApplying]     = useState(false);
   const [appliedPaths, setAppliedPaths] = useState<Set<string>>(new Set());
   const [applyResults, setApplyResults] = useState<Array<{ path: string; ok: boolean; error?: string }>>([]);
@@ -592,12 +592,19 @@ export function App() {
       });
       const data = await res.json() as {
         ok?: boolean; pushed?: boolean; branch?: string;
-        message?: string; error?: string; detail?: string;
+        message?: string; error?: string; detail?: string; checkFailed?: boolean;
       };
-      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      if (!res.ok) {
+        const err = data.error ?? `HTTP ${res.status}`;
+        throw new Error(
+          data.checkFailed
+            ? err
+            : err,
+        );
+      }
       if (data.pushed) {
         setPushOk(
-          `Pushed to GitHub${data.branch ? ` (${data.branch})` : ''}. ` +
+          `Pushed to GitHub${data.branch ? ` (${data.branch})` : ''} after checks passed. ` +
           'Open the repo on github.com to see the new commit.',
         );
       } else {
@@ -707,7 +714,7 @@ export function App() {
             Auto-run <input type="checkbox" checked={autoRun} onChange={e => setAutoRun(e.target.checked)}
               style={{ accentColor: '#d4ff3f' }} />
           </label>
-          <label title="Off by default. Advanced: run project tests after saves."
+          <label title="On by default. Runs npm run check / project tests after saves so bad edits get fixed before you push."
             style={{ display: 'flex', alignItems: 'center', gap: 4,
             fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
             Auto-test <input type="checkbox" checked={autoVerifyOn} onChange={e => setAutoVerifyOn(e.target.checked)}
