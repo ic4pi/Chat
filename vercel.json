@@ -7,23 +7,25 @@
     { "source": "/admin",  "destination": "/api/admin" },
     { "source": "/agent",  "destination": "/agent/index.html" },
     { "source": "/media",  "destination": "/media/index.html" },
-    { "source": "/media/", "destination": "/media/index.html" }
+    { "source": "/media/", "destination": "/media/index.html" },
+
+    { "source": "/api/run",                  "destination": "/api/sandbox/run" },
+    { "source": "/api/run-code",             "destination": "/api/sandbox/run-code" },
+    { "source": "/api/init-repo",            "destination": "/api/sandbox/init-repo" },
+    { "source": "/api/files",                "destination": "/api/sandbox/files" },
+    { "source": "/api/file",                 "destination": "/api/sandbox/file" },
+    { "source": "/api/write-files",          "destination": "/api/sandbox/write-files" },
+    { "source": "/api/search",               "destination": "/api/sandbox/search" },
+    { "source": "/api/detect-test-command",  "destination": "/api/sandbox/detect-test-command" },
+    { "source": "/api/git-push",             "destination": "/api/sandbox/git-push" }
   ],
   "functions": {
-    "api/chat.js":                 { "maxDuration": 120 },
-    "api/run.js":                  { "maxDuration": 300 },
-    "api/run-code.js":             { "maxDuration": 300 },
-    "api/init-repo.js":            { "maxDuration": 300 },
-    "api/files.js":                { "maxDuration": 30  },
-    "api/file.js":                 { "maxDuration": 30  },
-    "api/write-files.js":          { "maxDuration": 30  },
-    "api/git-push.js":             { "maxDuration": 120 },
-    "api/search.js":               { "maxDuration": 30  },
-    "api/detect-test-command.js":  { "maxDuration": 30  },
-    "api/agent-chat.js":           { "maxDuration": 120 },
-    "api/group-chat.js":           { "maxDuration": 300 },
-    "api/tts.js":                  { "maxDuration": 60  },
-    "api/media-generate.js":       { "maxDuration": 300 },
-    "api/animate-sequence.js":     { "maxDuration": 300 }
+    "api/chat.js":                 { "maxDuration": 60 },
+    "api/sandbox/[op].js":         { "maxDuration": 60 },
+    "api/agent-chat.js":           { "maxDuration": 60 },
+    "api/group-chat.js":           { "maxDuration": 60 },
+    "api/tts.js":                  { "maxDuration": 60 },
+    "api/media-generate.js":       { "maxDuration": 60 },
+    "api/animate-sequence.js":     { "maxDuration": 60 }
   }
 }

@@ -26,7 +26,8 @@ const SYNTAX_FILES = [
   'api/agent-chat.js',
   'api/group-chat.js',
   'api/admin-config.js',
-  'api/git-push.js',
+  'api/sandbox/[op].js',
+  'lib/sandbox-api/git-push.js',
 ];
 
 function fail(msg) {

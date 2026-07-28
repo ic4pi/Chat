@@ -1143,6 +1143,29 @@ async function callChatStream(provider, model, messages, personaId, onEvent) {
       return { ok: false, status: res.status, data, errText };
     }
 
+    // Backend returned a normal JSON completion (older deploy / stream ignored).
+    if (ctype.includes('application/json') && !ctype.includes('text/event-stream')) {
+      let data = null;
+      try { data = await res.json(); } catch {
+        return { ok: false, status: res.status, data: null, errText: 'Non-JSON response' };
+      }
+      if (typeof onEvent === 'function' && data?.reply) {
+        onEvent({ type: 'token', text: data.reply });
+        onEvent({ type: 'done', reply: data.reply, provider: data.provider, model: data.model });
+      }
+      return {
+        ok: true,
+        status: res.status,
+        data: {
+          reply: data?.reply || '',
+          reasoning: data?.reasoning,
+          provider: data?.provider,
+          model: data?.model,
+        },
+        errText: null,
+      };
+    }
+
     if (!res.body) {
       return { ok: false, status: res.status, data: null, errText: 'No response body' };
     }
