@@ -17,13 +17,14 @@
  * Env (Vercel → Settings → Environment Variables):
  *   CLOUDFLARE_ACCOUNT_ID  — Workers AI account id (images + Seedance video)
  *   CLOUDFLARE_API_TOKEN   — API token with Workers AI permission
- *   FAL_KEY                — fal.ai images (Flux) + video (Wan / LTX) — returns URLs (avoids Vercel 413)
+ *   VENICE_API_KEY         — Venice image generate/edit (same key as chat; negative_prompt)
+ *   FAL_KEY                — Wan 2.2 video only (already used by Media Studio)
  *   NVIDIA_API_KEY         — hosted FLUX/SDXL image (optional)
  *   NVIDIA_MEDIA_BASE_URL  — self-hosted Wan NIM only (OpenAI-compatible base URL)
  *
- * Vercel Functions hard-limit request/response bodies at 4.5MB. Returning big
- * base64 images triggers HTTP 413 — prefer URL responses (fal) and refuse
- * oversized base64 payloads in favor of fal fallback.
+ * Vercel Functions hard-limit request/response bodies at 4.5MB. Do not attach
+ * reference images to text-to-image requests (that caused HTTP 413). Oversized
+ * Cloudflare responses fall back to Venice webp (existing key).
  */
 
 /** Stay under Vercel’s 4.5MB JSON body limit (request + response). */
@@ -79,21 +80,7 @@ const NVIDIA_VIDEO_MODELS = {
   'wan2.2-i2v': 'wan-ai/wan2.2',
 };
 
-/** Hosted images on fal.ai — responses are HTTPS URLs (safe for Vercel 4.5MB limit). */
-const FAL_IMAGE_MODELS = {
-  'flux-schnell': 'fal-ai/flux/schnell',
-  'flux': 'fal-ai/flux/schnell',
-  'fal-flux-schnell': 'fal-ai/flux/schnell',
-  'fal-ai/flux/schnell': 'fal-ai/flux/schnell',
-  'flux-dev': 'fal-ai/flux/dev',
-  'fal-flux-dev': 'fal-ai/flux/dev',
-  'fal-ai/flux/dev': 'fal-ai/flux/dev',
-  'fast-sdxl': 'fal-ai/fast-sdxl',
-  'fal-fast-sdxl': 'fal-ai/fast-sdxl',
-  'fal-ai/fast-sdxl': 'fal-ai/fast-sdxl',
-};
-
-/** Hosted video on fal.ai (NVIDIA’s free genai host 404s for Wan). */
+/** Hosted video on fal.ai (Wan only — already in the app; no new image stacks). */
 const FAL_VIDEO_MODELS = {
   'wan2.2': 'fal-ai/wan/v2.2-5b/text-to-video',
   'wan2.2-t2v': 'fal-ai/wan/v2.2-5b/text-to-video',
@@ -105,11 +92,22 @@ const FAL_VIDEO_MODELS = {
   'fal-ai/wan/v2.2-5b/text-to-video': 'fal-ai/wan/v2.2-5b/text-to-video',
   'fal-ai/wan/v2.2-a14b/text-to-video': 'fal-ai/wan/v2.2-a14b/text-to-video',
   'fal-ai/wan/v2.2-5b/image-to-video': 'fal-ai/wan/v2.2-5b/image-to-video',
-  // Cheap / fast text→video on fal
-  'ltx': 'fal-ai/ltx-video',
-  'ltx-video': 'fal-ai/ltx-video',
-  'fal-ltx': 'fal-ai/ltx-video',
-  'fal-ai/ltx-video': 'fal-ai/ltx-video',
+};
+
+const VENICE_IMAGE_MODELS = {
+  'venice-sd35': 'venice-sd35',
+  'sd35': 'venice-sd35',
+  'qwen-image': 'qwen-image',
+  'qwen-image-2': 'qwen-image-2',
+  'hidream': 'hidream',
+  'lustify-sdxl': 'lustify-sdxl',
+  'pony-realism': 'pony-realism',
+};
+
+const VENICE_EDIT_MODELS = {
+  'qwen-edit': 'qwen-edit',
+  'edit': 'qwen-edit',
+  'venice-edit': 'qwen-edit',
 };
 
 
@@ -139,6 +137,10 @@ function stripDataUrl(input) {
 
 function falKey() {
   return (process.env.FAL_KEY || process.env.FAL_API_KEY || '').trim();
+}
+
+function veniceKey() {
+  return (process.env.VENICE_API_KEY || '').trim();
 }
 
 function approxJsonBytes(value) {
@@ -836,66 +838,149 @@ async function falQueue(modelId, input, { timeoutMs = 180_000 } = {}) {
   throw err;
 }
 
-function pickFalImageUrl(result) {
-  return (
-    result?.images?.[0]?.url ||
-    result?.data?.images?.[0]?.url ||
-    result?.output?.images?.[0]?.url ||
-    result?.image?.url ||
-    null
-  );
-}
-
-function pickFalVideoUrl(result) {
-  return (
-    result?.video?.url ||
-    result?.data?.video?.url ||
-    result?.output?.video?.url ||
-    result?.video_url ||
-    null
-  );
-}
-
-async function generateFalImage({ prompt, model, size, negativePrompt }) {
-  const modelId = FAL_IMAGE_MODELS[model] || FAL_IMAGE_MODELS['flux-schnell'];
-  const { width, height } = parseSize(size, 1024, 1024);
-  const input = {
-    prompt,
-    num_images: 1,
-  };
-
-  if (/fast-sdxl/i.test(modelId)) {
-    input.image_size = `${Math.min(1024, width)}x${Math.min(1024, height)}`;
-  } else {
-    input.image_size = {
-      width: Math.min(1536, width),
-      height: Math.min(1536, height),
-    };
-  }
-  if (negativePrompt) input.negative_prompt = negativePrompt;
-
-  const result = await falQueue(modelId, input, { timeoutMs: 120_000 });
-  const imageUrl = pickFalImageUrl(result);
-  if (!imageUrl) {
-    const err = new Error('fal.ai finished without an image URL.');
-    err.status = 502;
+async function generateVeniceImage({ prompt, model, size, negativePrompt }) {
+  const key = veniceKey();
+  if (!key) {
+    const err = new Error(
+      'Missing VENICE_API_KEY in Vercel env (same key as chat).'
+    );
+    err.status = 503;
     throw err;
   }
 
-  return {
-    kind: 'image',
-    provider: 'fal',
+  const modelId = VENICE_IMAGE_MODELS[model] || VENICE_IMAGE_MODELS['venice-sd35'];
+  const { width, height } = parseSize(size, 1024, 1024);
+  const body = {
     model: modelId,
-    images: [{ mimeType: 'image/jpeg', url: imageUrl }],
+    prompt,
+    // webp stays small — avoids Vercel 413 on base64 responses
+    format: 'webp',
+    width: Math.min(1280, width),
+    height: Math.min(1280, height),
+    safe_mode: false,
+    cfg_scale: 7.5,
+    return_binary: false,
   };
+  if (negativePrompt) body.negative_prompt = negativePrompt;
+  // Ratio models (qwen-image-2) prefer aspect_ratio
+  if (/qwen-image-2/i.test(modelId)) {
+    delete body.width;
+    delete body.height;
+    body.aspect_ratio = width >= height ? (Math.abs(width / height - 1) < 0.1 ? '1:1' : '16:9') : '9:16';
+  }
+
+  const upstream = await fetch('https://api.venice.ai/api/v1/image/generate', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  const data = await upstream.json().catch(() => ({}));
+  if (!upstream.ok) {
+    const detail = extractErrorDetail(data) || `Venice image HTTP ${upstream.status}`;
+    const err = new Error(cleanMediaError(detail));
+    err.status = upstream.status || 502;
+    throw err;
+  }
+
+  const raw = Array.isArray(data.images) ? data.images[0] : null;
+  if (!raw || typeof raw !== 'string') {
+    const err = new Error('Venice returned no image.');
+    err.status = 502;
+    throw err;
+  }
+  const clean = String(raw).replace(/^data:image\/\w+;base64,/, '');
+  if (clean.length > 3_000_000) throw oversizeError('image');
+
+  const out = {
+    kind: 'image',
+    provider: 'venice',
+    model: modelId,
+    images: [{ mimeType: 'image/webp', base64: clean }],
+  };
+  if (imageResultTooLarge(out)) throw oversizeError('image');
+  return out;
 }
 
-/** @deprecated name kept for older call sites */
-async function generateFalFluxImage(opts) {
-  return generateFalImage({ ...opts, model: 'flux-schnell' });
+async function generateVeniceEdit({ prompt, model, imageBase64, mimeType }) {
+  const key = veniceKey();
+  if (!key) {
+    const err = new Error(
+      'Missing VENICE_API_KEY in Vercel env (needed for Venice · Edit).'
+    );
+    err.status = 503;
+    throw err;
+  }
+  if (!imageBase64) {
+    const err = new Error('Venice · Edit needs an uploaded image.');
+    err.status = 400;
+    throw err;
+  }
+
+  const modelId = VENICE_EDIT_MODELS[model] || VENICE_EDIT_MODELS['qwen-edit'];
+  const { b64 } = stripDataUrl(imageBase64);
+
+  const upstream = await fetch('https://api.venice.ai/api/v1/image/edit', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      Accept: 'image/*,application/json',
+    },
+    body: JSON.stringify({
+      model: modelId,
+      prompt,
+      image: b64,
+      output_format: 'webp',
+    }),
+  });
+
+  const ctype = (upstream.headers.get('content-type') || '').toLowerCase();
+  if (upstream.ok && ctype.startsWith('image/')) {
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    if (buf.length > 2_400_000) throw oversizeError('image');
+    const out = {
+      kind: 'image',
+      provider: 'venice',
+      model: modelId,
+      images: [{ mimeType: ctype.split(';')[0] || 'image/webp', base64: buf.toString('base64') }],
+    };
+    if (imageResultTooLarge(out)) throw oversizeError('image');
+    return out;
+  }
+
+  const data = await upstream.json().catch(() => ({}));
+  if (!upstream.ok) {
+    const detail = extractErrorDetail(data) || `Venice edit HTTP ${upstream.status}`;
+    const err = new Error(cleanMediaError(detail));
+    err.status = upstream.status || 502;
+    throw err;
+  }
+
+  const raw =
+    (Array.isArray(data.images) && data.images[0]) ||
+    data.image ||
+    data.result?.image;
+  if (!raw || typeof raw !== 'string') {
+    const err = new Error('Venice edit returned no image.');
+    err.status = 502;
+    throw err;
+  }
+  const clean = String(raw).replace(/^data:image\/\w+;base64,/, '');
+  if (clean.length > 3_000_000) throw oversizeError('image');
+  const out = {
+    kind: 'image',
+    provider: 'venice',
+    model: modelId,
+    images: [{ mimeType: 'image/webp', base64: clean }],
+  };
+  if (imageResultTooLarge(out)) throw oversizeError('image');
+  return out;
 }
 
-/** Try Cloudflare models, then fal Flux (URL), so image gen keeps working past NSFW / 413. */
+/** Cloudflare first, then Venice (existing chat key) — no new image providers. */
 async function generateImageWithFallbacks({ prompt, size, negativePrompt, preferredCfModel = 'flux-schnell' }) {
   const cfModels = [
     preferredCfModel,
@@ -920,22 +1005,36 @@ async function generateImageWithFallbacks({ prompt, size, negativePrompt, prefer
       return out;
     } catch (err) {
       errors.push(`Cloudflare ${model}: ${cleanMediaError(err.message)}`);
-      // Oversized CF payloads won't shrink by switching SDXL/FLUX variants — go to fal.
       if (err.code === 'PAYLOAD_TOO_LARGE' || err.status === 413) break;
     }
   }
 
-  if (falKey()) {
+  if (veniceKey()) {
     try {
-      return await generateFalImage({ prompt, size, negativePrompt, model: 'flux-schnell' });
+      return await generateVeniceImage({
+        prompt,
+        model: 'venice-sd35',
+        size,
+        negativePrompt,
+      });
     } catch (err) {
-      errors.push(`fal Flux: ${cleanMediaError(err.message)}`);
+      errors.push(`Venice: ${cleanMediaError(err.message)}`);
     }
   }
 
   const err = new Error(errors.join(' · ') || 'All image backends failed.');
   err.status = 502;
   throw err;
+}
+
+function pickFalVideoUrl(result) {
+  return (
+    result?.video?.url ||
+    result?.data?.video?.url ||
+    result?.output?.video?.url ||
+    result?.video_url ||
+    null
+  );
 }
 
 async function generateFalWanVideo({
@@ -973,43 +1072,6 @@ async function generateFalWanVideo({
   const videoUrl = pickFalVideoUrl(result);
   if (!videoUrl) {
     const err = new Error('fal.ai Wan finished but returned no video URL.');
-    err.status = 502;
-    throw err;
-  }
-  return {
-    kind: 'video',
-    provider: 'fal',
-    model: modelId,
-    videoUrl,
-    mime: 'video/mp4',
-  };
-}
-
-async function generateFalLtxVideo({ prompt, model, size, seconds }) {
-  if (!falKey()) {
-    const err = new Error(
-      'Missing FAL_KEY in Vercel env for LTX video — https://fal.ai/dashboard/keys'
-    );
-    err.status = 503;
-    throw err;
-  }
-
-  const modelId = FAL_VIDEO_MODELS[model] || FAL_VIDEO_MODELS['ltx-video'];
-  const aspect = videoAspectFromSize(size);
-  const input = {
-    prompt,
-    aspect_ratio: aspect === '9:16' ? '9:16' : '16:9',
-  };
-  const secs = Number(seconds);
-  if (Number.isFinite(secs) && secs > 0) {
-    // LTX accepts num_frames on some builds; keep mild if present.
-    input.num_frames = Math.min(161, Math.max(25, Math.round(secs * 16)));
-  }
-
-  const result = await falQueue(modelId, input, { timeoutMs: 240_000 });
-  const videoUrl = pickFalVideoUrl(result);
-  if (!videoUrl) {
-    const err = new Error('fal.ai LTX finished without a video URL.');
     err.status = 502;
     throw err;
   }
@@ -1142,18 +1204,19 @@ export default async function handler(req, res) {
 
   const respondImage = async (out) => {
     if (imageResultTooLarge(out)) {
-      if (falKey() && out.provider !== 'fal') {
-        console.warn('image payload too large for Vercel; falling back to fal URL');
-        const falOut = await generateFalImage({
+      // Prefer Venice (existing chat key) over inventing a new image stack.
+      if (veniceKey() && out.provider !== 'venice') {
+        console.warn('image payload too large for Vercel; falling back to Venice webp');
+        const veniceOut = await generateVeniceImage({
           prompt: prompt.trim(),
-          model: 'flux-schnell',
+          model: 'venice-sd35',
           size,
           negativePrompt,
         });
-        falOut.fallbackFrom = out.provider;
-        falOut.fallbackNote =
-          `Primary ${out.provider} image was too large for Vercel (would 413); used fal · ${falOut.model}.`;
-        return res.status(200).json(falOut);
+        veniceOut.fallbackFrom = out.provider;
+        veniceOut.fallbackNote =
+          `Primary ${out.provider} image was too large for Vercel (would 413); used Venice · ${veniceOut.model}.`;
+        return res.status(200).json(veniceOut);
       }
       throw oversizeError('image');
     }
@@ -1162,19 +1225,30 @@ export default async function handler(req, res) {
 
   try {
     if (kind === 'image') {
-      // fal first-class: cheap Flux/SDXL with URL responses (no Vercel 413).
-      if (provider === 'fal') {
-        const out = await generateFalImage({
+      // Venice edit — only path that uses the uploaded image for images.
+      const isEdit =
+        provider === 'venice' &&
+        (VENICE_EDIT_MODELS[model] || /edit/i.test(String(model || '')));
+      if (isEdit) {
+        const out = await generateVeniceEdit({
           prompt: prompt.trim(),
-          model: model || 'flux-schnell',
+          model: model || 'qwen-edit',
+          imageBase64,
+          mimeType,
+        });
+        return respondImage(out);
+      }
+
+      if (provider === 'venice') {
+        const out = await generateVeniceImage({
+          prompt: prompt.trim(),
+          model: model || 'venice-sd35',
           size,
           negativePrompt,
         });
         return respondImage(out);
       }
 
-      // Prefer Cloudflare / fal. NVIDIA’s hosted SDXL/FLUX safety filter
-      // false-flags normal prompts and is not usable as primary.
       const preferredCf =
         provider === 'cloudflare'
           ? (model || 'flux-schnell')
@@ -1203,7 +1277,7 @@ export default async function handler(req, res) {
         }
       }
 
-      // nvidia (or anything else): Cloudflare/fal first, NVIDIA last resort only.
+      // nvidia (or unknown): Cloudflare → Venice first; NVIDIA last resort.
       try {
         const out = await generateImageWithFallbacks({
           prompt: prompt.trim(),
@@ -1219,7 +1293,7 @@ export default async function handler(req, res) {
         return respondImage(out);
       } catch (fbErr) {
         if (provider !== 'nvidia') throw fbErr;
-        console.warn('CF/fal image failed, last-resort NVIDIA:', fbErr.message);
+        console.warn('CF/Venice image failed, last-resort NVIDIA:', fbErr.message);
         try {
           const out = await generateNvidiaImage({
             prompt: prompt.trim(),
@@ -1228,7 +1302,7 @@ export default async function handler(req, res) {
             negativePrompt,
           });
           out.fallbackFrom = 'cloudflare';
-          out.fallbackNote = `Cloudflare/fal failed; used NVIDIA · ${out.model}.`;
+          out.fallbackNote = `Cloudflare/Venice failed; used NVIDIA · ${out.model}.`;
           return respondImage(out);
         } catch (nvidiaErr) {
           const err = new Error(
@@ -1241,44 +1315,7 @@ export default async function handler(req, res) {
     }
 
     if (kind === 'video') {
-      const isLtx = provider === 'fal' && /ltx/i.test(String(model || ''));
-      const isWan =
-        !isLtx &&
-        (provider === 'nvidia' || provider === 'fal' || /wan/i.test(String(model || '')));
-
-      if (isLtx) {
-        try {
-          const out = await generateFalLtxVideo({
-            prompt: prompt.trim(),
-            model: model || 'ltx-video',
-            size: size || '832x480',
-            seconds,
-          });
-          return res.status(200).json(out);
-        } catch (ltxErr) {
-          console.warn('LTX video failed, trying Wan:', ltxErr.message);
-          if (falKey()) {
-            try {
-              const out = await generateFalWanVideo({
-                prompt: prompt.trim(),
-                model: imageBase64 ? 'wan2.2-i2v' : 'wan2.2-t2v',
-                imageBase64,
-                mimeType,
-              });
-              out.fallbackFrom = 'fal-ltx';
-              out.fallbackNote = ltxErr.message || 'LTX failed; used Wan 2.2 on fal.ai.';
-              return res.status(200).json(out);
-            } catch (wanErr) {
-              const err = new Error(
-                `${ltxErr.message} Also tried Wan: ${wanErr.message}`
-              );
-              err.status = ltxErr.status || wanErr.status || 502;
-              throw err;
-            }
-          }
-          throw ltxErr;
-        }
-      }
+      const isWan = provider === 'nvidia' || provider === 'fal' || /wan/i.test(String(model || ''));
 
       if (isWan) {
         try {
@@ -1296,7 +1333,6 @@ export default async function handler(req, res) {
           }
           return res.status(200).json(out);
         } catch (wanErr) {
-          // Fall through to Cloudflare Seedance if configured
           console.warn('Wan video failed, trying Cloudflare Seedance:', wanErr.message);
           try {
             const out = await generateCloudflareVideo({
@@ -1331,33 +1367,22 @@ export default async function handler(req, res) {
         });
         return res.status(200).json(out);
       } catch (cfErr) {
-        // Seedance often needs dashboard enablement — fall back to fal Wan/LTX if key exists.
         if (falKey()) {
-          console.warn('Cloudflare Seedance failed, falling back to fal video:', cfErr.message);
+          console.warn('Cloudflare Seedance failed, falling back to fal Wan:', cfErr.message);
           try {
-            let out;
-            try {
-              out = await generateFalLtxVideo({
-                prompt: prompt.trim(),
-                model: 'ltx-video',
-                size: size || '832x480',
-                seconds,
-              });
-            } catch {
-              out = await generateFalWanVideo({
-                prompt: prompt.trim(),
-                model: imageBase64 ? 'wan2.2-i2v' : 'wan2.2-t2v',
-                imageBase64,
-                mimeType,
-              });
-            }
+            const out = await generateFalWanVideo({
+              prompt: prompt.trim(),
+              model: imageBase64 ? 'wan2.2-i2v' : 'wan2.2-t2v',
+              imageBase64,
+              mimeType,
+            });
             out.fallbackFrom = 'cloudflare';
             out.fallbackNote =
-              cfErr.message || 'Cloudflare Seedance unavailable; used fal.ai video.';
+              cfErr.message || 'Cloudflare Seedance unavailable; used Wan 2.2 on fal.ai.';
             return res.status(200).json(out);
           } catch (falErr) {
             const err = new Error(
-              `${cfErr.message} Also tried fal video: ${falErr.message}`
+              `${cfErr.message} Also tried fal Wan: ${falErr.message}`
             );
             err.status = cfErr.status || falErr.status || 502;
             throw err;

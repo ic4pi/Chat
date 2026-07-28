@@ -1,23 +1,22 @@
 const IMAGE_MODELS = [
-  // fal returns HTTPS URLs — safe under Vercel’s 4.5MB limit (no HTTP 413).
-  { value: 'fal:flux-schnell', label: 'fal · FLUX.1 Schnell (recommended)', kind: 'image', provider: 'fal', model: 'flux-schnell' },
-  { value: 'fal:flux-dev', label: 'fal · FLUX.1 Dev', kind: 'image', provider: 'fal', model: 'flux-dev' },
-  { value: 'fal:fast-sdxl', label: 'fal · Fast SDXL', kind: 'image', provider: 'fal', model: 'fast-sdxl' },
-  // Cloudflare kept — auto-falls back to fal if the PNG/JPEG would 413.
-  { value: 'cloudflare:flux-schnell', label: 'Cloudflare · FLUX.1 Schnell', kind: 'image', provider: 'cloudflare', model: 'flux-schnell' },
-  { value: 'cloudflare:sdxl-lightning', label: 'Cloudflare · SDXL Lightning', kind: 'image', provider: 'cloudflare', model: 'sdxl-lightning' },
-  { value: 'cloudflare:sdxl', label: 'Cloudflare · SDXL Base', kind: 'image', provider: 'cloudflare', model: 'sdxl' },
-  // Keep NVIDIA in the list (strict safety filter; not deleted).
-  { value: 'nvidia:flux-schnell', label: 'NVIDIA · FLUX.1 Schnell (strict filter)', kind: 'image', provider: 'nvidia', model: 'flux-schnell' },
-  { value: 'nvidia:sdxl', label: 'NVIDIA · SDXL (strict filter)', kind: 'image', provider: 'nvidia', model: 'sdxl' },
+  // Existing Cloudflare keys — primary path (no new keys).
+  { value: 'cloudflare:flux-schnell', label: 'Cloudflare · FLUX.1 Schnell', kind: 'image', provider: 'cloudflare', model: 'flux-schnell', usesRef: false },
+  { value: 'cloudflare:sdxl-lightning', label: 'Cloudflare · SDXL Lightning', kind: 'image', provider: 'cloudflare', model: 'sdxl-lightning', usesRef: false },
+  { value: 'cloudflare:sdxl', label: 'Cloudflare · SDXL Base', kind: 'image', provider: 'cloudflare', model: 'sdxl', usesRef: false },
+  // Variety via existing VENICE_API_KEY (real negative_prompt support).
+  { value: 'venice:venice-sd35', label: 'Venice · SD3.5', kind: 'image', provider: 'venice', model: 'venice-sd35', usesRef: false },
+  { value: 'venice:qwen-image', label: 'Venice · Qwen Image', kind: 'image', provider: 'venice', model: 'qwen-image', usesRef: false },
+  { value: 'venice:qwen-edit', label: 'Venice · Edit (uses uploaded image)', kind: 'image', provider: 'venice', model: 'qwen-edit', usesRef: true },
+  { value: 'nvidia:flux-schnell', label: 'NVIDIA · FLUX.1 Schnell (strict filter)', kind: 'image', provider: 'nvidia', model: 'flux-schnell', usesRef: false },
+  { value: 'nvidia:sdxl', label: 'NVIDIA · SDXL (strict filter)', kind: 'image', provider: 'nvidia', model: 'sdxl', usesRef: false },
 ];
 
 const VIDEO_MODELS = [
-  { value: 'fal:ltx-video', label: 'fal · LTX Video (fast / cheap)', kind: 'video', provider: 'fal', model: 'ltx-video' },
-  { value: 'fal:wan2.2-t2v', label: 'fal · Wan 2.2 Text → Video', kind: 'video', provider: 'fal', model: 'wan2.2-t2v' },
-  { value: 'fal:wan2.2-i2v', label: 'fal · Wan 2.2 Image → Video', kind: 'video', provider: 'fal', model: 'wan2.2-i2v' },
-  { value: 'cloudflare:seedance-mini', label: 'Cloudflare · Seedance 2.0 Mini', kind: 'video', provider: 'cloudflare', model: 'seedance-mini' },
-  { value: 'cloudflare:seedance-fast', label: 'Cloudflare · Seedance 2.0 Fast', kind: 'video', provider: 'cloudflare', model: 'seedance-fast' },
+  // fal Wan was already in the app (FAL_KEY). No new video stacks.
+  { value: 'fal:wan2.2-t2v', label: 'Wan 2.2 · Text → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-t2v', usesRef: false },
+  { value: 'fal:wan2.2-i2v', label: 'Wan 2.2 · Image → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-i2v', usesRef: true },
+  { value: 'cloudflare:seedance-mini', label: 'Cloudflare · Seedance 2.0 Mini', kind: 'video', provider: 'cloudflare', model: 'seedance-mini', usesRef: false },
+  { value: 'cloudflare:seedance-fast', label: 'Cloudflare · Seedance 2.0 Fast', kind: 'video', provider: 'cloudflare', model: 'seedance-fast', usesRef: false },
 ];
 
 const IMAGE_SIZES = [
@@ -32,8 +31,8 @@ const VIDEO_SIZES = [
 ];
 
 /** Vercel Functions reject bodies over 4.5MB (HTTP 413). Keep refs well under. */
-const REF_MAX_EDGE = 1280;
-const REF_MAX_BYTES = 2_200_000;
+const REF_MAX_EDGE = 1024;
+const REF_MAX_BYTES = 1_200_000;
 
 const els = {
   tabs: [...document.querySelectorAll('.media-tab')],
@@ -86,13 +85,24 @@ function selectedSpec() {
   return currentModels().find((m) => m.value === value) || currentModels()[0];
 }
 
+function modelUsesRef(spec) {
+  if (!spec) return false;
+  if (spec.usesRef) return true;
+  return kind === 'video' && /i2v/i.test(spec.model || '');
+}
+
 function syncFields() {
   const spec = selectedSpec();
-  // Always show negative prompt for images — never hide by provider.
+  // Always show negative prompt for images.
   els.negativeWrap.style.display = kind === 'image' ? '' : 'none';
-  const i2v = kind === 'video' && (/i2v/i.test(spec?.model || '') || /wan2\.2-i2v/i.test(spec?.value || ''));
+  const usesRef = modelUsesRef(spec);
   const opt = els.refWrap.querySelector('.opt');
-  if (opt) opt.textContent = i2v ? '(required for image→video)' : '(optional · image→video)';
+  if (opt) {
+    if (kind === 'image' && usesRef) opt.textContent = '(required for Edit)';
+    else if (kind === 'image') opt.textContent = '(only for Venice · Edit — ignored otherwise)';
+    else if (usesRef) opt.textContent = '(required for image→video)';
+    else opt.textContent = '(optional · image→video)';
+  }
 }
 
 function setStatus(msg) {
@@ -122,27 +132,25 @@ function canvasToJpegDataUrl(canvas, quality) {
 async function compressImageFile(file) {
   const img = await loadImageElement(file);
   try {
-    const scale = Math.min(1, REF_MAX_EDGE / Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height));
-    const w = Math.max(1, Math.round((img.naturalWidth || img.width) * scale));
-    const h = Math.max(1, Math.round((img.naturalHeight || img.height) * scale));
+    let scale = Math.min(1, REF_MAX_EDGE / Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height));
+    let w = Math.max(1, Math.round((img.naturalWidth || img.width) * scale));
+    let h = Math.max(1, Math.round((img.naturalHeight || img.height) * scale));
     const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
     const ctx = canvas.getContext('2d');
-    ctx.drawImage(img, 0, 0, w, h);
 
-    let quality = 0.85;
-    let dataUrl = canvasToJpegDataUrl(canvas, quality);
-    while (dataUrl.length > REF_MAX_BYTES && quality > 0.45) {
-      quality -= 0.1;
+    let quality = 0.8;
+    let dataUrl = '';
+    for (let attempt = 0; attempt < 6; attempt++) {
+      canvas.width = w;
+      canvas.height = h;
+      ctx.drawImage(img, 0, 0, w, h);
       dataUrl = canvasToJpegDataUrl(canvas, quality);
-    }
-    if (dataUrl.length > REF_MAX_BYTES) {
-      // Last resort: shrink further.
-      canvas.width = Math.max(1, Math.round(w * 0.7));
-      canvas.height = Math.max(1, Math.round(h * 0.7));
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      dataUrl = canvasToJpegDataUrl(canvas, 0.7);
+      if (dataUrl.length <= REF_MAX_BYTES) break;
+      quality = Math.max(0.4, quality - 0.1);
+      if (dataUrl.length > REF_MAX_BYTES) {
+        w = Math.max(256, Math.round(w * 0.75));
+        h = Math.max(256, Math.round(h * 0.75));
+      }
     }
     if (dataUrl.length > REF_MAX_BYTES) {
       throw new Error('Image is still too large after compression (Vercel max ~3MB). Try a smaller photo.');
@@ -187,7 +195,12 @@ els.ref.addEventListener('change', async () => {
     img.src = refData.base64;
     img.alt = 'Reference';
     els.refPreview.appendChild(img);
-    setStatus('');
+    const spec = selectedSpec();
+    if (kind === 'image' && refData && !modelUsesRef(spec)) {
+      setStatus('Upload ready. Pick “Venice · Edit” to use this image (other image models ignore it).');
+    } else {
+      setStatus('');
+    }
   } catch (err) {
     refData = null;
     els.ref.value = '';
@@ -221,7 +234,7 @@ function friendlyHttpError(status, data) {
   if (status === 413 || data?.code === 'PAYLOAD_TOO_LARGE') {
     return (
       data?.error ||
-      'Payload too large (HTTP 413). Vercel caps bodies at 4.5MB — pick fal · FLUX (URL) or a smaller size/reference.'
+      'Payload too large (HTTP 413). Clear the reference upload for text-to-image, or use Venice · Edit with a smaller JPEG.'
     );
   }
   return data?.error || `HTTP ${status}`;
@@ -235,8 +248,10 @@ els.generate.addEventListener('click', async () => {
     return;
   }
   const spec = selectedSpec();
-  if (kind === 'video' && /i2v/i.test(spec?.model || '') && !refData) {
-    alert('Image → Video needs a reference image.');
+  const usesRef = modelUsesRef(spec);
+
+  if (usesRef && !refData) {
+    alert(kind === 'image' ? 'Venice · Edit needs an uploaded image.' : 'Image → Video needs a reference image.');
     return;
   }
 
@@ -256,7 +271,9 @@ els.generate.addEventListener('click', async () => {
     if (neg && kind === 'image') {
       body.negativePrompt = neg;
     }
-    if (refData) {
+    // ONLY attach the upload when the selected model actually uses it.
+    // Sending it on Cloudflare text-to-image is what caused HTTP 413.
+    if (refData && usesRef) {
       body.imageBase64 = refData.base64;
       body.mimeType = refData.mimeType;
     }

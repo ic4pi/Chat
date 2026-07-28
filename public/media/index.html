@@ -56,12 +56,9 @@
 
       <div class="media-box media-keys-box">
         <p class="media-keys-note">
-          Recommended: <strong>fal · FLUX</strong> (images) and <strong>fal · LTX / Wan</strong> (video) —
-          they return URLs and avoid Vercel’s 4.5MB HTTP 413 limit on base64.
-          Cloudflare FLUX/SDXL is still available and auto-falls back to fal when the image is too large.
-          Keys in Vercel → Settings → Environment Variables:
-          <code>FAL_KEY</code> (images + video),
-          <code>CLOUDFLARE_ACCOUNT_ID</code> (32-char hex) + <code>CLOUDFLARE_API_TOKEN</code> (optional).
+          Images: Cloudflare (existing) + Venice SD3.5 / Qwen / Edit (same <code>VENICE_API_KEY</code> as chat).
+          Uploaded images are only sent for <strong>Venice · Edit</strong> or Wan image→video — not for text-to-image (that was the HTTP 413).
+          Video: Wan 2.2 (<code>FAL_KEY</code>) or Cloudflare Seedance.
         </p>
       </div>
     </section>
