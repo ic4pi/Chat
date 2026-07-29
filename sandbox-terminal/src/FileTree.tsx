@@ -95,6 +95,7 @@ interface Props {
   pythonReady?:   boolean | null;
   pythonDetail?:  string | null;
   onOpenRepo:     (path: string) => void;
+  onStartBlank?:  () => void;
   onAddToContext: (relPath: string) => void;
   onRemoveFromContext: (relPath: string) => void;
   onClearContext: () => void;
@@ -103,7 +104,7 @@ interface Props {
 export function FileTree({
   repoRoot, tree, totalFiles, contextFiles, loading, error,
   pythonReady, pythonDetail,
-  onOpenRepo, onAddToContext, onRemoveFromContext, onClearContext,
+  onOpenRepo, onStartBlank, onAddToContext, onRemoveFromContext, onClearContext,
 }: Props) {
   const [inputPath, setInputPath] = useState(repoRoot || '');
 
@@ -126,13 +127,13 @@ export function FileTree({
       {/* ── repo path input ── */}
       <div style={{ padding: '8px 10px', borderBottom: '1px solid #1e1e1e', flexShrink: 0 }}>
         <div style={{ fontSize: 10, color: '#555', letterSpacing: '0.1em',
-          textTransform: 'uppercase', marginBottom: 6 }}>// repo</div>
+          textTransform: 'uppercase', marginBottom: 6 }}>// project</div>
         <div style={{ display: 'flex', gap: 6 }}>
           <input
             value={inputPath}
             onChange={e => setInputPath(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleOpen()}
-            placeholder="https://github.com/user/repo  or  /local/path"
+            placeholder="GitHub URL (optional) — or start blank"
             style={{ flex: 1, minWidth: 0, background: '#111', color: '#e8e8e8',
               border: '1px solid #2a2a2a', borderRadius: 4, padding: '4px 8px',
               fontFamily: 'inherit', fontSize: 11, outline: 'none' }} />
@@ -145,6 +146,22 @@ export function FileTree({
             {loading ? '…' : 'Open'}
           </button>
         </div>
+        {onStartBlank && (
+          <button
+            type="button"
+            onClick={() => onStartBlank()}
+            disabled={loading}
+            style={{
+              marginTop: 8, width: '100%',
+              background: '#1a1a1a', color: '#d4ff3f',
+              border: '1px solid #2a4a1a', borderRadius: 4,
+              padding: '6px 10px', cursor: loading ? 'default' : 'pointer',
+              fontFamily: 'inherit', fontSize: 11, fontWeight: 700,
+            }}
+          >
+            {loading ? 'Starting…' : 'Start blank project (no clone)'}
+          </button>
+        )}
         {error && (
           <div style={{ marginTop: 5, fontSize: 11, color: '#ff6a6a' }}>✗ {error}</div>
         )}
@@ -169,7 +186,8 @@ export function FileTree({
         {tree.length === 0 && !loading && !repoRoot && (
           <div style={{ padding: '12px 10px', fontSize: 11, color: '#444',
             lineHeight: 1.6 }}>
-            Paste a GitHub URL above.
+            Tap <b style={{ color: '#888' }}>Start blank project</b> to begin without GitHub,
+            or paste a repo URL and Open.
           </div>
         )}
         {tree.map(node => (

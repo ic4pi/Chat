@@ -17,6 +17,8 @@
 
 * { box-sizing: border-box; }
 
+.hidden { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;
@@ -105,6 +107,11 @@ a.text-btn.group-btn:active {
 .text-btn.primary:hover { background: var(--accent-dim); border-color: var(--accent-dim); }
 .text-btn.danger { color: var(--danger); border-color: #4a1f1f; }
 .text-btn.danger:hover { background: #2a1010; }
+#stopBtn {
+  flex-shrink: 0;
+  min-width: 64px;
+  font-weight: 700;
+}
 
 select, input[type="text"], textarea {
   background: var(--panel);

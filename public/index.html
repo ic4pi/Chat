@@ -4,6 +4,20 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <title>Uncensored Chat</title>
+<meta name="description" content="Uncensored chat with Venice, OpenRouter, and more — personas, group chat, media, and a workspace that starts blank or from GitHub." />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Uncensored Chat" />
+<meta property="og:title" content="Uncensored Chat" />
+<meta property="og:description" content="Uncensored chat with Venice, OpenRouter, and more — personas, group chat, media, and workspace." />
+<meta property="og:url" content="https://chat-pearl-ten.vercel.app/" />
+<meta property="og:image" content="https://chat-pearl-ten.vercel.app/og.png" />
+<meta property="og:image:width" content="1536" />
+<meta property="og:image:height" content="1024" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Uncensored Chat" />
+<meta name="twitter:description" content="Uncensored chat with Venice, OpenRouter, and more." />
+<meta name="twitter:image" content="https://chat-pearl-ten.vercel.app/og.png" />
+<link rel="image_src" href="/og.png" />
 <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -110,6 +124,7 @@
         <button id="micBtn" type="button" class="icon-btn" title="Free voice input (browser speech — Chrome/Safari best)">🎤</button>
         <button id="speakBtn" type="button" class="icon-btn" title="Speak replies with neural voice" aria-pressed="false">🔊</button>
         <textarea id="input" rows="1" placeholder="Plan or ask… (code builds in Workspace)" autofocus></textarea>
+        <button id="stopBtn" type="button" class="text-btn danger hidden" title="Stop the model mid-reply">Stop</button>
         <button id="sendBtn" type="submit">Send</button>
       </div>
       <div id="voiceHint" class="voice-hint">Tap <b>Persona · Voice</b> for role / persona / voice. <b>🔊</b> auto-speaks full replies; <b>Read aloud</b> still works when it’s off. In <b>Group</b>, pair each persona with a model and save the session as MP3.</div>

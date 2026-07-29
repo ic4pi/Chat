@@ -389,6 +389,7 @@ const els = {
   inputForm: $('inputForm'),
   input: $('input'),
   sendBtn: $('sendBtn'),
+  stopBtn: $('stopBtn'),
   exportBtn: $('exportBtn'),
   importBtn: $('importBtn'),
   importFile: $('importFile'),
@@ -1070,6 +1071,21 @@ function friendlyNetworkError(err) {
 const CHAT_CLIENT_TIMEOUT_MS = 115_000;
 const CHAT_FREE_TIER_TIMEOUT_MS = 45_000;
 
+/** Active chat/group fetch — Stop aborts this. */
+let activeChatAbort = null;
+let activeChatUserStopped = false;
+
+function setGeneratingUi(on) {
+  if (els.sendBtn) els.sendBtn.classList.toggle('hidden', !!on);
+  if (els.stopBtn) els.stopBtn.classList.toggle('hidden', !on);
+  if (els.sendBtn) els.sendBtn.disabled = !!on;
+}
+
+function stopActiveChat(reason = 'Stopped.') {
+  activeChatUserStopped = true;
+  try { activeChatAbort?.abort(reason); } catch { /* ignore */ }
+}
+
 function timeoutFor(provider, model) {
   if (provider === 'openrouter' && /:free$/i.test(model || '')) return CHAT_FREE_TIER_TIMEOUT_MS;
   return CHAT_CLIENT_TIMEOUT_MS;
@@ -1077,6 +1093,7 @@ function timeoutFor(provider, model) {
 
 async function callChat(provider, model, messages, personaId) {
   const controller = new AbortController();
+  activeChatAbort = controller;
   const timer = setTimeout(() => controller.abort(), timeoutFor(provider, model));
   const apiKey = (providerKeys[provider] || '').trim();
   const headers = { 'Content-Type': 'application/json' };
@@ -1099,11 +1116,15 @@ async function callChat(provider, model, messages, personaId) {
     let data = null;
     let errText = null;
     try { data = await res.json(); } catch { errText = 'Non-JSON response'; }
-    return { ok: res.ok, status: res.status, data, errText };
+    return { ok: res.ok, status: res.status, data, errText, stopped: activeChatUserStopped };
   } catch (err) {
-    return { ok: false, status: 0, data: null, errText: friendlyNetworkError(err) };
+    if (activeChatUserStopped || err?.name === 'AbortError') {
+      return { ok: false, status: 0, data: null, errText: 'Stopped.', stopped: true };
+    }
+    return { ok: false, status: 0, data: null, errText: friendlyNetworkError(err), stopped: false };
   } finally {
     clearTimeout(timer);
+    if (activeChatAbort === controller) activeChatAbort = null;
   }
 }
 
@@ -1113,6 +1134,7 @@ async function callChat(provider, model, messages, personaId) {
  */
 async function callChatStream(provider, model, messages, personaId, onEvent) {
   const controller = new AbortController();
+  activeChatAbort = controller;
   const timer = setTimeout(() => controller.abort(), timeoutFor(provider, model));
   const apiKey = (providerKeys[provider] || '').trim();
   const headers = { 'Content-Type': 'application/json', Accept: 'text/event-stream' };
@@ -1225,9 +1247,13 @@ async function callChatStream(provider, model, messages, personaId, onEvent) {
       errText: null,
     };
   } catch (err) {
-    return { ok: false, status: 0, data: null, errText: friendlyNetworkError(err) };
+    if (activeChatUserStopped || err?.name === 'AbortError') {
+      return { ok: false, status: 0, data: null, errText: 'Stopped.', stopped: true };
+    }
+    return { ok: false, status: 0, data: null, errText: friendlyNetworkError(err), stopped: false };
   } finally {
     clearTimeout(timer);
+    if (activeChatAbort === controller) activeChatAbort = null;
   }
 }
 
@@ -1331,7 +1357,8 @@ async function sendMessage(text) {
   renderChatTitle();
   renderMessages({ scroll: 'bottom' });
 
-  els.sendBtn.disabled = true;
+  setGeneratingUi(true);
+  activeChatUserStopped = false;
   const startedAt = Date.now();
   let tickTimer = null;
   const updateStatusClock = (base) => {
@@ -1466,6 +1493,11 @@ async function sendMessage(text) {
       const timedOut = Boolean(data.timedOut) || (!attempt.ok && isTimeoutLikeError(data.error || attempt.errText));
 
       if (!attempt.ok && !rawReply) {
+        if (attempt.stopped || activeChatUserStopped) {
+          chat.messages.push({ role: 'info', content: 'Stopped.', ts: Date.now() });
+          renderMessages({ scroll: 'bottom' });
+          break;
+        }
         // Empty timeout: one automatic restart with a continue nudge.
         if (timedOut && emptyTimeoutRetries < 1 && autoRound < AUTO_CONTINUE_MAX) {
           emptyTimeoutRetries += 1;
@@ -1502,13 +1534,17 @@ async function sendMessage(text) {
           provider: data.provider,
           model: data.model || state.activeModel,
         });
-        const where = data.provider ? ` [${data.provider} · ${data.model || state.activeModel}]` : '';
-        const rawErr = data.error || attempt.errText || 'Request failed';
-        chat.messages.push({
-          role: 'error',
-          content: friendlyNetworkError({ message: String(rawErr) }) + where,
-          ts: Date.now(),
-        });
+        if (attempt.stopped || activeChatUserStopped) {
+          chat.messages.push({ role: 'info', content: 'Stopped.', ts: Date.now() });
+        } else {
+          const where = data.provider ? ` [${data.provider} · ${data.model || state.activeModel}]` : '';
+          const rawErr = data.error || attempt.errText || 'Request failed';
+          chat.messages.push({
+            role: 'error',
+            content: friendlyNetworkError({ message: String(rawErr) }) + where,
+            ts: Date.now(),
+          });
+        }
         renderMessages({ scroll: 'bottom' });
         break;
       }
@@ -1591,13 +1627,30 @@ async function sendMessage(text) {
     saveState();
   } catch (err) {
     const idx = chat.messages.findIndex((m) => m.role === 'assistant' && m.streaming);
-    if (idx !== -1) chat.messages.splice(idx, 1);
-    chat.messages.push({ role: 'error', content: err.message || 'Network error', ts: Date.now() });
+    if (idx !== -1) {
+      const partial = chat.messages[idx];
+      if (activeChatUserStopped && String(partial.content || '').trim()) {
+        partial.streaming = false;
+        chat.messages.push({ role: 'info', content: 'Stopped.', ts: Date.now() });
+      } else {
+        chat.messages.splice(idx, 1);
+        if (activeChatUserStopped) {
+          chat.messages.push({ role: 'info', content: 'Stopped.', ts: Date.now() });
+        } else {
+          chat.messages.push({ role: 'error', content: err.message || 'Network error', ts: Date.now() });
+        }
+      }
+    } else if (activeChatUserStopped) {
+      chat.messages.push({ role: 'info', content: 'Stopped.', ts: Date.now() });
+    } else {
+      chat.messages.push({ role: 'error', content: err.message || 'Network error', ts: Date.now() });
+    }
     saveState();
     renderMessages({ scroll: 'bottom' });
   } finally {
     if (tickTimer) clearInterval(tickTimer);
-    els.sendBtn.disabled = false;
+    setGeneratingUi(false);
+    activeChatUserStopped = false;
     setTypingActive(false);
     els.input.focus();
   }
@@ -1608,6 +1661,7 @@ async function sendMessage(text) {
  */
 async function callGroupStream(chat, apiMessages, onEvent) {
   const controller = new AbortController();
+  activeChatAbort = controller;
   const timer = setTimeout(() => controller.abort(), Math.max(timeoutFor(state.activeProvider, state.activeModel), 240_000));
   const apiKey = (providerKeys[state.activeProvider] || '').trim();
   const headers = { 'Content-Type': 'application/json', Accept: 'text/event-stream' };
@@ -1686,9 +1740,13 @@ async function callGroupStream(chat, apiMessages, onEvent) {
       errText: null,
     };
   } catch (err) {
-    return { ok: false, status: 0, data: null, errText: friendlyNetworkError(err) };
+    if (activeChatUserStopped || err?.name === 'AbortError') {
+      return { ok: false, status: 0, data: null, errText: 'Stopped.', stopped: true };
+    }
+    return { ok: false, status: 0, data: null, errText: friendlyNetworkError(err), stopped: false };
   } finally {
     clearTimeout(timer);
+    if (activeChatAbort === controller) activeChatAbort = null;
   }
 }
 
@@ -1906,7 +1964,8 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
 async function runAdditionalRounds(chat, n) {
   const startedAt   = Date.now();
   const firstPin    = [null];
-  els.sendBtn.disabled = true;
+  setGeneratingUi(true);
+  activeChatUserStopped = false;
   const updateStatusClock = (base) => {
     const secs = Math.floor((Date.now() - startedAt) / 1000);
     setTypingActive(true, `${base} · ${secs}s`);
@@ -1936,7 +1995,8 @@ async function runAdditionalRounds(chat, n) {
     showMoreRoundsPrompt(chat);
   } finally {
     clearInterval(tickTimer);
-    els.sendBtn.disabled = false;
+    setGeneratingUi(false);
+    activeChatUserStopped = false;
     setTypingActive(false);
     els.input?.focus();
   }
@@ -1964,7 +2024,8 @@ async function sendGroupMessage(text) {
   renderMessages({ scroll: 'bottom' });
 
   const totalRounds = chat.groupRounds || 3;
-  els.sendBtn.disabled = true;
+  setGeneratingUi(true);
+  activeChatUserStopped = false;
   const startedAt = Date.now();
   const overallFirstPin = [null];
 
@@ -2000,7 +2061,8 @@ async function sendGroupMessage(text) {
     showMoreRoundsPrompt(chat);
   } finally {
     clearInterval(tickTimer);
-    els.sendBtn.disabled = false;
+    setGeneratingUi(false);
+    activeChatUserStopped = false;
     setTypingActive(false);
     els.input?.focus();
   }
@@ -2080,6 +2142,11 @@ els.inputForm.addEventListener('submit', (e) => {
   els.input.value = '';
   els.input.style.height = 'auto';
   sendMessage(text);
+});
+
+els.stopBtn?.addEventListener('click', () => {
+  stopActiveChat('Stopped by user');
+  setTypingActive(true, 'Stopping…');
 });
 
 els.input.addEventListener('input', () => {

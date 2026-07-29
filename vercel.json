@@ -12,6 +12,7 @@
     { "source": "/api/run",                  "destination": "/api/sandbox/run" },
     { "source": "/api/run-code",             "destination": "/api/sandbox/run-code" },
     { "source": "/api/init-repo",            "destination": "/api/sandbox/init-repo" },
+    { "source": "/api/init-blank",           "destination": "/api/sandbox/init-blank" },
     { "source": "/api/files",                "destination": "/api/sandbox/files" },
     { "source": "/api/file",                 "destination": "/api/sandbox/file" },
     { "source": "/api/write-files",          "destination": "/api/sandbox/write-files" },

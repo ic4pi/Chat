@@ -40,6 +40,8 @@ export interface RepoContextState {
 
 export interface RepoContextActions {
   openRepo:        (rootPathOrUrl: string) => Promise<void>;
+  /** Start an empty sandbox project — no GitHub clone required. */
+  startBlankProject: (name?: string) => Promise<void>;
   addToContext:    (relPath: string)  => Promise<void>;
   /** Inject an uploaded / pasted file into model context (not from the repo tree). */
   injectContextFile: (relPath: string, content: string) => void;
@@ -132,6 +134,52 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     }
   }, [sandboxId]);
 
+  const startBlankProject = useCallback(async (name?: string) => {
+    setLoading(true);
+    setError(null);
+    setTree([]);
+    setContextFiles(new Map());
+    setPendingChanges([]);
+
+    try {
+      const res = await fetch(`${API_URL}/init-blank`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(sandboxId ? { 'X-Sandbox-Session': sandboxId } : {}),
+        },
+        body: JSON.stringify({ sandboxId, name: name || 'untitled-project' }),
+      });
+      const data = await res.json() as {
+        sandboxId?: string; repoDir?: string;
+        tree?: FileNode[]; totalFiles?: number; error?: string;
+        python?: { ready?: boolean; already?: boolean; detail?: string; error?: string };
+      };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setSandboxId(data.sandboxId ?? null);
+      setIsRemote(true);
+      setRepoUrl(null); // blank — no remote until they add one / push elsewhere
+      setRoot(data.repoDir ?? 'blank');
+      setTree(data.tree ?? []);
+      setTotalFiles(data.totalFiles ?? 0);
+      if (data.python) {
+        setPythonReady(!!data.python.ready);
+        setPythonDetail(
+          data.python.ready
+            ? (data.python.detail || (data.python.already ? 'Python already installed' : 'Python + pip ready'))
+            : (data.python.error || 'Python install failed'),
+        );
+      } else {
+        setPythonReady(null);
+        setPythonDetail(null);
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [sandboxId]);
+
   const addToContext = useCallback(async (relPath: string) => {
     if (contextFiles.has(relPath)) return;
     // Never load hashed bundles / dist into the model prompt.
@@ -199,7 +247,7 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     root, sandboxId, isRemote, repoUrl, tree, totalFiles,
     contextFiles, pendingChanges, loading, error,
     pythonReady, pythonDetail,
-    openRepo, addToContext, injectContextFile, removeFromContext, clearContext,
+    openRepo, startBlankProject, addToContext, injectContextFile, removeFromContext, clearContext,
     setPendingChanges, applyChanges, clearChanges,
   };
 }

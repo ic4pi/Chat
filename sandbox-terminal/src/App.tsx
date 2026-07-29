@@ -565,7 +565,7 @@ export function App() {
 
   const handlePush = useCallback(async (token: string, message: string) => {
     if (!repo.sandboxId) {
-      setPushError('Open a GitHub repo first.');
+      setPushError('Open a GitHub repo first (blank projects have no remote yet).');
       return;
     }
     setPushing(true);
@@ -838,7 +838,9 @@ export function App() {
       repoRoot={repo.root} tree={repo.tree} totalFiles={repo.totalFiles}
       contextFiles={repo.contextFiles} loading={repo.loading} error={repo.error}
       pythonReady={repo.pythonReady} pythonDetail={repo.pythonDetail}
-      onOpenRepo={repo.openRepo} onAddToContext={repo.addToContext}
+      onOpenRepo={repo.openRepo}
+      onStartBlank={() => { void repo.startBlankProject(); }}
+      onAddToContext={repo.addToContext}
       onRemoveFromContext={repo.removeFromContext} onClearContext={repo.clearContext}
     />
   );

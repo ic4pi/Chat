@@ -138,7 +138,7 @@ export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function Sandbo
     setTimeout(() => { try { fit.fit(); } catch { /* not laid out yet */ } }, 0);
 
     term.writeln('\x1b[2;36m// Sandbox Terminal\x1b[0m');
-    term.writeln('\x1b[2;90m// Open a GitHub repo on the left, then code from chat runs here.\x1b[0m');
+    term.writeln('\x1b[2;90m// Start a blank project or open a GitHub URL on the left, then code from chat runs here.\x1b[0m');
     term.writeln('');
 
     termRef.current = term;
@@ -173,7 +173,7 @@ export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function Sandbo
     term.writeln(`\x1b[2;37m${label}\x1b[0m`);
 
     if (!sandboxIdRef.current) {
-      term.writeln('\n\x1b[1;31m✗  Error: No active sandbox session. Open a GitHub repo first.\x1b[0m');
+      term.writeln('\n\x1b[1;31m✗  Error: No active sandbox session. Start a blank project or open a GitHub URL first.\x1b[0m');
       setStatus('error');
       return;
     }
@@ -255,7 +255,7 @@ export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function Sandbo
       term.writeln(`\x1b[2;37m$ ${command}\x1b[0m`);
 
       if (!sandboxIdRef.current) {
-        const msg = 'No active sandbox session. Open a GitHub repo first.';
+        const msg = 'No active sandbox session. Start a blank project or open a GitHub URL first.';
         term.writeln(`\n\x1b[1;31m✗  Error: ${msg}\x1b[0m`);
         setStatus('error');
         resolve({ exitCode: -1, output: msg });

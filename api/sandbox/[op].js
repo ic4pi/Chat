@@ -12,6 +12,7 @@
 import run from '../../lib/sandbox-api/run.js';
 import runCode from '../../lib/sandbox-api/run-code.js';
 import initRepo from '../../lib/sandbox-api/init-repo.js';
+import initBlank from '../../lib/sandbox-api/init-blank.js';
 import files from '../../lib/sandbox-api/files.js';
 import file from '../../lib/sandbox-api/file.js';
 import writeFiles from '../../lib/sandbox-api/write-files.js';
@@ -23,6 +24,7 @@ const OPS = {
   run,
   'run-code': runCode,
   'init-repo': initRepo,
+  'init-blank': initBlank,
   files,
   file,
   'write-files': writeFiles,
@@ -38,7 +40,7 @@ export default async function handler(req, res) {
   if (!fn) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     return res.status(404).json({
-      error: `Unknown sandbox op "${op || '(empty)'}". Expected run|run-code|init-repo|files|file|write-files|search|detect-test-command|git-push`,
+      error: `Unknown sandbox op "${op || '(empty)'}". Expected run|run-code|init-repo|init-blank|files|file|write-files|search|detect-test-command|git-push`,
     });
   }
   return fn(req, res);

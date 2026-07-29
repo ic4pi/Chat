@@ -753,7 +753,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
         {messages.length === 0 && !loading && (
           <div style={{ fontSize: 12, color: '#444', lineHeight: 1.5 }}>
-            {repoRoot ? 'Ask for a change.' : 'Open a GitHub repo, then ask.'}
+            {repoRoot ? 'Ask for a change.' : 'Start a blank project or open a GitHub URL, then ask.'}
           </div>
         )}
         {messages.map(msg => (
