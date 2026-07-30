@@ -753,35 +753,72 @@ function extensionForLang(lang) {
   return LANG_EXT[l] || 'txt';
 }
 
-// Detect artifacts in a bot response. Rules:
-//   - Any fenced code block >= 3 lines becomes an artifact.
-//   - If the block is preceded by a "```lang title=xyz" or a hint line like
-//     `File: name.ext` on the previous line, use that as the title.
-function extractArtifacts(text) {
+/**
+ * Detect artifacts in a bot response.
+ * - Prefers explicit File: / title= / heading / bold labels as the title.
+ * - Plan/advice replies: only keep blocks that have a real title (no more
+ *   untitled snippet-1.js junk when the model is just illustrating).
+ * - Write role (or explicit File:): keep substantial fences as before.
+ */
+function extractArtifacts(text, { role = 'plan' } = {}) {
   const artifacts = [];
-  const re = /(?:^|\n)([^\n]*)\n```([a-zA-Z0-9_+\-.]*)\s*\n([\s\S]*?)```/g;
+  const re = /(?:^|\n)([^\n]*)\n```([a-zA-Z0-9_+\-.]*)(?:[^\n]*)\n([\s\S]*?)```/g;
   let m;
   while ((m = re.exec(text)) !== null) {
-    const hint = (m[1] || '').trim();
+    const hintLine = (m[1] || '').trim();
+    const fenceOpen = m[0].match(/```([a-zA-Z0-9_+\-.]*)([^\n]*)/);
     const lang = (m[2] || '').trim();
+    const fenceAttrs = (fenceOpen && fenceOpen[2]) || '';
     const content = m[3];
     const lines = content.split('\n').length;
     if (lines < 3) continue;
+
     let title = '';
-    const fileMatch = hint.match(/(?:file|filename|path)\s*[:=]\s*[`'"]?([^\s`'"]+)[`'"]?/i);
-    if (fileMatch) title = fileMatch[1];
+    const attrTitle = fenceAttrs.match(/(?:title|name|file|filename|path)\s*=\s*[`'"]?([^\s`'"]+)[`'"]?/i);
+    if (attrTitle) title = attrTitle[1];
+
+    const fileMatch = hintLine.match(
+      /(?:^|\b)(?:file|filename|path)\s*[:=]\s*[`'"]?([^\s`'"]+)[`'"]?/i,
+    );
+    if (!title && fileMatch) title = fileMatch[1];
+
+    // Markdown heading or bold label on the line before the fence
+    if (!title) {
+      const heading = hintLine.match(/^(?:#{1,6}\s+|\*\*|__)(.+?)(?:\*\*|__)?\s*$/);
+      if (heading) title = heading[1].replace(/[#*_`]/g, '').trim();
+    }
+    // "Here's auth.ts:" / "### login.py"
+    if (!title) {
+      const named = hintLine.match(
+        /[`'"]?([\w./-]+\.[a-zA-Z0-9]{1,12})[`'"]?\s*:?\s*$/,
+      );
+      if (named) title = named[1];
+    }
     if (!title) {
       const firstLine = content.split('\n').find((ln) => ln.trim().length > 0) || '';
-      const commentPath = firstLine.match(/(?:#|\/\/|--)\s*(?:file|filename|path)?\s*[:=]?\s*([\w\-./]+\.[a-zA-Z0-9]+)/);
+      const commentPath = firstLine.match(
+        /(?:#|\/\/|--)\s*(?:file|filename|path)?\s*[:=]?\s*([\w\-./]+\.[a-zA-Z0-9]+)/,
+      );
       if (commentPath) title = commentPath[1];
     }
+
+    const hasExplicitTitle = !!title;
+    // Advice/plan: skip untitled example dumps. Write: keep them, but name better.
+    if (!hasExplicitTitle && role !== 'write') continue;
+
     if (!title) {
       const ext = extensionForLang(lang);
-      title = `snippet-${artifacts.length + 1}.${ext}`;
+      const idHint = (content.match(
+        /(?:function|class|const|def|export\s+(?:default\s+)?(?:async\s+)?function)\s+([A-Za-z_][\w]*)/,
+      ) || [])[1];
+      title = idHint
+        ? `${idHint}.${ext}`
+        : `${lang || 'code'}-${artifacts.length + 1}.${ext}`;
     }
+
     artifacts.push({
       id: uid(),
-      title,
+      title: String(title).slice(0, 120),
       language: lang || 'text',
       content,
       createdAt: Date.now(),
@@ -1074,16 +1111,28 @@ const CHAT_FREE_TIER_TIMEOUT_MS = 45_000;
 /** Active chat/group fetch — Stop aborts this. */
 let activeChatAbort = null;
 let activeChatUserStopped = false;
+/** True while a sendMessage / group round is in flight (blocks accidental re-send). */
+let chatBusy = false;
 
 function setGeneratingUi(on) {
+  chatBusy = !!on;
   if (els.sendBtn) els.sendBtn.classList.toggle('hidden', !!on);
   if (els.stopBtn) els.stopBtn.classList.toggle('hidden', !on);
   if (els.sendBtn) els.sendBtn.disabled = !!on;
+  if (els.input) {
+    els.input.setAttribute('aria-busy', on ? 'true' : 'false');
+    els.input.title = on
+      ? 'Generating — press Esc or Enter to Stop, or tap Stop'
+      : '';
+  }
 }
 
 function stopActiveChat(reason = 'Stopped.') {
   activeChatUserStopped = true;
   try { activeChatAbort?.abort(reason); } catch { /* ignore */ }
+  // Always kill spoken audio + mic — "Stop" means stop everything.
+  try { stopNeuralSpeech(); } catch { /* ignore */ }
+  try { stopListening(); } catch { /* ignore */ }
 }
 
 function timeoutFor(provider, model) {
@@ -1323,6 +1372,9 @@ function isTimeoutLikeError(msg) {
 }
 
 async function sendMessage(text) {
+  // Accidental Enter while a reply is streaming must NOT start another request.
+  if (chatBusy) return;
+
   const chat = ensureActiveChat();
   if (chat.kind === 'group') {
     return sendGroupMessage(text);
@@ -1574,7 +1626,7 @@ async function sendMessage(text) {
         chunk: autoRound + 1,
       });
 
-      const newArts = extractArtifacts(displayReply);
+      const newArts = extractArtifacts(displayReply, { role: state.activeRole || 'plan' });
       if (newArts.length) {
         chat.artifacts.push(...newArts);
         if (state.artifactsCollapsed) {
@@ -2006,6 +2058,7 @@ async function runAdditionalRounds(chat, n) {
 // Group message send — runs all scheduled rounds, then prompts for more
 // ---------------------------------------------------------------------------
 async function sendGroupMessage(text) {
+  if (chatBusy) return;
   const chat = ensureActiveChat();
   const displayText = (text || '').trim();
   if (!displayText) return;
@@ -2137,6 +2190,11 @@ async function renderAll() {
 
 els.inputForm.addEventListener('submit', (e) => {
   e.preventDefault();
+  if (chatBusy) {
+    stopActiveChat('Stopped by user');
+    setTypingActive(true, 'Stopping…');
+    return;
+  }
   const text = els.input.value.trim();
   if (!text && pendingUploads.length === 0) return;
   els.input.value = '';
@@ -2154,8 +2212,23 @@ els.input.addEventListener('input', () => {
   els.input.style.height = Math.min(els.input.scrollHeight, 200) + 'px';
 });
 els.input.addEventListener('keydown', (e) => {
+  // Esc always stops generation + speech.
+  if (e.key === 'Escape') {
+    if (chatBusy || activeAudio) {
+      e.preventDefault();
+      stopActiveChat('Stopped by user');
+      setTypingActive(true, 'Stopping…');
+    }
+    return;
+  }
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
+    // While generating, Enter = Stop (not another send).
+    if (chatBusy) {
+      stopActiveChat('Stopped by user');
+      setTypingActive(true, 'Stopping…');
+      return;
+    }
     els.inputForm.requestSubmit();
   }
 });
@@ -2849,6 +2922,13 @@ els.micBtn?.addEventListener('click', () => {
     stopListening();
     return;
   }
+  if (chatBusy) {
+    // Mic during a reply = stop first, then listen.
+    stopActiveChat('Stopped by user');
+  }
+  // Cut any playing TTS before listening (real voice-chat turn-taking).
+  try { stopNeuralSpeech(); } catch { /* ignore */ }
+
   const rec = getSpeechRecognition();
   if (!rec) {
     alert('Voice input needs a browser with Speech Recognition (Chrome or Safari on a real device).');
@@ -2868,8 +2948,16 @@ els.micBtn?.addEventListener('click', () => {
     listening = false;
     els.micBtn?.classList.remove('listening');
     setTypingActive(false);
-    if (finalText.trim()) {
-      els.input.value = (els.input.value ? els.input.value + ' ' : '') + finalText.trim();
+    const said = finalText.trim();
+    if (!said) return;
+    // Voice chat mode: 🔊 on → send immediately and speak the reply.
+    // Dictation mode: 🔊 off → just put text in the box.
+    if (speakReplies && !chatBusy) {
+      els.input.value = '';
+      els.input.style.height = 'auto';
+      void sendMessage(said);
+    } else {
+      els.input.value = (els.input.value ? els.input.value + ' ' : '') + said;
       els.input.dispatchEvent(new Event('input'));
       els.input.focus();
     }
@@ -2887,7 +2975,7 @@ els.micBtn?.addEventListener('click', () => {
     }
   };
   try {
-    setTypingActive(true, 'Listening…');
+    setTypingActive(true, speakReplies ? 'Voice chat — listening…' : 'Listening…');
     rec.start();
   } catch (err) {
     stopListening();

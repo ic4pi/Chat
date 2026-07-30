@@ -125,13 +125,13 @@
       <div class="input-row">
         <input id="attachInput" type="file" multiple accept="image/*,.txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.css,.html,.yml,.yaml,.csv" hidden />
         <button id="attachBtn" type="button" class="icon-btn" title="Upload photo or file">📎</button>
-        <button id="micBtn" type="button" class="icon-btn" title="Free voice input (browser speech — Chrome/Safari best)">🎤</button>
+        <button id="micBtn" type="button" class="icon-btn" title="Mic: dictation, or voice chat when 🔊 is on (Chrome/Safari)">🎤</button>
         <button id="speakBtn" type="button" class="icon-btn" title="Speak replies with neural voice" aria-pressed="false">🔊</button>
         <textarea id="input" rows="1" placeholder="Plan or ask… (code builds in Workspace)" autofocus></textarea>
-        <button id="stopBtn" type="button" class="text-btn danger hidden" title="Stop the model mid-reply">Stop</button>
+        <button id="stopBtn" type="button" class="text-btn danger hidden" title="Stop reply + voice (Esc or Enter also stops)">Stop</button>
         <button id="sendBtn" type="submit">Send</button>
       </div>
-      <div id="voiceHint" class="voice-hint">Tap <b>Persona · Voice</b> for role / persona / voice. <b>🔊</b> auto-speaks full replies; <b>Read aloud</b> still works when it’s off. In <b>Group</b>, pair each persona with a model and save the session as MP3.</div>
+      <div id="voiceHint" class="voice-hint"><b>Stop</b> / <b>Esc</b> / <b>Enter</b> while generating cancels the reply and speech. <b>🔊</b> on + <b>🎤</b> = voice chat (auto-send). <b>🔊</b> off + mic = dictation only. Code builds in <b>Workspace</b>.</div>
     </form>
   </main>
 

@@ -109,8 +109,16 @@ a.text-btn.group-btn:active {
 .text-btn.danger:hover { background: #2a1010; }
 #stopBtn {
   flex-shrink: 0;
-  min-width: 64px;
+  min-width: 72px;
   font-weight: 700;
+  background: #3a1212;
+  border-color: #ff6a6a;
+  color: #ffb4b4;
+}
+#stopBtn:hover {
+  background: #5a1a1a;
+  border-color: #ff8a8a;
+  color: #fff;
 }
 
 select, input[type="text"], textarea {
