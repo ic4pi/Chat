@@ -2,7 +2,11 @@
  * Unit checks for File: block parsing + work-request detection.
  * Run: node --experimental-strip-types scripts/test-extract.ts
  */
-import { extractFileChanges, looksLikeWorkRequest } from '../src/agentParse.ts';
+import {
+  extractFileChanges,
+  looksLikeIncompleteFileContent,
+  looksLikeWorkRequest,
+} from '../src/agentParse.ts';
 
 let failed = 0;
 function assert(cond: boolean, msg: string) {
@@ -40,6 +44,20 @@ assert(none.length === 0, 'planning prose yields no changes');
 assert(looksLikeWorkRequest('fix the auth bug'), 'detects fix request');
 assert(looksLikeWorkRequest('build a todo app'), 'detects build request');
 assert(!looksLikeWorkRequest('what is a closure?'), 'ignores pure question');
+
+const stub = `// ... existing imports ...\n\nfunction budgetMessages() {}\n// Then in handler:\n`;
+assert(looksLikeIncompleteFileContent(stub, 'api/agent-chat.js'), 'flags incomplete patch stub');
+assert(
+  extractFileChanges(`File: api/agent-chat.js\n\`\`\`js\n${stub}\`\`\``).length === 0,
+  'extract drops incomplete api stub',
+);
+assert(
+  !looksLikeIncompleteFileContent(
+    'export default async function handler(req, res) {\n  return res.status(200).end();\n}\n'.repeat(5),
+    'api/agent-chat.js',
+  ),
+  'accepts complete api handler',
+);
 
 if (failed) {
   console.error(`\n${failed} failure(s)`);

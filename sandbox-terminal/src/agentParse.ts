@@ -8,6 +8,27 @@ export interface FileChange {
   content: string;
 }
 
+/**
+ * True when the model emitted a diff/stub instead of a complete file.
+ * Writing these to disk is what wiped api/agent-chat.js and caused HTTP 500s.
+ */
+export function looksLikeIncompleteFileContent(content: string, filePath = ''): boolean {
+  const c = content || '';
+  if (!c.trim()) return true;
+  if (/(?:^|\n)\s*(?:\/\/|#|\/\*)\s*\.\.\.\s*existing\b/i.test(c)) return true;
+  if (/(?:^|\n)\s*\/\/\s*Then in (?:the )?handler\b/i.test(c)) return true;
+  if (/\b\.\.\.\s*existing (?:code|imports|content|implementation)\b/i.test(c)) return true;
+  if (/\bYOUR[_ -]?CODE[_ -]?HERE\b|\bINSERT[_ -]?CODE[_ -]?HERE\b|<placeholders?>/i.test(c)) return true;
+
+  const rel = filePath.replace(/\\/g, '/');
+  // API serverless handlers must export a default function — stubs never do.
+  if (/^api\/.+\.js$/.test(rel) || rel.includes('/api/')) {
+    if (!/\bexport\s+default\b/.test(c)) return true;
+    if (c.length < 200) return true;
+  }
+  return false;
+}
+
 /** Parse LLM output for "File: path\\n```lang\\ncontent```" blocks. */
 export function extractFileChanges(text: string): FileChange[] {
   const changes: FileChange[] = [];
@@ -19,7 +40,7 @@ export function extractFileChanges(text: string): FileChange[] {
   while ((m = re.exec(text)) !== null) {
     const filePath = m[1]!.trim().replace(/^[`'"]+|[`'"]+$/g, '');
     const content  = m[2]!;
-    if (filePath && !filePath.includes('\n')) {
+    if (filePath && !filePath.includes('\n') && !looksLikeIncompleteFileContent(content, filePath)) {
       changes.push({ path: filePath, content });
     }
   }

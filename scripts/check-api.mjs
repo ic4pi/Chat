@@ -39,16 +39,52 @@ function ok(msg) {
   console.log(`check-api: ok — ${msg}`);
 }
 
+// Incomplete "patch-style" dumps that wiped production APIs (HTTP 500).
+// Example: model wrote `// ... existing imports ...` + a helper, auto-apply
+// overwrote the whole file, and `node --check` still passed.
+const INCOMPLETE_PATCH_RE =
+  /(?:^|\n)\s*(?:\/\/|#|\/\*)\s*\.\.\.\s*existing\b|(?:^|\n)\s*\/\/\s*Then in (?:the )?handler\b|\b\.\.\.\s*existing (?:code|imports|content|implementation)\b/i;
+
 // 1) Syntax check critical modules (works without installing deps beyond node).
 for (const rel of SYNTAX_FILES) {
   const abs = path.join(root, rel);
   if (!existsSync(abs)) fail(`missing required file ${rel}`);
+  const src = readFileSync(abs, 'utf8');
+  if (INCOMPLETE_PATCH_RE.test(src)) {
+    fail(
+      `${rel} looks like an incomplete patch (contains "... existing" / stub comments). ` +
+        'Workspace must write FULL files, not diffs. Restore the file before pushing.',
+    );
+  }
   const r = spawnSync(process.execPath, ['--check', abs], { encoding: 'utf8' });
   if (r.status !== 0) {
     fail(`syntax error in ${rel}\n${(r.stderr || r.stdout || '').trim()}`);
   }
 }
 ok(`syntax (${SYNTAX_FILES.length} files)`);
+
+// 1b) Handlers must export default. Prefer a real import when the module
+// graph doesn't need optional native deps (e.g. @vercel/sandbox).
+const HANDLER_IMPORTS = [
+  'api/agent-chat.js',
+  'api/chat.js',
+  'api/models.js',
+  'api/group-chat.js',
+  'api/admin-config.js',
+];
+for (const rel of HANDLER_IMPORTS) {
+  const abs = path.join(root, rel);
+  const mod = await import(pathToFileURL(abs).href + `?t=${Date.now()}`);
+  if (typeof mod.default !== 'function') {
+    fail(`${rel} must export default async function handler (got ${typeof mod.default})`);
+  }
+}
+// Static check for sandbox router (imports @vercel/sandbox — may be absent in CI).
+const sandboxOpSrc = readFileSync(path.join(root, 'api/sandbox/[op].js'), 'utf8');
+if (!/\bexport\s+default\b/.test(sandboxOpSrc)) {
+  fail('api/sandbox/[op].js must export default handler');
+}
+ok(`handler exports (${HANDLER_IMPORTS.length + 1} files)`);
 
 // 2) Contract: providers catalog + sync resolveProvider (must not be a Promise).
 const providers = await import(pathToFileURL(path.join(root, 'lib/providers.js')).href);
