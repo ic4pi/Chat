@@ -685,7 +685,7 @@ export function App() {
         {(repo.repoUrl || chatMessages.length > 0) && (
           <button type="button"
             onClick={() => {
-              if (!confirm('Delete this entire workspace session on this device?\n\nChat history for this session is removed. Personas are not affected.')) return;
+              if (!confirm('Delete this workspace conversation on this device?')) return;
               clearSession(sessionId);
               const next = listSessions()[0];
               if (next) openStoredSession(next);
@@ -694,7 +694,7 @@ export function App() {
             style={{ background: 'transparent', color: '#555', border: '1px solid #222',
               borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
               fontFamily: 'inherit', fontSize: 10 }}>
-            Delete session
+            Delete
           </button>
         )}
         <select value={role} onChange={e => handleRoleChange(e.target.value as RoleId)}
