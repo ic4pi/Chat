@@ -107,10 +107,15 @@ function buildSystemPrompt(
     'If the user wants changes written: output File: blocks with FULL file contents.',
     'NEVER write diffs, patches, or stubs. Forbidden: "// ... existing imports ...", "// ... existing code ...", "Then in handler:".',
     'Partial File: blocks are rejected and NOT saved — incomplete writes break production (HTTP 500).',
-    'If they only want advice: plain English, cite real paths from context.',
+    'If they only want advice: plain English, cite real paths from context. Do not dump untitled example code.',
     'Never claim something is fixed unless you outputted complete File: blocks.',
-    'Never ask where to save — the host app saves/downloads/pushes.',
     'Never invent paths. Use only paths from the tree / open files / search hits.',
+    '',
+    'QUALITY BAR (websites / apps):',
+    '- Ship something that looks finished: real <title>, working CSS, readable layout, no broken local asset links.',
+    '- After writing files, the host runs Auto-test / static smoke in this sandbox. Fix failures until green.',
+    '- NEVER tell the user to Push, or claim the work is done, until sandbox tests/smoke have passed.',
+    '- If smoke fails on title/layout/assets, fix the HTML/CSS completely in File: blocks and let Auto-test re-run.',
   );
 
   if (pythonReady === true) {

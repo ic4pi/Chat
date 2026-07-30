@@ -126,6 +126,8 @@ interface Props {
   applying:       boolean;
   appliedPaths:   Set<string>;
   canPush:        boolean;
+  /** When set, show why Push is hidden/locked (unverified sandbox). */
+  pushBlockedReason?: string | null;
   pushing:        boolean;
   pushError:      string | null;
   pushOk:         string | null;
@@ -137,7 +139,7 @@ interface Props {
 }
 
 export function DiffPanel({
-  changes, applying, appliedPaths, canPush, pushing, pushError, pushOk,
+  changes, applying, appliedPaths, canPush, pushBlockedReason, pushing, pushError, pushOk,
   onApply, onDismiss, onDismissAll, onPush, onCopyGitCommands,
 }: Props) {
   const [showPush, setShowPush] = useState(false);
@@ -217,8 +219,15 @@ export function DiffPanel({
           </div>
         </div>
         <div style={{ marginTop: 6, fontSize: 10, color: '#888', lineHeight: 1.45 }}>
-          Auto-save writes to the sandbox. Download keeps the full file on your device. Push sends to GitHub.
+          Auto-save writes to the sandbox. Download keeps the full file on your device.
+          Push only unlocks after Auto-test / smoke passes in the sandbox.
         </div>
+        {!canPush && pushBlockedReason && (
+          <div style={{ marginTop: 6, fontSize: 10, color: '#ffb4b4', lineHeight: 1.45 }}
+            data-testid="push-blocked-reason">
+            {pushBlockedReason}
+          </div>
+        )}
 
         {showPush && canPush && (
           <div style={{ marginTop: 10, padding: '10px', background: '#0a0a0a',
@@ -226,9 +235,9 @@ export function DiffPanel({
             <div style={{ fontSize: 11, color: '#ccc', marginBottom: 8, lineHeight: 1.45 }}>
               Paste a GitHub token with <code style={{ color: '#d4ff3f' }}>repo</code> access
               (github.com → Settings → Developer settings → Personal access tokens).
-              Saved in this browser so you do not have to re-enter it when you reopen the workspace.
-              Push always runs <code style={{ color: '#d4ff3f' }}>npm run check</code> first and
-              will refuse to push if checks fail.
+              Saved in this browser. Push re-runs sandbox checks and{' '}
+              <strong style={{ color: '#ffb4b4' }}>refuses</strong> if they fail —
+              including static HTML smoke when there is no npm test.
             </div>
             <input
               type="password"

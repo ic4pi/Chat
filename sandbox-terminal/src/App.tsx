@@ -148,20 +148,25 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
   if (verifyState === 'idle') return null;
   const color = verifyState === 'passed' ? '#8fbf6f' : verifyState === 'failed' ? '#ff6a6a' :
     verifyState === 'running' ? '#5b8dee' : '#d4ff3f';
-  const label = verifyState === 'detecting' ? 'Detecting test command…' :
-    verifyState === 'running' ? `Running: ${testCommand ?? '…'}` :
-    verifyState === 'passed' ? '✓ Tests passed' :
-    verifyState === 'failed' ? `✗ Tests failed after ${attempt} attempts` :
-    `⟳ Retrying (attempt ${attempt}/3)`;
+  const shortCmd = testCommand
+    ? (testCommand.length > 64 ? `${testCommand.slice(0, 64)}…` : testCommand)
+    : '…';
+  const label = verifyState === 'detecting' ? 'Detecting test / smoke command…' :
+    verifyState === 'running' ? `Running: ${shortCmd}` :
+    verifyState === 'passed' ? '✓ Verified — Push unlocked' :
+    verifyState === 'failed' ? `✗ Not verified after ${attempt} attempts — Push locked` :
+    `⟳ Fixing from test failure (attempt ${attempt}/5)`;
   if (askCommand) return (
     <div style={{ padding: '8px 12px', background: '#0f0f0f', borderTop: '1px solid #2a2a2a', flexShrink: 0 }}>
-      <div style={{ fontSize: 11, color: '#888', marginBottom: 5, lineHeight: 1.45 }}>
-        Auto-test is optional. Skip unless you know your project’s test command.
+      <div style={{ fontSize: 11, color: '#ffb4b4', marginBottom: 5, lineHeight: 1.45 }}>
+        No test command found. Push stays locked until a check can run.
+        Enter <code style={{ color: '#d4ff3f' }}>npm test</code> / your command, or add an{' '}
+        <code style={{ color: '#d4ff3f' }}>index.html</code> for the built-in smoke.
       </div>
       <div style={{ display: 'flex', gap: 6 }}>
         <input value={cmd} onChange={e => setCmd(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && cmd.trim() && onSetCommand(cmd.trim())}
-          placeholder="only if you know it — or tap Skip"
+          placeholder="e.g. npm test"
           style={{ flex: 1, background: '#151515', color: '#e8e8e8', border: '1px solid #333',
             borderRadius: 4, padding: '4px 8px', fontFamily: 'inherit', fontSize: 12, outline: 'none' }} />
         <button onClick={() => cmd.trim() && onSetCommand(cmd.trim())}
@@ -169,9 +174,9 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
             padding: '4px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
           Set & Run</button>
         <button onClick={onDismiss}
-          style={{ background: '#1a1a1a', color: '#e8e8e8', border: '1px solid #333',
-            borderRadius: 4, padding: '4px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
-          Skip</button>
+          style={{ background: '#1a1a1a', color: '#888', border: '1px solid #333',
+            borderRadius: 4, padding: '4px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11 }}>
+          Later</button>
       </div>
     </div>
   );
@@ -439,23 +444,23 @@ export function App() {
     } finally { setApplying(false); }
   }, [repo]);
 
-  const autoVerify = useAutoVerify(repo.root, termRef, chatRef, repo.applyChanges);
+  const autoVerify = useAutoVerify(repo.root, repo.sandboxId, termRef, chatRef, repo.applyChanges);
 
   const runVerify = useCallback(async () => {
-    if (verifyingRef.current) return;
+    if (verifyingRef.current) return autoVerify.verifyState === 'passed' ? 'passed' as const : 'idle' as const;
     verifyingRef.current = true;
     // Stay on Chat — don't yank the user to Terminal.
-    try { await autoVerify.verify(); }
+    try { return await autoVerify.verify(); }
     finally { verifyingRef.current = false; }
   }, [autoVerify]);
 
   const handleApplyAndVerify = useCallback(async (files?: PendingChange[]) => {
     const results = await handleApply(files);
-    if (results.some(r => r.ok) && autoVerifyOn && repo.root) {
+    if (results.some(r => r.ok) && autoVerifyOn && (repo.root || repo.sandboxId)) {
       await runVerify();
     }
     return results;
-  }, [handleApply, autoVerifyOn, repo.root, runVerify]);
+  }, [handleApply, autoVerifyOn, repo.root, repo.sandboxId, runVerify]);
 
   const handleAutoContext = useCallback(async (query: string): Promise<{
     hits: SearchHit[];
@@ -577,6 +582,22 @@ export function App() {
       if (repo.pendingChanges.length > 0) {
         await handleApply(repo.pendingChanges);
       }
+
+      // Client gate: never offer a push the sandbox hasn't proven.
+      // (Server still re-runs checks — belt and suspenders.)
+      if (autoVerifyOn) {
+        const result = autoVerify.verifyState === 'passed'
+          ? 'passed'
+          : await runVerify();
+        if (result !== 'passed') {
+          throw new Error(
+            'Push blocked — sandbox tests/smoke did not pass.\n' +
+            'Keep Auto-test on and let the agent fix until you see “Verified — Push unlocked”.\n' +
+            (autoVerify.lastFailDetail ? `\nLast failure:\n${autoVerify.lastFailDetail}` : ''),
+          );
+        }
+      }
+
       const res = await fetch(`${API_URL}/git-push`, {
         method: 'POST',
         headers: {
@@ -595,12 +616,7 @@ export function App() {
         message?: string; error?: string; detail?: string; checkFailed?: boolean;
       };
       if (!res.ok) {
-        const err = data.error ?? `HTTP ${res.status}`;
-        throw new Error(
-          data.checkFailed
-            ? err
-            : err,
-        );
+        throw new Error(data.error ?? `HTTP ${res.status}`);
       }
       if (data.pushed) {
         setPushOk(
@@ -615,7 +631,7 @@ export function App() {
     } finally {
       setPushing(false);
     }
-  }, [repo.sandboxId, repo.pendingChanges, handleApply]);
+  }, [repo.sandboxId, repo.pendingChanges, handleApply, autoVerifyOn, autoVerify.verifyState, autoVerify.lastFailDetail, runVerify]);
 
   // ── Shared topbar ────────────────────────────────────────────────────────
   const topbar = (
@@ -804,7 +820,18 @@ export function App() {
       <DiffPanel
         changes={repo.pendingChanges} applying={applying}
         appliedPaths={appliedPaths}
-        canPush={!!repo.sandboxId && !!repo.repoUrl}
+        canPush={!!repo.sandboxId && !!repo.repoUrl && autoVerify.pushAllowed}
+        pushBlockedReason={
+          !repo.sandboxId || !repo.repoUrl
+            ? null
+            : autoVerify.pushAllowed
+              ? null
+              : autoVerify.verifyState === 'failed'
+                ? 'Push locked — tests/smoke failed. Retry Auto-test until verified.'
+                : autoVerify.verifyState === 'running' || autoVerify.verifyState === 'detecting' || String(autoVerify.verifyState).startsWith('retry')
+                  ? 'Push locked — sandbox is still verifying…'
+                  : 'Push locked until Auto-test passes in the sandbox.'
+        }
         pushing={pushing}
         pushError={pushError}
         pushOk={pushOk}
@@ -816,7 +843,7 @@ export function App() {
           const cmd = buildPushShellCommands({ commitMessage: 'Apply agent changes' });
           const ok = await copyText(cmd);
           if (ok) {
-            setPushOk('Git commands copied — paste into Terminal. For push with auth, use Push to GitHub.');
+            setPushOk('Git commands copied — paste into Terminal. For push with auth, use Push to GitHub (only after verified).');
             setMobileTab('terminal');
           }
         }}
