@@ -1,9 +1,15 @@
 /**
  * POST /api/agent-chat
- * Body: { messages, systemPrompt, model?, provider?, apiKey? }
+ * Body: { messages, systemPrompt, model?, provider?, apiKey?, stream? }
  *
  * Client can supply a full systemPrompt (file tree + context) and optionally
  * a BYOK apiKey for Venice / OpenRouter / Cerebras / Groq / NVIDIA.
+ *
+ * Default is SSE streaming so tokens reach the browser before Vercel's
+ * Hobby ~60s hard kill. Non-stream JSON remains available via stream:false.
+ *
+ * IMPORTANT: keep UPSTREAM_TIMEOUT_MS under vercel.json maxDuration (Hobby
+ * caps at 60s). A longer abort timer never fires — Vercel returns opaque 504.
  */
 
 import { estimateTokens } from '../lib/context-filters.js';
@@ -13,6 +19,16 @@ import { resolveProvider, withProviderChatExtras } from '../lib/providers.js';
 const MAX_INPUT_TOKENS = 100_000;
 const MAX_SYSTEM_TOKENS = 70_000;
 const MAX_HISTORY_TOKENS = 25_000;
+
+/**
+ * Leave headroom under Vercel Hobby's hard 60s cap by default.
+ * On Pro (vercel.json maxDuration 300), set AGENT_CHAT_TIMEOUT_MS=280000.
+ */
+const UPSTREAM_TIMEOUT_MS = Math.max(
+  10_000,
+  Math.min(Number(process.env.AGENT_CHAT_TIMEOUT_MS) || 55_000, 280_000),
+);
+const CHUNK_MAX_TOKENS = 8192;
 
 function truncateToTokens(text, maxTokens) {
   const maxChars = maxTokens * 4;
@@ -69,31 +85,152 @@ function budgetMessages(systemPrompt, messages) {
   return { system, messages: hist, tokens: total };
 }
 
-export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Sandbox-Session, X-Provider-Key');
-  if (req.method === 'OPTIONS') return res.status(204).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+function extractDelta(chunk) {
+  const choice = chunk?.choices?.[0];
+  if (!choice) return { text: '', reasoning: '' };
+  const delta = choice.delta || {};
+  const text =
+    (typeof delta.content === 'string' ? delta.content : '') ||
+    (typeof choice.text === 'string' ? choice.text : '') ||
+    '';
+  const reasoning =
+    (typeof delta.reasoning_content === 'string' ? delta.reasoning_content : '') ||
+    (typeof delta.reasoning === 'string' ? delta.reasoning : '') ||
+    (typeof delta.thinking === 'string' ? delta.thinking : '') ||
+    '';
+  return { text, reasoning };
+}
 
-  const { messages, systemPrompt, model, provider: providerId, apiKey: clientKey } = req.body || {};
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return res.status(400).json({ error: 'messages array required' });
-  }
+function sseWrite(res, obj) {
+  res.write(`data: ${JSON.stringify(obj)}\n\n`);
+}
 
-  let resolved;
+async function handleStream(res, resolved, model, messagesWithSystem, providerId, budgeted) {
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+  sseWrite(res, { type: 'status', message: `Connecting to ${resolved.label}…` });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+  let fullReply = '';
+  let finishReason = '';
+
+  const finalizeReply = (opts = {}) => {
+    sseWrite(res, {
+      type: 'done',
+      reply: fullReply,
+      incomplete: opts.incomplete || finishReason === 'length' || undefined,
+      timedOut: opts.timedOut || undefined,
+      provider: resolved.label,
+      model,
+      tokens: budgeted.tokens,
+      keySource: resolved.keySource,
+    });
+    return res.end();
+  };
+
   try {
-    resolved = resolveProvider(providerId || 'venice', clientKey || req.headers['x-provider-key']);
+    const upstream = await fetch(resolved.url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${resolved.apiKey}`,
+        Accept: 'text/event-stream',
+        ...resolved.extraHeaders(),
+      },
+      body: JSON.stringify(
+        withProviderChatExtras(
+          {
+            model: model || 'dolphin-3.0-mistral-24b',
+            messages: messagesWithSystem,
+            stream: true,
+            max_tokens: CHUNK_MAX_TOKENS,
+          },
+          providerId || resolved.id || 'venice',
+        ),
+      ),
+      signal: controller.signal,
+    });
+
+    if (!upstream.ok) {
+      const errText = await upstream.text();
+      let detail = errText;
+      try { detail = JSON.parse(errText)?.error?.message || errText; } catch { /* keep */ }
+      sseWrite(res, {
+        type: 'error',
+        error: `${resolved.label} error (${upstream.status}): ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`,
+        provider: resolved.label,
+        model,
+      });
+      return res.end();
+    }
+
+    sseWrite(res, { type: 'status', message: 'Model is writing…' });
+
+    const reader = upstream.body?.getReader();
+    if (!reader) {
+      sseWrite(res, { type: 'error', error: 'Upstream returned no stream body' });
+      return res.end();
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith(':')) continue;
+        if (!trimmed.startsWith('data:')) continue;
+        const payload = trimmed.slice(5).trim();
+        if (payload === '[DONE]') {
+          return finalizeReply();
+        }
+        let chunk;
+        try { chunk = JSON.parse(payload); } catch { continue; }
+        const fr = chunk?.choices?.[0]?.finish_reason;
+        if (typeof fr === 'string' && fr) finishReason = fr;
+        const { text } = extractDelta(chunk);
+        if (text) {
+          fullReply += text;
+          sseWrite(res, { type: 'token', text });
+        }
+      }
+    }
+
+    return finalizeReply();
   } catch (err) {
-    return res.status(500).json({ error: err.message || 'Provider not configured' });
+    const aborted = err?.name === 'AbortError' || controller.signal.aborted;
+    // Keep any streamed text so Workspace can still apply File: blocks.
+    if (aborted && fullReply.trim()) {
+      return finalizeReply({ incomplete: true, timedOut: true });
+    }
+    sseWrite(res, {
+      type: 'error',
+      error: aborted
+        ? `${resolved.label} timed out after ${UPSTREAM_TIMEOUT_MS / 1000}s (Vercel function limit). Try a faster model or a shorter fix ask.`
+        : (err.message || 'Upstream request failed'),
+      provider: resolved.label,
+      model,
+      partialReply: fullReply || undefined,
+    });
+    return res.end();
+  } finally {
+    clearTimeout(timer);
   }
+}
 
-  const budgeted = budgetMessages(systemPrompt, messages);
-  const messagesWithSystem = budgeted.system
-    ? [{ role: 'system', content: budgeted.system }, ...budgeted.messages]
-    : budgeted.messages;
-
-  const UPSTREAM_TIMEOUT_MS = 110_000;
+async function handleJson(res, resolved, model, messagesWithSystem, providerId, budgeted) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
@@ -111,6 +248,7 @@ export default async function handler(req, res) {
             model: model || 'dolphin-3.0-mistral-24b',
             messages: messagesWithSystem,
             stream: false,
+            max_tokens: CHUNK_MAX_TOKENS,
           },
           providerId || resolved.id || 'venice',
         ),
@@ -143,7 +281,7 @@ export default async function handler(req, res) {
   } catch (err) {
     if (err?.name === 'AbortError') {
       return res.status(504).json({
-        error: `${resolved.label} timed out after ${UPSTREAM_TIMEOUT_MS / 1000}s.`,
+        error: `${resolved.label} timed out after ${UPSTREAM_TIMEOUT_MS / 1000}s (Vercel function limit). Try a faster model or a shorter fix ask.`,
         provider: resolved.label,
         model,
       });
@@ -152,4 +290,43 @@ export default async function handler(req, res) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Sandbox-Session, X-Provider-Key');
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+
+  const {
+    messages,
+    systemPrompt,
+    model,
+    provider: providerId,
+    apiKey: clientKey,
+    stream: wantStream,
+  } = req.body || {};
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: 'messages array required' });
+  }
+
+  let resolved;
+  try {
+    resolved = resolveProvider(providerId || 'venice', clientKey || req.headers['x-provider-key']);
+  } catch (err) {
+    return res.status(500).json({ error: err.message || 'Provider not configured' });
+  }
+
+  const budgeted = budgetMessages(systemPrompt, messages);
+  const messagesWithSystem = budgeted.system
+    ? [{ role: 'system', content: budgeted.system }, ...budgeted.messages]
+    : budgeted.messages;
+
+  // Default stream:true — Workspace needs tokens before the 60s Hobby kill.
+  const useStream = wantStream !== false;
+  if (useStream) {
+    return handleStream(res, resolved, model, messagesWithSystem, providerId, budgeted);
+  }
+  return handleJson(res, resolved, model, messagesWithSystem, providerId, budgeted);
 }

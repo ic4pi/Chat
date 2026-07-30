@@ -62,7 +62,10 @@ const API_URL =
 
 // Auto-context must NEVER block the user bubble from appearing.
 const BEFORE_SEND_TIMEOUT_MS = 8_000;
-const CHAT_TIMEOUT_MS = 115_000;
+/** Above Hobby default (55s) and Pro override (up to 280s) so the API's clear error wins. */
+const CHAT_TIMEOUT_MS = 300_000;
+/** Skip the corrective nudge if the first model call already burned most of the Hobby window. */
+const NUDGE_BUDGET_MS = 40_000;
 
 // ---------------------------------------------------------------------------
 // System prompt
@@ -225,7 +228,62 @@ function friendlyError(raw: string): string {
   if (lower.includes('abort')) {
     return 'Request timed out waiting for the model. Try a faster model or a shorter prompt.';
   }
+  if (lower.includes('http 504') || lower.includes('504') || lower.includes('gateway timeout')) {
+    return 'Workspace hit the ~60s server time limit before the model finished. Try a faster model, or ask to fix one file at a time.';
+  }
   return raw || 'Request failed';
+}
+
+/** Read SSE from /api/agent-chat (stream:true). Falls back if the body is plain JSON. */
+async function readAgentReply(res: Response): Promise<string> {
+  const ctype = (res.headers.get('content-type') || '').toLowerCase();
+  if (!ctype.includes('text/event-stream') || !res.body) {
+    const data = await res.json() as { reply?: string; error?: string };
+    if (data.error && !data.reply) throw new Error(data.error);
+    return data.reply ?? '(empty response)';
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let reply = '';
+  let streamError: string | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() || '';
+    for (const part of parts) {
+      for (const line of part.split('\n')) {
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+        let ev: {
+          type?: string;
+          text?: string;
+          reply?: string;
+          error?: string;
+          partialReply?: string;
+        };
+        try { ev = JSON.parse(payload); } catch { continue; }
+        if (ev.type === 'token' && typeof ev.text === 'string') {
+          reply += ev.text;
+        } else if (ev.type === 'done' && typeof ev.reply === 'string') {
+          reply = ev.reply;
+        } else if (ev.type === 'error') {
+          streamError = ev.error || 'Stream error';
+          if (typeof ev.partialReply === 'string' && ev.partialReply.trim()) {
+            reply = ev.partialReply;
+          }
+        }
+      }
+    }
+  }
+
+  if (streamError && !reply.trim()) throw new Error(streamError);
+  return reply || '(empty response)';
 }
 
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
@@ -494,19 +552,25 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             provider: prov,
             model: mod,
             apiKey: key || undefined,
+            stream: true,
           }),
           signal: controller.signal,
         });
         if (!res.ok) {
-          const d = await res.json().catch(() => ({ error: `HTTP ${res.status}` })) as { error?: string };
-          throw new Error(d.error ?? `HTTP ${res.status}`);
+          const ctype = (res.headers.get('content-type') || '').toLowerCase();
+          if (ctype.includes('application/json')) {
+            const d = await res.json().catch(() => ({ error: `HTTP ${res.status}` })) as { error?: string };
+            throw new Error(d.error ?? `HTTP ${res.status}`);
+          }
+          throw new Error(`HTTP ${res.status}`);
         }
-        const data = await res.json() as { reply?: string };
-        return data.reply ?? '(empty response)';
+        return await readAgentReply(res);
       } finally {
         clearTimeout(timer);
       }
     };
+
+    const sendStartedAt = Date.now();
 
     try {
       // 2) Optional auto-context, hard-capped so a hung /search can't eat the send.
@@ -614,11 +678,13 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       }]);
 
       // Only nudge for explicit APPLY asks — never for suggestions/reviews.
+      // Skip if the first call already used most of the ~60s Hobby window (avoids a second 504).
       const shouldNudge = fc.length === 0
         && kind === 'user'
         && applyTurn
         && !suggestTurn
-        && (!!root || ctx.size > 0);
+        && (!!root || ctx.size > 0)
+        && (Date.now() - sendStartedAt) < NUDGE_BUDGET_MS;
 
       if (shouldNudge) {
         const nudgeMsg: Message = {

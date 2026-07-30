@@ -15,7 +15,11 @@ const ADMIN_HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>Uncensored Chat — Admin</title>
+<title>Jive — Admin</title>
+<meta name="theme-color" content="#000000" />
+<link rel="icon" href="/favicon.ico" sizes="any" />
+<link rel="icon" type="image/png" href="/favicon.png" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 <link rel="stylesheet" href="/styles.css" />
 <link rel="stylesheet" href="/admin.css" />
 </head>
