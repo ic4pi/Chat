@@ -792,7 +792,8 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
   return (
     <div data-testid="chat-pane" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
-      background: '#0a0a0a', fontFamily: '"JetBrains Mono",ui-monospace,monospace' }}>
+      background: '#0a0a0a', color: '#e8e8e8',
+      fontFamily: '"JetBrains Mono",ui-monospace,monospace' }}>
 
       {/* header */}
       <div style={{ padding: '7px 12px', borderBottom: '1px solid #1e1e1e',
@@ -838,20 +839,51 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             {msg.role === 'user' && msg.kind === 'retry-inject' ? (
               <div style={{ padding: '5px 10px', background: '#111a0a',
                 border: '1px dashed #2a4020', borderRadius: 6,
-                fontSize: 11, color: '#6a8a5a', whiteSpace: 'pre-wrap',
-                maxHeight: 120, overflowY: 'auto' }}>
-                <span style={{ fontWeight: 700, display: 'block', marginBottom: 3 }}>
+                fontSize: 11, color: '#a8c898', whiteSpace: 'pre-wrap',
+                maxHeight: 160, overflowY: 'auto' }}>
+                <span style={{ fontWeight: 700, display: 'block', marginBottom: 3, color: '#d4ff3f' }}>
                   ⟳ Auto-retry — test failure injected
                 </span>
                 {msg.content.slice(0, 500)}{msg.content.length > 500 ? '…' : ''}
               </div>
             ) : msg.role === 'user' ? (
-              <div style={{ background: '#1f1f1f', border: '1px solid #2a2a2a',
-                borderRadius: 8, padding: '7px 12px', fontSize: 13, whiteSpace: 'pre-wrap' }}>
+              <div style={{
+                background: '#243018',
+                border: '1px solid #5a7a2a',
+                borderRadius: 8,
+                padding: '8px 12px',
+                fontSize: 14,
+                lineHeight: 1.45,
+                color: '#f4ffe8',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+              }}>
+                <div style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  color: '#d4ff3f',
+                  marginBottom: 4,
+                }}>
+                  You asked
+                </div>
                 {msg.content}
               </div>
             ) : (
-              <AssistantBody msg={msg} appliedPaths={appliedPaths} onRunCode={onRunCode} />
+              <div>
+                <div style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  color: '#8fbf6f',
+                  marginBottom: 4,
+                }}>
+                  Agent
+                </div>
+                <AssistantBody msg={msg} appliedPaths={appliedPaths} onRunCode={onRunCode} />
+              </div>
             )}
           </div>
         ))}
@@ -902,20 +934,21 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           onKeyDown={e => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); }
           }}
-          placeholder="What should change?"
+          placeholder={loading ? 'Waiting for reply… (Esc stops)' : 'What should change?'}
           disabled={loading}
-          style={{ flex: 1, background: '#111', color: '#e8e8e8',
+          style={{ flex: 1, background: '#111', color: '#f0f0f0',
             border: '1px solid #2a2a2a', borderRadius: 4,
             padding: '7px 10px', fontFamily: 'inherit', fontSize: 16,
             outline: 'none', resize: 'vertical', minHeight: 48, maxHeight: 120,
-            opacity: loading ? .6 : 1 }} />
+            WebkitTextFillColor: '#f0f0f0',
+            opacity: 1 }} />
         <button type="submit" data-testid="chat-send" disabled={(!input.trim() && uploads.length === 0) || loading}
           style={{ background: (input.trim() || uploads.length) && !loading ? '#d4ff3f' : '#1a1a1a',
-            color: (input.trim() || uploads.length) && !loading ? '#0a0a0a' : '#444',
+            color: (input.trim() || uploads.length) && !loading ? '#0a0a0a' : '#888',
             border: 'none', borderRadius: 4, padding: '8px 16px',
             cursor: (input.trim() || uploads.length) && !loading ? 'pointer' : 'default',
             fontFamily: 'inherit', fontSize: 12, fontWeight: 700,
-            alignSelf: 'flex-end' }}>Send</button>
+            alignSelf: 'flex-end' }}>{loading ? '…' : 'Send'}</button>
       </form>
     </div>
   );
