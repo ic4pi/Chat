@@ -26,11 +26,14 @@ import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef,
 import type { PendingChange } from './useRepoContext.js';
 import type { FileNode } from './types.js';
 import {
+  extractFileChangeReport,
   extractFileChanges,
+  formatRejectedSandboxWarning,
   looksLikeApplyRequest,
   looksLikeSuggestRequest,
   looksLikeLegacyWelcome,
   needsCodeContext,
+  nudgeAfterRejects,
   NUDGE_PROMPT,
 } from './agentParse.js';
 import {
@@ -43,7 +46,9 @@ import {
 import { copyText, downloadTextFile } from './downloadFile.js';
 
 export {
+  extractFileChangeReport,
   extractFileChanges,
+  formatRejectedSandboxWarning,
   looksLikeApplyRequest,
   looksLikeSuggestRequest,
   needsCodeContext,
@@ -91,8 +96,16 @@ function buildSystemPrompt(
 
   parts.push(
     'You are a coding agent for the user\'s opened GitHub repo in a cloud sandbox.',
+    'Act like a senior engineer: correct, complete code — not sketches.',
     'Be direct. No tutorials. No fake example tasks. No <placeholders>, TODOs, or "your-token-here".',
     'Every code file you output must be COMPLETE and ready to save.',
+    '',
+    'HARD RULE — NEVER DEGRADE THIS SANDBOX:',
+    '- Incomplete File: blocks are REJECTED before write. Nothing partial is saved.',
+    '- Forbidden: diffs, patches, stubs, "// ... existing imports ...", "// ... existing code ...", "Then in handler:", "rest of file unchanged".',
+    '- If a file is long, still output the ENTIRE file. Prefer one full file over five stubs.',
+    '- Truncating api/*.js or lib/sandbox-api/* has taken production to HTTP 500. Do not do it.',
+    '- Never claim a fix was applied unless you emitted complete accepted File: blocks.',
     '',
     'SANDBOX FACTS (do not invent limitations):',
     '- This is a Vercel Sandbox microVM (Amazon Linux 2023), NOT a local laptop.',
@@ -105,10 +118,7 @@ function buildSystemPrompt(
     '- If a package is missing, install it with pip in the venv (or dnf for system libs), then run.',
     '',
     'If the user wants changes written: output File: blocks with FULL file contents.',
-    'NEVER write diffs, patches, or stubs. Forbidden: "// ... existing imports ...", "// ... existing code ...", "Then in handler:".',
-    'Partial File: blocks are rejected and NOT saved — incomplete writes break production (HTTP 500).',
     'If they only want advice: plain English, cite real paths from context. Do not dump untitled example code.',
-    'Never claim something is fixed unless you outputted complete File: blocks.',
     'Never invent paths. Use only paths from the tree / open files / search hits.',
     '',
     'QUALITY BAR (websites / apps):',
@@ -661,18 +671,20 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           '\n\nSUGGEST-ONLY this turn: plain advice, real paths, no File: blocks, no placeholders.';
       } else if (applyTurn) {
         systemPrompt +=
-          '\n\nAPPLY this turn: output complete File: blocks only (full files, no placeholders).';
+          '\n\nAPPLY this turn: output complete File: blocks only (FULL files). Stubs are rejected and will not save.';
       }
 
       // Always hit agent-chat — it accepts systemPrompt. /api/chat ignores it
       // and is the main-chat persona endpoint, not the agent.
       let reply = await callAgent(history, systemPrompt, sid, prov, mod, key);
       let segs  = parseSegments(reply);
-      let fc    = extractFileChanges(reply);
+      let report = extractFileChangeReport(reply);
+      let fc = report.accepted;
 
       // Suggest-only: ignore any File: blocks the model wrongly emitted.
       if (suggestTurn) {
         fc = [];
+        report = { accepted: [], rejected: [] };
         segs = segs.map(s =>
           s.type === 'file-change'
             ? { type: 'text' as const, content: `(Suggestion for ${s.path} — not saved. Say “apply this” if you want it written.)` }
@@ -684,9 +696,17 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
       }]);
 
+      // LOUD: stubs never silently disappear — tell the user the sandbox blocked them.
+      if (!suggestTurn && report.rejected.length > 0) {
+        const warn = formatRejectedSandboxWarning(report.rejected);
+        setMessages(m => [...m, { id: uid(), role: 'assistant', content: warn }]);
+      }
+
       // Only nudge for explicit APPLY asks — never for suggestions/reviews.
+      // Also nudge when stubs were rejected (sandbox would otherwise stay broken-looking).
       // Skip if the first call already used most of the ~60s Hobby window (avoids a second 504).
-      const shouldNudge = fc.length === 0
+      const rejectedFirst = report.rejected;
+      const shouldNudge = (fc.length === 0 || rejectedFirst.length > 0)
         && kind === 'user'
         && applyTurn
         && !suggestTurn
@@ -694,26 +714,34 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         && (Date.now() - sendStartedAt) < NUDGE_BUDGET_MS;
 
       if (shouldNudge) {
+        const nudgeText = rejectedFirst.length > 0
+          ? nudgeAfterRejects(rejectedFirst)
+          : NUDGE_PROMPT;
         const nudgeMsg: Message = {
-          id: uid(), role: 'user', content: NUDGE_PROMPT, kind: 'retry-inject',
+          id: uid(), role: 'user', content: nudgeText, kind: 'retry-inject',
         };
         setMessages(m => [...m, nudgeMsg]);
 
         const nudgedHistory = [
           ...history,
           { role: 'assistant', content: reply },
-          { role: 'user', content: NUDGE_PROMPT },
+          { role: 'user', content: nudgeText },
         ];
         reply = await callAgent(nudgedHistory, systemPrompt, sid, prov, mod, key);
         segs  = parseSegments(reply);
-        fc    = extractFileChanges(reply);
+        report = extractFileChangeReport(reply);
+        fc = report.accepted;
 
         setMessages(m => [...m, {
           id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
         }]);
+        if (report.rejected.length > 0) {
+          const warn = formatRejectedSandboxWarning(report.rejected);
+          setMessages(m => [...m, { id: uid(), role: 'assistant', content: warn }]);
+        }
       }
 
-      // Never write files on a suggest turn.
+      // Never write files on a suggest turn. Never write rejected stubs.
       if (fc.length > 0 && !suggestTurn) await onFc(fc);
 
       if (ar && !suggestTurn) {
@@ -868,6 +896,21 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 }}>
                   You asked
                 </div>
+                {msg.content}
+              </div>
+            ) : msg.content.includes('SANDBOX PROTECTED') ? (
+              <div data-testid="sandbox-protect-warn" style={{
+                background: '#3a1010',
+                border: '2px solid #ff6a6a',
+                borderRadius: 8,
+                padding: '10px 12px',
+                fontSize: 13,
+                lineHeight: 1.45,
+                color: '#ffd0d0',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                fontWeight: 600,
+              }}>
                 {msg.content}
               </div>
             ) : (

@@ -1,6 +1,9 @@
 /**
  * Pure helpers for coding-agent replies: File: block extraction and
  * intent detection (suggest vs apply).
+ *
+ * Incomplete / stub File: blocks are NEVER accepted. Silent drops used to
+ * wipe production APIs — rejected paths must be reported loudly to the UI.
  */
 
 export interface FileChange {
@@ -8,30 +11,72 @@ export interface FileChange {
   content: string;
 }
 
+export interface RejectedFileChange {
+  path: string;
+  reason: string;
+}
+
+export interface FileChangeReport {
+  accepted: FileChange[];
+  rejected: RejectedFileChange[];
+}
+
+/** Why a file dump is unsafe to write into the sandbox (or null if OK). */
+export function incompleteFileReason(content: string, filePath = ''): string | null {
+  const c = content || '';
+  if (!c.trim()) return 'empty file content';
+
+  if (/(?:^|\n)\s*(?:\/\/|#|\/\*|<!--)\s*\.\.\.\s*existing\b/i.test(c)) {
+    return 'stub comment “… existing …” — write the FULL file';
+  }
+  if (/(?:^|\n)\s*\/\/\s*Then in (?:the )?handler\b/i.test(c)) {
+    return 'patch stub (“Then in handler”) — write the FULL file';
+  }
+  if (/\b\.\.\.\s*existing (?:code|imports|content|implementation|logic|handlers?)\b/i.test(c)) {
+    return 'incomplete “… existing …” dump — write the FULL file';
+  }
+  if (/\b(rest of (?:the )?file|unchanged below|keep the rest|same as before)\b/i.test(c)) {
+    return 'partial rewrite language — write the FULL file';
+  }
+  if (/\bYOUR[_ -]?CODE[_ -]?HERE\b|\bINSERT[_ -]?CODE[_ -]?HERE\b|<placeholders?>/i.test(c)) {
+    return 'placeholder junk — write real complete code';
+  }
+  // Truncated fences / ellipsis-only bodies
+  if (/^\s*\.\.\.\s*$/m.test(c) && c.trim().length < 80) {
+    return 'ellipsis-only body — write the FULL file';
+  }
+
+  const rel = filePath.replace(/\\/g, '/');
+  // API serverless handlers must export a default function — stubs never do.
+  if (/^api\/.+\.js$/.test(rel) || /(^|\/)api\/.+\.js$/.test(rel)) {
+    if (!/\bexport\s+default\b/.test(c)) {
+      return 'api handler missing export default — refusing to trash the sandbox';
+    }
+    if (c.length < 200) {
+      return 'api file looks truncated — refusing to trash the sandbox';
+    }
+  }
+  // Critical shared libs — never accept tiny wipe stubs
+  if (/(^|\/)lib\/sandbox-api\/.+\.js$/.test(rel) || /(^|\/)lib\/config\.js$/.test(rel)) {
+    if (c.length < 120) {
+      return 'critical lib looks truncated — refusing to trash the sandbox';
+    }
+  }
+  return null;
+}
+
 /**
  * True when the model emitted a diff/stub instead of a complete file.
  * Writing these to disk is what wiped api/agent-chat.js and caused HTTP 500s.
  */
 export function looksLikeIncompleteFileContent(content: string, filePath = ''): boolean {
-  const c = content || '';
-  if (!c.trim()) return true;
-  if (/(?:^|\n)\s*(?:\/\/|#|\/\*)\s*\.\.\.\s*existing\b/i.test(c)) return true;
-  if (/(?:^|\n)\s*\/\/\s*Then in (?:the )?handler\b/i.test(c)) return true;
-  if (/\b\.\.\.\s*existing (?:code|imports|content|implementation)\b/i.test(c)) return true;
-  if (/\bYOUR[_ -]?CODE[_ -]?HERE\b|\bINSERT[_ -]?CODE[_ -]?HERE\b|<placeholders?>/i.test(c)) return true;
-
-  const rel = filePath.replace(/\\/g, '/');
-  // API serverless handlers must export a default function — stubs never do.
-  if (/^api\/.+\.js$/.test(rel) || rel.includes('/api/')) {
-    if (!/\bexport\s+default\b/.test(c)) return true;
-    if (c.length < 200) return true;
-  }
-  return false;
+  return incompleteFileReason(content, filePath) != null;
 }
 
-/** Parse LLM output for "File: path\\n```lang\\ncontent```" blocks. */
-export function extractFileChanges(text: string): FileChange[] {
-  const changes: FileChange[] = [];
+/** Parse LLM output; return accepted full files + rejected stubs with reasons. */
+export function extractFileChangeReport(text: string): FileChangeReport {
+  const accepted: FileChange[] = [];
+  const rejected: RejectedFileChange[] = [];
   // Match: File: <path> then optional blank line then ```lang\ncontent```
   // Also tolerates **File:** / *File:* markdown emphasis and CRLF.
   const re =
@@ -40,11 +85,32 @@ export function extractFileChanges(text: string): FileChange[] {
   while ((m = re.exec(text)) !== null) {
     const filePath = m[1]!.trim().replace(/^[`'"]+|[`'"]+$/g, '');
     const content  = m[2]!;
-    if (filePath && !filePath.includes('\n') && !looksLikeIncompleteFileContent(content, filePath)) {
-      changes.push({ path: filePath, content });
+    if (!filePath || filePath.includes('\n')) continue;
+    const reason = incompleteFileReason(content, filePath);
+    if (reason) {
+      rejected.push({ path: filePath, reason });
+    } else {
+      accepted.push({ path: filePath, content });
     }
   }
-  return changes;
+  return { accepted, rejected };
+}
+
+/** Parse LLM output for "File: path\\n```lang\\ncontent```" blocks (accepted only). */
+export function extractFileChanges(text: string): FileChange[] {
+  return extractFileChangeReport(text).accepted;
+}
+
+/** Loud chat warning when stubs were blocked from touching the sandbox. */
+export function formatRejectedSandboxWarning(rejected: RejectedFileChange[]): string {
+  if (!rejected.length) return '';
+  const lines = rejected.map(r => `• ${r.path} — ${r.reason}`);
+  return [
+    '⛔ SANDBOX PROTECTED — incomplete File: blocks were NOT saved.',
+    'Stubs / patches degrade this sandbox and have broken production before.',
+    'Rewrite each file in FULL (every line) and try again:',
+    ...lines,
+  ].join('\n');
 }
 
 /** Old welcome blurb that poisoned the model into inventing fake tasks. */
@@ -101,9 +167,24 @@ export function needsCodeContext(text: string): boolean {
 
 /** Only used when the user explicitly asked to apply/write. */
 export const NUDGE_PROMPT =
-  'STOP. You did not output any File: blocks, so nothing was written.\n' +
-  'The user asked you to APPLY changes. Output complete file(s) now:\n\n' +
+  'STOP. You did not output any usable File: blocks, so nothing was written.\n' +
+  'NEVER degrade the sandbox with stubs, diffs, or “… existing …” comments.\n' +
+  'Output COMPLETE file(s) now — every line of each file:\n\n' +
   'File: <relative-path>\n' +
   '```lang\n' +
-  '<full file content>\n' +
+  '<full file content — no omissions>\n' +
   '```';
+
+export function nudgeAfterRejects(rejected: RejectedFileChange[]): string {
+  const detail = rejected.map(r => `- ${r.path}: ${r.reason}`).join('\n');
+  return (
+    'STOP. Your File: blocks were REJECTED to protect the sandbox.\n' +
+    'Nothing was saved. Incomplete patches have wiped production APIs before.\n' +
+    `${detail}\n\n` +
+    'Output each file again in FULL — every import, every function, no ellipses:\n\n' +
+    'File: <relative-path>\n' +
+    '```lang\n' +
+    '<complete file>\n' +
+    '```'
+  );
+}

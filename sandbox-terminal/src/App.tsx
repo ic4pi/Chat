@@ -146,22 +146,30 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
 }) {
   const [cmd, setCmd] = useState('');
   if (verifyState === 'idle') return null;
-  const color = verifyState === 'passed' ? '#8fbf6f' : verifyState === 'failed' ? '#ff6a6a' :
-    verifyState === 'running' ? '#5b8dee' : '#d4ff3f';
+  const passed = verifyState === 'passed';
+  const failed = verifyState === 'failed';
+  const running = verifyState === 'running' || verifyState === 'detecting'
+    || String(verifyState).startsWith('retry');
+  const color = passed ? '#0a0a0a' : failed ? '#fff' : '#0a0a0a';
+  const bg = passed ? '#8fbf6f' : failed ? '#8a1f1f' : '#d4ff3f';
   const shortCmd = testCommand
     ? (testCommand.length > 64 ? `${testCommand.slice(0, 64)}…` : testCommand)
     : '…';
-  const label = verifyState === 'detecting' ? 'Detecting test / smoke command…' :
-    verifyState === 'running' ? `Running: ${shortCmd}` :
-    verifyState === 'passed' ? '✓ Verified — Push unlocked' :
-    verifyState === 'failed' ? `✗ Not verified after ${attempt} attempts — Push locked` :
-    `⟳ Fixing from test failure (attempt ${attempt}/5)`;
+  const label = verifyState === 'detecting' ? 'SANDBOX CHECK — detecting test / smoke…' :
+    verifyState === 'running' ? `SANDBOX CHECK RUNNING — ${shortCmd}` :
+    passed ? 'SANDBOX VERIFIED — Push unlocked. Incomplete stubs never get this far.' :
+    failed ? `SANDBOX FAILED — Push LOCKED after ${attempt} attempts. Fix until green.` :
+    `SANDBOX AUTO-FIX — attempt ${attempt}/5 (do not push yet)`;
   if (askCommand) return (
-    <div style={{ padding: '8px 12px', background: '#0f0f0f', borderTop: '1px solid #2a2a2a', flexShrink: 0 }}>
-      <div style={{ fontSize: 11, color: '#ffb4b4', marginBottom: 5, lineHeight: 1.45 }}>
-        No test command found. Push stays locked until a check can run.
-        Enter <code style={{ color: '#d4ff3f' }}>npm test</code> / your command, or add an{' '}
-        <code style={{ color: '#d4ff3f' }}>index.html</code> for the built-in smoke.
+    <div data-testid="verify-banner" style={{ padding: '10px 12px', background: '#5a1010',
+      borderTop: '2px solid #ff6a6a', flexShrink: 0 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: '#ffb4b4', marginBottom: 4,
+        letterSpacing: '0.04em' }}>
+        PUSH LOCKED — no sandbox check found
+      </div>
+      <div style={{ fontSize: 11, color: '#ffd0d0', marginBottom: 6, lineHeight: 1.45 }}>
+        Enter <code style={{ color: '#d4ff3f' }}>npm test</code> / your command, or add{' '}
+        <code style={{ color: '#d4ff3f' }}>index.html</code> for built-in smoke. Nothing ships unproven.
       </div>
       <div style={{ display: 'flex', gap: 6 }}>
         <input value={cmd} onChange={e => setCmd(e.target.value)}
@@ -181,14 +189,19 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
     </div>
   );
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px',
-      background: '#0c0c0c', borderTop: '1px solid #1e1e1e', flexShrink: 0 }}>
-      <div style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }} />
-      <span style={{ fontSize: 11, color, flex: 1 }}>{label}</span>
-      {(verifyState === 'passed' || verifyState === 'failed') && (
-        <button onClick={verifyState === 'failed' ? onRun : onDismiss}
-          style={{ background: 'transparent', color: '#555', border: 'none', fontSize: 11, cursor: 'pointer' }}>
-          {verifyState === 'failed' ? 'Retry' : 'Dismiss'}</button>
+    <div data-testid="verify-banner" style={{ display: 'flex', alignItems: 'center', gap: 10,
+      padding: '10px 12px', background: bg, borderTop: `2px solid ${passed ? '#6a9a4a' : failed ? '#ff6a6a' : '#b8d92a'}`,
+      flexShrink: 0 }}>
+      <div style={{ width: 10, height: 10, borderRadius: '50%',
+        background: passed || running ? '#0a0a0a' : '#fff', flexShrink: 0 }} />
+      <span style={{ fontSize: 13, fontWeight: 800, color, flex: 1, lineHeight: 1.35,
+        letterSpacing: '0.02em' }}>{label}</span>
+      {(passed || failed) && (
+        <button onClick={failed ? onRun : onDismiss}
+          style={{ background: passed ? 'rgba(0,0,0,0.15)' : 'rgba(0,0,0,0.35)',
+            color, border: 'none', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+            padding: '4px 10px', borderRadius: 4 }}>
+          {failed ? 'Retry check' : 'Dismiss'}</button>
       )}
     </div>
   );
@@ -770,16 +783,31 @@ export function App() {
   );
 
   // ── apply-results banner (reused in both layouts) ─────────────────────────
+  const applyFailed = applyResults.filter(r => !r.ok);
+  const applyOk = applyResults.filter(r => r.ok);
   const applyBanner = applyResults.length > 0 ? (
-    <div style={{ padding: '6px 10px', background: '#0c1a0c', borderBottom: '1px solid #1e3a1e',
-      flexShrink: 0, fontSize: 11, lineHeight: 1.45 }}>
-      <div style={{ color: '#8fbf6f', marginBottom: 4 }}>
-        Saved to the cloud sandbox only — not GitHub, not your phone.
-      </div>
-      {applyResults.map(r => (
-        <span key={r.path} style={{ marginRight: 10, color: r.ok ? '#8fbf6f' : '#ff6a6a' }}>
-          {r.ok ? '✓' : '✗'} {r.path.split('/').pop()}
-        </span>
+    <div data-testid="apply-banner" style={{
+      padding: '8px 12px',
+      background: applyFailed.length ? '#3a1010' : '#0c1a0c',
+      borderBottom: `2px solid ${applyFailed.length ? '#ff6a6a' : '#1e3a1e'}`,
+      flexShrink: 0, fontSize: 12, lineHeight: 1.45,
+    }}>
+      {applyFailed.length > 0 ? (
+        <div style={{ color: '#ffb4b4', fontWeight: 800, marginBottom: 4, letterSpacing: '0.03em' }}>
+          ⛔ SANDBOX PROTECTED — {applyFailed.length} write{applyFailed.length === 1 ? '' : 's'} blocked
+        </div>
+      ) : (
+        <div style={{ color: '#8fbf6f', fontWeight: 700, marginBottom: 4 }}>
+          Saved to sandbox — not GitHub yet. Push stays locked until Auto-test is green.
+        </div>
+      )}
+      {applyOk.map(r => (
+        <div key={r.path} style={{ color: '#8fbf6f' }}>✓ {r.path}</div>
+      ))}
+      {applyFailed.map(r => (
+        <div key={r.path} style={{ color: '#ff6a6a', marginTop: 2 }}>
+          ✗ {r.path}{r.error ? ` — ${r.error}` : ''}
+        </div>
       ))}
     </div>
   ) : null;

@@ -3,7 +3,9 @@
  * Run: node --experimental-strip-types scripts/test-extract.ts
  */
 import {
+  extractFileChangeReport,
   extractFileChanges,
+  formatRejectedSandboxWarning,
   looksLikeIncompleteFileContent,
   looksLikeWorkRequest,
 } from '../src/agentParse.ts';
@@ -58,6 +60,14 @@ assert(
   ),
   'accepts complete api handler',
 );
+
+const report = extractFileChangeReport(
+  `File: api/agent-chat.js\n\`\`\`js\n${stub}\`\`\`\n\nFile: src/ok.ts\n\`\`\`ts\nexport const ok = 1;\n\`\`\`\n`,
+);
+assert(report.accepted.length === 1 && report.accepted[0]!.path === 'src/ok.ts', 'report keeps good files');
+assert(report.rejected.length === 1 && report.rejected[0]!.path === 'api/agent-chat.js', 'report lists rejected stubs');
+const warn = formatRejectedSandboxWarning(report.rejected);
+assert(warn.includes('SANDBOX PROTECTED') && warn.includes('api/agent-chat.js'), 'loud reject warning');
 
 if (failed) {
   console.error(`\n${failed} failure(s)`);

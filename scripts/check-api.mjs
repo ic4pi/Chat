@@ -43,7 +43,7 @@ function ok(msg) {
 // Example: model wrote `// ... existing imports ...` + a helper, auto-apply
 // overwrote the whole file, and `node --check` still passed.
 const INCOMPLETE_PATCH_RE =
-  /(?:^|\n)\s*(?:\/\/|#|\/\*)\s*\.\.\.\s*existing\b|(?:^|\n)\s*\/\/\s*Then in (?:the )?handler\b|\b\.\.\.\s*existing (?:code|imports|content|implementation)\b/i;
+  /(?:^|\n)\s*(?:\/\/|#|\/\*|<!--)\s*\.\.\.\s*existing\b|(?:^|\n)\s*\/\/\s*Then in (?:the )?handler\b|\b\.\.\.\s*existing (?:code|imports|content|implementation|logic|handlers?)\b|\b(rest of (?:the )?file|unchanged below|keep the rest|same as before)\b/i;
 
 // 1) Syntax check critical modules (works without installing deps beyond node).
 for (const rel of SYNTAX_FILES) {
