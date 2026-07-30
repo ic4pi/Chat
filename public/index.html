@@ -58,14 +58,19 @@
         <button id="toggleChats" class="icon-btn" title="Toggle chat list">☰</button>
         <button id="newChatTopBtn" class="icon-btn accent" title="New chat" aria-label="New chat">+</button>
         <h1 id="chatTitle" contenteditable="true" spellcheck="false">Untitled</h1>
-        <a id="adminLink" class="icon-btn" href="/admin" target="_blank" rel="noopener" title="Admin (personas &amp; master prompt)">⚙</a>
-        <button id="workspaceBtn" class="text-btn ctrl-btn workspace-btn" type="button" title="Open this chat in Workspace (files + terminal sandbox)">Workspace</button>
-        <button id="groupBtn" class="text-btn ctrl-btn group-btn" type="button" title="Group chat — all personas around a table">Group</button>
-        <a id="mediaLink" class="text-btn ctrl-btn group-btn" href="/media" title="Image &amp; video generation (Cloudflare FLUX, Wan)">Media</a>
+        <div class="topbar-menu-wrap">
+          <button id="menuBtn" class="text-btn ctrl-btn menu-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Workspace, Group, Media, Persona">Menu ▾</button>
+          <div id="appMenu" class="app-menu hidden" role="menu">
+            <button id="workspaceBtn" class="app-menu-item" type="button" role="menuitem">Workspace</button>
+            <button id="groupBtn" class="app-menu-item" type="button" role="menuitem">Group</button>
+            <a id="mediaLink" class="app-menu-item" href="/media" role="menuitem">Media</a>
+            <button id="toneBtn" class="app-menu-item" type="button" role="menuitem">Persona · Voice</button>
+            <a id="adminLink" class="app-menu-item" href="/admin" target="_blank" rel="noopener" role="menuitem">Admin</a>
+          </div>
+        </div>
         <button id="toggleArtifacts" class="icon-btn" title="Toggle artifacts">📎</button>
       </div>
       <div class="topbar-row controls">
-        <button id="toneBtn" class="text-btn ctrl-btn tone-btn" type="button" title="Role, persona, and voice">Persona · Voice</button>
         <label class="ctrl ctrl-inline">
           <span>role</span>
           <select id="roleSelect">
@@ -88,31 +93,30 @@
           <span>model</span>
           <select id="modelSelect"></select>
         </label>
-        <label class="ctrl ctrl-inline desk-only">
-          <span>persona</span>
-          <select id="personaSelect"></select>
-        </label>
-        <label class="ctrl ctrl-inline desk-only">
-          <span>voice</span>
-          <select id="voiceSelect" title="Voice for the current persona">
-            <optgroup label="Female">
-              <option value="en-US-AvaNeural">Ava · US</option>
-              <option value="en-US-EmmaMultilingualNeural">Emma · US</option>
-              <option value="en-US-JennyNeural">Jenny · US</option>
-              <option value="en-GB-SoniaNeural">Sonia · UK</option>
-              <option value="en-AU-NatashaNeural">Natasha · AU</option>
-            </optgroup>
-            <optgroup label="Male">
-              <option value="en-US-AndrewNeural">Andrew · US</option>
-              <option value="en-US-BrianMultilingualNeural">Brian · US</option>
-              <option value="en-US-GuyNeural">Guy · US</option>
-              <option value="en-GB-RyanNeural">Ryan · UK</option>
-              <option value="en-AU-WilliamNeural">William · AU</option>
-            </optgroup>
-          </select>
-        </label>
         <button id="keysBtn" class="text-btn ctrl-btn" type="button" title="Bring your own API keys">Keys</button>
       </div>
+      <div id="personaBlurb" class="persona-blurb" hidden>
+        <span id="personaBlurbName" class="persona-blurb-name"></span>
+        <span id="personaBlurbDesc" class="persona-blurb-desc"></span>
+      </div>
+      <!-- Hidden selects kept for voice/persona state sync used by speech + applyPersona -->
+      <select id="personaSelect" class="sr-only" tabindex="-1" aria-hidden="true"></select>
+      <select id="voiceSelect" class="sr-only" tabindex="-1" aria-hidden="true">
+        <optgroup label="Female">
+          <option value="en-US-AvaNeural">Ava · US</option>
+          <option value="en-US-EmmaMultilingualNeural">Emma · US</option>
+          <option value="en-US-JennyNeural">Jenny · US</option>
+          <option value="en-GB-SoniaNeural">Sonia · UK</option>
+          <option value="en-AU-NatashaNeural">Natasha · AU</option>
+        </optgroup>
+        <optgroup label="Male">
+          <option value="en-US-AndrewNeural">Andrew · US</option>
+          <option value="en-US-BrianMultilingualNeural">Brian · US</option>
+          <option value="en-US-GuyNeural">Guy · US</option>
+          <option value="en-GB-RyanNeural">Ryan · UK</option>
+          <option value="en-AU-WilliamNeural">William · AU</option>
+        </optgroup>
+      </select>
     </header>
 
     <div id="chat"></div>
@@ -157,7 +161,7 @@
       <h2>Persona · Voice</h2>
       <button id="closeToneModal" class="icon-btn" title="Close">×</button>
     </div>
-    <p class="keys-hint">Each persona can have its own speaking voice. Change persona, then pick a voice — it’s saved for that persona.</p>
+    <p class="keys-hint">Pick who you’re talking to. The description below is the public blurb from Admin — not the private system prompt.</p>
     <div class="tone-form">
       <label>
         Role
@@ -171,6 +175,7 @@
         Persona
         <select id="tonePersonaSelect"></select>
       </label>
+      <div id="tonePersonaDesc" class="persona-desc" role="status"></div>
       <label>
         Voice for this persona
         <select id="toneVoiceSelect">

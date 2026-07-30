@@ -348,11 +348,17 @@ const els = {
   roleSelect: $('roleSelect'),
   personaSelect: $('personaSelect'),
   voiceSelect: $('voiceSelect'),
+  menuBtn: $('menuBtn'),
+  appMenu: $('appMenu'),
+  personaBlurb: $('personaBlurb'),
+  personaBlurbName: $('personaBlurbName'),
+  personaBlurbDesc: $('personaBlurbDesc'),
   toneBtn: $('toneBtn'),
   toneModal: $('toneModal'),
   closeToneModal: $('closeToneModal'),
   toneRoleSelect: $('toneRoleSelect'),
   tonePersonaSelect: $('tonePersonaSelect'),
+  tonePersonaDesc: $('tonePersonaDesc'),
   toneVoiceSelect: $('toneVoiceSelect'),
   previewVoiceBtn: $('previewVoiceBtn'),
   saveToneBtn: $('saveToneBtn'),
@@ -946,10 +952,9 @@ function closeArtifactModal() {
 // Personas
 // ---------------------------------------------------------------------------
 
-// Pulls the current persona list from /api/public-config. Only IDs and names
-// come back — persona system prompts and the master prompt are secrets kept
-// server-side. Falls back to FALLBACK_PERSONAS on any failure so the UI
-// remains usable even without a network / with KV unconfigured.
+// Pulls the current persona list from /api/public-config (id, name, description).
+// System prompts and the master prompt stay server-side. Falls back to
+// FALLBACK_PERSONAS on any failure so the UI remains usable offline.
 async function fetchPersonas() {
   try {
     const res = await fetch('/api/public-config');
@@ -974,6 +979,33 @@ async function fetchPersonas() {
   renderPersonaSelect();
 }
 
+function activePersona() {
+  return personas.find((p) => p.id === state.activePersonaId) || personas[0] || null;
+}
+
+/** Show the Admin "Description (shown to users)" blurb in the sheet + topbar. */
+function renderPersonaDescription() {
+  const p = activePersona();
+  const name = p?.name || 'Persona';
+  const desc = (p?.description || '').trim();
+
+  if (els.tonePersonaDesc) {
+    if (desc) {
+      els.tonePersonaDesc.textContent = desc;
+      els.tonePersonaDesc.classList.remove('empty');
+    } else {
+      els.tonePersonaDesc.textContent = 'No public description yet — set one in Admin → Personas → Description.';
+      els.tonePersonaDesc.classList.add('empty');
+    }
+  }
+
+  if (els.personaBlurb && els.personaBlurbName && els.personaBlurbDesc) {
+    els.personaBlurb.hidden = false;
+    els.personaBlurbName.textContent = name;
+    els.personaBlurbDesc.textContent = desc || 'No description — open Menu → Persona · Voice, or edit in Admin.';
+  }
+}
+
 function renderPersonaSelect() {
   const fill = (selectEl) => {
     if (!selectEl) return;
@@ -990,6 +1022,7 @@ function renderPersonaSelect() {
   fill(els.personaSelect);
   fill(els.tonePersonaSelect);
   syncVoiceSelectToPersona();
+  renderPersonaDescription();
 }
 
 
@@ -2515,14 +2548,45 @@ function applyPersona(personaId) {
   const chat = activeChat();
   if (chat) chat.personaId = state.activePersonaId;
   syncVoiceSelectToPersona();
+  renderPersonaDescription();
   saveState();
 }
 
+function closeAppMenu() {
+  if (!els.appMenu || els.appMenu.classList.contains('hidden')) return;
+  els.appMenu.classList.add('hidden');
+  if (els.menuBtn) els.menuBtn.setAttribute('aria-expanded', 'false');
+}
+
+function toggleAppMenu() {
+  if (!els.appMenu || !els.menuBtn) return;
+  const open = els.appMenu.classList.contains('hidden');
+  els.appMenu.classList.toggle('hidden', !open);
+  els.menuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+els.menuBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleAppMenu();
+});
+els.appMenu?.addEventListener('click', (e) => {
+  // Close after choosing an action (links + buttons).
+  const item = e.target.closest('.app-menu-item');
+  if (item) closeAppMenu();
+});
+document.addEventListener('click', (e) => {
+  if (!els.appMenu || els.appMenu.classList.contains('hidden')) return;
+  const wrap = e.target.closest?.('.topbar-menu-wrap');
+  if (!wrap) closeAppMenu();
+});
+
 function openToneModal() {
   if (!els.toneModal) return;
+  closeAppMenu();
   if (els.toneRoleSelect) els.toneRoleSelect.value = state.activeRole || 'plan';
   renderPersonaSelect();
   syncVoiceSelectToPersona();
+  renderPersonaDescription();
   els.toneModal.classList.remove('hidden');
 }
 
@@ -2542,6 +2606,7 @@ els.toneRoleSelect?.addEventListener('change', () => {
 });
 els.tonePersonaSelect?.addEventListener('change', () => {
   applyPersona(els.tonePersonaSelect.value);
+  renderPersonaDescription();
 });
 els.toneVoiceSelect?.addEventListener('change', () => {
   setVoiceForPersona(state.activePersonaId, els.toneVoiceSelect.value);
@@ -3377,10 +3442,15 @@ els.clearAllBtn.addEventListener('click', clearAll);
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    closeAppMenu();
     if (!els.artifactModal.classList.contains('hidden')) closeArtifactModal();
     if (els.keysModal && !els.keysModal.classList.contains('hidden')) closeKeysModal();
     if (els.toneModal && !els.toneModal.classList.contains('hidden')) closeToneModal();
   }
+});
+
+els.personaBlurb?.addEventListener('click', () => {
+  openToneModal();
 });
 
 els.artifactModal.addEventListener('click', (e) => {

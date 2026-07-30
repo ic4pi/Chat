@@ -665,23 +665,6 @@ export function App() {
             fontFamily: 'inherit', fontSize: 10 }}>
           New
         </button>
-        {chatMessages.length > 0 && (
-          <button type="button"
-            data-testid="clear-workspace-chat-btn"
-            title="Clear this workspace chat only — repo, files, and personas stay"
-            onClick={() => {
-              if (!confirm('Clear this workspace chat history?\n\nRepo, files, and settings stay.')) return;
-              setChatMessages([]);
-              setSessionKey(k => k + 1);
-              setPushError(null);
-              setPushOk(null);
-            }}
-            style={{ background: 'transparent', color: '#888', border: '1px solid #333',
-              borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
-              fontFamily: 'inherit', fontSize: 10 }}>
-            Clear chat
-          </button>
-        )}
         {(repo.repoUrl || chatMessages.length > 0) && (
           <button type="button"
             onClick={() => {
