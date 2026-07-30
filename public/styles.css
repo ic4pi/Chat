@@ -193,7 +193,8 @@ select:focus, input[type="text"]:focus, textarea:focus {
   gap: 6px;
   flex-wrap: wrap;
 }
-.sidebar-footer .text-btn { flex: 1; min-width: 60px; font-size: 11px; padding: 5px 6px; }
+.sidebar-footer .text-btn { flex: 1 1 calc(50% - 6px); min-width: 72px; font-size: 11px; padding: 5px 6px; }
+.sidebar-footer .text-btn.danger { flex: 1 1 100%; }
 
 /* Chat list */
 .chat-list {

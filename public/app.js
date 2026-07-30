@@ -393,6 +393,7 @@ const els = {
   exportBtn: $('exportBtn'),
   importBtn: $('importBtn'),
   importFile: $('importFile'),
+  clearChatsBtn: $('clearChatsBtn'),
   clearAllBtn: $('clearAllBtn'),
 };
 
@@ -2151,8 +2152,27 @@ async function importData(file) {
   }
 }
 
+/** Wipe chat history only. Personas (server-side), provider keys, voice prefs, and UI settings stay. */
+function clearChatsOnly() {
+  const n = state.chats.length;
+  if (!n) {
+    alert('No chats to clear.');
+    return;
+  }
+  if (!confirm(`Delete ${n} chat${n === 1 ? '' : 's'} from this browser?\n\nPersonas, API keys, and settings are kept.`)) {
+    return;
+  }
+  state.chats = [];
+  state.activeChatId = null;
+  saveState();
+  renderAll();
+}
+
+/** Nuclear local reset: chats + sidebar/provider prefs in STORAGE_KEY. Personas stay on the server. */
 function clearAll() {
-  if (!confirm('Delete ALL chats, personas, and settings from this browser?')) return;
+  if (!confirm('Reset local chats and settings on this browser?\n\nPersonas stay (they live on the server). API keys & voice prefs in other storage keys are not removed — clear site data for a full wipe.')) {
+    return;
+  }
   localStorage.removeItem(STORAGE_KEY);
   Object.assign(state, freshState());
   renderAll();
@@ -3352,6 +3372,7 @@ els.importFile.addEventListener('change', (e) => {
   if (file) importData(file);
   e.target.value = '';
 });
+if (els.clearChatsBtn) els.clearChatsBtn.addEventListener('click', clearChatsOnly);
 els.clearAllBtn.addEventListener('click', clearAll);
 
 document.addEventListener('keydown', (e) => {
@@ -3378,7 +3399,7 @@ function showBootError(msg) {
   const el = document.getElementById('bootError');
   if (!el) return;
   el.style.display = 'block';
-  el.textContent = 'Boot error: ' + msg + '\n\nTry a hard refresh, or open the ⚙ menu → Clear all to reset local state.';
+  el.textContent = 'Boot error: ' + msg + '\n\nTry a hard refresh, or open Chats → Clear chats / Reset settings.';
 }
 
 renderAll().catch((err) => {

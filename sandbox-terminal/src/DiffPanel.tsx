@@ -1,6 +1,6 @@
 /**
- * DiffPanel — proposed file changes with real takeaway actions:
- *   Download (complete file), Copy, Save to sandbox, Push to GitHub.
+ * DiffPanel — proposed file changes with real takeaway actions.
+ * Collapsed by default so it does not bury the chat transcript.
  */
 
 import React, { useState } from 'react';
@@ -47,7 +47,7 @@ function FileDiff({ change, onDismiss }: {
   change: PendingChange;
   onDismiss: () => void;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const diff   = computeDiff(change.original, change.content);
   const added   = diff.filter(l => l.kind === '+').length;
@@ -57,11 +57,11 @@ function FileDiff({ change, onDismiss }: {
 
   return (
     <div style={{ border: '1px solid #2a2a2a', borderRadius: 6,
-      overflow: 'hidden', marginBottom: 8 }}>
+      overflow: 'hidden', marginBottom: 6 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8,
-        padding: '6px 10px', background: '#111',
+        padding: '5px 8px', background: '#111',
         borderBottom: open ? '1px solid #1e1e1e' : 'none', flexWrap: 'wrap' }}>
-        <button onClick={() => setOpen(o => !o)}
+        <button type="button" onClick={() => setOpen(o => !o)}
           style={{ background: 'transparent', border: 'none',
             color: '#888', cursor: 'pointer', fontSize: 11, padding: 0 }}>
           {open ? '▾' : '▸'}
@@ -93,13 +93,13 @@ function FileDiff({ change, onDismiss }: {
             cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
           {copied ? 'Copied' : 'Copy'}
         </button>
-        <button onClick={onDismiss}
+        <button type="button" onClick={onDismiss}
           style={{ background: 'transparent', border: 'none', color: '#555',
             cursor: 'pointer', fontSize: 13, padding: 0, lineHeight: 1 }}>×</button>
       </div>
 
       {open && (
-        <pre style={{ margin: 0, maxHeight: 220, overflowY: 'auto',
+        <pre style={{ margin: 0, maxHeight: 140, overflowY: 'auto',
           fontSize: 11.5, lineHeight: 1.5, fontFamily: 'inherit' }}>
           {diff.map((line, i) => (
             <div key={i} style={{
@@ -138,14 +138,20 @@ interface Props {
   onCopyGitCommands?: () => void;
 }
 
+const btnBase: React.CSSProperties = {
+  borderRadius: 4, padding: '4px 10px', cursor: 'pointer',
+  fontFamily: 'inherit', fontSize: 11, border: '1px solid #333',
+};
+
 export function DiffPanel({
   changes, applying, appliedPaths, canPush, pushBlockedReason, pushing, pushError, pushOk,
   onApply, onDismiss, onDismissAll, onPush, onCopyGitCommands,
 }: Props) {
+  // Collapsed by default — chat stays readable; expand to inspect diffs / push.
+  const [expanded, setExpanded] = useState(false);
   const [showPush, setShowPush] = useState(false);
   const [token, setToken] = useState(() => {
     try {
-      // Prefer localStorage so the token survives workspace reopen / new tabs.
       const persisted = localStorage.getItem('gh_push_token');
       if (persisted) return persisted;
       const sessionOnly = sessionStorage.getItem('gh_push_token');
@@ -163,161 +169,171 @@ export function DiffPanel({
 
   const pending = changes.filter(c => !appliedPaths.has(c.path));
   const allFiles = changes.map(c => ({ path: c.path, content: c.content }));
+  const names = changes.map(c => c.path.split('/').pop() || c.path).slice(0, 3).join(', ');
+  const more = changes.length > 3 ? ` +${changes.length - 3}` : '';
 
   return (
-    <div style={{ borderTop: '1px solid #1e1e1e', background: '#0a0a0a',
-      fontFamily: '"JetBrains Mono",ui-monospace,monospace' }}>
-      <div style={{ padding: '8px 12px', background: '#0f0f0f',
-        borderBottom: '1px solid #1e1e1e', position: 'sticky', top: 0, zIndex: 5 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 10, color: '#d4ff3f', letterSpacing: '0.1em',
-            textTransform: 'uppercase' }}>
-            {changes.length} new file{changes.length !== 1 ? 's' : ''}
+    <div data-testid="diff-panel" style={{
+      borderTop: '1px solid #1e1e1e', background: '#0a0a0a', flexShrink: 0,
+      fontFamily: '"JetBrains Mono",ui-monospace,monospace',
+      maxHeight: expanded ? 'min(38vh, 320px)' : undefined,
+      display: 'flex', flexDirection: 'column', minHeight: 0,
+    }}>
+      {/* Always-visible compact action bar */}
+      <div style={{ padding: '6px 10px', background: '#0f0f0f',
+        borderBottom: expanded ? '1px solid #1e1e1e' : 'none', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <button type="button" onClick={() => setExpanded(e => !e)}
+            data-testid="diff-expand-btn"
+            title={expanded ? 'Collapse changes panel' : 'Expand to review diffs'}
+            style={{ ...btnBase, background: expanded ? 'rgba(212,255,63,0.12)' : 'transparent',
+              color: '#d4ff3f', borderColor: '#3a4a18', fontWeight: 700, padding: '4px 8px' }}>
+            {expanded ? '▾' : '▸'} {changes.length} file{changes.length !== 1 ? 's' : ''}
+          </button>
+          <span style={{ fontSize: 10, color: '#666', flex: 1, minWidth: 0,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            title={changes.map(c => c.path).join(', ')}>
+            {names}{more}
           </span>
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            <button type="button" onClick={onDismissAll}
-              style={{ background: 'transparent', color: '#555',
-                border: '1px solid #222', borderRadius: 4,
-                padding: '4px 10px', cursor: 'pointer',
-                fontFamily: 'inherit', fontSize: 11 }}>
-              Discard
+          <button type="button" onClick={onDismissAll}
+            style={{ ...btnBase, background: 'transparent', color: '#555', borderColor: '#222' }}>
+            Discard
+          </button>
+          <button type="button"
+            onClick={() => { void downloadAllFiles(allFiles); }}
+            data-testid="download-all-btn"
+            style={{ ...btnBase, background: '#1a2a0a', color: '#8fbf6f',
+              borderColor: '#2a4a1a', fontWeight: 700 }}>
+            Download
+          </button>
+          <button type="button" onClick={onApply} disabled={applying || pending.length === 0}
+            data-testid="apply-btn"
+            style={{ ...btnBase,
+              background: pending.length > 0 ? '#222' : '#1a1a1a',
+              color: pending.length > 0 ? '#e8e8e8' : '#444',
+              cursor: pending.length > 0 ? 'pointer' : 'default' }}>
+            {applying ? 'Saving…' : 'Save'}
+          </button>
+          {canPush ? (
+            <button type="button" onClick={() => { setShowPush(s => !s); setExpanded(true); }}
+              data-testid="push-toggle-btn"
+              style={{ ...btnBase, background: '#d4ff3f', color: '#0a0a0a',
+                border: 'none', fontWeight: 700, padding: '4px 12px' }}>
+              {showPush ? 'Hide push' : 'Push'}
             </button>
-            <button type="button"
-              onClick={() => { void downloadAllFiles(allFiles); }}
-              data-testid="download-all-btn"
-              style={{ background: '#1a2a0a', color: '#8fbf6f',
-                border: '1px solid #2a4a1a', borderRadius: 4, padding: '4px 10px',
-                cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
-              Download all
-            </button>
-            {onCopyGitCommands && (
-              <button type="button" onClick={onCopyGitCommands}
-                style={{ background: 'transparent', color: '#89ddff',
-                  border: '1px solid #234', borderRadius: 4, padding: '4px 10px',
-                  cursor: 'pointer', fontFamily: 'inherit', fontSize: 11 }}>
-                Copy git cmds
-              </button>
-            )}
-            <button type="button" onClick={onApply} disabled={applying || pending.length === 0}
-              data-testid="apply-btn"
-              style={{ background: pending.length > 0 ? '#222' : '#1a1a1a',
-                color: pending.length > 0 ? '#e8e8e8' : '#444',
-                border: '1px solid #333', borderRadius: 4, padding: '4px 10px',
-                cursor: pending.length > 0 ? 'pointer' : 'default',
-                fontFamily: 'inherit', fontSize: 11 }}>
-              {applying ? 'Saving…' : 'Save'}
-            </button>
-            {canPush && (
-              <button type="button" onClick={() => setShowPush(s => !s)}
-                data-testid="push-toggle-btn"
-                style={{ background: '#d4ff3f', color: '#0a0a0a',
-                  border: 'none', borderRadius: 4, padding: '4px 12px',
-                  cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
-                {showPush ? 'Hide push' : 'Push to GitHub'}
-              </button>
-            )}
-          </div>
-        </div>
-        <div style={{ marginTop: 6, fontSize: 10, color: '#888', lineHeight: 1.45 }}>
-          Auto-save writes to the sandbox. Download keeps the full file on your device.
-          Push only unlocks after Auto-test / smoke passes in the sandbox.
+          ) : (
+            <span style={{ fontSize: 10, color: '#664', whiteSpace: 'nowrap' }}
+              title={pushBlockedReason || 'Verify sandbox first'}>
+              Push locked
+            </span>
+          )}
         </div>
         {!canPush && pushBlockedReason && (
-          <div style={{ marginTop: 6, fontSize: 10, color: '#ffb4b4', lineHeight: 1.45 }}
+          <div style={{ marginTop: 4, fontSize: 10, color: '#ffb4b4', lineHeight: 1.35 }}
             data-testid="push-blocked-reason">
             {pushBlockedReason}
           </div>
         )}
+      </div>
 
-        {showPush && canPush && (
-          <div style={{ marginTop: 10, padding: '10px', background: '#0a0a0a',
-            border: '1px solid #2a2a2a', borderRadius: 6 }}>
-            <div style={{ fontSize: 11, color: '#ccc', marginBottom: 8, lineHeight: 1.45 }}>
-              Paste a GitHub token with <code style={{ color: '#d4ff3f' }}>repo</code> access
-              (github.com → Settings → Developer settings → Personal access tokens).
-              Saved in this browser. Push re-runs sandbox checks and{' '}
-              <strong style={{ color: '#ffb4b4' }}>refuses</strong> if they fail —
-              including static HTML smoke when there is no npm test.
-            </div>
-            <input
-              type="password"
-              value={token}
-              onChange={e => {
-                const next = e.target.value;
-                setToken(next);
-                try {
-                  const trimmed = next.trim();
-                  if (trimmed) localStorage.setItem('gh_push_token', trimmed);
-                  else localStorage.removeItem('gh_push_token');
-                } catch { /* ignore */ }
-              }}
-              placeholder="ghp_… or github_pat_…"
-              autoComplete="off"
-              style={{ width: '100%', boxSizing: 'border-box', marginBottom: 6,
-                background: '#111', color: '#e8e8e8', border: '1px solid #333',
-                borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 12 }}
-            />
-            <input
-              value={commitMsg}
-              onChange={e => setCommitMsg(e.target.value)}
-              placeholder="Commit message"
-              style={{ width: '100%', boxSizing: 'border-box', marginBottom: 8,
-                background: '#111', color: '#e8e8e8', border: '1px solid #333',
-                borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 12 }}
-            />
-            <div style={{ display: 'flex', gap: 8, marginBottom: pushError || pushOk ? 8 : 0 }}>
-            <button type="button"
-              disabled={pushing || !token.trim()}
-              onClick={() => {
-                try {
-                  localStorage.setItem('gh_push_token', token.trim());
-                  sessionStorage.removeItem('gh_push_token');
-                } catch { /* ignore */ }
-                onPush(token.trim(), commitMsg.trim() || 'Apply agent changes from sandbox');
-              }}
-              style={{ flex: 1, background: token.trim() && !pushing ? '#d4ff3f' : '#1a1a1a',
-                color: token.trim() && !pushing ? '#0a0a0a' : '#555',
-                border: 'none', borderRadius: 4, padding: '7px 14px',
-                cursor: token.trim() && !pushing ? 'pointer' : 'default',
-                fontFamily: 'inherit', fontSize: 12, fontWeight: 700 }}>
-              {pushing ? 'Pushing to GitHub…' : 'Commit & push'}
-            </button>
-            {token.trim() && (
-              <button type="button"
-                onClick={() => {
-                  setToken('');
+      {expanded && (
+        <div style={{ overflowY: 'auto', minHeight: 0, flex: 1 }}>
+          {showPush && canPush && (
+            <div style={{ margin: '8px 10px', padding: '8px 10px', background: '#0a0a0a',
+              border: '1px solid #2a2a2a', borderRadius: 6 }}>
+              <div style={{ fontSize: 10, color: '#888', marginBottom: 6, lineHeight: 1.4 }}>
+                GitHub token with <code style={{ color: '#d4ff3f' }}>repo</code> scope.
+                Push re-runs sandbox checks and refuses on failure.
+              </div>
+              <input
+                type="password"
+                value={token}
+                onChange={e => {
+                  const next = e.target.value;
+                  setToken(next);
                   try {
-                    localStorage.removeItem('gh_push_token');
-                    sessionStorage.removeItem('gh_push_token');
+                    const trimmed = next.trim();
+                    if (trimmed) localStorage.setItem('gh_push_token', trimmed);
+                    else localStorage.removeItem('gh_push_token');
                   } catch { /* ignore */ }
                 }}
-                style={{ background: 'transparent', color: '#888',
-                  border: '1px solid #333', borderRadius: 4, padding: '7px 10px',
-                  cursor: 'pointer', fontFamily: 'inherit', fontSize: 11 }}>
-                Clear token
-              </button>
-            )}
+                placeholder="ghp_… or github_pat_…"
+                autoComplete="off"
+                style={{ width: '100%', boxSizing: 'border-box', marginBottom: 6,
+                  background: '#111', color: '#e8e8e8', border: '1px solid #333',
+                  borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 12 }}
+              />
+              <input
+                value={commitMsg}
+                onChange={e => setCommitMsg(e.target.value)}
+                placeholder="Commit message"
+                style={{ width: '100%', boxSizing: 'border-box', marginBottom: 8,
+                  background: '#111', color: '#e8e8e8', border: '1px solid #333',
+                  borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 12 }}
+              />
+              <div style={{ display: 'flex', gap: 8, marginBottom: pushError || pushOk ? 8 : 0 }}>
+                <button type="button"
+                  disabled={pushing || !token.trim()}
+                  onClick={() => {
+                    try {
+                      localStorage.setItem('gh_push_token', token.trim());
+                      sessionStorage.removeItem('gh_push_token');
+                    } catch { /* ignore */ }
+                    onPush(token.trim(), commitMsg.trim() || 'Apply agent changes from sandbox');
+                  }}
+                  style={{ flex: 1, background: token.trim() && !pushing ? '#d4ff3f' : '#1a1a1a',
+                    color: token.trim() && !pushing ? '#0a0a0a' : '#555',
+                    border: 'none', borderRadius: 4, padding: '7px 14px',
+                    cursor: token.trim() && !pushing ? 'pointer' : 'default',
+                    fontFamily: 'inherit', fontSize: 12, fontWeight: 700 }}>
+                  {pushing ? 'Pushing…' : 'Commit & push'}
+                </button>
+                {onCopyGitCommands && (
+                  <button type="button" onClick={onCopyGitCommands}
+                    style={{ ...btnBase, background: 'transparent', color: '#89ddff',
+                      borderColor: '#234' }}>
+                    Git cmds
+                  </button>
+                )}
+                {token.trim() && (
+                  <button type="button"
+                    onClick={() => {
+                      setToken('');
+                      try {
+                        localStorage.removeItem('gh_push_token');
+                        sessionStorage.removeItem('gh_push_token');
+                      } catch { /* ignore */ }
+                    }}
+                    style={{ ...btnBase, background: 'transparent', color: '#888' }}>
+                    Clear token
+                  </button>
+                )}
+              </div>
+              {pushError && (
+                <div style={{ fontSize: 11, color: '#ff6a6a', lineHeight: 1.4 }}>{pushError}</div>
+              )}
+              {pushOk && (
+                <div style={{ fontSize: 11, color: '#8fbf6f', lineHeight: 1.4 }}>{pushOk}</div>
+              )}
             </div>
-            {pushError && (
-              <div style={{ marginTop: 8, fontSize: 11, color: '#ff6a6a', lineHeight: 1.4 }}>
-                {pushError}
-              </div>
-            )}
-            {pushOk && (
-              <div style={{ marginTop: 8, fontSize: 11, color: '#8fbf6f', lineHeight: 1.4 }}>
-                {pushOk}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+          )}
 
-      <div style={{ padding: '8px 12px', maxHeight: 'min(32vh, 260px)', overflowY: 'auto' }}>
-        {changes.map(c => (
-          <FileDiff key={c.path} change={c}
-            onDismiss={() => onDismiss(c.path)} />
-        ))}
-      </div>
+          <div style={{ padding: '6px 10px 10px' }}>
+            {changes.map(c => (
+              <FileDiff key={c.path} change={c}
+                onDismiss={() => onDismiss(c.path)} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Surface push result even when collapsed */}
+      {!expanded && (pushError || pushOk) && (
+        <div style={{ padding: '4px 10px 6px', fontSize: 11, lineHeight: 1.35,
+          color: pushError ? '#ff6a6a' : '#8fbf6f' }}>
+          {pushError || pushOk}
+        </div>
+      )}
     </div>
   );
 }
