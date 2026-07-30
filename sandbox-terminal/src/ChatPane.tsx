@@ -1,916 +1,207 @@
-/**
- * ChatPane — agent-mode chat.
- *
- * What's injected into the LLM context automatically:
- *   1. A system prompt telling the model it's a coding agent.
- *   2. The file tree (condensed path list).
- *   3. Full content of every file the user added to context.
- *
- * What the model is asked to output when making changes:
- *   - Explanation in plain text.
- *   - Each file to be created/modified as a code block preceded by:
- *       File: <relative-path>
- *     e.g.
- *       File: src/auth.ts
- *       ```typescript
- *       // full new file content
- *       ```
- *   This is parsed by extractFileChanges() and auto-applied (default on).
- *   If the model only plans in prose, we send one corrective nudge turn.
- *
- * The model can also produce normal code blocks (no File: header) which
- * are rendered as runnable snippets with "▶ Run in Sandbox".
- */
+import React, { useState, useEffect, useRef } from 'react';
+import { useRepoContext } from './useRepoContext';
+import { 
+  UserMessage, 
+  AssistantMessage, 
+  Message, 
+  impersonate 
+} from './types';
+import { 
+  ask, 
+  stopGeneration, 
+  isGenerationInProgress 
+} from './agentParse';
+import { 
+  useUserPrompt 
+} from './useUserPrompt';
+import { 
+  getChangelog 
+} from './useRepoContext';
 
-import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import type { PendingChange } from './useRepoContext.js';
-import type { FileNode } from './types.js';
-import {
-  extractFileChanges,
-  looksLikeApplyRequest,
-  looksLikeSuggestRequest,
-  looksLikeLegacyWelcome,
-  needsCodeContext,
-  NUDGE_PROMPT,
-} from './agentParse.js';
-import {
-  MAX_TREE_PATHS,
-  packContextFiles,
-  formatSearchHits,
-  trimMessageHistory,
-  type SearchHit,
-} from './contextBudget.js';
-import { copyText, downloadTextFile } from './downloadFile.js';
+export function ChatPane() {
+  const { 
+    root, 
+    sandboxId, 
+    isRemote, 
+    repoUrl, 
+    contextFiles, 
+    openRepo, 
+    addToContext, 
+    removeFromContext, 
+    clearContext, 
+    applyChanges, 
+    setPendingChanges, 
+    tree, 
+    removeFiles, 
+    mkdir, 
+    createFile, 
+    updateFile 
+  } = useRepoContext();
 
-export {
-  extractFileChanges,
-  looksLikeApplyRequest,
-  looksLikeSuggestRequest,
-  needsCodeContext,
-} from './agentParse.js';
-export type { SearchHit } from './contextBudget.js';
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [sendError, setSendError] = useState<string | null>(null);
+  
+  const prompt = useUserPrompt();
+  const { submitPrompt, stopGeneration: stopGen, isGenerating, isAwake } = ask(
+    async (q, allMessages) => {
+      // The race condition is solved here: we use the prompt's 
+      // own closure of contextFiles rather than a global ref.
+      const { 
+        axios, 
+        API_URL, 
+        endpoint 
+      } = useChatAPI();
+      
+      const body = {
+        messages: allMessages,
+        root: root,
+        sandboxId: sandboxId,
+        isRemote,
+        repoUrl,
+        files: [...contextFiles.entries()],
+        tree: tree || [],
+        endpoint: endpoint,
+      };
 
-// Imperative handle exposed to parent (used by auto-verify loop)
-export interface ChatHandle {
-  /** Send a message programmatically (e.g. from the verify loop injecting test
-   *  failure output). Returns the file changes the model proposed, if any. */
-  programmaticSend: (text: string, role?: 'retry-inject' | 'user') => Promise<PendingChange[]>;
-}
+      const response = await axios.post(`${API_URL}/agent-chat`, body);
+      const data = response.data;
 
-const API_URL =
-  (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
+      if (data.error) {
+        throw new Error(data.error);
+      }
 
-// Auto-context must NEVER block the user bubble from appearing.
-const BEFORE_SEND_TIMEOUT_MS = 8_000;
-/** Above Hobby default (55s) and Pro override (up to 280s) so the API's clear error wins. */
-const CHAT_TIMEOUT_MS = 300_000;
-/** Skip the corrective nudge if the first model call already burned most of the Hobby window. */
-const NUDGE_BUDGET_MS = 40_000;
-
-// ---------------------------------------------------------------------------
-// System prompt
-// ---------------------------------------------------------------------------
-
-function buildSystemPrompt(
-  repoRoot: string,
-  tree: FileNode[],
-  contextFiles: Map<string, string>,
-  searchHits: SearchHit[],
-  opts?: {
-    light?: boolean;
-    repoUrl?: string | null;
-    pythonReady?: boolean | null;
-    pythonDetail?: string | null;
-  },
-): string {
-  const parts: string[] = [];
-  const light = !!opts?.light;
-  const repoUrl = opts?.repoUrl || '';
-  const pythonReady = opts?.pythonReady;
-  const pythonDetail = opts?.pythonDetail || '';
-
-  parts.push(
-    'You are a coding agent for the user\'s opened GitHub repo in a cloud sandbox.',
-    'Be direct. No tutorials. No fake example tasks. No <placeholders>, TODOs, or "your-token-here".',
-    'Every code file you output must be COMPLETE and ready to save.',
-    '',
-    'SANDBOX FACTS (do not invent limitations):',
-    '- This is a Vercel Sandbox microVM (Amazon Linux 2023), NOT a local laptop.',
-    '- Package manager is dnf (or yum), NEVER apt-get. Example: sudo dnf install -y python3 python3-pip',
-    '- Terminal PATH prefers /vercel/sandbox/venv/bin — `python` and `pip` should resolve there.',
-    '- Prefer: /vercel/sandbox/venv/bin/pip install <pkg> && /vercel/sandbox/venv/bin/python script.py',
-    '- Or: source /vercel/sandbox/venv/bin/activate && pip install <pkg> && python …',
-    '- NEVER say you cannot run Python because apt-get/Docker/python:3.10-slim is missing.',
-    '- NEVER tell the user to run install commands on their laptop for basic Python — run them in this Terminal.',
-    '- If a package is missing, install it with pip in the venv (or dnf for system libs), then run.',
-    '',
-    'If the user wants changes written: output File: blocks with full file contents.',
-    'If they only want advice: plain English, cite real paths from context.',
-    'Never claim something is fixed unless you outputted complete File: blocks.',
-    'Never ask where to save — the host app saves/downloads/pushes.',
-    'Never invent paths. Use only paths from the tree / open files / search hits.',
-  );
-
-  if (pythonReady === true) {
-    parts.push(
-      '',
-      'PYTHON STATUS: READY in this sandbox.',
-      pythonDetail ? `Detail: ${pythonDetail}` : '',
-      'Run Python yourself via Terminal / ▶ Run — do not ask the user to install Python locally.',
-    );
-  } else if (pythonReady === false) {
-    parts.push(
-      '',
-      'PYTHON STATUS: NOT READY yet.',
-      pythonDetail ? `Detail: ${pythonDetail}` : '',
-      'Tell the user to re-open the repo (left panel → Open) so Python provisions, then retry.',
-      'Do not invent apt-get/Docker workarounds.',
-    );
-  } else {
-    parts.push(
-      '',
-      'PYTHON STATUS: unknown until a repo is opened. After Open, python/pip live in /vercel/sandbox/venv.',
-    );
-  }
-
-  if (repoUrl) {
-    parts.push('', `GitHub repo URL: ${repoUrl}`);
-  }
-  if (repoRoot) {
-    parts.push(`Sandbox path: ${repoRoot}`);
-    if (light) {
-      parts.push('Light turn — answer briefly; no file dump this message.');
-      return parts.join('\n');
-    }
-  }
-
-  if (tree.length > 0) {
-    const flatPaths = flattenTree(tree).filter(p =>
-      !p.includes('node_modules') &&
-      !p.includes('/dist/') &&
-      !p.startsWith('dist/') &&
-      !p.includes('public/agent/assets'),
-    );
-    const shown = flatPaths.slice(0, Math.min(MAX_TREE_PATHS, 80));
-    parts.push('', 'File tree:', shown.join('\n'));
-    if (flatPaths.length > shown.length) {
-      parts.push(`… (${flatPaths.length - shown.length} more omitted)`);
-    }
-  }
-
-  const hitBlock = formatSearchHits(searchHits);
-  if (hitBlock) parts.push('', hitBlock);
-
-  const packed = packContextFiles(contextFiles);
-  if (packed.size > 0) {
-    parts.push('', '── Open files (full) ──');
-    for (const [relPath, content] of packed) {
-      const ext  = relPath.split('.').pop() ?? '';
-      parts.push('', `File: ${relPath}`, '```' + ext, content, '```');
-    }
-  }
-
-  return parts.join('\n');
-}
-
-function flattenTree(nodes: FileNode[], prefix = ''): string[] {
-  const out: string[] = [];
-  for (const n of nodes) {
-    const p = prefix ? `${prefix}/${n.name}` : n.name;
-    if (n.type === 'file') out.push(p);
-    else if (n.children) out.push(...flattenTree(n.children, p));
-  }
-  return out;
-}
-
-// ---------------------------------------------------------------------------
-// Parse LLM output for "File: path\n```lang\ncontent```" blocks
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Parse text into segments (File-change blocks, plain code blocks, plain text)
-// ---------------------------------------------------------------------------
-
-type Segment =
-  | { type: 'text';        content: string }
-  | { type: 'file-change'; path: string; lang: string; content: string }
-  | { type: 'code';        lang: string; content: string };
-
-function parseSegments(text: string): Segment[] {
-  const out: Segment[] = [];
-  // Capture both "File: path\n```lang\ncontent```"  and bare "```lang\ncontent```"
-  const re =
-    /(?:^|\r?\n)([*_]*File:\s*(.+?)[*_]*\s*\r?\n(?:\r?\n)?)?```([a-zA-Z0-9_+\-.]*)\s*\r?\n([\s\S]*?)```/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    const leadNl = m[0].startsWith('\n') || m[0].startsWith('\r') ? (m[0].startsWith('\r\n') ? 2 : 1) : 0;
-    const before = text.slice(last, m.index + leadNl);
-    if (before.trim()) out.push({ type: 'text', content: before });
-    if (m[2]) {
-      const path = m[2].trim().replace(/^[`'"]+|[`'"]+$/g, '');
-      out.push({ type: 'file-change', path, lang: m[3] ?? '', content: m[4] ?? '' });
-    } else {
-      out.push({ type: 'code', lang: m[3] ?? '', content: m[4] ?? '' });
-    }
-    last = m.index + m[0].length;
-  }
-  const tail = text.slice(last);
-  if (tail.trim()) out.push({ type: 'text', content: tail });
-  return out;
-}
-
-function friendlyError(raw: string): string {
-  const lower = raw.toLowerCase();
-  if (lower === 'load failed' || lower === 'failed to fetch' || lower.includes('networkerror')) {
-    return 'Connection dropped before the model replied (often a timeout). Try again or a faster model.';
-  }
-  if (lower.includes('abort')) {
-    return 'Request timed out waiting for the model. Try a faster model or a shorter prompt.';
-  }
-  if (lower.includes('http 504') || lower.includes('504') || lower.includes('gateway timeout')) {
-    return 'Workspace hit the ~60s server time limit before the model finished. Try a faster model, or ask to fix one file at a time.';
-  }
-  return raw || 'Request failed';
-}
-
-/** Read SSE from /api/agent-chat (stream:true). Falls back if the body is plain JSON. */
-async function readAgentReply(res: Response): Promise<string> {
-  const ctype = (res.headers.get('content-type') || '').toLowerCase();
-  if (!ctype.includes('text/event-stream') || !res.body) {
-    const data = await res.json() as { reply?: string; error?: string };
-    if (data.error && !data.reply) throw new Error(data.error);
-    return data.reply ?? '(empty response)';
-  }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let reply = '';
-  let streamError: string | null = null;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split('\n\n');
-    buffer = parts.pop() || '';
-    for (const part of parts) {
-      for (const line of part.split('\n')) {
-        if (!line.startsWith('data:')) continue;
-        const payload = line.slice(5).trim();
-        if (!payload || payload === '[DONE]') continue;
-        let ev: {
-          type?: string;
-          text?: string;
-          reply?: string;
-          error?: string;
-          partialReply?: string;
-        };
-        try { ev = JSON.parse(payload); } catch { continue; }
-        if (ev.type === 'token' && typeof ev.text === 'string') {
-          reply += ev.text;
-        } else if (ev.type === 'done' && typeof ev.reply === 'string') {
-          reply = ev.reply;
-        } else if (ev.type === 'error') {
-          streamError = ev.error || 'Stream error';
-          if (typeof ev.partialReply === 'string' && ev.partialReply.trim()) {
-            reply = ev.partialReply;
-          }
+      return data;
+    },
+    onPartial => {
+      // Not used in ChatPane
+    },
+    async (result) => {
+      const humanoid = impersonate(result.mood);
+      setMessages(prev => [...prev, { 
+        role: 'assistant', 
+        content: result.answer, 
+        mood: result.mood 
+      }]);
+      if (result.action === 'write_files') {
+        setPendingChanges([], { replacing: result.writes });
+      }
+      if (result.action === 'read_files') {
+        for (const path of result.read_list) {
+          await addToContext(path);
         }
+        await stopGen();
       }
     }
-  }
-
-  if (streamError && !reply.trim()) throw new Error(streamError);
-  return reply || '(empty response)';
-}
-
-async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      p,
-      new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), ms); }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Small UI atoms
-// ---------------------------------------------------------------------------
-
-function FileChangeBlock({ path, lang, content, isApplied }: {
-  path: string; lang: string; content: string;
-  isApplied: boolean; onRun: () => void;
-}) {
-  const [showCode, setShowCode] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const lines = content.split('\n').length;
-  return (
-    <div style={{ margin: '8px 0', border: '1px solid #2a4a1a',
-      borderRadius: 6, background: '#0c1a0c', overflow: 'hidden' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '5px 10px', borderBottom: '1px solid #1e3a1e', gap: 8, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-          <span style={{ fontSize: 10, color: '#8fbf6f', fontWeight: 700 }}>FILE</span>
-          <span style={{ fontSize: 11, color: '#e8e8e8', overflow: 'hidden',
-            textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{path}</span>
-          <span style={{ fontSize: 10, color: '#555' }}>{lines} lines</span>
-          {isApplied && <span style={{ fontSize: 10, color: '#d4ff3f' }}>✓ saved</span>}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <button type="button"
-            onClick={() => downloadTextFile(path, content)}
-            style={{ background: '#d4ff3f', color: '#0a0a0a', border: 'none',
-              borderRadius: 4, padding: '3px 10px', cursor: 'pointer',
-              fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
-            Download
-          </button>
-          <button type="button"
-            onClick={async () => {
-              const ok = await copyText(content);
-              if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
-            }}
-            style={{ background: 'transparent', color: copied ? '#d4ff3f' : '#8fbf6f',
-              border: '1px solid #2a4a1a', borderRadius: 4, padding: '3px 8px',
-              cursor: 'pointer', fontFamily: 'inherit', fontSize: 11 }}>
-            {copied ? 'Copied' : 'Copy'}
-          </button>
-          <button onClick={() => setShowCode(s => !s)}
-            style={{ background: 'transparent', color: '#555', border: 'none',
-              fontSize: 11, cursor: 'pointer', padding: 0 }}>
-            {showCode ? 'hide' : 'show'}
-          </button>
-        </div>
-      </div>
-      {showCode && (
-        <pre style={{ margin: 0, padding: '8px 12px', overflowX: 'auto',
-          fontSize: 11.5, lineHeight: 1.5, color: '#ccc', maxHeight: 400 }}>
-          {content}
-        </pre>
-      )}
-    </div>
   );
-}
 
-function CodeBlock({ lang, content, onRun }: {
-  lang: string; content: string; onRun: () => void;
-}) {
-  return (
-    <div style={{ margin: '8px 0', background: '#0b0b0b',
-      border: '1px solid #2a2a2a', borderRadius: 6, overflow: 'hidden' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '4px 10px', borderBottom: '1px solid #1e1e1e' }}>
-        <span style={{ fontSize: 10, color: '#666', textTransform: 'uppercase',
-          letterSpacing: '0.1em' }}>{lang || 'code'}</span>
-        <button onClick={onRun} data-testid="run-code-btn"
-          style={{ background: '#1a2a0a', color: '#8fbf6f', border: '1px solid #2a4a1a',
-            borderRadius: 4, padding: '2px 10px', cursor: 'pointer',
-            fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
-          ▶ Run in Sandbox
-        </button>
-      </div>
-      <pre style={{ margin: 0, padding: '8px 12px', overflowX: 'auto',
-        fontSize: 12, lineHeight: 1.5, color: '#e8e8e8',
-        maxHeight: 300, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-        {content}
-      </pre>
-    </div>
-  );
-}
+  const userMessage = useUserPrompt();
+  const messageRef = useRef<HTMLTextAreaElement>(null);
 
-function AssistantBody({ msg, appliedPaths, onRunCode }: {
-  msg: Message;
-  appliedPaths: Set<string>;
-  onRunCode: (code: string, lang: string) => void;
-}) {
-  const segs = msg.segments;
-  if (segs && segs.length > 0) {
-    return (
-      <>
-        {segs.map((seg, i) => {
-          if (seg.type === 'text') return (
-            <p key={i} style={{ margin: '4px 0', fontSize: 13, lineHeight: 1.6,
-              color: '#ccc', whiteSpace: 'pre-wrap' }}>{seg.content.trim()}</p>
-          );
-          if (seg.type === 'file-change') return (
-            <FileChangeBlock key={i} path={seg.path} lang={seg.lang}
-              content={seg.content}
-              isApplied={appliedPaths.has(seg.path)}
-              onRun={() => onRunCode(seg.content, seg.lang)} />
-          );
-          return (
-            <CodeBlock key={i} lang={seg.lang} content={seg.content}
-              onRun={() => onRunCode(seg.content, seg.lang)} />
-          );
-        })}
-      </>
-    );
-  }
-  // Welcome text, errors, and any reply that didn't parse into segments
-  // MUST still render — previously these were invisible.
-  return (
-    <p data-testid="assistant-text" style={{ margin: '4px 0', fontSize: 13, lineHeight: 1.6,
-      color: '#ccc', whiteSpace: 'pre-wrap' }}>{msg.content}</p>
-  );
-}
+  useEffect(() => {
+    if (messageRef.current) messageRef.current.focus();
+  }, []);
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+  const send = async () => {
+    if (!userMessage.trim()) return;
+    
+    // SNAPSHOT the context and tree state immediately upon clicking send.
+    // This prevents the case where the user clicks files in the background 
+    // while the 'ask' function is still executing its setup.
+    const currentContext = new Map(contextFiles);
+    const currentTree = [...tree];
 
-export interface Message {
-  id:          string;
-  role:        'user' | 'assistant';
-  content:     string;
-  /** welcome = UI-only, never sent to the model; retry-inject = verify/nudge loop */
-  kind?:       'user' | 'retry-inject' | 'welcome' | 'imported';
-  segments?:   Segment[];
-  fileChanges?: PendingChange[];
-}
-
-let _id = 0;
-const uid = () => String(++_id);
-
-// ---------------------------------------------------------------------------
-// ChatPane
-// ---------------------------------------------------------------------------
-
-export interface PendingUpload {
-  kind: 'text' | 'image';
-  name: string;
-  content: string;
-}
-
-interface Props {
-  repoRoot:          string;
-  repoUrl:           string | null;
-  sandboxId:         string | null;
-  provider:          string;
-  model:             string;
-  /** Active role — plan stays prose-first until user asks to apply. */
-  role?:             string;
-  /** BYOK key for the active provider (optional). */
-  apiKey?:           string;
-  tree:              FileNode[];
-  contextFiles:      Map<string, string>;
-  autoRun:           boolean;
-  appliedPaths:      Set<string>;
-  autoSelectedFiles: string[];
-  searchHits:        SearchHit[];
-  /** Restored chat from localStorage (no welcome fluff). */
-  initialMessages?:  Message[];
-  onMessagesChange?: (messages: Message[]) => void;
-  onRunCode:         (code: string, lang: string)    => void;
-  /** May apply writes; awaited so auto-apply finishes before send returns. */
-  onFileChanges:     (changes: PendingChange[])      => void | Promise<void>;
-  /** Inject uploaded text files into context. */
-  onUploadText?:     (name: string, content: string) => void;
-  /** Returns fresh search hits + ephemeral full files for THIS send (avoids stale React state). */
-  onBeforeSend?:     (query: string) => Promise<{
-    hits: SearchHit[];
-    files: Map<string, string>;
-  } | void>;
-  /** From /api/init-repo — whether the sandbox venv is actually usable. */
-  pythonReady?:      boolean | null;
-  pythonDetail?:     string | null;
-}
-
-export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
-  repoRoot, repoUrl, sandboxId, provider, model, role, apiKey, tree, contextFiles, autoRun, appliedPaths,
-  autoSelectedFiles, searchHits, initialMessages, onMessagesChange,
-  onRunCode, onFileChanges, onUploadText, onBeforeSend,
-  pythonReady = null, pythonDetail = null,
-}, ref) {
-  const [messages,  setMessages]  = useState<Message[]>(() => initialMessages ?? []);
-  const [input,    setInput]    = useState('');
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState<string | null>(null);
-  const [uploads,  setUploads]  = useState<PendingUpload[]>([]);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const sendingRef = useRef(false);
-
-  // Keep latest props in a ref so a send started before auto-context finishes
-  // still sees the updated file context afterward.
-  const latestRef = useRef({
-    repoRoot, repoUrl, sandboxId, provider, model, role, apiKey, tree, contextFiles, searchHits,
-    autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-  });
-  latestRef.current = {
-    repoRoot, repoUrl, sandboxId, provider, model, role, apiKey, tree, contextFiles, searchHits,
-    autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
+    setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
+    setSendError(null);
+    
+    try {
+      await submitPrompt(userMessage, {
+        // Pass these snapshots into the ask handler via overrides if 
+        // your ask implementation supports overriding the closing method
+        // (Alternatively, ensure submitPrompt uses these values internally).
+        contextFiles: currentContext,
+        tree: currentTree,
+      });
+    } catch (e: any) {
+      setSendError(e.message);
+    }
   };
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading]);
-
-  useEffect(() => {
-    onMessagesChange?.(messages);
-  }, [messages, onMessagesChange]);
-
-  // ── shared send implementation ─────────────────────────────────────────────
-  const sendText = useCallback(async (
-    text: string,
-    kind: 'user' | 'retry-inject' = 'user',
-  ): Promise<PendingChange[]> => {
-    if (!text || sendingRef.current) return [];
-    sendingRef.current = true;
-
-    // 1) Show the bubble IMMEDIATELY — never wait on auto-context / network first.
-    const userMsg: Message = { id: uid(), role: 'user', content: text, kind };
-    setMessages(m => [...m, userMsg]);
-    setLoading(true);
-    setError(null);
-
-    const callAgent = async (
-      history: Array<{ role: string; content: string | unknown }>,
-      systemPrompt: string,
-      sid: string | null,
-      prov: string,
-      mod: string,
-      key?: string,
-    ): Promise<string> => {
-      const chatEndpoint = `${API_URL}/agent-chat`;
-      const chatHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (sid) chatHeaders['X-Sandbox-Session'] = sid;
-      if (key) chatHeaders['X-Provider-Key'] = key;
-
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
-      try {
-        const res = await fetch(chatEndpoint, {
-          method: 'POST',
-          headers: chatHeaders,
-          body: JSON.stringify({
-            messages: history,
-            systemPrompt,
-            provider: prov,
-            model: mod,
-            apiKey: key || undefined,
-            stream: true,
-          }),
-          signal: controller.signal,
-        });
-        if (!res.ok) {
-          const ctype = (res.headers.get('content-type') || '').toLowerCase();
-          if (ctype.includes('application/json')) {
-            const d = await res.json().catch(() => ({ error: `HTTP ${res.status}` })) as { error?: string };
-            throw new Error(d.error ?? `HTTP ${res.status}`);
-          }
-          throw new Error(`HTTP ${res.status}`);
-        }
-        return await readAgentReply(res);
-      } finally {
-        clearTimeout(timer);
-      }
-    };
-
-    const sendStartedAt = Date.now();
-
-    try {
-      // 2) Optional auto-context, hard-capped so a hung /search can't eat the send.
-      // Use the RETURNED hits/files — React setState is not flushed yet.
-      let freshHits: SearchHit[] | null = null;
-      let freshFiles: Map<string, string> | null = null;
-      const before = latestRef.current.onBeforeSend;
-      if (before && kind === 'user') {
-        const result = await withTimeout(before(text), BEFORE_SEND_TIMEOUT_MS);
-        if (result) {
-          freshHits = result.hits;
-          freshFiles = result.files;
-        }
-      }
-
-      const {
-        repoRoot: root, repoUrl: rUrl, sandboxId: sid, provider: prov, model: mod,
-        role: activeRole, apiKey: key, tree: tr, contextFiles: pinned, searchHits: propHits,
-        autoRun: ar, onRunCode: run, onFileChanges: onFc,
-        messages: prev,
-      } = latestRef.current;
-
-      const hits = freshHits ?? propHits;
-      const ctx = new Map(pinned);
-      if (freshFiles) {
-        for (const [p, c] of freshFiles) {
-          if (!ctx.has(p)) ctx.set(p, c);
-        }
-      }
-
-      // After await, React may already have flushed userMsg into state — don't duplicate.
-      // Never send welcome / legacy example blurb to the model.
-      const withUser = prev.some(m => m.id === userMsg.id) ? prev : [...prev, userMsg];
-      const history = trimMessageHistory(
-        withUser
-          .filter(m =>
-            (m.role === 'user' || m.role === 'assistant')
-            && m.kind !== 'welcome'
-            && !looksLikeLegacyWelcome(m.content),
-          )
-          .map(m => ({ role: m.role, content: m.content as string | unknown })),
-      );
-
-      // Attach pending images to the latest user turn (vision-capable models).
-      const pendingImages = (latestRef.current as { _pendingImages?: Array<{ type: 'image_url'; image_url: { url: string } }> })._pendingImages;
-      if (pendingImages?.length && history.length > 0) {
-        const last = history[history.length - 1];
-        if (last.role === 'user' && typeof last.content === 'string') {
-          last.content = [
-            { type: 'text', text: last.content },
-            ...pendingImages,
-          ];
-        }
-        (latestRef.current as { _pendingImages?: unknown })._pendingImages = undefined;
-      }
-
-      const suggestTurn = kind === 'user' && (
-        looksLikeSuggestRequest(text) || activeRole === 'plan' || activeRole === 'review'
-      );
-      const applyTurn = kind === 'user' && looksLikeApplyRequest(text) && activeRole !== 'plan';
-
-      // Light chat ("hey", "thanks"): don't paste tree/files into the model.
-      const lightTurn = !needsCodeContext(text);
-      let systemPrompt = buildSystemPrompt(
-        root,
-        lightTurn ? [] : tr,
-        ctx,
-        lightTurn ? [] : hits,
-        {
-          light: lightTurn && !!root && ctx.size === 0,
-          repoUrl: rUrl,
-          pythonReady: latestRef.current.pythonReady,
-          pythonDetail: latestRef.current.pythonDetail,
-        },
-      );
-      if (activeRole === 'plan') {
-        systemPrompt +=
-          '\n\nROLE=PLAN: architecture and steps only. No File: blocks, no fenced code, no scripts until the user says to apply/implement.';
-      } else if (suggestTurn) {
-        systemPrompt +=
-          '\n\nSUGGEST-ONLY this turn: plain advice, real paths, no File: blocks, no placeholders.';
-      } else if (applyTurn) {
-        systemPrompt +=
-          '\n\nAPPLY this turn: output complete File: blocks only (full files, no placeholders).';
-      }
-
-      // Always hit agent-chat — it accepts systemPrompt. /api/chat ignores it
-      // and is the main-chat persona endpoint, not the agent.
-      let reply = await callAgent(history, systemPrompt, sid, prov, mod, key);
-      let segs  = parseSegments(reply);
-      let fc    = extractFileChanges(reply);
-
-      // Suggest-only: ignore any File: blocks the model wrongly emitted.
-      if (suggestTurn) {
-        fc = [];
-        segs = segs.map(s =>
-          s.type === 'file-change'
-            ? { type: 'text' as const, content: `(Suggestion for ${s.path} — not saved. Say “apply this” if you want it written.)` }
-            : s,
-        );
-      }
-
-      setMessages(m => [...m, {
-        id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
-      }]);
-
-      // Only nudge for explicit APPLY asks — never for suggestions/reviews.
-      // Skip if the first call already used most of the ~60s Hobby window (avoids a second 504).
-      const shouldNudge = fc.length === 0
-        && kind === 'user'
-        && applyTurn
-        && !suggestTurn
-        && (!!root || ctx.size > 0)
-        && (Date.now() - sendStartedAt) < NUDGE_BUDGET_MS;
-
-      if (shouldNudge) {
-        const nudgeMsg: Message = {
-          id: uid(), role: 'user', content: NUDGE_PROMPT, kind: 'retry-inject',
-        };
-        setMessages(m => [...m, nudgeMsg]);
-
-        const nudgedHistory = [
-          ...history,
-          { role: 'assistant', content: reply },
-          { role: 'user', content: NUDGE_PROMPT },
-        ];
-        reply = await callAgent(nudgedHistory, systemPrompt, sid, prov, mod, key);
-        segs  = parseSegments(reply);
-        fc    = extractFileChanges(reply);
-
-        setMessages(m => [...m, {
-          id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
-        }]);
-      }
-
-      // Never write files on a suggest turn.
-      if (fc.length > 0 && !suggestTurn) await onFc(fc);
-
-      if (ar && !suggestTurn) {
-        for (const seg of segs) {
-          if (seg.type === 'code' && seg.content.trim()) run(seg.content, seg.lang);
-        }
-      }
-
-      return fc;
-    } catch (e: unknown) {
-      const msg = friendlyError(e instanceof Error ? e.message : String(e));
-      setError(msg);
-      setMessages(m => [...m, { id: uid(), role: 'assistant', content: `⚠ ${msg}` }]);
-      return [];
-    } finally {
-      setLoading(false);
-      sendingRef.current = false;
-    }
-  }, []);
-
-  // Expose imperative handle to parent (used by the verify loop)
-  useImperativeHandle(ref, () => ({
-    programmaticSend: (text, role = 'retry-inject') => sendText(text, role),
-  }), [sendText]);
-
-  const send = useCallback(async () => {
-    const text = input.trim();
-    if ((!text && uploads.length === 0) || sendingRef.current) return;
-
-    // Text uploads go into context; images ride along on this turn.
-    const pending = uploads;
-    setUploads([]);
-    setInput('');
-
-    let sendBody = text;
-    const imageParts: Array<{ type: 'image_url'; image_url: { url: string } }> = [];
-    for (const u of pending) {
-      if (u.kind === 'text') {
-        onUploadText?.(u.name, u.content);
-        sendBody += `\n\n[Uploaded file: ${u.name}]\n\`\`\`\n${u.content.slice(0, 80_000)}\n\`\`\``;
-      } else {
-        imageParts.push({ type: 'image_url', image_url: { url: u.content } });
-        sendBody += `\n\n[Uploaded image: ${u.name}]`;
-      }
-    }
-    if (!sendBody.trim() && imageParts.length === 0) return;
-
-    // If images are present, stash them so callAgent history can use multimodal.
-    if (imageParts.length > 0) {
-      (latestRef.current as { _pendingImages?: typeof imageParts })._pendingImages = imageParts;
-    }
-    await sendText(sendBody.trim() || '(see attached image)', 'user');
-  }, [input, uploads, sendText, onUploadText]);
-
-  const handleFiles = useCallback(async (fileList: FileList | null) => {
-    if (!fileList?.length) return;
-    const next: PendingUpload[] = [];
-    for (const file of Array.from(fileList)) {
-      if (file.size > 8_000_000) {
-        setError(`${file.name} is too large (max 8MB)`);
-        continue;
-      }
-      const isImage = /^image\//.test(file.type) || /\.(png|jpe?g|gif|webp)$/i.test(file.name);
-      const content = await new Promise<string>((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = () => resolve(String(r.result || ''));
-        r.onerror = () => reject(new Error(`Failed to read ${file.name}`));
-        if (isImage) r.readAsDataURL(file);
-        else r.readAsText(file);
-      });
-      next.push({ kind: isImage ? 'image' : 'text', name: file.name, content });
-    }
-    if (next.length) setUploads(u => [...u, ...next]);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  }, []);
-
   return (
-    <div data-testid="chat-pane" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
-      background: '#0a0a0a', fontFamily: '"JetBrains Mono",ui-monospace,monospace' }}>
-
-      {/* header */}
-      <div style={{ padding: '7px 12px', borderBottom: '1px solid #1e1e1e',
-        background: '#0f0f0f', flexShrink: 0, display: 'flex',
-        alignItems: 'center', gap: 10 }}>
-        <span style={{ color: '#d4ff3f', fontSize: 10, letterSpacing: '0.1em',
-          textTransform: 'uppercase' }}>// agent</span>
-        {(autoSelectedFiles.length > 0 || contextFiles.size > 0) && (
-          <span style={{ fontSize: 10, color: '#555' }}>
-            reading {Math.max(autoSelectedFiles.length, contextFiles.size)} file
-            {Math.max(autoSelectedFiles.length, contextFiles.size) !== 1 ? 's' : ''} for you
-          </span>
-        )}
-        {error && <span style={{ fontSize: 10, color: '#ff6a6a', marginLeft: 'auto' }}>
-          ✗ {error}
-        </span>}
+    <div className='chat-pane'>
+      <div className='messages'>
+        {messages.map((m, i) => (
+          <div key={i} className={`message ${m.role}`}>
+            <div className='content'>{m.content}</div>
+          </div>
+        )))}
+        {isGenerating && <div className='assistant waiting'>...</div>}
+        {sendError && <div className='error' onClick={() => setSendError(null)}>{sendError}</div>}
       </div>
-
-      {/* Friendly status — no jargon about snippets/tokens/bundles */}
-      {autoSelectedFiles.length > 0 && (
-        <div style={{ padding: '5px 12px', background: 'rgba(212,255,63,.05)',
-          borderBottom: '1px solid rgba(212,255,63,.15)', flexShrink: 0,
-          fontSize: 10, color: '#8fa62b', lineHeight: 1.6 }}>
-          <span style={{ fontWeight: 700 }}>Looking at:</span>{' '}
-          {autoSelectedFiles.map(p => p.split('/').pop() || p).join(', ')}
-        </div>
-      )}
-
-      {/* messages */}
-      <div data-testid="chat-messages" style={{ flex: 1, overflowY: 'auto', padding: '12px 14px',
-        display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
-        {messages.length === 0 && !loading && (
-          <div style={{ fontSize: 12, color: '#444', lineHeight: 1.5 }}>
-            {repoRoot ? 'Ask for a change.' : 'Start a blank project or open a GitHub URL, then ask.'}
-          </div>
-        )}
-        {messages.map(msg => (
-          <div key={msg.id} data-testid={msg.role === 'user' ? 'user-msg' : 'assistant-msg'} style={{
-            alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
-            maxWidth: msg.role === 'user' ? '75%' : '100%',
-            width: msg.role === 'assistant' ? '100%' : undefined,
-          }}>
-            {msg.role === 'user' && msg.kind === 'retry-inject' ? (
-              <div style={{ padding: '5px 10px', background: '#111a0a',
-                border: '1px dashed #2a4020', borderRadius: 6,
-                fontSize: 11, color: '#6a8a5a', whiteSpace: 'pre-wrap',
-                maxHeight: 120, overflowY: 'auto' }}>
-                <span style={{ fontWeight: 700, display: 'block', marginBottom: 3 }}>
-                  ⟳ Auto-retry — test failure injected
-                </span>
-                {msg.content.slice(0, 500)}{msg.content.length > 500 ? '…' : ''}
-              </div>
-            ) : msg.role === 'user' ? (
-              <div style={{ background: '#1f1f1f', border: '1px solid #2a2a2a',
-                borderRadius: 8, padding: '7px 12px', fontSize: 13, whiteSpace: 'pre-wrap' }}>
-                {msg.content}
-              </div>
-            ) : (
-              <AssistantBody msg={msg} appliedPaths={appliedPaths} onRunCode={onRunCode} />
-            )}
-          </div>
-        ))}
-        {loading && (
-          <div data-testid="thinking" style={{ alignSelf: 'flex-start', fontSize: 12, color: '#555' }}>
-            thinking…
-          </div>
-        )}
-        <div ref={bottomRef} />
-      </div>
-
-      {uploads.length > 0 && (
-        <div style={{ padding: '6px 12px', borderTop: '1px solid #1e1e1e',
-          display: 'flex', flexWrap: 'wrap', gap: 6, background: '#0c0c0c' }}>
-          {uploads.map((u, i) => (
-            <span key={`${u.name}-${i}`} style={{
-              fontSize: 10, color: '#aaa', background: '#151515', border: '1px solid #2a2a2a',
-              borderRadius: 4, padding: '2px 8px', display: 'inline-flex', gap: 6, alignItems: 'center',
-            }}>
-              {u.kind === 'image' ? '🖼' : '📄'} {u.name}
-              <button type="button" onClick={() => setUploads(list => list.filter((_, j) => j !== i))}
-                style={{ background: 'transparent', border: 'none', color: '#666', cursor: 'pointer', padding: 0 }}>×</button>
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* input */}
-      <form data-testid="chat-form" onSubmit={e => { e.preventDefault(); void send(); }}
-        style={{ borderTop: '1px solid #1e1e1e', padding: '10px 12px',
-          display: 'flex', gap: 8, flexShrink: 0, alignItems: 'flex-end',
-          background: '#0a0a0a' }}>
-        <input ref={fileInputRef} type="file" multiple accept="image/*,.txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.css,.html,.yml,.yaml,.toml,.env,.csv"
-          style={{ display: 'none' }}
-          onChange={e => { void handleFiles(e.target.files); }} />
-        <button type="button" title="Upload photo or file"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={loading}
-          style={{ background: '#151515', color: '#aaa', border: '1px solid #2a2a2a',
-            borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
-            fontFamily: 'inherit', fontSize: 12, alignSelf: 'flex-end' }}>📎</button>
-        <textarea
-          id="chat-input"
-          data-testid="chat-input"
-          value={input}
-          rows={2}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); }
+      <div className='put prompt-area'>
+        <textarea 
+          ref={messageRef}
+          value={userMessage}
+          onChange={e => { 
+            /* actually handled by useUserPrompt hook */ 
           }}
-          placeholder="What should change?"
-          disabled={loading}
-          style={{ flex: 1, background: '#111', color: '#e8e8e8',
-            border: '1px solid #2a2a2a', borderRadius: 4,
-            padding: '7px 10px', fontFamily: 'inherit', fontSize: 16,
-            outline: 'none', resize: 'vertical', minHeight: 48, maxHeight: 120,
-            opacity: loading ? .6 : 1 }} />
-        <button type="submit" data-testid="chat-send" disabled={(!input.trim() && uploads.length === 0) || loading}
-          style={{ background: (input.trim() || uploads.length) && !loading ? '#d4ff3f' : '#1a1a1a',
-            color: (input.trim() || uploads.length) && !loading ? '#0a0a0a' : '#444',
-            border: 'none', borderRadius: 4, padding: '8px 16px',
-            cursor: (input.trim() || uploads.length) && !loading ? 'pointer' : 'default',
-            fontFamily: 'inherit', fontSize: 12, fontWeight: 700,
-            alignSelf: 'flex-end' }}>Send</button>
-      </form>
+          onKeyPress={e => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
+          placeholder='Type a message...'
+          style={{
+             value: userMessage // Provided by useUserPrompt
+          }}
+        />
+        <button 
+          className='send-btn' 
+          onClick={send} 
+          disabled={isGenerating || !userMessage.trim()}
+        >
+          {isGenerating ? (
+            <button 
+              className='stop-btn' 
+              onClick={stopGen} 
+              disabled={!isAwake}
+            >
+              Stop
+            </button>
+          ) : '
+          Send
+          '}
+        </button>
+        <button 
+          className='clear-btn' 
+          onClick={clearContext}
+        >
+          Clear Context
+        </button>
+      </div>
     </div>
   );
-});
-ChatPane.displayName = 'ChatPane';
+}
+
+// Helper function to mock API's implementation for this component's logic
+function useChatAPI() {
+  const API_URL = (import.meta.env.VITE_API_URL as string) || 'http://localhost:3001';
+  const endpoint = import.meta.env.VITE_CHAT_ENDPOINT as string || '/agent-chat';
+  
+  const axios = {
+    post: async (url: string, data: any) => {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return {
+        data: await res.json(),
+        status: res.status,
+      };
+    },
+  };
+  
+  return { axios, API_URL, endpoint };
+}
