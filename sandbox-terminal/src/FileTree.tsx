@@ -94,6 +94,10 @@ interface Props {
   error:          string | null;
   pythonReady?:   boolean | null;
   pythonDetail?:  string | null;
+  rustReady?:     boolean | null;
+  rustDetail?:    string | null;
+  goReady?:       boolean | null;
+  goDetail?:      string | null;
   onOpenRepo:     (path: string) => void;
   onStartBlank?:  () => void;
   onAddToContext: (relPath: string) => void;
@@ -103,7 +107,7 @@ interface Props {
 
 export function FileTree({
   repoRoot, tree, totalFiles, contextFiles, loading, error,
-  pythonReady, pythonDetail,
+  pythonReady, pythonDetail, rustReady, rustDetail, goReady, goDetail,
   onOpenRepo, onStartBlank, onAddToContext, onRemoveFromContext, onClearContext,
 }: Props) {
   const [inputPath, setInputPath] = useState(repoRoot || '');
@@ -172,6 +176,24 @@ export function FileTree({
           }}>
             {pythonReady ? '●' : '✗'} Python {pythonReady ? 'ready' : 'missing'}
             {pythonDetail ? ` — ${pythonDetail.slice(0, 80)}` : ''}
+          </div>
+        )}
+        {rustReady != null && (
+          <div style={{
+            marginTop: 3, fontSize: 10, lineHeight: 1.4,
+            color: rustReady ? '#8fbf6f' : '#ff6a6a',
+          }}>
+            {rustReady ? '●' : '✗'} Rust {rustReady ? 'ready' : 'missing'}
+            {rustDetail ? ` — ${rustDetail.slice(0, 80)}` : ''}
+          </div>
+        )}
+        {goReady != null && (
+          <div style={{
+            marginTop: 3, fontSize: 10, lineHeight: 1.4,
+            color: goReady ? '#8fbf6f' : '#ff6a6a',
+          }}>
+            {goReady ? '●' : '✗'} Go {goReady ? 'ready' : 'missing'}
+            {goDetail ? ` — ${goDetail.slice(0, 80)}` : ''}
           </div>
         )}
         {repoRoot && !loading && (

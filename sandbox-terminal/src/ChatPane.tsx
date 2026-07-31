@@ -86,6 +86,10 @@ function buildSystemPrompt(
     repoUrl?: string | null;
     pythonReady?: boolean | null;
     pythonDetail?: string | null;
+    rustReady?: boolean | null;
+    rustDetail?: string | null;
+    goReady?: boolean | null;
+    goDetail?: string | null;
   },
 ): string {
   const parts: string[] = [];
@@ -93,6 +97,10 @@ function buildSystemPrompt(
   const repoUrl = opts?.repoUrl || '';
   const pythonReady = opts?.pythonReady;
   const pythonDetail = opts?.pythonDetail || '';
+  const rustReady = opts?.rustReady;
+  const rustDetail = opts?.rustDetail || '';
+  const goReady = opts?.goReady;
+  const goDetail = opts?.goDetail || '';
 
   parts.push(
     'You are a coding agent for the user\'s opened GitHub repo in a cloud sandbox.',
@@ -109,13 +117,14 @@ function buildSystemPrompt(
     '',
     'SANDBOX FACTS (do not invent limitations):',
     '- This is a Vercel Sandbox microVM (Amazon Linux 2023), NOT a local laptop.',
-    '- Package manager is dnf (or yum), NEVER apt-get. Example: sudo dnf install -y python3 python3-pip',
-    '- Terminal PATH prefers /vercel/sandbox/venv/bin — `python` and `pip` should resolve there.',
+    '- Package manager is dnf (or yum), NEVER apt-get.',
+    '- Python: Terminal PATH prefers /vercel/sandbox/venv/bin — use pip/python there.',
     '- Prefer: /vercel/sandbox/venv/bin/pip install <pkg> && /vercel/sandbox/venv/bin/python script.py',
-    '- Or: source /vercel/sandbox/venv/bin/activate && pip install <pkg> && python …',
-    '- NEVER say you cannot run Python because apt-get/Docker/python:3.10-slim is missing.',
-    '- NEVER tell the user to run install commands on their laptop for basic Python — run them in this Terminal.',
-    '- If a package is missing, install it with pip in the venv (or dnf for system libs), then run.',
+    '- Rust: rustc + cargo are provisioned (dnf or rustup into /vercel/sandbox/cargo). Use cargo test / rustc.',
+    '- Go: `go` is provisioned via dnf golang. Use go test ./... / go run / go build.',
+    '- NEVER say you cannot run Python/Rust/Go because apt-get/Docker/slim images are missing.',
+    '- NEVER tell the user to run install commands on their laptop for basic toolchains — run them in this Terminal.',
+    '- If a package is missing, install it with pip (venv), cargo, go get/mod, or dnf for system libs, then run.',
     '',
     'If the user wants changes written: output File: blocks with FULL file contents.',
     'If they only want advice: plain English, cite real paths from context. Do not dump untitled example code.',
@@ -147,6 +156,48 @@ function buildSystemPrompt(
     parts.push(
       '',
       'PYTHON STATUS: unknown until a repo is opened. After Open, python/pip live in /vercel/sandbox/venv.',
+    );
+  }
+
+  if (rustReady === true) {
+    parts.push(
+      '',
+      'RUST STATUS: READY (rustc + cargo) in this sandbox.',
+      rustDetail ? `Detail: ${rustDetail}` : '',
+      'Run cargo/rustc yourself via Terminal — do not ask the user to install Rust locally.',
+    );
+  } else if (rustReady === false) {
+    parts.push(
+      '',
+      'RUST STATUS: NOT READY yet.',
+      rustDetail ? `Detail: ${rustDetail}` : '',
+      'Tell the user to re-open the repo so Rust provisions, then retry. Do not invent apt-get workarounds.',
+    );
+  } else {
+    parts.push(
+      '',
+      'RUST STATUS: unknown until a repo is opened. After Open, rustc/cargo should be on PATH.',
+    );
+  }
+
+  if (goReady === true) {
+    parts.push(
+      '',
+      'GO STATUS: READY in this sandbox.',
+      goDetail ? `Detail: ${goDetail}` : '',
+      'Run go yourself via Terminal — do not ask the user to install Go locally.',
+    );
+  } else if (goReady === false) {
+    parts.push(
+      '',
+      'GO STATUS: NOT READY yet.',
+      goDetail ? `Detail: ${goDetail}` : '',
+      'Tell the user to re-open the repo so Go provisions, then retry. Do not invent apt-get workarounds.',
+    );
+  } else {
+    parts.push(
+      '',
+      'GO STATUS: unknown until a repo is opened. After Open, `go` should be on PATH.',
     );
   }
 
@@ -491,9 +542,13 @@ interface Props {
     hits: SearchHit[];
     files: Map<string, string>;
   } | void>;
-  /** From /api/init-repo — whether the sandbox venv is actually usable. */
+  /** From /api/init-repo — whether the sandbox toolchains are actually usable. */
   pythonReady?:      boolean | null;
   pythonDetail?:     string | null;
+  rustReady?:        boolean | null;
+  rustDetail?:       string | null;
+  goReady?:          boolean | null;
+  goDetail?:         string | null;
 }
 
 export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
@@ -501,6 +556,8 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   autoSelectedFiles, searchHits, initialMessages, onMessagesChange,
   onRunCode, onFileChanges, onUploadText, onBeforeSend,
   pythonReady = null, pythonDetail = null,
+  rustReady = null, rustDetail = null,
+  goReady = null, goDetail = null,
 }, ref) {
   const [messages,  setMessages]  = useState<Message[]>(() => initialMessages ?? []);
   const [input,    setInput]    = useState('');
@@ -516,10 +573,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   const latestRef = useRef({
     repoRoot, repoUrl, sandboxId, provider, model, role, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
+    rustReady, rustDetail, goReady, goDetail,
   });
   latestRef.current = {
     repoRoot, repoUrl, sandboxId, provider, model, role, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
+    rustReady, rustDetail, goReady, goDetail,
   };
 
   useEffect(() => {
@@ -661,6 +720,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           repoUrl: rUrl,
           pythonReady: latestRef.current.pythonReady,
           pythonDetail: latestRef.current.pythonDetail,
+          rustReady: latestRef.current.rustReady,
+          rustDetail: latestRef.current.rustDetail,
+          goReady: latestRef.current.goReady,
+          goDetail: latestRef.current.goDetail,
         },
       );
       if (activeRole === 'plan') {
