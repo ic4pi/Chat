@@ -4,7 +4,7 @@
  * Body:
  *   {
  *     kind: 'image' | 'video',
- *     provider: 'cloudflare' | 'nvidia',
+ *     provider: 'cloudflare' | 'nvidia' | 'fal' | 'venice',
  *     model?: string,
  *     prompt: string,
  *     negativePrompt?: string,
@@ -15,10 +15,11 @@
  *   }
  *
  * Env (Vercel → Settings → Environment Variables):
+ *   VENICE_API_KEY         — uncensored images (safe_mode:false) via Venice
  *   CLOUDFLARE_ACCOUNT_ID  — Workers AI account id (images + Seedance video)
  *   CLOUDFLARE_API_TOKEN   — API token with Workers AI permission
  *   FAL_KEY                — Wan 2.2 video via fal.ai (recommended)
- *   NVIDIA_API_KEY         — hosted FLUX/SDXL image (optional)
+ *   NVIDIA_API_KEY         — hosted FLUX/SDXL image (optional; safety-filtered)
  *   NVIDIA_MEDIA_BASE_URL  — self-hosted Wan NIM only (OpenAI-compatible base URL)
  */
 
@@ -30,6 +31,22 @@ const CLOUDFLARE_IMAGE_MODELS = {
   '@cf/bytedance/stable-diffusion-xl-lightning': '@cf/bytedance/stable-diffusion-xl-lightning',
   'sdxl': '@cf/stabilityai/stable-diffusion-xl-base-1.0',
   '@cf/stabilityai/stable-diffusion-xl-base-1.0': '@cf/stabilityai/stable-diffusion-xl-base-1.0',
+};
+
+/** Venice image models — uncensored when safe_mode is false (native /image/generate). */
+const VENICE_IMAGE_MODELS = {
+  'z-image-turbo': 'z-image-turbo',
+  'lustify-sdxl': 'lustify-sdxl',
+  'lustify-v7': 'lustify-v7',
+  'lustify-v8': 'lustify-v8',
+  'wai-Illustrious': 'wai-Illustrious',
+  'wai-illustrious': 'wai-Illustrious',
+  chroma: 'chroma',
+  'venice-sd35': 'venice-sd35',
+  'flux-2-pro': 'flux-2-pro',
+  'flux-2-max': 'flux-2-max',
+  'qwen-image': 'qwen-image',
+  'qwen-image-2': 'qwen-image-2',
 };
 
 const CLOUDFLARE_VIDEO_MODELS = {
@@ -167,6 +184,112 @@ function explainNvidiaAuth(status, detail, modelId) {
 
 function isNvidiaSafetyBlock(detail) {
   return /nsfw|safety|content.?filter|blocked|moderated|inappropriate/i.test(String(detail || ''));
+}
+
+function veniceImageKey() {
+  return (process.env.VENICE_API_KEY || '').trim();
+}
+
+/**
+ * Uncensored Venice images — native POST /image/generate with safe_mode:false.
+ * Cloudflare / NVIDIA / fal hosts keep their own filters; use Venice for unrestricted.
+ */
+async function generateVeniceImage({ prompt, model, size, negativePrompt }) {
+  const key = veniceImageKey();
+  if (!key) {
+    const err = new Error(
+      'Missing VENICE_API_KEY in Vercel env. Uncensored images need Venice — same key as chat.',
+    );
+    err.status = 503;
+    throw err;
+  }
+
+  const modelId = VENICE_IMAGE_MODELS[model] || model || 'z-image-turbo';
+  const { width, height } = parseSize(size, 1024, 1024);
+  // Venice caps some models around 1280 on a side — keep requests sane.
+  const w = Math.min(1280, Math.max(256, width));
+  const h = Math.min(1280, Math.max(256, height));
+
+  const body = {
+    model: modelId,
+    prompt,
+    width: w,
+    height: h,
+    format: 'png',
+    return_binary: false,
+    // Critical: default Venice safe_mode blurs adult content. Off = uncensored.
+    safe_mode: false,
+    hide_watermark: true,
+  };
+  if (negativePrompt) body.negative_prompt = negativePrompt;
+
+  const upstream = await fetch('https://api.venice.ai/api/v1/image/generate', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  const rawText = await upstream.text();
+  let data;
+  try { data = JSON.parse(rawText); } catch { data = { error: rawText }; }
+
+  if (!upstream.ok) {
+    const detail =
+      extractErrorDetail(data) ||
+      (typeof data?.error === 'string' ? data.error : null) ||
+      `Venice HTTP ${upstream.status}`;
+    const err = new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+    err.status = upstream.status || 502;
+    throw err;
+  }
+
+  const images = [];
+  const imagesArr = data?.images || data?.data || [];
+  if (Array.isArray(imagesArr)) {
+    for (const item of imagesArr) {
+      if (typeof item === 'string') {
+        const { mime, b64 } = stripDataUrl(item);
+        if (b64) images.push({ mimeType: mime || 'image/png', base64: b64 });
+        else if (/^https?:\/\//i.test(item)) images.push({ mimeType: 'image/png', url: item });
+      } else if (item && typeof item === 'object') {
+        const b64 = item.b64_json || item.base64 || item.image || item.url;
+        if (typeof b64 === 'string' && /^https?:\/\//i.test(b64)) {
+          images.push({ mimeType: item.mimeType || 'image/png', url: b64 });
+        } else if (typeof b64 === 'string') {
+          const stripped = stripDataUrl(b64);
+          images.push({ mimeType: item.mimeType || stripped.mime || 'image/png', base64: stripped.b64 });
+        }
+      }
+    }
+  }
+  // Some Venice responses: { image: "base64..." } or { images: ["data:image/..."] }
+  if (!images.length && typeof data?.image === 'string') {
+    const stripped = stripDataUrl(data.image);
+    images.push({ mimeType: stripped.mime || 'image/png', base64: stripped.b64 });
+  }
+
+  if (!images.length) {
+    const err = new Error('Venice returned no image data.');
+    err.status = 502;
+    throw err;
+  }
+
+  const blurred = String(upstream.headers.get('x-venice-is-blurred') || '').toLowerCase() === 'true';
+  return {
+    kind: 'image',
+    provider: 'venice',
+    model: modelId,
+    uncensored: !blurred,
+    safeMode: false,
+    images,
+    note: blurred
+      ? 'Venice marked this result blurred — try another Venice model (Lustify / WAI / Chroma).'
+      : 'Venice · safe_mode off (uncensored).',
+  };
 }
 
 function cleanMediaError(msg) {
@@ -1036,6 +1159,17 @@ export default async function handler(req, res) {
 
   try {
     if (kind === 'image') {
+      // Venice = uncensored path (safe_mode:false). CF/NVIDIA/fal keep host filters.
+      if (provider === 'venice') {
+        const out = await generateVeniceImage({
+          prompt: prompt.trim(),
+          model,
+          size,
+          negativePrompt,
+        });
+        return res.status(200).json(out);
+      }
+
       // Honor the user's selected provider. Never silently skip NVIDIA or swap models.
       if (provider === 'nvidia') {
         const out = await generateNvidiaImage({

@@ -1,10 +1,18 @@
 const IMAGE_MODELS = [
-  { value: 'cloudflare:flux-schnell', label: 'Cloudflare · FLUX.1 Schnell', kind: 'image', provider: 'cloudflare', model: 'flux-schnell' },
-  { value: 'cloudflare:sdxl-lightning', label: 'Cloudflare · SDXL Lightning', kind: 'image', provider: 'cloudflare', model: 'sdxl-lightning' },
-  { value: 'cloudflare:sdxl', label: 'Cloudflare · SDXL Base', kind: 'image', provider: 'cloudflare', model: 'sdxl' },
-  { value: 'nvidia:flux-schnell', label: 'NVIDIA · FLUX.1 Schnell', kind: 'image', provider: 'nvidia', model: 'flux-schnell' },
-  { value: 'nvidia:sdxl', label: 'NVIDIA · SDXL', kind: 'image', provider: 'nvidia', model: 'sdxl' },
-  { value: 'nvidia:qwen-image', label: 'NVIDIA · Qwen Image', kind: 'image', provider: 'nvidia', model: 'qwen-image' },
+  { value: 'venice:z-image-turbo', label: 'Venice · Z-Image Turbo (uncensored)', kind: 'image', provider: 'venice', model: 'z-image-turbo' },
+  { value: 'venice:lustify-sdxl', label: 'Venice · Lustify SDXL (uncensored)', kind: 'image', provider: 'venice', model: 'lustify-sdxl' },
+  { value: 'venice:lustify-v8', label: 'Venice · Lustify v8 (uncensored)', kind: 'image', provider: 'venice', model: 'lustify-v8' },
+  { value: 'venice:wai-Illustrious', label: 'Venice · Anime WAI (uncensored)', kind: 'image', provider: 'venice', model: 'wai-Illustrious' },
+  { value: 'venice:chroma', label: 'Venice · Chroma (uncensored)', kind: 'image', provider: 'venice', model: 'chroma' },
+  { value: 'venice:venice-sd35', label: 'Venice · SD3.5 (uncensored)', kind: 'image', provider: 'venice', model: 'venice-sd35' },
+  { value: 'venice:flux-2-pro', label: 'Venice · Flux 2 Pro (uncensored)', kind: 'image', provider: 'venice', model: 'flux-2-pro' },
+  { value: 'venice:qwen-image', label: 'Venice · Qwen Image (uncensored)', kind: 'image', provider: 'venice', model: 'qwen-image' },
+  { value: 'cloudflare:flux-schnell', label: 'Cloudflare · FLUX.1 Schnell (filtered)', kind: 'image', provider: 'cloudflare', model: 'flux-schnell' },
+  { value: 'cloudflare:sdxl-lightning', label: 'Cloudflare · SDXL Lightning (filtered)', kind: 'image', provider: 'cloudflare', model: 'sdxl-lightning' },
+  { value: 'cloudflare:sdxl', label: 'Cloudflare · SDXL Base (filtered)', kind: 'image', provider: 'cloudflare', model: 'sdxl' },
+  { value: 'nvidia:flux-schnell', label: 'NVIDIA · FLUX.1 Schnell (filtered)', kind: 'image', provider: 'nvidia', model: 'flux-schnell' },
+  { value: 'nvidia:sdxl', label: 'NVIDIA · SDXL (filtered)', kind: 'image', provider: 'nvidia', model: 'sdxl' },
+  { value: 'nvidia:qwen-image', label: 'NVIDIA · Qwen Image (filtered)', kind: 'image', provider: 'nvidia', model: 'qwen-image' },
 ];
 
 const VIDEO_MODELS = [
@@ -204,14 +212,12 @@ els.generate.addEventListener('click', async () => {
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
 
     if (data.kind === 'image') {
-      if (data.fallbackNote) {
-        setStatus(data.fallbackNote);
-      } else {
-        setStatus('Done.');
-      }
+      if (data.note) setStatus(data.note);
+      else if (data.fallbackNote) setStatus(data.fallbackNote);
+      else setStatus('Done.');
       for (const img of data.images || []) {
         const { card, meta } = cardShell(
-          `${data.provider} · ${data.model}${data.fallbackFrom ? ' (fallback)' : ''}`,
+          `${data.provider} · ${data.model}${data.uncensored === false ? '' : data.provider === 'venice' ? ' · uncensored' : ''}${data.fallbackFrom ? ' (fallback)' : ''}`,
           new Date().toLocaleTimeString(),
         );
         const el = document.createElement('img');
