@@ -10,18 +10,24 @@
  *     negativePrompt?: string,
  *     size?: string,          // image: 1024x1024 | video: 832x480 / 480x832
  *     seconds?: number,       // video length
- *     imageBase64?: string,   // optional reference / i2v frame (data URL or raw b64)
+ *     imageBase64?: string,   // Venice Edit / Wan i2v only (do NOT send on text-to-image)
  *     mimeType?: string
  *   }
  *
  * Env (Vercel → Settings → Environment Variables):
- *   VENICE_API_KEY         — uncensored images (safe_mode:false) via Venice
+ *   VENICE_API_KEY         — uncensored images + Edit (safe_mode:false)
  *   CLOUDFLARE_ACCOUNT_ID  — Workers AI account id (images + Seedance video)
  *   CLOUDFLARE_API_TOKEN   — API token with Workers AI permission
  *   FAL_KEY                — Wan 2.2 video via fal.ai (recommended)
  *   NVIDIA_API_KEY         — hosted FLUX/SDXL image (optional; safety-filtered)
  *   NVIDIA_MEDIA_BASE_URL  — self-hosted Wan NIM only (OpenAI-compatible base URL)
+ *
+ * Vercel Functions hard-limit request/response bodies at 4.5MB (HTTP 413).
+ * Never attach reference images to text-to-image. Prefer webp for Venice.
  */
+
+/** Stay under Vercel’s 4.5MB JSON body limit (request + response). */
+const SAFE_JSON_BYTES = 3_200_000;
 
 const CLOUDFLARE_IMAGE_MODELS = {
   'flux-schnell': '@cf/black-forest-labs/flux-1-schnell',
@@ -47,6 +53,14 @@ const VENICE_IMAGE_MODELS = {
   'flux-2-max': 'flux-2-max',
   'qwen-image': 'qwen-image',
   'qwen-image-2': 'qwen-image-2',
+};
+
+/** Venice image→image (POST /image/edit). */
+const VENICE_EDIT_MODELS = {
+  'qwen-edit': 'qwen-edit',
+  edit: 'qwen-edit',
+  'venice-edit': 'qwen-edit',
+  'gpt-image-2-edit': 'gpt-image-2-edit',
 };
 
 const CLOUDFLARE_VIDEO_MODELS = {
@@ -126,6 +140,36 @@ function stripDataUrl(input) {
   const m = s.match(/^data:([^;]+);base64,(.+)$/);
   if (m) return { mime: m[1], b64: m[2] };
   return { mime: null, b64: s.replace(/\s+/g, '') };
+}
+
+function approxJsonBytes(value) {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), 'utf8');
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+/** True when a media JSON payload would trip Vercel’s 4.5MB limit. */
+function payloadTooLarge(payload) {
+  return approxJsonBytes(payload) > SAFE_JSON_BYTES;
+}
+
+function imageResultTooLarge(out) {
+  if (!out || out.kind !== 'image' || !Array.isArray(out.images)) return false;
+  const hasOnlyUrls = out.images.every((img) => img?.url && !img?.base64);
+  if (hasOnlyUrls) return false;
+  return payloadTooLarge(out);
+}
+
+function oversizeError(kind = 'image') {
+  const err = new Error(
+    `Generated ${kind} is too large to return through Vercel (4.5MB limit / HTTP 413). ` +
+      `Use Venice · Edit with a smaller JPEG, or pick a smaller size.`,
+  );
+  err.status = 413;
+  err.code = 'PAYLOAD_TOO_LARGE';
+  return err;
 }
 
 function asDataUrl(mime, b64OrDataUrl) {
@@ -215,7 +259,8 @@ async function generateVeniceImage({ prompt, model, size, negativePrompt }) {
     prompt,
     width: w,
     height: h,
-    format: 'png',
+    // webp stays small — PNG base64 often trips Vercel’s 4.5MB (HTTP 413).
+    format: 'webp',
     return_binary: false,
     // Critical: default Venice safe_mode blurs adult content. Off = uncensored.
     safe_mode: false,
@@ -278,8 +323,19 @@ async function generateVeniceImage({ prompt, model, size, negativePrompt }) {
     throw err;
   }
 
+  // Prefer webp mime when we asked for webp (responses may omit mime).
+  for (const img of images) {
+    if (img.base64 && (!img.mimeType || img.mimeType === 'image/png')) {
+      img.mimeType = 'image/webp';
+    }
+  }
+
+  if (images.some((img) => img.base64 && String(img.base64).length > 3_000_000)) {
+    throw oversizeError('image');
+  }
+
   const blurred = String(upstream.headers.get('x-venice-is-blurred') || '').toLowerCase() === 'true';
-  return {
+  const out = {
     kind: 'image',
     provider: 'venice',
     model: modelId,
@@ -290,6 +346,104 @@ async function generateVeniceImage({ prompt, model, size, negativePrompt }) {
       ? 'Venice marked this result blurred — try another Venice model (Lustify / WAI / Chroma).'
       : 'Venice · safe_mode off (uncensored).',
   };
+  if (imageResultTooLarge(out)) throw oversizeError('image');
+  return out;
+}
+
+/**
+ * Image→image via Venice POST /image/edit (qwen-edit).
+ * safe_mode:false keeps edits uncensored like text-to-image.
+ */
+async function generateVeniceEdit({ prompt, model, imageBase64 }) {
+  const key = veniceImageKey();
+  if (!key) {
+    const err = new Error(
+      'Missing VENICE_API_KEY in Vercel env (needed for Venice · Edit).',
+    );
+    err.status = 503;
+    throw err;
+  }
+  if (!imageBase64) {
+    const err = new Error('Venice · Edit needs an uploaded image.');
+    err.status = 400;
+    throw err;
+  }
+
+  const modelId = VENICE_EDIT_MODELS[model] || VENICE_EDIT_MODELS['qwen-edit'];
+  const { b64 } = stripDataUrl(imageBase64);
+
+  const upstream = await fetch('https://api.venice.ai/api/v1/image/edit', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      Accept: 'image/*,application/json',
+    },
+    body: JSON.stringify({
+      model: modelId,
+      prompt,
+      image: b64,
+      output_format: 'webp',
+      safe_mode: false,
+    }),
+  });
+
+  const ctype = (upstream.headers.get('content-type') || '').toLowerCase();
+  if (upstream.ok && ctype.startsWith('image/')) {
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    if (buf.length > 2_400_000) throw oversizeError('image');
+    const out = {
+      kind: 'image',
+      provider: 'venice',
+      model: modelId,
+      uncensored: true,
+      safeMode: false,
+      images: [{
+        mimeType: ctype.split(';')[0] || 'image/webp',
+        base64: buf.toString('base64'),
+      }],
+      note: 'Venice · Edit (safe_mode off).',
+    };
+    if (imageResultTooLarge(out)) throw oversizeError('image');
+    return out;
+  }
+
+  const rawText = await upstream.text();
+  let data;
+  try { data = JSON.parse(rawText); } catch { data = { error: rawText }; }
+
+  if (!upstream.ok) {
+    const detail =
+      extractErrorDetail(data) ||
+      (typeof data?.error === 'string' ? data.error : null) ||
+      `Venice edit HTTP ${upstream.status}`;
+    const err = new Error(cleanMediaError(detail));
+    err.status = upstream.status || 502;
+    throw err;
+  }
+
+  const raw =
+    (Array.isArray(data.images) && data.images[0]) ||
+    data.image ||
+    data.result?.image;
+  if (!raw || typeof raw !== 'string') {
+    const err = new Error('Venice edit returned no image.');
+    err.status = 502;
+    throw err;
+  }
+  const clean = String(raw).replace(/^data:image\/\w+;base64,/, '');
+  if (clean.length > 3_000_000) throw oversizeError('image');
+  const out = {
+    kind: 'image',
+    provider: 'venice',
+    model: modelId,
+    uncensored: true,
+    safeMode: false,
+    images: [{ mimeType: 'image/webp', base64: clean }],
+    note: 'Venice · Edit (safe_mode off).',
+  };
+  if (imageResultTooLarge(out)) throw oversizeError('image');
+  return out;
 }
 
 function cleanMediaError(msg) {
@@ -1157,8 +1311,51 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'prompt is required' });
   }
 
+  // Reject huge reference images early — Vercel returns opaque 413 otherwise.
+  if (imageBase64 && approxJsonBytes({ imageBase64 }) > SAFE_JSON_BYTES) {
+    return res.status(413).json({
+      error:
+        'Reference image is too large for Vercel (max ~3MB after encode). ' +
+        'Use a smaller JPEG (Media Studio compresses uploads automatically).',
+      code: 'PAYLOAD_TOO_LARGE',
+    });
+  }
+
+  const respondImage = async (out) => {
+    if (imageResultTooLarge(out)) {
+      if (veniceImageKey() && out.provider !== 'venice') {
+        console.warn('image payload too large for Vercel; falling back to Venice webp');
+        const veniceOut = await generateVeniceImage({
+          prompt: prompt.trim(),
+          model: 'z-image-turbo',
+          size,
+          negativePrompt,
+        });
+        veniceOut.fallbackFrom = out.provider;
+        veniceOut.fallbackNote =
+          `Primary ${out.provider} image was too large for Vercel (would 413); used Venice · ${veniceOut.model}.`;
+        return res.status(200).json(veniceOut);
+      }
+      throw oversizeError('image');
+    }
+    return res.status(200).json(out);
+  };
+
   try {
     if (kind === 'image') {
+      // Venice Edit = image→image. Only path that consumes imageBase64 for images.
+      const isEdit =
+        provider === 'venice' &&
+        (VENICE_EDIT_MODELS[model] || /edit/i.test(String(model || '')));
+      if (isEdit) {
+        const out = await generateVeniceEdit({
+          prompt: prompt.trim(),
+          model: model || 'qwen-edit',
+          imageBase64,
+        });
+        return respondImage(out);
+      }
+
       // Venice = uncensored path (safe_mode:false). CF/NVIDIA/fal keep host filters.
       if (provider === 'venice') {
         const out = await generateVeniceImage({
@@ -1167,7 +1364,7 @@ export default async function handler(req, res) {
           size,
           negativePrompt,
         });
-        return res.status(200).json(out);
+        return respondImage(out);
       }
 
       // Honor the user's selected provider. Never silently skip NVIDIA or swap models.
@@ -1178,7 +1375,7 @@ export default async function handler(req, res) {
           size,
           negativePrompt,
         });
-        return res.status(200).json(out);
+        return respondImage(out);
       }
 
       if (provider === 'fal') {
@@ -1187,7 +1384,7 @@ export default async function handler(req, res) {
           size,
           negativePrompt,
         });
-        return res.status(200).json(out);
+        return respondImage(out);
       }
 
       // Default / cloudflare
@@ -1199,7 +1396,7 @@ export default async function handler(req, res) {
           size,
           negativePrompt,
         });
-        return res.status(200).json(out);
+        return respondImage(out);
       } catch (cfPrimaryErr) {
         console.warn('cloudflare primary failed:', cfPrimaryErr.message);
         const out = await generateImageWithFallbacks({
@@ -1210,7 +1407,7 @@ export default async function handler(req, res) {
         });
         out.fallbackFrom = 'cloudflare';
         out.fallbackNote = `Primary Cloudflare model failed; used ${out.provider} · ${out.model}.`;
-        return res.status(200).json(out);
+        return respondImage(out);
       }
     }
 
@@ -1294,8 +1491,11 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: `Unknown kind: ${kind}` });
   } catch (err) {
     console.error('media-generate error:', err);
-    return res.status(err.status || 502).json({
+    const status = err.status || 502;
+    const payload = {
       error: cleanMediaError(err.message) || 'Media generation failed',
-    });
+    };
+    if (err.code) payload.code = err.code;
+    return res.status(status).json(payload);
   }
 }

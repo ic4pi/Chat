@@ -1,27 +1,28 @@
 const IMAGE_MODELS = [
-  { value: 'venice:z-image-turbo', label: 'Venice · Z-Image Turbo (uncensored)', kind: 'image', provider: 'venice', model: 'z-image-turbo' },
-  { value: 'venice:lustify-sdxl', label: 'Venice · Lustify SDXL (uncensored)', kind: 'image', provider: 'venice', model: 'lustify-sdxl' },
-  { value: 'venice:lustify-v8', label: 'Venice · Lustify v8 (uncensored)', kind: 'image', provider: 'venice', model: 'lustify-v8' },
-  { value: 'venice:wai-Illustrious', label: 'Venice · Anime WAI (uncensored)', kind: 'image', provider: 'venice', model: 'wai-Illustrious' },
-  { value: 'venice:chroma', label: 'Venice · Chroma (uncensored)', kind: 'image', provider: 'venice', model: 'chroma' },
-  { value: 'venice:venice-sd35', label: 'Venice · SD3.5 (uncensored)', kind: 'image', provider: 'venice', model: 'venice-sd35' },
-  { value: 'venice:flux-2-pro', label: 'Venice · Flux 2 Pro (uncensored)', kind: 'image', provider: 'venice', model: 'flux-2-pro' },
-  { value: 'venice:qwen-image', label: 'Venice · Qwen Image (uncensored)', kind: 'image', provider: 'venice', model: 'qwen-image' },
-  { value: 'cloudflare:flux-schnell', label: 'Cloudflare · FLUX.1 Schnell (filtered)', kind: 'image', provider: 'cloudflare', model: 'flux-schnell' },
-  { value: 'cloudflare:sdxl-lightning', label: 'Cloudflare · SDXL Lightning (filtered)', kind: 'image', provider: 'cloudflare', model: 'sdxl-lightning' },
-  { value: 'cloudflare:sdxl', label: 'Cloudflare · SDXL Base (filtered)', kind: 'image', provider: 'cloudflare', model: 'sdxl' },
-  { value: 'nvidia:flux-schnell', label: 'NVIDIA · FLUX.1 Schnell (filtered)', kind: 'image', provider: 'nvidia', model: 'flux-schnell' },
-  { value: 'nvidia:sdxl', label: 'NVIDIA · SDXL (filtered)', kind: 'image', provider: 'nvidia', model: 'sdxl' },
-  { value: 'nvidia:qwen-image', label: 'NVIDIA · Qwen Image (filtered)', kind: 'image', provider: 'nvidia', model: 'qwen-image' },
+  { value: 'venice:qwen-edit', label: 'Venice · Edit / Image→Image (uncensored)', kind: 'image', provider: 'venice', model: 'qwen-edit', usesRef: true },
+  { value: 'venice:z-image-turbo', label: 'Venice · Z-Image Turbo (uncensored)', kind: 'image', provider: 'venice', model: 'z-image-turbo', usesRef: false },
+  { value: 'venice:lustify-sdxl', label: 'Venice · Lustify SDXL (uncensored)', kind: 'image', provider: 'venice', model: 'lustify-sdxl', usesRef: false },
+  { value: 'venice:lustify-v8', label: 'Venice · Lustify v8 (uncensored)', kind: 'image', provider: 'venice', model: 'lustify-v8', usesRef: false },
+  { value: 'venice:wai-Illustrious', label: 'Venice · Anime WAI (uncensored)', kind: 'image', provider: 'venice', model: 'wai-Illustrious', usesRef: false },
+  { value: 'venice:chroma', label: 'Venice · Chroma (uncensored)', kind: 'image', provider: 'venice', model: 'chroma', usesRef: false },
+  { value: 'venice:venice-sd35', label: 'Venice · SD3.5 (uncensored)', kind: 'image', provider: 'venice', model: 'venice-sd35', usesRef: false },
+  { value: 'venice:flux-2-pro', label: 'Venice · Flux 2 Pro (uncensored)', kind: 'image', provider: 'venice', model: 'flux-2-pro', usesRef: false },
+  { value: 'venice:qwen-image', label: 'Venice · Qwen Image (uncensored)', kind: 'image', provider: 'venice', model: 'qwen-image', usesRef: false },
+  { value: 'cloudflare:flux-schnell', label: 'Cloudflare · FLUX.1 Schnell (filtered)', kind: 'image', provider: 'cloudflare', model: 'flux-schnell', usesRef: false },
+  { value: 'cloudflare:sdxl-lightning', label: 'Cloudflare · SDXL Lightning (filtered)', kind: 'image', provider: 'cloudflare', model: 'sdxl-lightning', usesRef: false },
+  { value: 'cloudflare:sdxl', label: 'Cloudflare · SDXL Base (filtered)', kind: 'image', provider: 'cloudflare', model: 'sdxl', usesRef: false },
+  { value: 'nvidia:flux-schnell', label: 'NVIDIA · FLUX.1 Schnell (filtered)', kind: 'image', provider: 'nvidia', model: 'flux-schnell', usesRef: false },
+  { value: 'nvidia:sdxl', label: 'NVIDIA · SDXL (filtered)', kind: 'image', provider: 'nvidia', model: 'sdxl', usesRef: false },
+  { value: 'nvidia:qwen-image', label: 'NVIDIA · Qwen Image (filtered)', kind: 'image', provider: 'nvidia', model: 'qwen-image', usesRef: false },
 ];
 
 const VIDEO_MODELS = [
-  { value: 'fal:wan2.2-t2v', label: 'Wan 2.2 · Text → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-t2v' },
-  { value: 'fal:wan2.2-i2v', label: 'Wan 2.2 · Image → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-i2v' },
-  { value: 'nvidia:wan2.2-t2v', label: 'NVIDIA · Wan 2.2 · Text → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-t2v' },
-  { value: 'nvidia:wan2.2-i2v', label: 'NVIDIA · Wan 2.2 · Image → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-i2v' },
-  { value: 'cloudflare:seedance-mini', label: 'Cloudflare · Seedance 2.0 Mini', kind: 'video', provider: 'cloudflare', model: 'seedance-mini' },
-  { value: 'cloudflare:seedance-fast', label: 'Cloudflare · Seedance 2.0 Fast', kind: 'video', provider: 'cloudflare', model: 'seedance-fast' },
+  { value: 'fal:wan2.2-t2v', label: 'Wan 2.2 · Text → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-t2v', usesRef: false },
+  { value: 'fal:wan2.2-i2v', label: 'Wan 2.2 · Image → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-i2v', usesRef: true },
+  { value: 'nvidia:wan2.2-t2v', label: 'NVIDIA · Wan 2.2 · Text → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-t2v', usesRef: false },
+  { value: 'nvidia:wan2.2-i2v', label: 'NVIDIA · Wan 2.2 · Image → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-i2v', usesRef: true },
+  { value: 'cloudflare:seedance-mini', label: 'Cloudflare · Seedance 2.0 Mini', kind: 'video', provider: 'cloudflare', model: 'seedance-mini', usesRef: false },
+  { value: 'cloudflare:seedance-fast', label: 'Cloudflare · Seedance 2.0 Fast', kind: 'video', provider: 'cloudflare', model: 'seedance-fast', usesRef: false },
 ];
 
 const IMAGE_SIZES = [
@@ -34,6 +35,10 @@ const VIDEO_SIZES = [
   { value: '832x480', label: 'Landscape · 16:9' },
   { value: '480x832', label: 'Portrait · 9:16' },
 ];
+
+/** Vercel Functions reject bodies over 4.5MB (HTTP 413). Keep refs well under. */
+const REF_MAX_EDGE = 1024;
+const REF_MAX_BYTES = 1_200_000;
 
 const els = {
   tabs: [...document.querySelectorAll('.media-tab')],
@@ -86,26 +91,80 @@ function selectedSpec() {
   return currentModels().find((m) => m.value === value) || currentModels()[0];
 }
 
+function modelUsesRef(spec) {
+  if (!spec) return false;
+  if (spec.usesRef) return true;
+  return kind === 'video' && /i2v/i.test(spec.model || '');
+}
+
 function syncFields() {
   const spec = selectedSpec();
   // Always show negative prompt for images — never hide controls based on provider.
   els.negativeWrap.style.display = kind === 'image' ? '' : 'none';
-  const i2v = kind === 'video' && (/i2v/i.test(spec?.model || '') || /wan2\.2-i2v/i.test(spec?.value || ''));
+  const usesRef = modelUsesRef(spec);
   const opt = els.refWrap.querySelector('.opt');
-  if (opt) opt.textContent = i2v ? '(required for image→video)' : '(optional · image→video)';
+  if (opt) {
+    if (kind === 'image' && usesRef) opt.textContent = '(required for Edit / image→image)';
+    else if (kind === 'image') opt.textContent = '(only for Venice · Edit — ignored otherwise)';
+    else if (usesRef) opt.textContent = '(required for image→video)';
+    else opt.textContent = '(optional · image→video)';
+  }
 }
 
 function setStatus(msg) {
   els.status.textContent = msg || '';
 }
 
-function readFileAsDataUrl(file) {
+function loadImageElement(fileOrUrl) {
   return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result || ''));
-    r.onerror = () => reject(new Error('Failed to read image'));
-    r.readAsDataURL(file);
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Failed to decode image'));
+    if (typeof fileOrUrl === 'string') {
+      img.src = fileOrUrl;
+    } else {
+      img.src = URL.createObjectURL(fileOrUrl);
+    }
   });
+}
+
+function canvasToJpegDataUrl(canvas, quality) {
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
+/**
+ * Resize + JPEG-compress so reference uploads stay under Vercel’s 4.5MB body limit.
+ */
+async function compressImageFile(file) {
+  const img = await loadImageElement(file);
+  try {
+    let scale = Math.min(1, REF_MAX_EDGE / Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height));
+    let w = Math.max(1, Math.round((img.naturalWidth || img.width) * scale));
+    let h = Math.max(1, Math.round((img.naturalHeight || img.height) * scale));
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    let quality = 0.8;
+    let dataUrl = '';
+    for (let attempt = 0; attempt < 6; attempt++) {
+      canvas.width = w;
+      canvas.height = h;
+      ctx.drawImage(img, 0, 0, w, h);
+      dataUrl = canvasToJpegDataUrl(canvas, quality);
+      if (dataUrl.length <= REF_MAX_BYTES) break;
+      quality = Math.max(0.4, quality - 0.1);
+      if (dataUrl.length > REF_MAX_BYTES) {
+        w = Math.max(256, Math.round(w * 0.75));
+        h = Math.max(256, Math.round(h * 0.75));
+      }
+    }
+    if (dataUrl.length > REF_MAX_BYTES) {
+      throw new Error('Image is still too large after compression (Vercel max ~3MB). Try a smaller photo.');
+    }
+    return { mimeType: 'image/jpeg', base64: dataUrl };
+  } finally {
+    if (img.src && img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
+  }
 }
 
 els.tabs.forEach((tab) => {
@@ -128,22 +187,30 @@ els.ref.addEventListener('change', async () => {
     els.refPreview.innerHTML = '';
     return;
   }
-  if (file.size > 8_000_000) {
-    alert('Image too large (max 8MB)');
+  if (file.size > 20_000_000) {
+    alert('Image too large (max 20MB before compression)');
     els.ref.value = '';
     return;
   }
   try {
-    const dataUrl = await readFileAsDataUrl(file);
-    const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-    refData = { mimeType: m?.[1] || file.type || 'image/png', base64: dataUrl };
+    setStatus('Compressing reference image…');
+    refData = await compressImageFile(file);
     els.refPreview.classList.remove('hidden');
     els.refPreview.innerHTML = '';
     const img = document.createElement('img');
-    img.src = dataUrl;
+    img.src = refData.base64;
     img.alt = 'Reference';
     els.refPreview.appendChild(img);
+    const spec = selectedSpec();
+    if (kind === 'image' && refData && !modelUsesRef(spec)) {
+      setStatus('Upload ready. Pick “Venice · Edit / Image→Image” to use this image.');
+    } else {
+      setStatus('');
+    }
   } catch (err) {
+    refData = null;
+    els.ref.value = '';
+    setStatus('');
     alert(err.message || 'Could not read image');
   }
 });
@@ -169,6 +236,16 @@ function cardShell(metaLeft, metaRight) {
   return { card, meta };
 }
 
+function friendlyHttpError(status, data) {
+  if (status === 413 || status === 513 || data?.code === 'PAYLOAD_TOO_LARGE') {
+    return (
+      data?.error ||
+      'Payload too large (HTTP 413). For image→image pick Venice · Edit and keep the JPEG small; clear the upload for text-to-image.'
+    );
+  }
+  return data?.error || `HTTP ${status}`;
+}
+
 els.generate.addEventListener('click', async () => {
   const prompt = (els.prompt.value || '').trim();
   if (!prompt) {
@@ -177,8 +254,10 @@ els.generate.addEventListener('click', async () => {
     return;
   }
   const spec = selectedSpec();
-  if (kind === 'video' && /i2v/i.test(spec?.model || '') && !refData) {
-    alert('Image → Video needs a reference image.');
+  const usesRef = modelUsesRef(spec);
+
+  if (usesRef && !refData) {
+    alert(kind === 'image' ? 'Venice · Edit needs an uploaded image.' : 'Image → Video needs a reference image.');
     return;
   }
 
@@ -198,7 +277,9 @@ els.generate.addEventListener('click', async () => {
     if (neg && kind === 'image') {
       body.negativePrompt = neg;
     }
-    if (refData) {
+    // ONLY attach the upload when the selected model actually uses it.
+    // Sending it on text-to-image is what caused HTTP 413.
+    if (refData && usesRef) {
       body.imageBase64 = refData.base64;
       body.mimeType = refData.mimeType;
     }
@@ -209,7 +290,7 @@ els.generate.addEventListener('click', async () => {
       body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!res.ok) throw new Error(friendlyHttpError(res.status, data));
 
     if (data.kind === 'image') {
       if (data.note) setStatus(data.note);
@@ -221,14 +302,7 @@ els.generate.addEventListener('click', async () => {
           new Date().toLocaleTimeString(),
         );
         const el = document.createElement('img');
-        if (img.base64) {
-          el.src = `data:${img.mimeType || 'image/png'};base64,${img.base64}`;
-          const a = document.createElement('a');
-          a.href = el.src;
-          a.download = `media-${Date.now()}.png`;
-          a.textContent = 'Download';
-          meta.lastChild.replaceWith(a);
-        } else if (img.url) {
+        if (img.url) {
           el.src = img.url;
           const a = document.createElement('a');
           a.href = img.url;
@@ -236,11 +310,18 @@ els.generate.addEventListener('click', async () => {
           a.rel = 'noopener';
           a.textContent = 'Open';
           meta.lastChild.replaceWith(a);
+        } else if (img.base64) {
+          el.src = `data:${img.mimeType || 'image/webp'};base64,${img.base64}`;
+          const a = document.createElement('a');
+          a.href = el.src;
+          a.download = `media-${Date.now()}.webp`;
+          a.textContent = 'Download';
+          meta.lastChild.replaceWith(a);
         }
         card.insertBefore(el, card.firstChild);
         prependCard(card);
       }
-      if (!data.fallbackNote) setStatus('Done.');
+      if (!data.note && !data.fallbackNote) setStatus('Done.');
     } else if (data.kind === 'video') {
       if (data.fallbackNote) setStatus(data.fallbackNote);
       const open = document.createElement('a');
