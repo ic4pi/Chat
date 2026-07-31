@@ -110,14 +110,14 @@ export default async function handler(req, res) {
   const { provider, apiKey, keySource } = resolveProvider(providerId, clientKey, { requireKey: false });
   const curated = FALLBACK_MODELS[providerId] || [];
 
-  // NVIDIA: account NVCF list first, then integrate catalog — never a hand-guessed set.
+  // NVIDIA: NVCF-authorized ∩ integrate.api chat IDs — never invent endpoints/IDs.
   if (providerId === 'nvidia') {
     try {
       const resolved = await resolveNvidiaModels({ apiKey: apiKey || undefined });
       const models = resolved.models.length ? resolved.models : filterNvidiaChatModels(curated);
       res.setHeader(
         'Cache-Control',
-        keySource === 'client' || resolved.source === 'nvcf-account'
+        keySource === 'client' || String(resolved.source || '').startsWith('nvcf')
           ? 'no-store'
           : 's-maxage=300, stale-while-revalidate=600',
       );
@@ -126,6 +126,7 @@ export default async function handler(req, res) {
         models,
         source: resolved.models.length ? resolved.source : 'fallback',
         keySource,
+        chatUrl: resolved.chatUrl || provider.url,
         note: resolved.note,
         warning: resolved.warning,
       });
@@ -135,6 +136,7 @@ export default async function handler(req, res) {
         models: filterNvidiaChatModels(curated),
         source: 'fallback',
         keySource,
+        chatUrl: provider.url,
         warning: err.message || 'NVIDIA catalog failed',
       });
     }
