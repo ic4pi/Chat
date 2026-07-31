@@ -75,17 +75,19 @@ const PROVIDER_FALLBACKS = {
   ],
   nvidia: [
     { id: 'meta/llama-3.3-70b-instruct', name: 'Llama 3.3 70B Instruct' },
-    { id: 'meta/llama-3.1-405b-instruct', name: 'Llama 3.1 405B Instruct' },
     { id: 'meta/llama-3.1-70b-instruct', name: 'Llama 3.1 70B Instruct' },
     { id: 'meta/llama-3.1-8b-instruct', name: 'Llama 3.1 8B Instruct' },
-    { id: 'meta/llama-4-maverick-17b-128e-instruct', name: 'Llama 4 Maverick 17B' },
-    { id: 'qwen/qwen3-235b-a22b', name: 'Qwen3 235B' },
     { id: 'nvidia/llama-3.1-nemotron-70b-instruct', name: 'Nemotron 70B Instruct' },
+    { id: 'nvidia/llama-3.3-nemotron-super-49b-v1.5', name: 'Nemotron Super 49B v1.5' },
+    { id: 'nvidia/nemotron-3-nano-30b-a3b', name: 'Nemotron 3 Nano 30B' },
+    { id: 'nvidia/nemotron-3-super-120b-a12b', name: 'Nemotron 3 Super 120B' },
     { id: 'deepseek-ai/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
     { id: 'deepseek-ai/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
     { id: 'google/gemma-4-31b-it', name: 'Gemma 4 31B' },
     { id: 'mistralai/mistral-large-2-instruct', name: 'Mistral Large 2' },
-    { id: 'mistralai/mixtral-8x22b-instruct', name: 'Mixtral 8x22B' },
+    { id: 'moonshotai/kimi-k2.6', name: 'Kimi K2.6' },
+    { id: 'z-ai/glm-5.2', name: 'GLM 5.2' },
+    { id: 'openai/gpt-oss-120b', name: 'GPT OSS 120B' },
   ],
 };
 

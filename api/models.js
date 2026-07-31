@@ -3,6 +3,7 @@
  * Optional header: X-Provider-Key (BYOK for listing)
  *
  * Each provider returns THAT provider’s full catalog from its own API.
+ * NVIDIA uses NVCF account functions when a key is present (not a guessed list).
  */
 
 import {
@@ -10,6 +11,7 @@ import {
   FALLBACK_MODELS,
   resolveProvider,
 } from '../lib/providers.js';
+import { resolveNvidiaModels, filterNvidiaChatModels } from '../lib/nvidia-models.js';
 
 /** Exact Venice models the app exposes — nothing else. */
 const VENICE_ONLY = FALLBACK_MODELS.venice || [];
@@ -56,17 +58,6 @@ function normalizeOpenAIStyle(data) {
       free: /:free$/i.test(m.id || '') || m.pricing?.prompt === '0' || m.pricing?.prompt === 0,
     }))
     .filter((m) => m.id);
-}
-
-/** Drop embeddings / audio / vision-only / guards from NVIDIA’s mega-list. */
-function filterNvidiaChat(models) {
-  return models.filter((m) => {
-    const id = m.id || '';
-    if (/embed|rerank|retrieval|whisper|tts|nv-embed|neva|cosmos|sdxl|diffusion|guard|ocr|deplot|kosmos|fuyu|phi-3-vision|llama-3\.2-11b-vision|llama-3\.2-90b-vision/i.test(id)) {
-      return false;
-    }
-    return true;
-  });
 }
 
 /** Groq models list includes whisper / TTS — keep text chat systems. */
@@ -119,8 +110,36 @@ export default async function handler(req, res) {
   const { provider, apiKey, keySource } = resolveProvider(providerId, clientKey, { requireKey: false });
   const curated = FALLBACK_MODELS[providerId] || [];
 
-  // Prefer authenticated catalog; else public catalog when the provider has one.
-  // Prefer live modelsUrl (works unauthenticated for OpenRouter + public NVIDIA/Cerebras).
+  // NVIDIA: account NVCF list first, then integrate catalog — never a hand-guessed set.
+  if (providerId === 'nvidia') {
+    try {
+      const resolved = await resolveNvidiaModels({ apiKey: apiKey || undefined });
+      const models = resolved.models.length ? resolved.models : filterNvidiaChatModels(curated);
+      res.setHeader(
+        'Cache-Control',
+        keySource === 'client' || resolved.source === 'nvcf-account'
+          ? 'no-store'
+          : 's-maxage=300, stale-while-revalidate=600',
+      );
+      return res.status(200).json({
+        provider: provider.label,
+        models,
+        source: resolved.models.length ? resolved.source : 'fallback',
+        keySource,
+        note: resolved.note,
+        warning: resolved.warning,
+      });
+    } catch (err) {
+      return res.status(200).json({
+        provider: provider.label,
+        models: filterNvidiaChatModels(curated),
+        source: 'fallback',
+        keySource,
+        warning: err.message || 'NVIDIA catalog failed',
+      });
+    }
+  }
+
   const catalogUrl = provider.modelsUrl || provider.publicModelsUrl || null;
 
   if (!catalogUrl) {
@@ -142,14 +161,12 @@ export default async function handler(req, res) {
     });
 
     if (!ok) {
-      // Authenticated failed → try public if we haven’t already
       if (apiKey && provider.publicModelsUrl) {
         const pub = await fetchCatalog(provider.publicModelsUrl, {
           extraHeaders: provider.extraHeaders(),
         });
         if (pub.ok) {
           let models = normalizeOpenAIStyle(pub.data);
-          if (providerId === 'nvidia') models = filterNvidiaChat(models);
           models = models.sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
           return res.status(200).json({
             provider: provider.label,
@@ -173,9 +190,6 @@ export default async function handler(req, res) {
       models = normalizeVenice(data);
     } else if (providerId === 'openrouter') {
       models = sortOpenRouter(normalizeOpenAIStyle(data));
-    } else if (providerId === 'nvidia') {
-      models = filterNvidiaChat(normalizeOpenAIStyle(data))
-        .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
     } else if (providerId === 'groq') {
       models = filterGroqChat(normalizeOpenAIStyle(data))
         .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));

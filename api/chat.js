@@ -6,7 +6,7 @@
 // nothing else. Uncensored models get no channel/role/safety rules injected.
 
 import { loadConfig } from '../lib/config.js';
-import { resolveProvider, withProviderChatExtras } from '../lib/providers.js';
+import { resolveProvider, withProviderChatExtras, formatProviderError } from '../lib/providers.js';
 
 const UPSTREAM_TIMEOUT_MS = 110_000;
 /**
@@ -116,11 +116,9 @@ async function handleStream(req, res, resolved, model, messagesWithSystem, provi
 
     if (!upstream.ok) {
       const errText = await upstream.text();
-      let detail = errText;
-      try { detail = JSON.parse(errText)?.error?.message || errText; } catch { /* keep */ }
       sseWrite(res, {
         type: 'error',
-        error: `${resolved.label} error (${upstream.status}): ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`,
+        error: formatProviderError(resolved.label, upstream.status, errText, model),
         provider: resolved.label,
         model,
       });
@@ -228,13 +226,8 @@ async function handleJson(req, res, resolved, model, messagesWithSystem, provide
     }
 
     if (!upstream.ok) {
-      const message =
-        data?.error?.message ||
-        data?.error ||
-        data?.message ||
-        `Upstream ${resolved.label} error (HTTP ${upstream.status})`;
       return res.status(upstream.status).json({
-        error: typeof message === 'string' ? message : JSON.stringify(message),
+        error: formatProviderError(resolved.label, upstream.status, data, model),
         provider: resolved.label,
         model,
         raw: data,

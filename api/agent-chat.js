@@ -13,7 +13,7 @@
  */
 
 import { estimateTokens } from '../lib/context-filters.js';
-import { resolveProvider, withProviderChatExtras } from '../lib/providers.js';
+import { resolveProvider, withProviderChatExtras, formatProviderError } from '../lib/providers.js';
 
 /** Stay under Venice/Dolphin ~131k with room for the completion. */
 const MAX_INPUT_TOKENS = 100_000;
@@ -158,11 +158,9 @@ async function handleStream(res, resolved, model, messagesWithSystem, providerId
 
     if (!upstream.ok) {
       const errText = await upstream.text();
-      let detail = errText;
-      try { detail = JSON.parse(errText)?.error?.message || errText; } catch { /* keep */ }
       sseWrite(res, {
         type: 'error',
-        error: `${resolved.label} error (${upstream.status}): ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`,
+        error: formatProviderError(resolved.label, upstream.status, errText, model),
         provider: resolved.label,
         model,
       });
@@ -261,9 +259,8 @@ async function handleJson(res, resolved, model, messagesWithSystem, providerId, 
     try { data = JSON.parse(rawText); } catch { data = { error: { message: rawText } }; }
 
     if (!upstream.ok) {
-      const detail = data?.error?.message || data?.error || `Upstream HTTP ${upstream.status}`;
       return res.status(upstream.status).json({
-        error: `${resolved.label} error (${upstream.status}): ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`,
+        error: formatProviderError(resolved.label, upstream.status, data, model),
         provider: resolved.label,
         model,
         tokens: budgeted.tokens,

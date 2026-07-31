@@ -66,9 +66,11 @@ export const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string }>
   ],
   nvidia: [
     { id: 'meta/llama-3.3-70b-instruct', name: 'Llama 3.3 70B Instruct' },
-    { id: 'meta/llama-3.1-405b-instruct', name: 'Llama 3.1 405B Instruct' },
-    { id: 'qwen/qwen3-235b-a22b', name: 'Qwen3 235B' },
+    { id: 'meta/llama-3.1-70b-instruct', name: 'Llama 3.1 70B Instruct' },
     { id: 'nvidia/llama-3.1-nemotron-70b-instruct', name: 'Nemotron 70B Instruct' },
+    { id: 'nvidia/nemotron-3-nano-30b-a3b', name: 'Nemotron 3 Nano 30B' },
+    { id: 'deepseek-ai/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+    { id: 'moonshotai/kimi-k2.6', name: 'Kimi K2.6' },
   ],
 };
 
