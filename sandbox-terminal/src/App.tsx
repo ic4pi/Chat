@@ -843,6 +843,10 @@ export function App() {
           searchHits={searchHits}
           pythonReady={repo.pythonReady}
           pythonDetail={repo.pythonDetail}
+          rustReady={repo.rustReady}
+          rustDetail={repo.rustDetail}
+          goReady={repo.goReady}
+          goDetail={repo.goDetail}
         />
       </div>
       <DiffPanel
@@ -893,6 +897,8 @@ export function App() {
       repoRoot={repo.root} tree={repo.tree} totalFiles={repo.totalFiles}
       contextFiles={repo.contextFiles} loading={repo.loading} error={repo.error}
       pythonReady={repo.pythonReady} pythonDetail={repo.pythonDetail}
+      rustReady={repo.rustReady} rustDetail={repo.rustDetail}
+      goReady={repo.goReady} goDetail={repo.goDetail}
       onOpenRepo={repo.openRepo}
       onStartBlank={() => { void repo.startBlankProject(); }}
       onAddToContext={repo.addToContext}

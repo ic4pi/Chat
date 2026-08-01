@@ -321,7 +321,7 @@ app.get('/detect-test-command', (req: Request, res: Response): void => {
 // code. SSE format is identical to /run.
 // ---------------------------------------------------------------------------
 
-const LANG_CONFIG: Record<string, { ext: string; runner: string[] }> = {
+const LANG_CONFIG: Record<string, { ext: string; runner: string[]; shell?: string }> = {
   python:     { ext: '.py',  runner: ['python3'] },
   py:         { ext: '.py',  runner: ['python3'] },
   javascript: { ext: '.js',  runner: ['node'] },
@@ -333,6 +333,9 @@ const LANG_CONFIG: Record<string, { ext: string; runner: string[] }> = {
   shell:      { ext: '.sh',  runner: ['bash'] },
   ruby:       { ext: '.rb',  runner: ['ruby'] },
   rb:         { ext: '.rb',  runner: ['ruby'] },
+  rust:       { ext: '.rs',  runner: ['bash'], shell: 'rust' },
+  rs:         { ext: '.rs',  runner: ['bash'], shell: 'rust' },
+  go:         { ext: '.go',  runner: ['go', 'run'] },
 };
 
 const DEFAULT_LANG_CONFIG = { ext: '.sh', runner: ['bash'] };
@@ -372,12 +375,22 @@ app.post('/run-code', async (req: Request, res: Response): Promise<void> => {
       tmpFile = path.join(os.tmpdir(), `sb-code-${Date.now()}${config.ext}`);
       fs.writeFileSync(tmpFile, code, 'utf8');
 
+      const rustBin = config.shell === 'rust'
+        ? path.join(os.tmpdir(), `sb-rs-bin-${Date.now()}`)
+        : null;
+
+      const spawnCmd = config.shell === 'rust'
+        ? 'bash'
+        : config.runner[0]!;
+      const spawnArgs = config.shell === 'rust'
+        ? ['-lc', `rustc "${tmpFile}" -o "${rustBin}" && "${rustBin}"`]
+        : [...config.runner.slice(1), tmpFile!];
+
       sseEvent(res, 'status',
-        `[LOCAL_MODE] ${config.runner[0]} ${path.basename(tmpFile)}`);
+        `[LOCAL_MODE] ${config.shell === 'rust' ? 'rustc+run' : spawnCmd} ${path.basename(tmpFile)}`);
 
       await new Promise<void>((resolve, reject) => {
-        const [cmd, ...args] = config.runner;
-        const child = spawn(cmd!, [...args, tmpFile!], { stdio: 'pipe' });
+        const child = spawn(spawnCmd, spawnArgs, { stdio: 'pipe' });
 
         const abortListener = () => {
           child.kill('SIGTERM');
@@ -400,6 +413,10 @@ app.post('/run-code', async (req: Request, res: Response): Promise<void> => {
         });
       });
 
+      if (rustBin) {
+        try { fs.unlinkSync(rustBin); } catch { /* best effort */ }
+      }
+
     } else {
       // Vercel Sandbox: write file, then runCommand.
       const auth = resolveSandboxAuth();
@@ -411,12 +428,21 @@ app.post('/run-code', async (req: Request, res: Response): Promise<void> => {
       const filename = `code${config.ext}`;
       await sandbox.writeFiles([{ path: filename, content: Buffer.from(code, 'utf8') }]);
 
-      const [cmd, ...args] = config.runner;
-      const sdxCmd = await sandbox.runCommand({
-        cmd: cmd!,
-        args: [...args, filename],
-        detached: true,
-      });
+      let sdxCmd;
+      if (config.shell === 'rust') {
+        sdxCmd = await sandbox.runCommand({
+          cmd: 'bash',
+          args: ['-lc', `rustc "${filename}" -o /tmp/_rs_bin && /tmp/_rs_bin`],
+          detached: true,
+        });
+      } else {
+        const [cmd, ...args] = config.runner;
+        sdxCmd = await sandbox.runCommand({
+          cmd: cmd!,
+          args: [...args, filename],
+          detached: true,
+        });
+      }
 
       try {
         for await (const log of sdxCmd.logs({ signal: abort.signal })) {

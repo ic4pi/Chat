@@ -36,6 +36,10 @@ export interface RepoContextState {
   error:          string | null;
   pythonReady:    boolean | null;
   pythonDetail:   string | null;
+  rustReady:      boolean | null;
+  rustDetail:     string | null;
+  goReady:        boolean | null;
+  goDetail:       string | null;
 }
 
 export interface RepoContextActions {
@@ -66,6 +70,10 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
   const [error,          setError]          = useState<string | null>(null);
   const [pythonReady,    setPythonReady]    = useState<boolean | null>(null);
   const [pythonDetail,   setPythonDetail]   = useState<string | null>(null);
+  const [rustReady,      setRustReady]      = useState<boolean | null>(null);
+  const [rustDetail,     setRustDetail]     = useState<string | null>(null);
+  const [goReady,        setGoReady]        = useState<boolean | null>(null);
+  const [goDetail,       setGoDetail]       = useState<string | null>(null);
 
   /** Build fetch headers — adds X-Sandbox-Session when we have a remote session */
   const sessionHeaders = useCallback((extra?: Record<string, string>): Record<string, string> => {
@@ -73,6 +81,47 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     if (sandboxId) h['X-Sandbox-Session'] = sandboxId;
     return h;
   }, [sandboxId]);
+
+  /** Apply toolchain readiness from init-repo / init-blank JSON. */
+  const applyStackStatus = useCallback((data: {
+    python?: { ready?: boolean; already?: boolean; detail?: string; error?: string };
+    rust?: { ready?: boolean; already?: boolean; detail?: string; error?: string };
+    go?: { ready?: boolean; already?: boolean; detail?: string; error?: string };
+  }) => {
+    if (data.python) {
+      setPythonReady(!!data.python.ready);
+      setPythonDetail(
+        data.python.ready
+          ? (data.python.detail || (data.python.already ? 'Python already installed' : 'Python + pip ready'))
+          : (data.python.error || 'Python install failed'),
+      );
+    } else {
+      setPythonReady(null);
+      setPythonDetail(null);
+    }
+    if (data.rust) {
+      setRustReady(!!data.rust.ready);
+      setRustDetail(
+        data.rust.ready
+          ? (data.rust.detail || (data.rust.already ? 'Rust already installed' : 'rustc + cargo ready'))
+          : (data.rust.error || 'Rust install failed'),
+      );
+    } else {
+      setRustReady(null);
+      setRustDetail(null);
+    }
+    if (data.go) {
+      setGoReady(!!data.go.ready);
+      setGoDetail(
+        data.go.ready
+          ? (data.go.detail || (data.go.already ? 'Go already installed' : 'go toolchain ready'))
+          : (data.go.error || 'Go install failed'),
+      );
+    } else {
+      setGoReady(null);
+      setGoDetail(null);
+    }
+  }, []);
 
   const openRepo = useCallback(async (rootPathOrUrl: string) => {
     setLoading(true);
@@ -96,6 +145,8 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
           sandboxId?: string; repoDir?: string;
           tree?: FileNode[]; totalFiles?: number; error?: string;
           python?: { ready?: boolean; already?: boolean; detail?: string; error?: string };
+          rust?: { ready?: boolean; already?: boolean; detail?: string; error?: string };
+          go?: { ready?: boolean; already?: boolean; detail?: string; error?: string };
         };
         if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
         setSandboxId(data.sandboxId ?? null);
@@ -104,17 +155,7 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
         setRoot(data.repoDir ?? rootPathOrUrl);
         setTree(data.tree ?? []);
         setTotalFiles(data.totalFiles ?? 0);
-        if (data.python) {
-          setPythonReady(!!data.python.ready);
-          setPythonDetail(
-            data.python.ready
-              ? (data.python.detail || (data.python.already ? 'Python already installed' : 'Python + pip ready'))
-              : (data.python.error || 'Python install failed'),
-          );
-        } else {
-          setPythonReady(null);
-          setPythonDetail(null);
-        }
+        applyStackStatus(data);
       } else {
         // Local mode: direct /files endpoint on sandbox-runner
         setSandboxId(null);
@@ -132,7 +173,7 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     } finally {
       setLoading(false);
     }
-  }, [sandboxId]);
+  }, [sandboxId, applyStackStatus]);
 
   const startBlankProject = useCallback(async (name?: string) => {
     setLoading(true);
@@ -154,6 +195,8 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
         sandboxId?: string; repoDir?: string;
         tree?: FileNode[]; totalFiles?: number; error?: string;
         python?: { ready?: boolean; already?: boolean; detail?: string; error?: string };
+        rust?: { ready?: boolean; already?: boolean; detail?: string; error?: string };
+        go?: { ready?: boolean; already?: boolean; detail?: string; error?: string };
       };
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
       setSandboxId(data.sandboxId ?? null);
@@ -162,23 +205,13 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
       setRoot(data.repoDir ?? 'blank');
       setTree(data.tree ?? []);
       setTotalFiles(data.totalFiles ?? 0);
-      if (data.python) {
-        setPythonReady(!!data.python.ready);
-        setPythonDetail(
-          data.python.ready
-            ? (data.python.detail || (data.python.already ? 'Python already installed' : 'Python + pip ready'))
-            : (data.python.error || 'Python install failed'),
-        );
-      } else {
-        setPythonReady(null);
-        setPythonDetail(null);
-      }
+      applyStackStatus(data);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [sandboxId]);
+  }, [sandboxId, applyStackStatus]);
 
   const addToContext = useCallback(async (relPath: string) => {
     if (contextFiles.has(relPath)) return;
@@ -247,6 +280,8 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     root, sandboxId, isRemote, repoUrl, tree, totalFiles,
     contextFiles, pendingChanges, loading, error,
     pythonReady, pythonDetail,
+    rustReady, rustDetail,
+    goReady, goDetail,
     openRepo, startBlankProject, addToContext, injectContextFile, removeFromContext, clearContext,
     setPendingChanges, applyChanges, clearChanges,
   };
