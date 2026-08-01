@@ -151,6 +151,13 @@ select:focus, input[type="text"]:focus, textarea:focus {
 #app.artifacts-collapsed { grid-template-columns: 240px 1fr 0; }
 #app.chats-collapsed.artifacts-collapsed { grid-template-columns: 0 1fr 0; }
 
+/* Pin each pane to its track. Collapsed sidebars use display:none and leave
+   the grid, so without explicit columns #main auto-places into the first
+   (0px) track and the chat vanishes on desktop. */
+#chatsSidebar { grid-column: 1; }
+#main { grid-column: 2; }
+#artifactsSidebar { grid-column: 3; }
+
 .sidebar {
   background: var(--panel-2);
   border-right: 1px solid var(--border);
@@ -1263,6 +1270,11 @@ button#sendBtn:hover:not(:disabled) { background: var(--accent-dim); }
   #app.chats-collapsed,
   #app.artifacts-collapsed,
   #app.chats-collapsed.artifacts-collapsed { grid-template-columns: 1fr; }
+
+  /* Single-column mobile shell — don't keep the desktop column pins. */
+  #chatsSidebar,
+  #main,
+  #artifactsSidebar { grid-column: 1; }
 
   /* Lock the chat shell to the visible viewport — no page-level scroll/zoom. */
   #main {

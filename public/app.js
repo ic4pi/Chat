@@ -241,6 +241,16 @@ function migrate(s) {
     createdAt: c.createdAt || Date.now(),
     updatedAt: c.updatedAt || Date.now(),
   }));
+  // One-time: older builds marked mobile drawer auto-close as an explicit
+  // preference, which left desktop with chats stuck collapsed (and, before
+  // the grid-column pin, #main at 0 width). Clear that sticky flag once.
+  if (!merged.sidebarDesktopHealV1) {
+    if (merged.chatsCollapsedExplicit && merged.chatsCollapsed) {
+      merged.chatsCollapsedExplicit = false;
+      merged.chatsCollapsed = false;
+    }
+    merged.sidebarDesktopHealV1 = true;
+  }
   return merged;
 }
 
@@ -451,10 +461,9 @@ function renderChatList() {
       state.activeProvider = c.provider;
       state.activeModel = c.model;
       state.activePersonaId = c.personaId;
-      if (isMobileViewport()) {
-        state.chatsCollapsed = true;
-        state.chatsCollapsedExplicit = true;
-      }
+      // Auto-close the drawer on mobile only — do NOT mark explicit, or a
+      // later desktop session keeps chats collapsed forever via localStorage.
+      if (isMobileViewport()) state.chatsCollapsed = true;
       saveState();
       renderAll();
     });
@@ -2292,7 +2301,6 @@ function handleNewChat() {
   createChat();
   if (isMobileViewport()) {
     state.chatsCollapsed = true;
-    state.chatsCollapsedExplicit = true;
     saveState();
   }
   renderAll().catch((err) => console.error(err));
@@ -3308,11 +3316,8 @@ els.startGroupBtn?.addEventListener('click', async () => {
   ensurePersonaVoices(personas);
   createGroupChat(mode, topic, assigned, rounds);
   closeGroupModal();
-  if (isMobileViewport()) {
-    state.chatsCollapsed = true;
-    state.chatsCollapsedExplicit = true;
-    saveState();
-  }
+  if (isMobileViewport()) state.chatsCollapsed = true;
+  saveState();
   await renderAll();
   if (els.input) els.input.placeholder = 'Address the table…';
   // Message field IS the start — don't make the user type it twice.

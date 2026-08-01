@@ -26,7 +26,9 @@
 </head>
 <body>
 
-<div id="app">
+<!-- Match sidebar.collapsed defaults so first paint doesn't put #main in a
+     0-width track, then animate open on desktop once JS runs. -->
+<div id="app" class="chats-collapsed artifacts-collapsed">
 
   <!-- Backdrop shown behind sidebars on mobile; tap to dismiss. -->
   <div id="backdrop" class="backdrop hidden"></div>
