@@ -132,13 +132,13 @@
       <div class="input-row">
         <input id="attachInput" type="file" multiple accept="image/*,.txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.css,.html,.yml,.yaml,.csv" hidden />
         <button id="attachBtn" type="button" class="icon-btn" title="Upload photo or file">📎</button>
-        <button id="micBtn" type="button" class="icon-btn" title="Mic: dictation, or voice chat when 🔊 is on (Chrome/Safari)">🎤</button>
-        <button id="speakBtn" type="button" class="icon-btn" title="Speak replies with neural voice" aria-pressed="false">🔊</button>
+        <button id="micBtn" type="button" class="icon-btn" title="Voice input — with 🔊 on, sends automatically (conversation mode)">🎤</button>
+        <button id="speakBtn" type="button" class="icon-btn" title="Voice chat: speak replies as they stream, then listen again" aria-pressed="false">🔊</button>
         <textarea id="input" rows="1" placeholder="Plan or ask… (code builds in Workspace)" autofocus></textarea>
         <button id="stopBtn" type="button" class="text-btn danger hidden" title="Stop reply + voice (Esc or Enter also stops)">Stop</button>
         <button id="sendBtn" type="submit">Send</button>
       </div>
-      <div id="voiceHint" class="voice-hint"><b>Stop</b> / <b>Esc</b> / <b>Enter</b> while generating cancels the reply and speech. <b>🔊</b> on + <b>🎤</b> = voice chat (auto-send). <b>🔊</b> off + mic = dictation only. Code builds in <b>Workspace</b>.</div>
+      <div id="voiceHint" class="voice-hint"><b>🔊</b> + <b>🎤</b> = conversation: speech starts while the reply streams, then the mic opens again. Tap mic to barge in. <b>Stop</b>/<b>Esc</b> cancels reply + speech. <b>🔊</b> off = dictation only.</div>
     </form>
   </main>
 

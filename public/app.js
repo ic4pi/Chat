@@ -1456,6 +1456,11 @@ async function sendMessage(text) {
 
   setGeneratingUi(true);
   activeChatUserStopped = false;
+  try { stopListening(); } catch { /* ignore */ }
+  if (speakReplies) {
+    // New user turn — cut any leftover audio from the previous exchange.
+    try { stopNeuralSpeech(); } catch { /* ignore */ }
+  }
   const startedAt = Date.now();
   let tickTimer = null;
   const updateStatusClock = (base) => {
@@ -1501,6 +1506,11 @@ async function sendMessage(text) {
       if (firstAssistantTs == null) firstAssistantTs = assistantTs;
       let pinnedToStart = false;
       let streamBuf = '';
+      // Speak sentences as they stream (don't wait for the full reply).
+      let streamSpeech = beginStreamSpeech({
+        personaId: state.activePersonaId,
+        force: false,
+      });
       chat.messages.push({
         role: 'assistant',
         content: '',
@@ -1528,28 +1538,32 @@ async function sendMessage(text) {
         }
       };
 
+      const onStreamEvt = (evt, { continuing = false } = {}) => {
+        if (evt.type === 'status') {
+          updateStatusClock(evt.message || 'Working…');
+        } else if (evt.type === 'thinking') {
+          appendTypingThought(evt.text || '');
+          updateStatusClock('Thinking');
+        } else if (evt.type === 'token') {
+          const piece = evt.text || '';
+          streamBuf += piece;
+          streamSpeech?.push(piece);
+          updateStatusClock(continuing || autoRound > 0 ? `Writing (${autoRound + 1})` : 'Writing');
+          refreshStreamingBubble();
+          if (!pinnedToStart) {
+            renderMessages({ scroll: 'assistant-start', pinMsgTs: assistantTs });
+            pinnedToStart = true;
+          }
+        }
+      };
+
       updateStatusClock(autoRound > 0 ? `Continuing (${autoRound + 1})` : 'Waiting for model');
       let attempt = await callChatStream(
         state.activeProvider,
         state.activeModel,
         apiMessages,
         state.activePersonaId,
-        (evt) => {
-          if (evt.type === 'status') {
-            updateStatusClock(evt.message || 'Working…');
-          } else if (evt.type === 'thinking') {
-            appendTypingThought(evt.text || '');
-            updateStatusClock('Thinking');
-          } else if (evt.type === 'token') {
-            streamBuf += evt.text || '';
-            updateStatusClock(autoRound > 0 ? `Writing (${autoRound + 1})` : 'Writing');
-            refreshStreamingBubble();
-            if (!pinnedToStart) {
-              renderMessages({ scroll: 'assistant-start', pinMsgTs: assistantTs });
-              pinnedToStart = true;
-            }
-          }
-        },
+        (evt) => onStreamEvt(evt),
       );
       let usedFallback = null;
 
@@ -1558,21 +1572,19 @@ async function sendMessage(text) {
         if (fb) {
           updateStatusClock('Retrying on backup model');
           streamBuf = '';
+          // Restart speech for the backup attempt (drop partial from failed model).
+          try { stopNeuralSpeech(); } catch { /* ignore */ }
+          streamSpeech = beginStreamSpeech({
+            personaId: state.activePersonaId,
+            force: false,
+          });
           refreshStreamingBubble();
           const retry = await callChatStream(
             fb.provider,
             fb.model,
             apiMessages,
             state.activePersonaId,
-            (evt) => {
-              if (evt.type === 'status') updateStatusClock(evt.message || 'Working…');
-              else if (evt.type === 'thinking') appendTypingThought(evt.text || '');
-              else if (evt.type === 'token') {
-                streamBuf += evt.text || '';
-                updateStatusClock('Writing');
-                refreshStreamingBubble();
-              }
-            },
+            (evt) => onStreamEvt(evt),
           );
           if (retry.ok) {
             attempt = retry;
@@ -1590,6 +1602,7 @@ async function sendMessage(text) {
       const timedOut = Boolean(data.timedOut) || (!attempt.ok && isTimeoutLikeError(data.error || attempt.errText));
 
       if (!attempt.ok && !rawReply) {
+        try { streamSpeech = null; stopNeuralSpeech(); } catch { /* ignore */ }
         if (attempt.stopped || activeChatUserStopped) {
           chat.messages.push({ role: 'info', content: 'Stopped.', ts: Date.now() });
           renderMessages({ scroll: 'bottom' });
@@ -1632,8 +1645,16 @@ async function sendMessage(text) {
           model: data.model || state.activeModel,
         });
         if (attempt.stopped || activeChatUserStopped) {
+          try { streamSpeech = null; stopNeuralSpeech(); } catch { /* ignore */ }
           chat.messages.push({ role: 'info', content: 'Stopped.', ts: Date.now() });
         } else {
+          // Speak whatever we got, then listen again.
+          if (streamSpeech) {
+            streamSpeech.flush({ listenAfter: speakReplies });
+            streamSpeech = null;
+          } else {
+            void speakReply(stripContinueMarkers(rawReply), { listenAfter: speakReplies });
+          }
           const where = data.provider ? ` [${data.provider} · ${data.model || state.activeModel}]` : '';
           const rawErr = data.error || attempt.errText || 'Request failed';
           chat.messages.push({
@@ -1684,9 +1705,17 @@ async function sendMessage(text) {
         pinMsgTs: firstAssistantTs,
       });
       renderArtifacts();
-      speakReply(displayReply);
 
-      if (wantsMore && autoRound + 1 < AUTO_CONTINUE_MAX) {
+      const willContinue = wantsMore && autoRound + 1 < AUTO_CONTINUE_MAX;
+      if (streamSpeech) {
+        // Finish any unspoken tail; listen again only when the whole reply is done.
+        streamSpeech.flush({ listenAfter: !willContinue && speakReplies });
+        streamSpeech = null;
+      } else {
+        void speakReply(displayReply, { listenAfter: !willContinue && speakReplies });
+      }
+
+      if (willContinue) {
         autoRound += 1;
         chat.messages.push({
           role: 'info',
@@ -2041,8 +2070,12 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
       });
     }
     renderMessages({ scroll: groupScrollMode('bottom') });
-    for (const turn of spokenThisRound) {
-      void speakReply(turn.content, { personaId: turn.personaId });
+    for (let i = 0; i < spokenThisRound.length; i++) {
+      const turn = spokenThisRound[i];
+      void speakReply(turn.content, {
+        personaId: turn.personaId,
+        listenAfter: speakReplies && i === spokenThisRound.length - 1,
+      });
     }
     chat.updatedAt = Date.now();
     saveState();
@@ -2652,6 +2685,9 @@ let ttsUnlocked = false;
 let activeAudio = null;
 let speakQueue = Promise.resolve();
 let speakGeneration = 0;
+/** Active sentence-stream TTS session for the in-flight assistant reply. */
+let activeStreamSpeech = null;
+let voiceListenTimer = null;
 
 /** Tiny silent MP3 (no network) — unlocks HTMLAudioElement playback in a user gesture. */
 const SILENT_MP3_DATA_URI =
@@ -2662,13 +2698,14 @@ function syncSpeakBtn() {
   els.speakBtn.classList.toggle('speak-on', speakReplies);
   els.speakBtn.setAttribute('aria-pressed', speakReplies ? 'true' : 'false');
   els.speakBtn.title = speakReplies
-    ? 'Auto-speak on — full replies play automatically. Tap to turn off (Read aloud still works).'
-    : 'Tap to auto-speak full replies. Read aloud still works when this is off.';
+    ? 'Voice chat on — speaks while replies stream, then listens again. Tap to turn off.'
+    : 'Tap for voice chat: auto-speak replies + mic auto-sends. Read aloud still works when off.';
 }
 syncSpeakBtn();
 
 function cleanForSpeech(text) {
   return String(text || '')
+    .replace(CONTINUE_MARKER_RE, ' ')
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/\[Uploaded (file|image):[^\]]*\]/gi, ' ')
     .replace(/[#*_`>+]+/g, ' ')
@@ -2676,8 +2713,8 @@ function cleanForSpeech(text) {
     .trim();
 }
 
-/** Split long text into speakable chunks. No hard cap — entire reply is spoken. */
-function chunkSpeech(text, max = 1800) {
+/** Split long text into speakable chunks. Smaller chunks = faster first audio + fewer Edge truncations. */
+function chunkSpeech(text, max = 900) {
   const clean = cleanForSpeech(text);
   if (!clean) return [];
   if (clean.length <= max) return [clean];
@@ -2685,19 +2722,68 @@ function chunkSpeech(text, max = 1800) {
   let rest = clean;
   while (rest.length > max) {
     let cut = rest.lastIndexOf('. ', max);
-    if (cut < max * 0.4) cut = rest.lastIndexOf('? ', max);
-    if (cut < max * 0.4) cut = rest.lastIndexOf('! ', max);
+    if (cut < max * 0.45) cut = rest.lastIndexOf('? ', max);
+    if (cut < max * 0.45) cut = rest.lastIndexOf('! ', max);
+    if (cut < max * 0.45) cut = rest.lastIndexOf('; ', max);
+    if (cut < max * 0.45) cut = rest.lastIndexOf(', ', max);
     if (cut < max * 0.4) cut = rest.lastIndexOf(' ', max);
     if (cut < max * 0.3) cut = max;
-    parts.push(rest.slice(0, cut + 1).trim());
+    const piece = rest.slice(0, cut + 1).trim();
+    if (piece) parts.push(piece);
     rest = rest.slice(cut + 1).trim();
   }
   if (rest) parts.push(rest);
   return parts;
 }
 
+/**
+ * Pull ready sentences from unspoken cleaned text.
+ * Speaks early (first ~sentence) while the model is still streaming.
+ */
+function extractReadySpeech(unspoken, { flush = false, first = false } = {}) {
+  const units = [];
+  let rest = String(unspoken || '');
+  const softMax = first ? 220 : 850;
+  const hardMax = first ? 320 : 1100;
+  const minWait = first ? 24 : 48;
+
+  while (rest) {
+    if (!flush && rest.length < minWait) break;
+
+    let cut = -1;
+    const searchAt = Math.min(rest.length, hardMax);
+    const ends = ['. ', '? ', '! ', '.\n', '?\n', '!\n', ': ', '\n\n'];
+    for (const end of ends) {
+      const idx = rest.lastIndexOf(end, searchAt - 1);
+      if (idx >= Math.min(minWait, rest.length) - 1 && idx > cut) {
+        cut = idx + end.length - 1;
+      }
+    }
+    // Also accept sentence end at buffer end when flushing / enough text.
+    if (cut < 0 && (flush || rest.length >= softMax)) {
+      const m = rest.slice(0, searchAt).match(/[.!?](?:\s|$)/);
+      if (m && typeof m.index === 'number' && m.index >= 8) {
+        cut = m.index;
+      }
+    }
+    if (cut < 0) {
+      if (!flush && rest.length < hardMax) break;
+      cut = rest.lastIndexOf(' ', Math.min(rest.length, hardMax));
+      if (cut < hardMax * 0.4) cut = Math.min(rest.length, hardMax) - 1;
+    }
+
+    const piece = rest.slice(0, cut + 1).trim();
+    rest = rest.slice(cut + 1).trim();
+    if (piece) units.push(piece);
+    if (!flush && units.length >= 1 && first) break;
+    if (!flush && units.length >= 2) break;
+  }
+  return { units, rest };
+}
+
 function stopNeuralSpeech() {
   speakGeneration += 1;
+  activeStreamSpeech = null;
   try {
     if (activeAudio) {
       activeAudio.pause();
@@ -2723,6 +2809,21 @@ async function fetchNeuralAudio(text, voice) {
     throw new Error(msg);
   }
   return res.blob();
+}
+
+async function fetchNeuralAudioWithRetry(text, voice, retries = 2) {
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetchNeuralAudio(text, voice);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 350 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastErr || new Error('TTS failed');
 }
 
 function playBlob(blob, { interrupt = true } = {}) {
@@ -2760,24 +2861,83 @@ function playBlob(blob, { interrupt = true } = {}) {
   });
 }
 
-/** Fallback robotic browser voice — only if neural TTS fails. Speaks full text in chunks. */
-function speakBrowserFallback(text) {
-  if (!window.speechSynthesis) return;
-  try {
-    window.speechSynthesis.cancel();
-    const chunks = chunkSpeech(text, 1100);
-    const voices = window.speechSynthesis.getVoices?.() || [];
-    const en = voices.find(v => /en[-_]/i.test(v.lang) && /enhanced|premium|neural|samantha|google/i.test(v.name))
-      || voices.find(v => /en[-_]/i.test(v.lang));
-    for (const chunk of chunks) {
-      const u = new SpeechSynthesisUtterance(chunk);
+/** Fallback robotic browser voice for one chunk (does not cancel the whole reply). */
+function speakBrowserFallbackChunk(text) {
+  if (!window.speechSynthesis || !text) return Promise.resolve();
+  return new Promise((resolve) => {
+    try {
+      const voices = window.speechSynthesis.getVoices?.() || [];
+      const en = voices.find(v => /en[-_]/i.test(v.lang) && /enhanced|premium|neural|samantha|google/i.test(v.name))
+        || voices.find(v => /en[-_]/i.test(v.lang));
+      const u = new SpeechSynthesisUtterance(text);
       u.rate = 1.02;
       if (en) u.voice = en;
+      u.onend = () => resolve();
+      u.onerror = () => resolve();
       window.speechSynthesis.speak(u);
+    } catch {
+      resolve();
     }
-  } catch (err) {
-    console.warn('browser TTS fallback failed', err);
+  });
+}
+
+function speakBrowserFallback(text) {
+  const chunks = chunkSpeech(text, 900);
+  void (async () => {
+    for (const chunk of chunks) {
+      await speakBrowserFallbackChunk(chunk);
+    }
+  })();
+}
+
+/** Prefetch next chunk while current audio plays — cuts dead air between sentences. */
+async function playSpeechChunks(chunks, voice, gen, { listenAfter = false, interruptFirst = true } = {}) {
+  if (gen !== speakGeneration) return;
+  if (!chunks.length) {
+    if (listenAfter && gen === speakGeneration) scheduleVoiceListen();
+    return;
   }
+
+  let nextBlobPromise = fetchNeuralAudioWithRetry(chunks[0], voice).catch((err) => err);
+
+  for (let i = 0; i < chunks.length; i++) {
+    if (gen !== speakGeneration) return;
+
+    const upcoming = (i + 1 < chunks.length)
+      ? fetchNeuralAudioWithRetry(chunks[i + 1], voice).catch((err) => err)
+      : null;
+
+    const result = await nextBlobPromise;
+    nextBlobPromise = upcoming;
+    if (gen !== speakGeneration) return;
+
+    if (!(result instanceof Blob)) {
+      console.warn('TTS chunk failed, browser fallback for this sentence:', result?.message || result);
+      await speakBrowserFallbackChunk(chunks[i]);
+      continue;
+    }
+
+    try {
+      await playBlob(result, { interrupt: interruptFirst && i === 0 });
+      ttsUnlocked = true;
+    } catch (err) {
+      console.warn('Audio play failed, browser fallback:', err);
+      await speakBrowserFallbackChunk(chunks[i]);
+    }
+  }
+
+  if (listenAfter && gen === speakGeneration) scheduleVoiceListen();
+}
+
+function enqueueSpeech(chunks, { personaId = null, listenAfter = false, interruptFirst = false } = {}) {
+  const list = (chunks || []).filter(Boolean);
+  if (!list.length && !listenAfter) return speakQueue;
+  const voice = voiceForPersona(personaId || state.activePersonaId);
+  const gen = speakGeneration;
+  speakQueue = speakQueue
+    .then(() => playSpeechChunks(list, voice, gen, { listenAfter, interruptFirst }))
+    .catch(() => { /* keep queue alive */ });
+  return speakQueue;
 }
 
 /** Latest assistant turn(s) to auto-speak when enabling 🔊. */
@@ -2797,15 +2957,13 @@ function lastSpeakableTurns() {
   return last ? [last] : [];
 }
 
-async function speakReply(text, { force = false, personaId = null } = {}) {
-  if (!force && !speakReplies) return;
-  const chunks = chunkSpeech(text);
-  if (!chunks.length) return;
-
-  const voice = voiceForPersona(personaId || state.activePersonaId);
-
+/**
+ * Speak tokens as sentences arrive (conversation speed), then flush the tail.
+ * Avoids waiting for the full model reply before any audio starts.
+ */
+function beginStreamSpeech({ personaId = null, force = false } = {}) {
+  if (!speakReplies) return null;
   if (force) {
-    // Cut any in-progress audio and start this reply immediately.
     try {
       if (activeAudio) {
         activeAudio.pause();
@@ -2818,24 +2976,83 @@ async function speakReply(text, { force = false, personaId = null } = {}) {
     speakQueue = Promise.resolve();
   }
 
-  const gen = speakGeneration;
-  speakQueue = speakQueue.then(async () => {
-    if (gen !== speakGeneration) return;
-    try {
-      for (let i = 0; i < chunks.length; i++) {
-        if (gen !== speakGeneration) return;
-        const blob = await fetchNeuralAudio(chunks[i], voice);
-        if (gen !== speakGeneration) return;
-        await playBlob(blob, { interrupt: i === 0 });
-      }
-      ttsUnlocked = true;
-    } catch (err) {
-      console.warn('Neural TTS failed, falling back:', err);
-      if (gen === speakGeneration) speakBrowserFallback(chunks.join(' '));
-    }
-  }).catch(() => { /* queue continues */ });
+  const session = {
+    personaId: personaId || state.activePersonaId,
+    gen: speakGeneration,
+    raw: '',
+    spokenLen: 0,
+    first: true,
+  };
 
-  return speakQueue;
+  session.drain = function drain() {
+    if (session.gen !== speakGeneration) return;
+    const full = cleanForSpeech(stripContinueMarkers(session.raw));
+    const unspoken = full.slice(session.spokenLen);
+    const { units, rest } = extractReadySpeech(unspoken, { flush: false, first: session.first });
+    if (!units.length) return;
+    session.spokenLen = Math.max(0, full.length - rest.length);
+    enqueueSpeech(units, {
+      personaId: session.personaId,
+      listenAfter: false,
+      interruptFirst: session.first,
+    });
+    session.first = false;
+  };
+
+  session.push = function push(delta) {
+    if (!delta || session.gen !== speakGeneration) return;
+    session.raw += delta;
+    session.drain();
+  };
+
+  session.flush = function flush({ listenAfter = false } = {}) {
+    if (session.gen !== speakGeneration) return;
+    session.drain();
+    const full = cleanForSpeech(stripContinueMarkers(session.raw));
+    const tail = full.slice(session.spokenLen).trim();
+    if (tail) {
+      session.spokenLen = full.length;
+      enqueueSpeech(chunkSpeech(tail, 900), {
+        personaId: session.personaId,
+        listenAfter,
+        interruptFirst: false,
+      });
+    } else if (listenAfter) {
+      enqueueSpeech([], { personaId: session.personaId, listenAfter: true });
+    }
+    if (activeStreamSpeech === session) activeStreamSpeech = null;
+  };
+
+  activeStreamSpeech = session;
+  return session;
+}
+
+async function speakReply(text, { force = false, personaId = null, listenAfter = false } = {}) {
+  if (!force && !speakReplies) return;
+  const chunks = chunkSpeech(text, 900);
+  if (!chunks.length) {
+    if (listenAfter && speakReplies) scheduleVoiceListen();
+    return;
+  }
+
+  if (force) {
+    try {
+      if (activeAudio) {
+        activeAudio.pause();
+        activeAudio.src = '';
+        activeAudio = null;
+      }
+    } catch { /* ignore */ }
+    try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
+    speakGeneration += 1;
+    speakQueue = Promise.resolve();
+  }
+
+  return enqueueSpeech(chunks, {
+    personaId: personaId || state.activePersonaId,
+    listenAfter: !!(listenAfter && speakReplies),
+    interruptFirst: force,
+  });
 }
 
 /** Must run inside a user gesture on iPhone so later Audio.play() is allowed. */
@@ -2846,7 +3063,6 @@ async function unlockTts() {
     audio.volume = 0.001;
     await audio.play().catch(() => {});
     audio.pause();
-    return true;
   } catch {
     try {
       if (window.speechSynthesis) {
@@ -2855,8 +3071,31 @@ async function unlockTts() {
         window.speechSynthesis.speak(u);
       }
     } catch { /* ignore */ }
-    return true;
   }
+  // Warm the /api/tts serverless function so the first real sentence is faster.
+  try {
+    const voice = voiceForPersona(state.activePersonaId);
+    void fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'Ready.', voice }),
+    }).then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => {});
+  } catch { /* ignore */ }
+  return true;
+}
+
+/** After the assistant finishes speaking, open the mic again (voice conversation). */
+function scheduleVoiceListen() {
+  if (!speakReplies) return;
+  if (voiceListenTimer) {
+    clearTimeout(voiceListenTimer);
+    voiceListenTimer = null;
+  }
+  voiceListenTimer = setTimeout(() => {
+    voiceListenTimer = null;
+    if (!speakReplies || chatBusy || listening || activeAudio) return;
+    startMicListening({ auto: true });
+  }, 420);
 }
 
 /**
@@ -3009,25 +3248,34 @@ function getSpeechRecognition() {
 function stopListening() {
   listening = false;
   els.micBtn?.classList.remove('listening');
+  try { recognition?.abort?.(); } catch { /* ignore */ }
   try { recognition?.stop(); } catch { /* ignore */ }
+  recognition = null;
 }
 
-els.micBtn?.addEventListener('click', () => {
-  if (listening) {
-    stopListening();
-    return;
-  }
+/**
+ * Start browser speech recognition.
+ * auto:true = after TTS finished (conversation loop). Failures stay silent.
+ */
+function startMicListening({ auto = false } = {}) {
+  if (listening) return false;
   if (chatBusy) {
-    // Mic during a reply = stop first, then listen.
+    if (auto) return false;
     stopActiveChat('Stopped by user');
   }
-  // Cut any playing TTS before listening (real voice-chat turn-taking).
-  try { stopNeuralSpeech(); } catch { /* ignore */ }
+  if (!auto) {
+    // Manual mic = barge-in: cut spoken audio first.
+    try { stopNeuralSpeech(); } catch { /* ignore */ }
+  } else if (activeAudio) {
+    return false;
+  }
 
   const rec = getSpeechRecognition();
   if (!rec) {
-    alert('Voice input needs a browser with Speech Recognition (Chrome or Safari on a real device).');
-    return;
+    if (!auto) {
+      alert('Voice input needs a browser with Speech Recognition (Chrome or Safari on a real device).');
+    }
+    return false;
   }
   recognition = rec;
   rec.continuous = false;
@@ -3038,13 +3286,26 @@ els.micBtn?.addEventListener('click', () => {
     listening = true;
     els.micBtn?.classList.add('listening');
   };
-  rec.onerror = () => stopListening();
+  rec.onerror = (ev) => {
+    const err = ev?.error || '';
+    stopListening();
+    setTypingActive(false);
+    // Auto-listen often gets no-speech / aborted — don't nag.
+    if (auto || err === 'aborted' || err === 'no-speech') return;
+    if (err === 'not-allowed') {
+      alert('Mic permission blocked. Allow microphone access for voice chat.');
+    }
+  };
   rec.onend = () => {
     listening = false;
     els.micBtn?.classList.remove('listening');
     setTypingActive(false);
     const said = finalText.trim();
-    if (!said) return;
+    if (!said) {
+      // In voice chat, keep the floor open if they didn't say anything usable.
+      if (auto && speakReplies && !chatBusy) scheduleVoiceListen();
+      return;
+    }
     // Voice chat mode: 🔊 on → send immediately and speak the reply.
     // Dictation mode: 🔊 off → just put text in the box.
     if (speakReplies && !chatBusy) {
@@ -3072,11 +3333,22 @@ els.micBtn?.addEventListener('click', () => {
   try {
     setTypingActive(true, speakReplies ? 'Voice chat — listening…' : 'Listening…');
     rec.start();
+    return true;
   } catch (err) {
     stopListening();
     setTypingActive(false);
-    alert('Could not start mic: ' + (err.message || err));
+    if (!auto) alert('Could not start mic: ' + (err.message || err));
+    return false;
   }
+}
+
+els.micBtn?.addEventListener('click', () => {
+  if (listening) {
+    stopListening();
+    setTypingActive(false);
+    return;
+  }
+  startMicListening({ auto: false });
 });
 
 const WORKSPACE_HANDOFF_KEY = 'chat_to_workspace_v1';
