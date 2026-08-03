@@ -128,7 +128,17 @@ async function fetchFileContent(
     if (!res.ok) return null;
     const data = await res.json() as { content?: string };
     if (data.content == null) return null;
-    if (data.content.length > MAX_AUTO_FULL_FILE_CHARS * 1.25) return null;
+    // Large sources (e.g. public/app.js) used to be skipped entirely — that left
+    // the agent with no implementation to read. Truncate instead of dropping.
+    if (data.content.length > MAX_AUTO_FULL_FILE_CHARS) {
+      const head = Math.floor(MAX_AUTO_FULL_FILE_CHARS * 0.7);
+      const tail = MAX_AUTO_FULL_FILE_CHARS - head - 80;
+      return (
+        data.content.slice(0, head) +
+        `\n\n/* … truncated ${data.content.length - MAX_AUTO_FULL_FILE_CHARS} chars for context budget … */\n\n` +
+        data.content.slice(-Math.max(tail, 0))
+      );
+    }
     return data.content;
   } catch {
     return null;
@@ -516,9 +526,9 @@ export function App() {
       const toOpen = hits
         .filter(h => isSourcePath(h.path))
         .filter(h => {
-          // Unknown size (seed) — try load; search hits respect size when present.
+          // Unknown size (seed) — try load. Very huge files still load truncated.
           if (h.size == null || h.size <= 0) return true;
-          return h.size <= MAX_AUTO_FULL_FILE_CHARS;
+          return h.size <= MAX_AUTO_FULL_FILE_CHARS * 3;
         })
         .slice(0, maxFull);
 

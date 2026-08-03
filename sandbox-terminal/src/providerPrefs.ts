@@ -30,7 +30,8 @@ const KEYS_STORAGE = 'uncensored_provider_keys_v1';
 const ROLES_STORAGE = 'uncensored_role_models_v1';
 
 const DEFAULT_ROLE_MODELS: Record<RoleId, RoleModel> = {
-  write:  { provider: 'venice', model: 'venice-uncensored' },
+  // Coding-specialized default — general uncensored chat models sketch more often.
+  write:  { provider: 'venice', model: 'qwen3-coder-480b-a35b-instruct' },
   review: { provider: 'venice', model: 'olafangensan-glm-4.7-flash-heretic' },
   plan:   { provider: 'venice', model: 'qwen3-235b-a22b-instruct-2507' },
 };

@@ -862,25 +862,54 @@ select:focus, input[type="text"]:focus, textarea:focus {
   padding: 4px 8px;
 }
 
-.msg pre.code-block {
-  background: var(--code-bg);
+.msg .code-block-wrap {
+  margin: 8px 0;
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 10px 12px;
-  margin: 8px 0;
-  overflow-x: auto;
-  font-size: 12.5px;
-  line-height: 1.5;
-  position: relative;
+  overflow: hidden;
+  background: var(--code-bg);
 }
-.msg pre.code-block .code-lang {
-  position: absolute;
-  top: 6px;
-  right: 8px;
+.msg .code-block-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px 4px 10px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.25);
+}
+.msg .code-block-bar .code-lang {
   font-size: 10px;
   color: var(--muted-2);
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+.msg .code-copy-btn {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--accent-dim);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-family: inherit;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.msg .code-copy-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+.msg pre.code-block {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 10px 12px;
+  margin: 0;
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.5;
+  position: relative;
 }
 
 #typing,

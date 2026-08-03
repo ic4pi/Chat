@@ -33,6 +33,8 @@ const PROVIDER_FALLBACKS = {
     { id: 'e2ee-gemma-4-26b-a4b-uncensored-p', name: 'Gemma 4 26B A4B Uncensored' },
     { id: 'e2ee-qwen3-6-35b-a3b-uncensored-p', name: 'Qwen3.6 35B A3B Uncensored' },
     { id: 'venice-uncensored', name: 'Dolphin Mistral 24B Venice Edition' },
+    { id: 'qwen3-coder-480b-a35b-instruct', name: 'Qwen3 Coder 480B' },
+    { id: 'qwen3-235b-a22b-instruct-2507', name: 'Qwen3 235B Instruct' },
   ],
   openrouter: [
     { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition', name: 'Venice Uncensored (Dolphin 24B)' },
@@ -108,7 +110,8 @@ const KEYS_STORAGE = 'uncensored_provider_keys_v1';
 const ROLES_STORAGE = 'uncensored_role_models_v1';
 
 const DEFAULT_ROLE_MODELS = {
-  write:  { provider: 'venice', model: 'venice-uncensored' },
+  // Coding-specialized default for Write — uncensored chat models sketch more often.
+  write:  { provider: 'venice', model: 'qwen3-coder-480b-a35b-instruct' },
   review: { provider: 'venice', model: 'olafangensan-glm-4.7-flash-heretic' },
   plan:   { provider: 'venice', model: 'qwen3-235b-a22b-instruct-2507' },
 };
@@ -702,18 +705,38 @@ function renderMarkdownInto(container, text) {
   const parts = splitByCodeFences(text);
   for (const part of parts) {
     if (part.type === 'code') {
+      const wrap = document.createElement('div');
+      wrap.className = 'code-block-wrap';
+
+      const bar = document.createElement('div');
+      bar.className = 'code-block-bar';
+      const lang = document.createElement('span');
+      lang.className = 'code-lang';
+      lang.textContent = part.lang || 'code';
+      bar.appendChild(lang);
+
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'code-copy-btn';
+      copyBtn.textContent = 'Copy';
+      copyBtn.title = 'Copy this code snippet';
+      copyBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void copyTextToClipboard(part.content).then((ok) =>
+          flashButton(copyBtn, ok ? 'Copied' : 'Copy failed')
+        );
+      });
+      bar.appendChild(copyBtn);
+      wrap.appendChild(bar);
+
       const pre = document.createElement('pre');
       pre.className = 'code-block';
-      if (part.lang) {
-        const lang = document.createElement('span');
-        lang.className = 'code-lang';
-        lang.textContent = part.lang;
-        pre.appendChild(lang);
-      }
       const code = document.createElement('code');
       code.textContent = part.content;
       pre.appendChild(code);
-      container.appendChild(pre);
+      wrap.appendChild(pre);
+      container.appendChild(wrap);
     } else if (part.content.length > 0) {
       const p = document.createElement('p');
       p.textContent = part.content;

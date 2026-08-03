@@ -268,8 +268,10 @@ async function handleJson(res, resolved, model, messagesWithSystem, providerId, 
     }
 
     const reply = data.choices?.[0]?.message?.content ?? '';
+    const finishReason = data.choices?.[0]?.finish_reason || '';
     return res.status(200).json({
       reply,
+      incomplete: finishReason === 'length' || undefined,
       model,
       provider: resolved.label,
       tokens: budgeted.tokens,
