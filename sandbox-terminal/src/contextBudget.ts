@@ -19,19 +19,19 @@ const SKIP_PATH_RE = new RegExp(
 const SOURCE_EXT_RE =
   /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|rb|php|css|scss|html|md|json|yml|yaml|toml|sh)$/i;
 
-/** Only auto-load full files under this size (~12k tokens). */
-export const MAX_AUTO_FULL_FILE_CHARS = 48_000;
+/** Auto-load files up to this size; larger sources are truncated, not skipped. */
+export const MAX_AUTO_FULL_FILE_CHARS = 100_000;
 /** Max full source files opened automatically per query (ephemeral working set). */
-export const MAX_AUTO_FULL_FILES = 5;
+export const MAX_AUTO_FULL_FILES = 6;
 /** Broad audits / vague asks get a slightly larger working set. */
-export const MAX_AUDIT_FULL_FILES = 8;
+export const MAX_AUDIT_FULL_FILES = 10;
 /** Hard cap for any single file in the prompt. */
-export const MAX_FILE_CHARS = 80_000;
+export const MAX_FILE_CHARS = 100_000;
 /** Total full-file budget in the system prompt. */
-export const MAX_CONTEXT_CHARS = 160_000;
+export const MAX_CONTEXT_CHARS = 200_000;
 /** Search-hit snippet budget. */
-export const MAX_SNIPPET_CHARS = 24_000;
-export const MAX_TREE_PATHS = 80;
+export const MAX_SNIPPET_CHARS = 32_000;
+export const MAX_TREE_PATHS = 120;
 
 /** Prefer these paths when the user asks for a broad audit and search is thin. */
 const AUDIT_SEED_RE =
@@ -70,6 +70,16 @@ export function truncateForContext(content: string, max = MAX_FILE_CHARS): strin
   );
 }
 
+function contextPathPriority(path: string): number {
+  const norm = path.replace(/\\/g, '/');
+  let score = 0;
+  if (AUDIT_SEED_RE.test(norm)) score += 6;
+  if (AUDIT_NAME_RE.test(norm)) score += 4;
+  if (/(^|\/)(package\.json|README\.md|vercel\.json)$/i.test(norm)) score += 2;
+  // Tiny stubs rarely matter; giant dumps crowd others — prefer mid/large sources.
+  return score;
+}
+
 export function packContextFiles(
   files: Map<string, string>,
   budget = MAX_CONTEXT_CHARS,
@@ -77,7 +87,12 @@ export function packContextFiles(
   const entries = [...files.entries()]
     .filter(([p]) => !isJunkContextPath(p))
     .map(([p, c]) => [p, truncateForContext(c)] as const)
-    .sort((a, b) => a[1].length - b[1].length);
+    // Important paths first so small noise files cannot crowd out app/api sources.
+    .sort((a, b) => {
+      const pd = contextPathPriority(b[0]) - contextPathPriority(a[0]);
+      if (pd !== 0) return pd;
+      return a[1].length - b[1].length;
+    });
 
   const out = new Map<string, string>();
   let used = 0;

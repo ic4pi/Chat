@@ -46,7 +46,7 @@ export interface RepoContextActions {
   openRepo:        (rootPathOrUrl: string) => Promise<void>;
   /** Start an empty sandbox project — no GitHub clone required. */
   startBlankProject: (name?: string) => Promise<void>;
-  addToContext:    (relPath: string)  => Promise<void>;
+  addToContext:    (relPath: string, opts?: { force?: boolean })  => Promise<void>;
   /** Inject an uploaded / pasted file into model context (not from the repo tree). */
   injectContextFile: (relPath: string, content: string) => void;
   removeFromContext: (relPath: string) => void;
@@ -213,8 +213,10 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     }
   }, [sandboxId, applyStackStatus]);
 
-  const addToContext = useCallback(async (relPath: string) => {
-    if (contextFiles.has(relPath)) return;
+  const addToContext = useCallback(async (relPath: string, opts?: { force?: boolean }) => {
+    // force=true reloads from disk after a write — otherwise the model keeps
+    // seeing the pre-edit version while tests already run against the new file.
+    if (!opts?.force && contextFiles.has(relPath)) return;
     // Never load hashed bundles / dist into the model prompt.
     if (isJunkContextPath(relPath)) {
       console.warn('addToContext skipped junk path:', relPath);
@@ -267,9 +269,23 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     });
     const data = await res.json() as { results: Array<{ path: string; written: boolean; error?: string }> };
     const results = (data.results ?? []).map(r => ({ path: r.path, ok: r.written, error: r.error }));
-    const written = results.filter(r => r.ok).map(r => r.path);
-    for (const p of written) {
-      if (contextFiles.has(p)) await addToContext(p);
+    const written = new Set(results.filter(r => r.ok).map(r => r.path));
+    // Immediately refresh open-context entries with the bytes we just wrote.
+    // Re-fetch alone used to no-op when the path was already in the Map.
+    if (written.size > 0) {
+      setContextFiles(m => {
+        let changed = false;
+        const n = new Map(m);
+        for (const c of toWrite) {
+          if (!written.has(c.path) || !n.has(c.path)) continue;
+          n.set(c.path, truncateForContext(c.content));
+          changed = true;
+        }
+        return changed ? n : m;
+      });
+      for (const p of written) {
+        if (contextFiles.has(p)) await addToContext(p, { force: true });
+      }
     }
     return results;
   }, [root, sandboxId, pendingChanges, contextFiles, sessionHeaders, addToContext]);

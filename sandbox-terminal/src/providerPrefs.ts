@@ -59,7 +59,8 @@ export function inferFree(providerId: string, model: { id?: string; name?: strin
 }
 
 const DEFAULT_ROLE_MODELS: Record<RoleId, RoleModel> = {
-  write:  { provider: 'openrouter', model: 'openrouter/free' },
+  // Free OpenRouter coder — Venice coder is paid/locked without unlock.
+  write:  { provider: 'openrouter', model: 'qwen/qwen3-coder:free' },
   review: { provider: 'openrouter', model: 'openrouter/free' },
   plan:   { provider: 'openrouter', model: 'openrouter/free' },
 };
@@ -81,6 +82,7 @@ export const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string }>
     { id: 'nousresearch/hermes-3-llama-3.1-405b:free', name: 'Hermes 3 405B (free)' },
     { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B (free)' },
     { id: 'qwen/qwen3-coder:free', name: 'Qwen3 Coder (free)' },
+    { id: 'openrouter/free', name: 'Free Models Router' },
   ],
   cerebras: [
     { id: 'llama-3.3-70b', name: 'Llama 3.3 70B' },
@@ -105,7 +107,7 @@ export const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string }>
 
 export const DEFAULT_MODELS: Record<string, string> = {
   venice: 'venice-uncensored',
-  openrouter: 'openrouter/free',
+  openrouter: 'qwen/qwen3-coder:free',
   cerebras: 'llama-3.3-70b',
   groq: 'llama-3.3-70b-versatile',
   nvidia: 'meta/llama-3.3-70b-instruct',

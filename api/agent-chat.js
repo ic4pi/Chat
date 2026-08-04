@@ -269,8 +269,10 @@ async function handleJson(res, resolved, model, messagesWithSystem, providerId, 
     }
 
     const reply = data.choices?.[0]?.message?.content ?? '';
+    const finishReason = data.choices?.[0]?.finish_reason || '';
     return res.status(200).json({
       reply,
+      incomplete: finishReason === 'length' || undefined,
       model,
       provider: resolved.label,
       tokens: budgeted.tokens,
@@ -309,14 +311,14 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'messages array required' });
   }
 
-  const paidGate = requirePaidAccess(req, providerId || 'venice', model || '');
+  const paidGate = requirePaidAccess(req, providerId || 'openrouter', model || '');
   if (paidGate) {
     return res.status(paidGate.status).json({ error: paidGate.error, paidLocked: true });
   }
 
   let resolved;
   try {
-    resolved = resolveProvider(providerId || 'venice', clientKey || req.headers['x-provider-key']);
+    resolved = resolveProvider(providerId || 'openrouter', clientKey || req.headers['x-provider-key']);
   } catch (err) {
     return res.status(500).json({ error: err.message || 'Provider not configured' });
   }

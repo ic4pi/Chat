@@ -45,6 +45,7 @@ const PROVIDER_FALLBACKS = {
     { id: 'google/gemma-4-26b-a4b-it:free', name: 'Gemma 4 26B A4B (free)' },
     { id: 'openai/gpt-oss-20b:free', name: 'GPT OSS 20B (free)' },
     { id: 'nvidia/nemotron-3-nano-30b-a3b:free', name: 'Nemotron 3 Nano 30B (free)' },
+    { id: 'qwen/qwen3-coder:free', name: 'Qwen3 Coder (free)' },
     { id: 'meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 70B Instruct' },
     { id: 'qwen/qwen3-coder', name: 'Qwen3 Coder' },
     { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5' },
@@ -93,7 +94,7 @@ const PROVIDER_FALLBACKS = {
 
 const DEFAULT_MODELS = {
   venice: 'venice-uncensored-1-2',
-  openrouter: 'openrouter/free',
+  openrouter: 'qwen/qwen3-coder:free',
   cerebras: 'gpt-oss-120b',
   groq: 'llama-3.3-70b-versatile',
   nvidia: 'meta/llama-3.3-70b-instruct',
@@ -172,7 +173,7 @@ function enrichModelClient(providerId, model = {}) {
 }
 
 const DEFAULT_ROLE_MODELS = {
-  write:  { provider: 'openrouter', model: 'openrouter/free' },
+  write:  { provider: 'openrouter', model: 'qwen/qwen3-coder:free' },
   review: { provider: 'openrouter', model: 'openrouter/free' },
   plan:   { provider: 'openrouter', model: 'openrouter/free' },
 };
@@ -241,7 +242,7 @@ function freshState() {
     // OpenRouter free router by default — Venice and other paid catalogs
     // need the paid-models unlock password.
     activeProvider: 'openrouter',
-    activeModel: 'openrouter/free',
+    activeModel: 'qwen/qwen3-coder:free',
     chatsCollapsed: false,
     chatsCollapsedExplicit: false,
     artifactsCollapsed: true,

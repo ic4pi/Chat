@@ -44,6 +44,14 @@ import {
   type SearchHit,
 } from './contextBudget.js';
 import { copyText, downloadTextFile } from './downloadFile.js';
+import {
+  cleanForSpeech,
+  getSpeechRecognition,
+  loadSpeakPref,
+  saveSpeakPref,
+  speakReply,
+  stopSpeech,
+} from './workspaceVoice.js';
 
 export {
   extractFileChangeReport,
@@ -108,10 +116,18 @@ function buildSystemPrompt(
     'Be direct. No tutorials. No fake example tasks. No <placeholders>, TODOs, or "your-token-here".',
     'Every code file you output must be COMPLETE and ready to save.',
     '',
+    'HOW THIS WORKSPACE WORKS (read carefully):',
+    '- You do NOT have interactive shell/tool calls in this chat.',
+    '- To change the repo: emit File: blocks with FULL file contents. The host writes them to the sandbox.',
+    '- After accepted writes, the HOST runs Auto-test / static smoke and may inject failures back to you.',
+    '- Untitled ``` code blocks can be run via ▶ Run in Sandbox — they do not write files.',
+    '- Do not claim you already ran tests or saved files unless you emitted accepted File: blocks.',
+    '',
     'HARD RULE — NEVER DEGRADE THIS SANDBOX:',
     '- Incomplete File: blocks are REJECTED before write. Nothing partial is saved.',
     '- Forbidden: diffs, patches, stubs, "// ... existing imports ...", "// ... existing code ...", "Then in handler:", "rest of file unchanged".',
     '- If a file is long, still output the ENTIRE file. Prefer one full file over five stubs.',
+    '- If output may truncate, finish the highest-priority file first (complete), then others.',
     '- Truncating api/*.js or lib/sandbox-api/* has taken production to HTTP 500. Do not do it.',
     '- Never claim a fix was applied unless you emitted complete accepted File: blocks.',
     '',
@@ -123,8 +139,8 @@ function buildSystemPrompt(
     '- Rust: rustc + cargo are provisioned (dnf or rustup into /vercel/sandbox/cargo). Use cargo test / rustc.',
     '- Go: `go` is provisioned via dnf golang. Use go test ./... / go run / go build.',
     '- NEVER say you cannot run Python/Rust/Go because apt-get/Docker/slim images are missing.',
-    '- NEVER tell the user to run install commands on their laptop for basic toolchains — run them in this Terminal.',
-    '- If a package is missing, install it with pip (venv), cargo, go get/mod, or dnf for system libs, then run.',
+    '- NEVER tell the user to run install commands on their laptop for basic toolchains.',
+    '- If a package is missing, say which install command the Terminal should run (pip/cargo/go/dnf).',
     '',
     'If the user wants changes written: output File: blocks with FULL file contents.',
     'If they only want advice: plain English, cite real paths from context. Do not dump untitled example code.',
@@ -142,7 +158,7 @@ function buildSystemPrompt(
       '',
       'PYTHON STATUS: READY in this sandbox.',
       pythonDetail ? `Detail: ${pythonDetail}` : '',
-      'Run Python yourself via Terminal / ▶ Run — do not ask the user to install Python locally.',
+      'Python is ready — prefer File: scripts + host Auto-test / ▶ Run. Do not ask the user to install Python locally.',
     );
   } else if (pythonReady === false) {
     parts.push(
@@ -164,7 +180,7 @@ function buildSystemPrompt(
       '',
       'RUST STATUS: READY (rustc + cargo) in this sandbox.',
       rustDetail ? `Detail: ${rustDetail}` : '',
-      'Run cargo/rustc yourself via Terminal — do not ask the user to install Rust locally.',
+      'Rust is ready — prefer cargo/rustc via Terminal or host Auto-test. Do not ask the user to install Rust locally.',
     );
   } else if (rustReady === false) {
     parts.push(
@@ -185,7 +201,7 @@ function buildSystemPrompt(
       '',
       'GO STATUS: READY in this sandbox.',
       goDetail ? `Detail: ${goDetail}` : '',
-      'Run go yourself via Terminal — do not ask the user to install Go locally.',
+      'Go is ready — prefer go test/run via Terminal or host Auto-test. Do not ask the user to install Go locally.',
     );
   } else if (goReady === false) {
     parts.push(
@@ -302,19 +318,56 @@ function friendlyError(raw: string): string {
   return raw || 'Request failed';
 }
 
+type AgentReply = { reply: string; incomplete?: boolean; timedOut?: boolean };
+
+/** True when the model was cut off mid File:/fence — worth one continuation turn. */
+function looksTruncatedReply(text: string): boolean {
+  if (!text || text === '(empty response)') return false;
+  const fences = (text.match(/```/g) || []).length;
+  if (fences % 2 === 1) return true;
+  if (/\bFile:\s+\S+\s*$/m.test(text) && !/```[\s\S]*```\s*$/.test(text)) return true;
+  // Ends mid-statement without a closing fence after a File: header
+  if (/\bFile:\s+\S+/i.test(text) && !/```\s*$/.test(text.trim()) && text.length > 2_000) {
+    const lastFence = text.lastIndexOf('```');
+    if (lastFence >= 0) {
+      const after = text.slice(lastFence + 3);
+      // opened a fence and never closed it
+      if (!after.includes('```') && after.length > 200) return true;
+    }
+  }
+  return false;
+}
+
+function mergeContinuation(prev: string, next: string): string {
+  const a = prev.replace(/\s+$/, '');
+  const b = next.replace(/^\s+/, '');
+  // Model often restarts the open fence — strip a duplicated opener.
+  if (a.endsWith('```') || /```[a-zA-Z0-9_+\-.]*$/.test(a)) {
+    return `${a}\n${b}`;
+  }
+  if (b.startsWith('```') && (a.match(/```/g) || []).length % 2 === 1) {
+    // Continuation reopened the fence — keep body only
+    const nl = b.indexOf('\n');
+    return nl >= 0 ? `${a}\n${b.slice(nl + 1)}` : a + b;
+  }
+  return `${a}\n${b}`;
+}
+
 /** Read SSE from /api/agent-chat (stream:true). Falls back if the body is plain JSON. */
-async function readAgentReply(res: Response): Promise<string> {
+async function readAgentReply(res: Response): Promise<AgentReply> {
   const ctype = (res.headers.get('content-type') || '').toLowerCase();
   if (!ctype.includes('text/event-stream') || !res.body) {
-    const data = await res.json() as { reply?: string; error?: string };
+    const data = await res.json() as { reply?: string; error?: string; incomplete?: boolean };
     if (data.error && !data.reply) throw new Error(data.error);
-    return data.reply ?? '(empty response)';
+    return { reply: data.reply ?? '(empty response)', incomplete: !!data.incomplete };
   }
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   let reply = '';
+  let incomplete = false;
+  let timedOut = false;
   let streamError: string | null = null;
 
   while (true) {
@@ -334,16 +387,21 @@ async function readAgentReply(res: Response): Promise<string> {
           reply?: string;
           error?: string;
           partialReply?: string;
+          incomplete?: boolean;
+          timedOut?: boolean;
         };
         try { ev = JSON.parse(payload); } catch { continue; }
         if (ev.type === 'token' && typeof ev.text === 'string') {
           reply += ev.text;
         } else if (ev.type === 'done' && typeof ev.reply === 'string') {
           reply = ev.reply;
+          incomplete = !!ev.incomplete;
+          timedOut = !!ev.timedOut;
         } else if (ev.type === 'error') {
           streamError = ev.error || 'Stream error';
           if (typeof ev.partialReply === 'string' && ev.partialReply.trim()) {
             reply = ev.partialReply;
+            incomplete = true;
           }
         }
       }
@@ -351,7 +409,7 @@ async function readAgentReply(res: Response): Promise<string> {
   }
 
   if (streamError && !reply.trim()) throw new Error(streamError);
-  return reply || '(empty response)';
+  return { reply: reply || '(empty response)', incomplete, timedOut };
 }
 
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
@@ -427,19 +485,32 @@ function FileChangeBlock({ path, lang, content, isApplied }: {
 function CodeBlock({ lang, content, onRun }: {
   lang: string; content: string; onRun: () => void;
 }) {
+  const [copied, setCopied] = useState(false);
   return (
     <div style={{ margin: '8px 0', background: '#0b0b0b',
       border: '1px solid #2a2a2a', borderRadius: 6, overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '4px 10px', borderBottom: '1px solid #1e1e1e' }}>
+        padding: '4px 10px', borderBottom: '1px solid #1e1e1e', gap: 8 }}>
         <span style={{ fontSize: 10, color: '#666', textTransform: 'uppercase',
           letterSpacing: '0.1em' }}>{lang || 'code'}</span>
-        <button onClick={onRun} data-testid="run-code-btn"
-          style={{ background: '#1a2a0a', color: '#8fbf6f', border: '1px solid #2a4a1a',
-            borderRadius: 4, padding: '2px 10px', cursor: 'pointer',
-            fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
-          ▶ Run in Sandbox
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button type="button" data-testid="copy-code-btn"
+            onClick={async () => {
+              const ok = await copyText(content);
+              if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
+            }}
+            style={{ background: 'transparent', color: copied ? '#d4ff3f' : '#8fbf6f',
+              border: '1px solid #2a4a1a', borderRadius: 4, padding: '2px 10px',
+              cursor: 'pointer', fontFamily: 'inherit', fontSize: 11 }}>
+            {copied ? 'Copied' : 'Copy'}
+          </button>
+          <button onClick={onRun} data-testid="run-code-btn"
+            style={{ background: '#1a2a0a', color: '#8fbf6f', border: '1px solid #2a4a1a',
+              borderRadius: 4, padding: '2px 10px', cursor: 'pointer',
+              fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
+            ▶ Run in Sandbox
+          </button>
+        </div>
       </div>
       <pre style={{ margin: 0, padding: '8px 12px', overflowX: 'auto',
         fontSize: 12, lineHeight: 1.5, color: '#e8e8e8',
@@ -564,9 +635,14 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState<string | null>(null);
   const [uploads,  setUploads]  = useState<PendingUpload[]>([]);
+  const [speakOn,  setSpeakOn]  = useState(() => loadSpeakPref());
+  const [listening, setListening] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
+  const recognitionRef = useRef<ReturnType<typeof getSpeechRecognition>>(null);
+  const speakOnRef = useRef(speakOn);
+  speakOnRef.current = speakOn;
 
   // Keep latest props in a ref so a send started before auto-context finishes
   // still sees the updated file context afterward.
@@ -610,15 +686,14 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       prov: string,
       mod: string,
       key?: string,
-    ): Promise<string> => {
+    ): Promise<AgentReply> => {
       const chatEndpoint = `${API_URL}/agent-chat`;
       const chatHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
       if (sid) chatHeaders['X-Sandbox-Session'] = sid;
       if (key) chatHeaders['X-Provider-Key'] = key;
-      try {
-        const paidPw = sessionStorage.getItem('uncensored_paid_password_v1');
-        if (paidPw) chatHeaders['X-Paid-Password'] = paidPw;
-      } catch { /* ignore */ }
+      let paidPw = '';
+      try { paidPw = sessionStorage.getItem('uncensored_paid_password_v1') || ''; } catch { /* ignore */ }
+      if (paidPw) chatHeaders['X-Paid-Password'] = paidPw;
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
@@ -632,10 +707,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             provider: prov,
             model: mod,
             apiKey: key || undefined,
-            paidPassword: (() => {
-              try { return sessionStorage.getItem('uncensored_paid_password_v1') || undefined; }
-              catch { return undefined; }
-            })(),
+            paidPassword: paidPw || undefined,
             stream: true,
           }),
           signal: controller.signal,
@@ -655,6 +727,40 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
     };
 
     const sendStartedAt = Date.now();
+
+    const callAgentWithContinue = async (
+      history: Array<{ role: string; content: string | unknown }>,
+      systemPrompt: string,
+      sid: string | null,
+      prov: string,
+      mod: string,
+      key?: string,
+    ): Promise<string> => {
+      let result = await callAgent(history, systemPrompt, sid, prov, mod, key);
+      let reply = result.reply;
+      let continues = 0;
+      // One or two continuations when max_tokens / timeout cut mid File: block.
+      while (
+        continues < 2
+        && (result.incomplete || looksTruncatedReply(reply))
+        && (Date.now() - sendStartedAt) < NUDGE_BUDGET_MS * 2
+      ) {
+        continues += 1;
+        const contPrompt =
+          'Your previous reply was cut off mid-output. Continue EXACTLY from where you left off. '
+          + 'Finish any open File: / fenced blocks with COMPLETE file contents. '
+          + 'Do not restart files you already finished. Do not apologize.';
+        const contHistory = [
+          ...history,
+          { role: 'assistant', content: reply },
+          { role: 'user', content: contPrompt },
+        ];
+        result = await callAgent(contHistory, systemPrompt, sid, prov, mod, key);
+        reply = mergeContinuation(reply, result.reply);
+        if (!result.incomplete && !looksTruncatedReply(result.reply)) break;
+      }
+      return reply;
+    };
 
     try {
       // 2) Optional auto-context, hard-capped so a hung /search can't eat the send.
@@ -747,7 +853,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       // Always hit agent-chat — it accepts systemPrompt. /api/chat ignores it
       // and is the main-chat persona endpoint, not the agent.
-      let reply = await callAgent(history, systemPrompt, sid, prov, mod, key);
+      let reply = await callAgentWithContinue(history, systemPrompt, sid, prov, mod, key);
       let segs  = parseSegments(reply);
       let report = extractFileChangeReport(reply);
       let fc = report.accepted;
@@ -766,6 +872,9 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       setMessages(m => [...m, {
         id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
       }]);
+      if (speakOnRef.current && kind === 'user' && cleanForSpeech(reply)) {
+        void speakReply(reply);
+      }
 
       // LOUD: stubs never silently disappear — tell the user the sandbox blocked them.
       if (!suggestTurn && report.rejected.length > 0) {
@@ -798,7 +907,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           { role: 'assistant', content: reply },
           { role: 'user', content: nudgeText },
         ];
-        reply = await callAgent(nudgedHistory, systemPrompt, sid, prov, mod, key);
+        reply = await callAgentWithContinue(nudgedHistory, systemPrompt, sid, prov, mod, key);
         segs  = parseSegments(reply);
         report = extractFileChangeReport(reply);
         fc = report.accepted;
@@ -806,6 +915,9 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         setMessages(m => [...m, {
           id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
         }]);
+        if (speakOnRef.current && cleanForSpeech(reply)) {
+          void speakReply(reply);
+        }
         if (report.rejected.length > 0) {
           const warn = formatRejectedSandboxWarning(report.rejected);
           setMessages(m => [...m, { id: uid(), role: 'assistant', content: warn }]);
@@ -888,6 +1000,71 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
     if (next.length) setUploads(u => [...u, ...next]);
     if (fileInputRef.current) fileInputRef.current.value = '';
   }, []);
+
+  const stopMic = useCallback(() => {
+    setListening(false);
+    try { recognitionRef.current?.stop(); } catch { /* ignore */ }
+    recognitionRef.current = null;
+  }, []);
+
+  const toggleSpeak = useCallback(() => {
+    setSpeakOn(prev => {
+      const next = !prev;
+      saveSpeakPref(next);
+      if (!next) stopSpeech();
+      return next;
+    });
+  }, []);
+
+  const toggleMic = useCallback(() => {
+    if (listening) {
+      stopMic();
+      return;
+    }
+    stopSpeech();
+    const rec = getSpeechRecognition();
+    if (!rec) {
+      setError('Voice input needs Chrome or Safari with Speech Recognition.');
+      return;
+    }
+    recognitionRef.current = rec;
+    rec.continuous = false;
+    rec.interimResults = true;
+    rec.lang = navigator.language || 'en-US';
+    let finalText = '';
+    rec.onstart = () => setListening(true);
+    rec.onerror = () => stopMic();
+    rec.onend = () => {
+      setListening(false);
+      recognitionRef.current = null;
+      const said = finalText.trim();
+      if (!said) return;
+      if (speakOnRef.current && !sendingRef.current) {
+        setInput('');
+        void sendText(said, 'user');
+      } else {
+        setInput(prev => (prev ? `${prev} ${said}` : said));
+      }
+    };
+    rec.onresult = (event) => {
+      finalText = '';
+      for (let i = 0; i < event.results.length; i++) {
+        const r = event.results[i];
+        if (r?.isFinal) finalText += r[0]?.transcript || '';
+      }
+    };
+    try {
+      rec.start();
+    } catch (err: unknown) {
+      stopMic();
+      setError(err instanceof Error ? err.message : 'Could not start mic');
+    }
+  }, [listening, stopMic, sendText]);
+
+  useEffect(() => () => {
+    stopMic();
+    stopSpeech();
+  }, [stopMic]);
 
   return (
     <div data-testid="chat-pane" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
@@ -1039,6 +1216,25 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           style={{ background: '#151515', color: '#aaa', border: '1px solid #2a2a2a',
             borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
             fontFamily: 'inherit', fontSize: 12, alignSelf: 'flex-end' }}>📎</button>
+        <button type="button" data-testid="workspace-mic" title={listening ? 'Stop listening' : (speakOn ? 'Voice chat — tap to talk' : 'Dictate into the box')}
+          onClick={toggleMic}
+          disabled={loading}
+          style={{ background: listening ? '#3a1a1a' : '#151515',
+            color: listening ? '#ff8a8a' : '#aaa',
+            border: `1px solid ${listening ? '#6a2a2a' : '#2a2a2a'}`,
+            borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
+            fontFamily: 'inherit', fontSize: 12, alignSelf: 'flex-end' }}>
+          {listening ? '●' : '🎙'}
+        </button>
+        <button type="button" data-testid="workspace-speak" title={speakOn ? 'Voice replies on — tap to mute' : 'Voice replies off — tap to speak answers'}
+          onClick={toggleSpeak}
+          style={{ background: speakOn ? '#1a2a0a' : '#151515',
+            color: speakOn ? '#d4ff3f' : '#aaa',
+            border: `1px solid ${speakOn ? '#2a4a1a' : '#2a2a2a'}`,
+            borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
+            fontFamily: 'inherit', fontSize: 12, alignSelf: 'flex-end' }}>
+          {speakOn ? '🔊' : '🔇'}
+        </button>
         <textarea
           id="chat-input"
           data-testid="chat-input"
@@ -1048,7 +1244,9 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           onKeyDown={e => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); }
           }}
-          placeholder={loading ? 'Waiting for reply… (Esc stops)' : 'What should change?'}
+          placeholder={loading ? 'Waiting for reply…'
+            : listening ? (speakOn ? 'Listening — will send…' : 'Listening…')
+            : 'What should change?'}
           disabled={loading}
           style={{ flex: 1, background: '#111', color: '#f0f0f0',
             border: '1px solid #2a2a2a', borderRadius: 4,

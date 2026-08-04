@@ -130,7 +130,17 @@ async function fetchFileContent(
     if (!res.ok) return null;
     const data = await res.json() as { content?: string };
     if (data.content == null) return null;
-    if (data.content.length > MAX_AUTO_FULL_FILE_CHARS * 1.25) return null;
+    // Large sources (e.g. public/app.js) used to be skipped entirely — that left
+    // the agent with no implementation to read. Truncate instead of dropping.
+    if (data.content.length > MAX_AUTO_FULL_FILE_CHARS) {
+      const head = Math.floor(MAX_AUTO_FULL_FILE_CHARS * 0.7);
+      const tail = MAX_AUTO_FULL_FILE_CHARS - head - 80;
+      return (
+        data.content.slice(0, head) +
+        `\n\n/* … truncated ${data.content.length - MAX_AUTO_FULL_FILE_CHARS} chars for context budget … */\n\n` +
+        data.content.slice(-Math.max(tail, 0))
+      );
+    }
     return data.content;
   } catch {
     return null;
@@ -328,8 +338,15 @@ export function App() {
         const current = list.find(m => m.id === model);
         const locked = current && current.free === false && !unlocked;
         if ((!current || locked) && list.length) {
-          const pick = list.find(m => m.free !== false) || list.find(m => unlocked || m.free !== false) || list[0];
-          if (pick) setModel(pick.id);
+          const freeCoder = list.find(m => m.free !== false && /coder/i.test(`${m.id} ${m.name}`));
+          const freeAny = list.find(m => m.free !== false);
+          if (freeCoder || freeAny) {
+            setModel((freeCoder || freeAny)!.id);
+          } else if (provider !== 'openrouter') {
+            // No free models on this provider — bounce to OpenRouter free coder.
+            setProvider('openrouter');
+            setModel(DEFAULT_MODELS.openrouter || 'qwen/qwen3-coder:free');
+          }
         }
       })
       .finally(() => { if (!cancelled) setModelsLoading(false); });
@@ -522,9 +539,9 @@ export function App() {
       const toOpen = hits
         .filter(h => isSourcePath(h.path))
         .filter(h => {
-          // Unknown size (seed) — try load; search hits respect size when present.
+          // Unknown size (seed) — try load. Very huge files still load truncated.
           if (h.size == null || h.size <= 0) return true;
-          return h.size <= MAX_AUTO_FULL_FILE_CHARS;
+          return h.size <= MAX_AUTO_FULL_FILE_CHARS * 3;
         })
         .slice(0, maxFull);
 

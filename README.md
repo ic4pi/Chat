@@ -28,6 +28,9 @@ In **Vercel → Project → Settings → Environment Variables** add:
 | `ADMIN_USERNAME` | anything you want | Gate for `/admin` |
 | `ADMIN_PASSWORD` | anything you want | Gate for `/admin` (also unlocks paid models if `PAID_MODELS_PASSWORD` unset) |
 | `PAID_MODELS_PASSWORD` | *(optional)* separate paid-model unlock | If set, also unlocks paid LLMs. **Either this or `ADMIN_PASSWORD` works** — you do not need both. |
+| `VERCEL_TOKEN` | Vercel account token with Sandbox access | **Required for Workspace** (`/agent`) coding VMs |
+| `VERCEL_TEAM_ID` | Team id from Vercel dashboard | **Required for Workspace** |
+| `VERCEL_PROJECT_ID` | Project id from Vercel dashboard | **Required for Workspace** |
 | `SITE_URL` | *(optional)* your deployment URL | Sent as OpenRouter's `HTTP-Referer` |
 
 ### Media Studio keys (Vercel secrets)
