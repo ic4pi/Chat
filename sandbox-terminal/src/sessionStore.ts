@@ -1,8 +1,12 @@
 /**
  * Persist workspace sessions in the browser.
- * Multiple conversations keyed by chatId so Home can list them,
- * and a handoff from Chat replaces that chat’s workspace thread.
+ * Multiple conversations keyed by chatId so Home can list them.
+ * Re-opening from Chat refreshes the imported prefix but keeps
+ * workspace-only turns (and pending file changes) from the prior visit.
  */
+
+/** Keep enough turns for long coding sessions without blowing localStorage. */
+const MAX_STORED_MESSAGES = 100;
 
 const LEGACY_KEY = 'agent_session_v1';
 const STORE_KEY = 'agent_sessions_v2';
@@ -135,6 +139,22 @@ export function loadSession(id?: string | null): StoredSession | null {
   return list[0] || null;
 }
 
+/**
+ * Merge a Chat → Workspace handoff with any prior workspace thread for that chat.
+ * - Imported messages become the fresh "from chat" prefix.
+ * - Prior non-imported workspace turns are appended (not wiped).
+ * - Empty handoff never clears an existing session transcript.
+ */
+export function mergeHandoffMessages(
+  imported: StoredMessage[],
+  prev: StoredSession | null | undefined,
+): StoredMessage[] {
+  const prior = prev?.messages || [];
+  if (!imported.length) return prior.slice();
+  const workspaceOnly = prior.filter((m) => m.kind !== 'imported');
+  return [...imported, ...workspaceOnly];
+}
+
 export function saveSession(
   partial: Omit<StoredSession, 'v' | 'savedAt'> & { id: string; title: string },
 ): void {
@@ -145,7 +165,7 @@ export function saveSession(
     savedAt: Date.now(),
     ...partial,
     title: partial.title || prev?.title || 'Workspace',
-    messages: (partial.messages || []).slice(-40).map((m) => ({
+    messages: (partial.messages || []).slice(-MAX_STORED_MESSAGES).map((m) => ({
       id: m.id,
       role: m.role,
       content: m.content.length > 40_000

@@ -12,6 +12,7 @@
 // ============================================================================
 
 const STORAGE_KEY = 'uncensored_chat_state_v3';
+const STORAGE_BACKUP_KEY = 'uncensored_chat_state_v3_bak';
 
 // Personas now live on the server (see /api/public-config). This is only a
 // bootstrap fallback used before the first /api/public-config response
@@ -268,11 +269,26 @@ function effectiveChatsCollapsed() {
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return freshState();
+    if (!raw) {
+      // Primary missing — try last-good backup (quota / partial clear recovery).
+      const bak = localStorage.getItem(STORAGE_BACKUP_KEY);
+      if (bak) {
+        console.warn('Primary chat state missing; restoring from backup');
+        const parsed = JSON.parse(bak);
+        return migrate(parsed);
+      }
+      return freshState();
+    }
     const parsed = JSON.parse(raw);
     return migrate(parsed);
   } catch (err) {
-    console.warn('Failed to parse stored state, starting fresh:', err);
+    console.warn('Failed to parse stored state, trying backup:', err);
+    try {
+      const bak = localStorage.getItem(STORAGE_BACKUP_KEY);
+      if (bak) return migrate(JSON.parse(bak));
+    } catch (bakErr) {
+      console.warn('Backup also unreadable:', bakErr);
+    }
     return freshState();
   }
 }
@@ -321,9 +337,30 @@ function migrate(s) {
 
 function saveState() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    const json = JSON.stringify(state);
+    localStorage.setItem(STORAGE_KEY, json);
+    try {
+      localStorage.setItem(STORAGE_BACKUP_KEY, json);
+    } catch {
+      // Backup is best-effort; primary already saved.
+    }
   } catch (err) {
     console.warn('Failed to save state (localStorage full?):', err);
+    // Try a leaner payload: drop oldest chats' message tails so history isn't lost entirely.
+    try {
+      const lean = JSON.parse(JSON.stringify(state));
+      for (const c of lean.chats || []) {
+        if (Array.isArray(c.messages) && c.messages.length > 80) {
+          c.messages = c.messages.slice(-80);
+        }
+      }
+      const leanJson = JSON.stringify(lean);
+      localStorage.setItem(STORAGE_KEY, leanJson);
+      try { localStorage.setItem(STORAGE_BACKUP_KEY, leanJson); } catch { /* ignore */ }
+      console.warn('Saved truncated chat history after quota pressure');
+    } catch (err2) {
+      console.warn('Could not recover save after quota error:', err2);
+    }
   }
 }
 
@@ -2656,6 +2693,7 @@ function clearAll() {
     return;
   }
   localStorage.removeItem(STORAGE_KEY);
+  try { localStorage.removeItem(STORAGE_BACKUP_KEY); } catch { /* ignore */ }
   Object.assign(state, freshState());
   renderAll();
 }
