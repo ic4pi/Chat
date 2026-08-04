@@ -1164,9 +1164,9 @@ function sortModelsForProvider(provider, models) {
 let allModelsCatalog = [];
 let allModelsLoading = null;
 const modelPickerFilters = {
-  providers: new Set(PROVIDER_IDS),
-  categories: new Set(),
-  access: new Set(), // 'free' | 'paid'
+  providers: new Set(), // empty = all providers
+  categories: new Set(), // empty = all categories
+  access: new Set(), // empty = free+paid; else 'free' / 'paid'
 };
 
 async function loadAllModelsCatalog({ force = false } = {}) {
@@ -1192,26 +1192,126 @@ function modelSearchPrefixMatch(model, query) {
   const name = String(model.name || '').toLowerCase();
   const id = String(model.id || '').toLowerCase();
   const leaf = id.includes('/') ? id.slice(id.lastIndexOf('/') + 1) : id;
-  // Prefix match: first letter (or more) against name / id / leaf.
-  return name.startsWith(q) || id.startsWith(q) || leaf.startsWith(q);
+  const prov = String(model.provider || '').toLowerCase();
+  const provLabel = String(PROVIDER_LABELS[model.provider] || '').toLowerCase();
+  // Prefix on name, id, leaf, or any whitespace-separated name word.
+  if (name.startsWith(q) || id.startsWith(q) || leaf.startsWith(q)) return true;
+  if (prov.startsWith(q) || provLabel.startsWith(q)) return true;
+  return name.split(/[\s/_.-]+/).some((w) => w.startsWith(q));
 }
 
 function filterCatalogModels(models, { query = '', filters = modelPickerFilters } = {}) {
   return models.filter((m) => {
     if (!modelSearchPrefixMatch(m, query)) return false;
-    if (filters.providers.size && !filters.providers.has(m.provider)) return false;
-    if (filters.access.has('free') || filters.access.has('paid')) {
+
+    // Empty provider set = all. Non-empty = must match one selected.
+    if (filters.providers.size > 0 && !filters.providers.has(m.provider)) return false;
+
+    if (filters.access.size > 0) {
       const wantFree = filters.access.has('free');
       const wantPaid = filters.access.has('paid');
       if (m.free && !wantFree) return false;
       if (!m.free && !wantPaid) return false;
     }
-    if (filters.categories.size) {
-      const cats = m.categories || [];
+
+    if (filters.categories.size > 0) {
+      const cats = Array.isArray(m.categories) ? m.categories : [];
       if (![...filters.categories].some((c) => cats.includes(c))) return false;
     }
     return true;
   });
+}
+
+function activeFilterCount() {
+  return (
+    modelPickerFilters.providers.size +
+    modelPickerFilters.categories.size +
+    modelPickerFilters.access.size
+  );
+}
+
+function syncFilterChipUI() {
+  els.modelFilterProviders?.querySelectorAll('.filter-chip').forEach((btn) => {
+    const id = btn.dataset.provider;
+    btn.classList.toggle('active', modelPickerFilters.providers.has(id));
+  });
+  els.modelFilterCategories?.querySelectorAll('.filter-chip').forEach((btn) => {
+    const id = btn.dataset.category;
+    btn.classList.toggle('active', modelPickerFilters.categories.has(id));
+  });
+  els.modelFilterAccess?.querySelectorAll('.filter-chip').forEach((btn) => {
+    const id = btn.dataset.access;
+    btn.classList.toggle('active', modelPickerFilters.access.has(id));
+  });
+  if (els.modelFilterBtn) {
+    const n = activeFilterCount();
+    els.modelFilterBtn.textContent = n ? `Filter (${n})` : 'Filter';
+  }
+}
+
+function toggleFilterValue(set, value) {
+  if (set.has(value)) set.delete(value);
+  else set.add(value);
+}
+
+function initModelFilterChips() {
+  if (els.modelFilterProviders && !els.modelFilterProviders.childElementCount) {
+    for (const id of PROVIDER_IDS) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'filter-chip';
+      btn.dataset.provider = id;
+      btn.textContent = PROVIDER_LABELS[id] || id;
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleFilterValue(modelPickerFilters.providers, id);
+        syncFilterChipUI();
+        renderModelPickerList();
+      });
+      els.modelFilterProviders.appendChild(btn);
+    }
+  }
+  if (els.modelFilterCategories && !els.modelFilterCategories.childElementCount) {
+    for (const cat of MODEL_CATEGORIES) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'filter-chip';
+      btn.dataset.category = cat.id;
+      btn.textContent = cat.label;
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleFilterValue(modelPickerFilters.categories, cat.id);
+        syncFilterChipUI();
+        renderModelPickerList();
+      });
+      els.modelFilterCategories.appendChild(btn);
+    }
+  }
+  if (els.modelFilterAccess) {
+    els.modelFilterAccess.querySelectorAll('.filter-chip').forEach((btn) => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const access = btn.dataset.access;
+        toggleFilterValue(modelPickerFilters.access, access);
+        syncFilterChipUI();
+        renderModelPickerList();
+      });
+    });
+  }
+  syncFilterChipUI();
+}
+
+function clearModelFilters() {
+  modelPickerFilters.providers = new Set();
+  modelPickerFilters.categories = new Set();
+  modelPickerFilters.access = new Set();
+  syncFilterChipUI();
+  renderModelPickerList();
 }
 
 function syncHiddenModelSelects(catalog) {
@@ -1304,57 +1404,6 @@ function makeModelOption(m, { showId = true } = {}) {
   return opt;
 }
 
-function initModelFilterChips() {
-  if (els.modelFilterProviders && !els.modelFilterProviders.childElementCount) {
-    for (const id of PROVIDER_IDS) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'filter-chip active';
-      btn.dataset.provider = id;
-      btn.textContent = PROVIDER_LABELS[id] || id;
-      btn.addEventListener('click', () => {
-        if (modelPickerFilters.providers.has(id)) modelPickerFilters.providers.delete(id);
-        else modelPickerFilters.providers.add(id);
-        if (!modelPickerFilters.providers.size) {
-          PROVIDER_IDS.forEach((p) => modelPickerFilters.providers.add(p));
-        }
-        btn.classList.toggle('active', modelPickerFilters.providers.has(id));
-        renderModelPickerList();
-      });
-      els.modelFilterProviders.appendChild(btn);
-    }
-  }
-  if (els.modelFilterCategories && !els.modelFilterCategories.childElementCount) {
-    for (const cat of MODEL_CATEGORIES) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'filter-chip';
-      btn.dataset.category = cat.id;
-      btn.textContent = cat.label;
-      btn.addEventListener('click', () => {
-        if (modelPickerFilters.categories.has(cat.id)) modelPickerFilters.categories.delete(cat.id);
-        else modelPickerFilters.categories.add(cat.id);
-        btn.classList.toggle('active', modelPickerFilters.categories.has(cat.id));
-        renderModelPickerList();
-      });
-      els.modelFilterCategories.appendChild(btn);
-    }
-  }
-  if (els.modelFilterAccess) {
-    els.modelFilterAccess.querySelectorAll('.filter-chip').forEach((btn) => {
-      if (btn.dataset.bound) return;
-      btn.dataset.bound = '1';
-      btn.addEventListener('click', () => {
-        const access = btn.dataset.access;
-        if (modelPickerFilters.access.has(access)) modelPickerFilters.access.delete(access);
-        else modelPickerFilters.access.add(access);
-        btn.classList.toggle('active', modelPickerFilters.access.has(access));
-        renderModelPickerList();
-      });
-    });
-  }
-}
-
 function renderModelPickerList() {
   const host = els.modelPickerList;
   if (!host) return;
@@ -1369,6 +1418,8 @@ function renderModelPickerList() {
   if (els.modelPickerStatus) {
     const bits = [`${filtered.length} model${filtered.length === 1 ? '' : 's'}`];
     if (query) bits.push(`starting with “${query.trim()}”`);
+    const n = activeFilterCount();
+    if (n) bits.push(`${n} filter${n === 1 ? '' : 's'} on`);
     if (!unlocked) bits.push('paid grayed out');
     els.modelPickerStatus.textContent = bits.join(' · ');
   }
@@ -2757,20 +2808,25 @@ els.modelPickerModal?.addEventListener('click', (e) => {
   if (e.target === els.modelPickerModal) closeModelPicker();
 });
 els.modelSearchInput?.addEventListener('input', () => renderModelPickerList());
-els.modelFilterBtn?.addEventListener('click', () => {
+els.modelFilterBtn?.addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  initModelFilterChips();
   els.modelFilterPanel?.classList.toggle('hidden');
 });
-els.modelFilterDone?.addEventListener('click', () => {
+els.modelFilterDone?.addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
   els.modelFilterPanel?.classList.add('hidden');
 });
-els.modelFilterClear?.addEventListener('click', () => {
-  modelPickerFilters.providers = new Set(PROVIDER_IDS);
-  modelPickerFilters.categories = new Set();
-  modelPickerFilters.access = new Set();
-  els.modelFilterProviders?.querySelectorAll('.filter-chip').forEach((b) => b.classList.add('active'));
-  els.modelFilterCategories?.querySelectorAll('.filter-chip').forEach((b) => b.classList.remove('active'));
-  els.modelFilterAccess?.querySelectorAll('.filter-chip').forEach((b) => b.classList.remove('active'));
-  renderModelPickerList();
+els.modelFilterClear?.addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  clearModelFilters();
+});
+els.modelFilterPanel?.addEventListener('click', (e) => {
+  // Keep clicks inside the filter popup from closing anything else.
+  e.stopPropagation();
 });
 els.modelUnlockBtn?.addEventListener('click', openUnlockPaidModal);
 els.unlockPaidBtn?.addEventListener('click', () => {
