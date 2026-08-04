@@ -9,6 +9,8 @@
     { "source": "/media",  "destination": "/media/index.html" },
     { "source": "/media/", "destination": "/media/index.html" },
 
+    { "source": "/generate",                 "destination": "/api/generate" },
+
     { "source": "/api/run",                  "destination": "/api/sandbox/run" },
     { "source": "/api/run-code",             "destination": "/api/sandbox/run-code" },
     { "source": "/api/init-repo",            "destination": "/api/sandbox/init-repo" },
@@ -25,6 +27,7 @@
     "api/sandbox/[op].js":         { "maxDuration": 60 },
     "api/agent-chat.js":           { "maxDuration": 300 },
     "api/group-chat.js":           { "maxDuration": 60 },
+    "api/generate.js":             { "maxDuration": 300 },
     "api/tts.js":                  { "maxDuration": 60 },
     "api/media-generate.js":       { "maxDuration": 60 },
     "api/animate-sequence.js":     { "maxDuration": 60 }

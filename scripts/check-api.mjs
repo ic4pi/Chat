@@ -25,9 +25,11 @@ const SYNTAX_FILES = [
   'api/models.js',
   'api/agent-chat.js',
   'api/group-chat.js',
+  'api/generate.js',
   'api/admin-config.js',
   'api/sandbox/[op].js',
   'lib/sandbox-api/git-push.js',
+  'lib/code-slices.js',
 ];
 
 function fail(msg) {
@@ -70,6 +72,7 @@ const HANDLER_IMPORTS = [
   'api/chat.js',
   'api/models.js',
   'api/group-chat.js',
+  'api/generate.js',
   'api/admin-config.js',
 ];
 for (const rel of HANDLER_IMPORTS) {
@@ -173,5 +176,40 @@ for (const sym of ['PROVIDERS', 'FALLBACK_MODELS', 'resolveProvider']) {
   if (!modelsSrc.includes(sym)) fail(`api/models.js must reference ${sym}`);
 }
 ok('api/models.js imports');
+
+// 5) Code-slice catalog + fallback resolution for POST /api/generate.
+const slices = await import(pathToFileURL(path.join(root, 'lib/code-slices.js')).href);
+if (!Array.isArray(slices.CHUNK_LIST) || slices.CHUNK_LIST.length < 5) {
+  fail('CHUNK_LIST must list coding chunks');
+}
+for (const id of ['html', 'css', 'js', 'tests', 'a11y']) {
+  if (!slices.CHUNK_LIST.some((c) => c.id === id)) fail(`CHUNK_LIST missing ${id}`);
+}
+if (!slices.GENERAL_PURPOSE_MODEL?.provider || !slices.GENERAL_PURPOSE_MODEL?.model) {
+  fail('GENERAL_PURPOSE_MODEL must set provider + model');
+}
+const assigned = slices.resolveChunkModel(
+  { html: { provider: 'openrouter', model: 'openai/gpt-4o' } },
+  'html',
+);
+if (assigned.model !== 'openai/gpt-4o' || assigned.usedFallback) {
+  fail('resolveChunkModel should honor assigned models');
+}
+if (slices.modelBadgeLabel('openai/gpt-4o') !== 'GPT-4o') {
+  fail('modelBadgeLabel(gpt-4o) should be GPT-4o');
+}
+const missing = slices.resolveChunkModel({ html: { provider: '', model: '' } }, 'html');
+if (!missing.model || missing.source === 'assigned') {
+  fail('resolveChunkModel must fall back when assignment incomplete');
+}
+const unknown = slices.resolveChunkModel({}, 'not-a-real-chunk');
+if (unknown.model !== slices.GENERAL_PURPOSE_MODEL.model || !unknown.usedFallback) {
+  fail('unknown chunk must use GENERAL_PURPOSE_MODEL');
+}
+const genSrc = readFileSync(path.join(root, 'api/generate.js'), 'utf8');
+for (const sym of ['resolveChunkModel', 'chunkModels', 'GENERAL_PURPOSE_MODEL', 'selectChunks']) {
+  if (!genSrc.includes(sym)) fail(`api/generate.js must reference ${sym}`);
+}
+ok('code-slices + generate contract');
 
 console.log('check-api: all checks passed');

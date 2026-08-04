@@ -91,6 +91,8 @@ Chat history, active chat / persona / model selection, sidebar preferences, and 
 | `/api/chat` | Chat completions proxy | none (relies on API keys server-side) |
 | `/api/media-generate` | Image/video generation proxy | none (keys server-side) |
 | `/api/animate-sequence` | Frame-chain AI animation → video | none (keys server-side; prefer local CLI) |
+| `/api/group-chat` | Multi-persona round-table | none (keys server-side) |
+| `/api/generate` | Multi-LLM code-slice orchestrator (`POST /generate` rewrite) | none (keys server-side) |
 | `/api/models?provider=venice` | Live Venice model catalog | none |
 | `/api/public-config` | Persona IDs and names (no prompts) | none |
 | `/api/admin-config` | Full config incl. system prompts | HTTP Basic auth |

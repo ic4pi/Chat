@@ -17,7 +17,7 @@ import {
   MAX_AUDIT_FULL_FILES,
   type SearchHit,
 } from './contextBudget.js';
-import { looksLikeSuggestRequest, needsCodeContext } from './agentParse.js';
+import { extractFileChanges, looksLikeSuggestRequest, needsCodeContext } from './agentParse.js';
 import type { FileNode } from './types.js';
 import {
   loadSession,
@@ -45,6 +45,7 @@ import {
   paidUnlocked,
   savePaidPassword,
 } from './providerPrefs.js';
+import { ChunkModelPanel, type GenerateChunkResult } from './ChunkModelPanel.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
@@ -289,6 +290,7 @@ export function App() {
   const [keys,         setKeys]         = useState(() => loadProviderKeys());
   const [showKeys,     setShowKeys]     = useState(false);
   const [showRoles,    setShowRoles]    = useState(false);
+  const [showSlices,   setShowSlices]   = useState(false);
   const [roleModels,   setRoleModels]   = useState(() => loadRoleModels());
   // Auto-save ON — generated files go to the sandbox immediately so you can download/push.
   const [autoRun,      setAutoRun]      = useState(false);
@@ -604,6 +606,41 @@ export function App() {
     termRef.current?.runCode(code, lang);
   }, []);
 
+  /** Multi-slice Generate → parse File: blocks and feed the apply pipeline. */
+  const handleSliceGenerateComplete = useCallback((
+    results: GenerateChunkResult[],
+    combined: string,
+  ) => {
+    const summary = results
+      .map((r) => {
+        const badge = r.badge || r.model || '?';
+        return r.ok
+          ? `✓ ${r.label} · ${badge}${r.usedFallback ? ' (fallback)' : ''}`
+          : `✗ ${r.label} · ${r.error || 'failed'}`;
+      })
+      .join('\n');
+    const body = [
+      '## Slice generate',
+      summary,
+      combined ? `\n${combined}` : '',
+    ].filter(Boolean).join('\n');
+
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        id: `gen-${Date.now()}`,
+        role: 'assistant' as const,
+        content: body,
+      },
+    ]);
+
+    const changes = extractFileChanges(combined);
+    if (changes.length) {
+      void handleFileChanges(changes.map((c) => ({ path: c.path, content: c.content })));
+    }
+    setMobileTab('chat');
+  }, [handleFileChanges]);
+
   const handlePush = useCallback(async (token: string, message: string) => {
     if (!repo.sandboxId) {
       setPushError('Open a GitHub repo first (blank projects have no remote yet).');
@@ -777,12 +814,23 @@ export function App() {
             cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
           Keys
         </button>
-        <button type="button" onClick={() => setShowRoles(s => !s)}
+        <button type="button" onClick={() => { setShowRoles(s => !s); setShowSlices(false); }}
           title="Assign models per role"
           style={{ background: showRoles ? '#1a2a0a' : '#151515', color: '#888',
             border: '1px solid #2a2a2a', borderRadius: 4, padding: '3px 8px',
             cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
           Roles
+        </button>
+        <button type="button"
+          onClick={() => { setShowSlices(s => !s); setShowRoles(false); }}
+          title="Assign an LLM per coding chunk (HTML, CSS, JS…) and Generate"
+          aria-expanded={showSlices}
+          aria-controls="chunk-model-panel"
+          style={{ background: showSlices ? '#1a2a0a' : '#151515',
+            color: showSlices ? '#d4ff3f' : '#888',
+            border: '1px solid #2a2a2a', borderRadius: 4, padding: '3px 8px',
+            cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
+          Slices
         </button>
         {repo.sandboxId && (
           <span style={{ fontSize: 9, color: '#444', whiteSpace: 'nowrap',
@@ -836,6 +884,21 @@ export function App() {
           Current: write={roleModels.write.model.split('/').pop()} ·
           review={roleModels.review.model.split('/').pop()} ·
           plan={roleModels.plan.model.split('/').pop()}
+        </div>
+      )}
+      {showSlices && (
+        <div id="chunk-model-panel">
+          <ChunkModelPanel
+            contextText={
+              [
+                repo.repoUrl ? `Repo: ${repo.repoUrl}` : '',
+                repo.tree.length
+                  ? `File tree (sample): ${repo.tree.slice(0, 40).map((n) => n.path).join(', ')}`
+                  : '',
+              ].filter(Boolean).join('\n')
+            }
+            onComplete={handleSliceGenerateComplete}
+          />
         </div>
       )}
     </div>
