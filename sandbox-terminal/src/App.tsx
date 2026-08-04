@@ -42,6 +42,8 @@ import {
   fetchModels,
   DEFAULT_MODELS,
   FALLBACK_MODELS,
+  paidUnlocked,
+  savePaidPassword,
 } from './providerPrefs.js';
 
 const API_URL =
@@ -322,8 +324,12 @@ export function App() {
       .then(list => {
         if (cancelled) return;
         setModels(list);
-        if (!list.some(m => m.id === model) && list[0]) {
-          setModel(list[0].id);
+        const unlocked = paidUnlocked();
+        const current = list.find(m => m.id === model);
+        const locked = current && current.free === false && !unlocked;
+        if ((!current || locked) && list.length) {
+          const pick = list.find(m => m.free !== false) || list.find(m => unlocked || m.free !== false) || list[0];
+          if (pick) setModel(pick.id);
         }
       })
       .finally(() => { if (!cancelled) setModelsLoading(false); });
@@ -709,8 +715,44 @@ export function App() {
           style={{ background: '#111', color: '#e8e8e8', border: '1px solid #333',
             borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11,
             cursor: 'pointer', maxWidth: 220, flex: 1, minWidth: 0 }}>
-          {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          {models.map(m => {
+            const locked = m.free === false && !paidUnlocked();
+            return (
+              <option key={m.id} value={m.id} disabled={locked}>
+                {m.name}{m.free ? ' · free' : ' · paid'}{locked ? ' 🔒' : ''}
+              </option>
+            );
+          })}
         </select>
+        <button type="button"
+          onClick={() => {
+            if (paidUnlocked()) {
+              savePaidPassword('');
+              setModels(ms => [...ms]); // re-render disabled state
+              return;
+            }
+            const pw = window.prompt('Paid models password');
+            if (!pw) return;
+            fetch('/api/unlock-paid', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ password: pw }),
+            })
+              .then(async (res) => {
+                const data = await res.json().catch(() => ({})) as { error?: string };
+                if (!res.ok) throw new Error(data.error || 'Wrong password');
+                savePaidPassword(pw);
+                setModels(ms => [...ms]);
+              })
+              .catch((err: Error) => window.alert(err.message || 'Unlock failed'));
+          }}
+          title={paidUnlocked() ? 'Paid models unlocked — click to lock' : 'Unlock paid models'}
+          style={{ background: paidUnlocked() ? '#1a2a0a' : '#151515',
+            color: paidUnlocked() ? '#8fbf6f' : '#888',
+            border: '1px solid #2a2a2a', borderRadius: 4, padding: '3px 8px',
+            cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
+          {paidUnlocked() ? 'Paid ✓' : 'Unlock'}
+        </button>
         <button type="button" onClick={() => setShowKeys(s => !s)}
           title="Bring your own API keys"
           style={{ background: activeApiKey ? '#1a2a0a' : '#151515', color: activeApiKey ? '#8fbf6f' : '#888',

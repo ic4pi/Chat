@@ -81,20 +81,23 @@
             <option value="write">Write</option>
           </select>
         </label>
-        <label class="ctrl ctrl-inline">
-          <span>provider</span>
-          <select id="providerSelect">
-            <option value="venice">Venice</option>
-            <option value="openrouter">OpenRouter</option>
-            <option value="cerebras">Cerebras</option>
-            <option value="groq">Groq</option>
-            <option value="nvidia">NVIDIA</option>
-          </select>
-        </label>
-        <label class="ctrl ctrl-inline">
+        <!-- Hidden native selects kept for role/persona persistence sync -->
+        <select id="providerSelect" class="sr-only" tabindex="-1" aria-hidden="true">
+          <option value="venice">Venice</option>
+          <option value="openrouter">OpenRouter</option>
+          <option value="cerebras">Cerebras</option>
+          <option value="groq">Groq</option>
+          <option value="nvidia">NVIDIA</option>
+        </select>
+        <select id="modelSelect" class="sr-only" tabindex="-1" aria-hidden="true"></select>
+        <div class="ctrl ctrl-inline model-picker-wrap">
           <span>model</span>
-          <select id="modelSelect"></select>
-        </label>
+          <button id="modelPickerBtn" class="model-picker-btn" type="button" aria-haspopup="dialog" aria-expanded="false" title="Search and pick a model">
+            <span id="modelPickerLabel" class="model-picker-label">Loading…</span>
+            <span class="model-picker-caret">▾</span>
+          </button>
+        </div>
+        <button id="unlockPaidBtn" class="text-btn ctrl-btn" type="button" title="Unlock paid models">Unlock</button>
         <button id="keysBtn" class="text-btn ctrl-btn" type="button" title="Bring your own API keys">Keys</button>
       </div>
       <div id="personaBlurb" class="persona-blurb" hidden>
@@ -260,6 +263,67 @@
         <button id="startGroupBtn" class="text-btn primary" type="button">Start</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- Model picker: one list, free + paid, search + filters -->
+<div id="modelPickerModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modelPickerTitle">
+  <div class="modal model-picker-modal">
+    <div class="modal-header">
+      <h2 id="modelPickerTitle">Models</h2>
+      <div class="modal-header-actions">
+        <button id="modelFilterBtn" class="text-btn" type="button" title="Filter by provider &amp; category">Filter</button>
+        <button id="closeModelPicker" class="icon-btn" title="Close">×</button>
+      </div>
+    </div>
+    <div class="model-picker-toolbar">
+      <input id="modelSearchInput" type="search" autocomplete="off" spellcheck="false" placeholder="Search — type a letter…" />
+      <button id="modelUnlockBtn" class="text-btn" type="button">Unlock paid</button>
+    </div>
+    <div id="modelFilterPanel" class="model-filter-panel hidden" role="group" aria-label="Model filters">
+      <div class="model-filter-section">
+        <div class="model-filter-heading">Providers</div>
+        <div id="modelFilterProviders" class="model-filter-chips"></div>
+      </div>
+      <div class="model-filter-section">
+        <div class="model-filter-heading">Categories</div>
+        <div id="modelFilterCategories" class="model-filter-chips"></div>
+      </div>
+      <div class="model-filter-section">
+        <div class="model-filter-heading">Access</div>
+        <div id="modelFilterAccess" class="model-filter-chips">
+          <button type="button" class="filter-chip" data-access="free">Free</button>
+          <button type="button" class="filter-chip" data-access="paid">Paid</button>
+        </div>
+      </div>
+      <div class="model-filter-actions">
+        <button id="modelFilterClear" class="text-btn" type="button">Clear filters</button>
+        <button id="modelFilterDone" class="text-btn primary" type="button">Done</button>
+      </div>
+    </div>
+    <div id="modelPickerStatus" class="model-picker-status" role="status"></div>
+    <div id="modelPickerList" class="model-picker-list" role="listbox" aria-label="Models"></div>
+  </div>
+</div>
+
+<!-- Unlock paid models -->
+<div id="unlockPaidModal" class="modal-overlay hidden" role="dialog" aria-modal="true">
+  <div class="modal unlock-modal">
+    <div class="modal-header">
+      <h2>Unlock paid models</h2>
+      <button id="closeUnlockPaid" class="icon-btn" title="Close">×</button>
+    </div>
+    <p class="keys-hint">Free models work without a password. Paid models stay grayed out until you unlock.</p>
+    <form id="unlockPaidForm" class="unlock-form">
+      <label>
+        Password
+        <input id="unlockPaidInput" type="password" autocomplete="current-password" required />
+      </label>
+      <div id="unlockPaidError" class="unlock-error hidden" role="alert"></div>
+      <div class="tone-actions">
+        <button id="unlockPaidSubmit" class="text-btn primary" type="submit">Unlock</button>
+      </div>
+    </form>
   </div>
 </div>
 

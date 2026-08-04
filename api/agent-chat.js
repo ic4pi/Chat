@@ -14,6 +14,7 @@
 
 import { estimateTokens } from '../lib/context-filters.js';
 import { resolveProvider, withProviderChatExtras, formatProviderError } from '../lib/providers.js';
+import { requirePaidAccess } from '../lib/model-meta.js';
 
 /** Stay under Venice/Dolphin ~131k with room for the completion. */
 const MAX_INPUT_TOKENS = 100_000;
@@ -292,7 +293,7 @@ async function handleJson(res, resolved, model, messagesWithSystem, providerId, 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Sandbox-Session, X-Provider-Key');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Sandbox-Session, X-Provider-Key, X-Paid-Password');
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
 
@@ -306,6 +307,11 @@ export default async function handler(req, res) {
   } = req.body || {};
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'messages array required' });
+  }
+
+  const paidGate = requirePaidAccess(req, providerId || 'venice', model || '');
+  if (paidGate) {
+    return res.status(paidGate.status).json({ error: paidGate.error, paidLocked: true });
   }
 
   let resolved;

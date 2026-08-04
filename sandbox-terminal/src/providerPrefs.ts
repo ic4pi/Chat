@@ -28,6 +28,34 @@ export interface RoleModel {
 
 const KEYS_STORAGE = 'uncensored_provider_keys_v1';
 const ROLES_STORAGE = 'uncensored_role_models_v1';
+const PAID_PASS_STORAGE = 'uncensored_paid_password_v1';
+
+export function loadPaidPassword(): string {
+  try { return sessionStorage.getItem(PAID_PASS_STORAGE) || ''; } catch { return ''; }
+}
+
+export function savePaidPassword(pw: string): void {
+  try {
+    if (pw) sessionStorage.setItem(PAID_PASS_STORAGE, pw);
+    else sessionStorage.removeItem(PAID_PASS_STORAGE);
+  } catch { /* ignore */ }
+}
+
+export function paidUnlocked(): boolean {
+  return !!loadPaidPassword();
+}
+
+export function inferFree(providerId: string, model: { id?: string; name?: string; free?: boolean } = {}): boolean {
+  if (model.free === true) return true;
+  if (model.free === false) return false;
+  const id = String(model.id || '');
+  if (providerId === 'venice') return true;
+  if (providerId === 'openrouter') {
+    if (id === 'openrouter/free' || /:free$/i.test(id)) return true;
+    if (/\(free\)/i.test(String(model.name || ''))) return true;
+  }
+  return false;
+}
 
 const DEFAULT_ROLE_MODELS: Record<RoleId, RoleModel> = {
   write:  { provider: 'venice', model: 'venice-uncensored' },
@@ -132,6 +160,10 @@ export interface CatalogModel {
   name: string;
   description?: string;
   uncensored?: boolean;
+  free?: boolean;
+  paid?: boolean;
+  categories?: string[];
+  provider?: string;
 }
 
 const modelCache = new Map<string, CatalogModel[]>();
@@ -146,13 +178,20 @@ export async function fetchModels(providerId: string, apiKey?: string): Promise<
   try {
     const res = await fetch(`/api/models?provider=${encodeURIComponent(providerId)}`, { headers });
     const data = await res.json() as { models?: CatalogModel[] };
-    const models = Array.isArray(data.models) && data.models.length
+    const raw = Array.isArray(data.models) && data.models.length
       ? data.models
       : (FALLBACK_MODELS[providerId] || []);
+    const models = raw.map((m) => {
+      const free = inferFree(providerId, m);
+      return { ...m, provider: providerId, free, paid: !free };
+    });
     if (!apiKey) modelCache.set(cacheKey, models);
     return models;
   } catch {
-    return FALLBACK_MODELS[providerId] || [];
+    return (FALLBACK_MODELS[providerId] || []).map((m) => {
+      const free = inferFree(providerId, m);
+      return { ...m, provider: providerId, free, paid: !free };
+    });
   }
 }
 

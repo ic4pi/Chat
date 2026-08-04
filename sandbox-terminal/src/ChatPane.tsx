@@ -615,6 +615,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       const chatHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
       if (sid) chatHeaders['X-Sandbox-Session'] = sid;
       if (key) chatHeaders['X-Provider-Key'] = key;
+      try {
+        const paidPw = sessionStorage.getItem('uncensored_paid_password_v1');
+        if (paidPw) chatHeaders['X-Paid-Password'] = paidPw;
+      } catch { /* ignore */ }
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
@@ -628,6 +632,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             provider: prov,
             model: mod,
             apiKey: key || undefined,
+            paidPassword: (() => {
+              try { return sessionStorage.getItem('uncensored_paid_password_v1') || undefined; }
+              catch { return undefined; }
+            })(),
             stream: true,
           }),
           signal: controller.signal,

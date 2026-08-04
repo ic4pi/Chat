@@ -1030,6 +1030,198 @@ select:focus, input[type="text"]:focus, textarea:focus {
   font-family: inherit;
 }
 
+.model-picker-wrap { min-width: 160px; max-width: min(360px, 55vw); flex: 1 1 auto; }
+.model-picker-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  max-width: 360px;
+  padding: 6px 10px;
+  background: #111;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+.model-picker-btn:hover,
+.model-picker-btn[aria-expanded="true"] {
+  border-color: var(--accent-dim);
+}
+.model-picker-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-picker-caret { color: var(--muted-2); flex: 0 0 auto; }
+.model-picker-modal {
+  max-width: 640px;
+  width: min(640px, 96vw);
+  max-height: min(84vh, 720px);
+  display: flex;
+  flex-direction: column;
+}
+.model-picker-toolbar {
+  display: flex;
+  gap: 8px;
+  padding: 0 4px 10px;
+  align-items: center;
+}
+.model-picker-toolbar input[type="search"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: #111;
+  color: #e8e8e8;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 9px 12px;
+  font-size: 14px;
+  font-family: inherit;
+}
+.model-picker-status {
+  font-size: 11px;
+  color: var(--muted-2);
+  padding: 0 6px 8px;
+  min-height: 1.2em;
+}
+.model-picker-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  border-top: 1px solid var(--border);
+  min-height: 180px;
+  max-height: min(52vh, 420px);
+}
+.model-picker-group {
+  padding: 8px 6px 4px;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  position: sticky;
+  top: 0;
+  background: #0e0e0e;
+  z-index: 1;
+}
+.model-picker-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid #1a1a1a;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.model-picker-item:hover:not(:disabled) { background: rgba(212, 255, 63, 0.06); }
+.model-picker-item.active { background: rgba(212, 255, 63, 0.12); }
+.model-picker-item:disabled,
+.model-picker-item.locked {
+  opacity: 0.42;
+  cursor: not-allowed;
+  filter: grayscale(0.35);
+}
+.model-picker-item-name {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.model-picker-item-meta {
+  font-size: 11px;
+  color: var(--muted-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.model-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid #2a2a2a;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.model-tag.free { color: #9fdf6f; border-color: #2a4a1a; }
+.model-tag.paid { color: #e0a86a; border-color: #4a321a; }
+.model-tag.locked-tag { color: #c07070; border-color: #4a1f1f; }
+.model-filter-panel {
+  margin: 0 4px 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0c0c0c;
+}
+.model-filter-section + .model-filter-section { margin-top: 10px; }
+.model-filter-heading {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  margin-bottom: 6px;
+}
+.model-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.filter-chip {
+  background: #151515;
+  color: #bbb;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.filter-chip.active {
+  color: #0a0a0a;
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 700;
+}
+.model-filter-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+.unlock-modal { max-width: 420px; width: min(420px, 94vw); }
+.unlock-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.unlock-form input {
+  background: #111;
+  color: #e8e8e8;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-family: inherit;
+}
+.unlock-error {
+  margin-top: 8px;
+  color: #ff9b9b;
+  font-size: 12px;
+}
+
 .backdrop {
   position: fixed;
   inset: 0;

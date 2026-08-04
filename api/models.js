@@ -12,6 +12,7 @@ import {
   resolveProvider,
 } from '../lib/providers.js';
 import { resolveNvidiaModels, filterNvidiaChatModels } from '../lib/nvidia-models.js';
+import { enrichModels } from '../lib/model-meta.js';
 
 /** Exact Venice models the app exposes — nothing else. */
 const VENICE_ONLY = FALLBACK_MODELS.venice || [];
@@ -34,30 +35,37 @@ function normalizeVenice(data) {
   }
 
   // Preserve the user’s order; keep curated names even if catalog labels differ.
-  return VENICE_ONLY.map((curated) => {
-    const live = liveById.get(curated.id);
-    return {
-      id: curated.id,
-      name: curated.name,
-      description: live?.description || curated.description || '',
-      contextTokens: live?.contextTokens ?? null,
-      uncensored: true,
-    };
-  });
+  return enrichModels(
+    'venice',
+    VENICE_ONLY.map((curated) => {
+      const live = liveById.get(curated.id);
+      return {
+        id: curated.id,
+        name: curated.name,
+        description: live?.description || curated.description || '',
+        contextTokens: live?.contextTokens ?? null,
+        uncensored: true,
+      };
+    }),
+  );
 }
 
-function normalizeOpenAIStyle(data) {
+function normalizeOpenAIStyle(data, providerId = 'openrouter') {
   const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
-  return list
-    .map((m) => ({
-      id: m.id,
-      name: m.name || m.id,
-      description: m.description || '',
-      contextTokens: m.context_length || m.context_window || m.limits?.max_context_length || null,
-      uncensored: /uncensored|dolphin|hermes|heretic|abliterated/i.test(m.id || ''),
-      free: /:free$/i.test(m.id || '') || m.pricing?.prompt === '0' || m.pricing?.prompt === 0,
-    }))
-    .filter((m) => m.id);
+  return enrichModels(
+    providerId,
+    list
+      .map((m) => ({
+        id: m.id,
+        name: m.name || m.id,
+        description: m.description || '',
+        contextTokens: m.context_length || m.context_window || m.limits?.max_context_length || null,
+        uncensored: /uncensored|dolphin|hermes|heretic|abliterated/i.test(m.id || ''),
+        free: /:free$/i.test(m.id || '') || m.pricing?.prompt === '0' || m.pricing?.prompt === 0,
+        pricing: m.pricing,
+      }))
+      .filter((m) => m.id),
+  );
 }
 
 /** Groq models list includes whisper / TTS — keep text chat systems. */
@@ -108,13 +116,16 @@ export default async function handler(req, res) {
 
   const clientKey = req.headers['x-provider-key'];
   const { provider, apiKey, keySource } = resolveProvider(providerId, clientKey, { requireKey: false });
-  const curated = FALLBACK_MODELS[providerId] || [];
+  const curated = enrichModels(providerId, FALLBACK_MODELS[providerId] || []);
 
   // NVIDIA: NVCF-authorized ∩ integrate.api chat IDs — never invent endpoints/IDs.
   if (providerId === 'nvidia') {
     try {
       const resolved = await resolveNvidiaModels({ apiKey: apiKey || undefined });
-      const models = resolved.models.length ? resolved.models : filterNvidiaChatModels(curated);
+      const models = enrichModels(
+        'nvidia',
+        resolved.models.length ? resolved.models : filterNvidiaChatModels(curated),
+      );
       res.setHeader(
         'Cache-Control',
         keySource === 'client' || String(resolved.source || '').startsWith('nvcf')
@@ -133,7 +144,7 @@ export default async function handler(req, res) {
     } catch (err) {
       return res.status(200).json({
         provider: provider.label,
-        models: filterNvidiaChatModels(curated),
+        models: enrichModels('nvidia', filterNvidiaChatModels(curated)),
         source: 'fallback',
         keySource,
         chatUrl: provider.url,
@@ -168,7 +179,7 @@ export default async function handler(req, res) {
           extraHeaders: provider.extraHeaders(),
         });
         if (pub.ok) {
-          let models = normalizeOpenAIStyle(pub.data);
+          let models = normalizeOpenAIStyle(pub.data, providerId);
           models = models.sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
           return res.status(200).json({
             provider: provider.label,
@@ -191,12 +202,12 @@ export default async function handler(req, res) {
     if (providerId === 'venice') {
       models = normalizeVenice(data);
     } else if (providerId === 'openrouter') {
-      models = sortOpenRouter(normalizeOpenAIStyle(data));
+      models = sortOpenRouter(normalizeOpenAIStyle(data, 'openrouter'));
     } else if (providerId === 'groq') {
-      models = filterGroqChat(normalizeOpenAIStyle(data))
+      models = filterGroqChat(normalizeOpenAIStyle(data, 'groq'))
         .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
     } else {
-      models = normalizeOpenAIStyle(data)
+      models = normalizeOpenAIStyle(data, providerId)
         .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
     }
 

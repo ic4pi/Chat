@@ -18,6 +18,7 @@
 
 import { loadConfig } from '../lib/config.js';
 import { resolveProvider, withProviderChatExtras } from '../lib/providers.js';
+import { requirePaidAccess } from '../lib/model-meta.js';
 
 const UPSTREAM_TIMEOUT_MS = 90_000;
 const MAX_PERSONAS = 12;
@@ -173,7 +174,7 @@ async function refreshSummary(resolved, model, {
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Provider-Key');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Provider-Key, X-Paid-Password');
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -207,6 +208,22 @@ export default async function handler(req, res) {
     typeof clientKey === 'string'
       ? clientKey
       : (typeof headerKey === 'string' ? headerKey : '');
+
+  // Gate default + every per-persona paid model before starting the round.
+  const paidChecks = [
+    { provider: providerId || 'venice', model: model || 'venice-uncensored' },
+    ...Object.values(personaModels || {}).map((a) => ({
+      provider: a?.provider || providerId || 'venice',
+      model: a?.model || model || 'venice-uncensored',
+    })),
+  ];
+  for (const check of paidChecks) {
+    const paidGate = requirePaidAccess(req, check.provider, check.model);
+    if (paidGate) {
+      sseWrite(res, { type: 'error', error: paidGate.error, paidLocked: true });
+      return res.end();
+    }
+  }
 
   let defaultResolved;
   try {

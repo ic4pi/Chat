@@ -106,6 +106,69 @@ const PROVIDER_LABELS = {
 
 const KEYS_STORAGE = 'uncensored_provider_keys_v1';
 const ROLES_STORAGE = 'uncensored_role_models_v1';
+const PAID_PASS_STORAGE = 'uncensored_paid_password_v1';
+
+const MODEL_CATEGORIES = [
+  { id: 'general', label: 'General' },
+  { id: 'coder', label: 'Coders' },
+  { id: 'creative', label: 'Creative' },
+  { id: 'reasoning', label: 'Reasoning' },
+  { id: 'uncensored', label: 'Uncensored' },
+];
+
+function loadPaidPassword() {
+  try { return sessionStorage.getItem(PAID_PASS_STORAGE) || ''; } catch { return ''; }
+}
+function savePaidPassword(pw) {
+  try {
+    if (pw) sessionStorage.setItem(PAID_PASS_STORAGE, pw);
+    else sessionStorage.removeItem(PAID_PASS_STORAGE);
+  } catch { /* ignore */ }
+}
+function paidUnlocked() {
+  return !!loadPaidPassword();
+}
+function paidAuthHeaders(extra = {}) {
+  const headers = { ...extra };
+  const pw = loadPaidPassword();
+  if (pw) headers['X-Paid-Password'] = pw;
+  return headers;
+}
+
+/** Client-side free/paid + categories (mirrors lib/model-meta.js for fallbacks). */
+function inferFreeClient(providerId, model = {}) {
+  if (model.free === true) return true;
+  if (model.free === false) return false;
+  const id = String(model.id || '');
+  if (providerId === 'venice') return true;
+  if (providerId === 'openrouter') {
+    if (id === 'openrouter/free' || /:free$/i.test(id)) return true;
+    if (/\(free\)/i.test(String(model.name || ''))) return true;
+    return false;
+  }
+  return false;
+}
+function inferCategoriesClient(providerId, model = {}) {
+  if (Array.isArray(model.categories) && model.categories.length) return model.categories;
+  const hay = `${model.id || ''} ${model.name || ''} ${model.description || ''}`.toLowerCase();
+  const cats = new Set();
+  if (/coder|codestral|starcoder|codellama|deepseek-coder|qwen3?-coder|devstral|programming|\bcode\b/.test(hay)) cats.add('coder');
+  if (/role.?play|mythomax|creative|story|novel|fiction|hermes|mytho/.test(hay)) cats.add('creative');
+  if (/uncensored|dolphin|heretic|abliterated|venice-uncensored/.test(hay)) cats.add('uncensored');
+  if (/reason|thinking|\br1\b|qwq|orchestrat/.test(hay)) cats.add('reasoning');
+  if (cats.size === 0 || /instruct|chat|general|assistant|versatile|turbo|flash|nano|scout/.test(hay)) cats.add('general');
+  return [...cats];
+}
+function enrichModelClient(providerId, model = {}) {
+  const free = inferFreeClient(providerId, model);
+  return {
+    ...model,
+    provider: providerId,
+    free,
+    paid: !free,
+    categories: inferCategoriesClient(providerId, model),
+  };
+}
 
 const DEFAULT_ROLE_MODELS = {
   write:  { provider: 'venice', model: 'venice-uncensored' },
@@ -357,6 +420,27 @@ const els = {
   chatTitle: $('chatTitle'),
   providerSelect: $('providerSelect'),
   modelSelect: $('modelSelect'),
+  modelPickerBtn: $('modelPickerBtn'),
+  modelPickerLabel: $('modelPickerLabel'),
+  modelPickerModal: $('modelPickerModal'),
+  closeModelPicker: $('closeModelPicker'),
+  modelSearchInput: $('modelSearchInput'),
+  modelFilterBtn: $('modelFilterBtn'),
+  modelFilterPanel: $('modelFilterPanel'),
+  modelFilterProviders: $('modelFilterProviders'),
+  modelFilterCategories: $('modelFilterCategories'),
+  modelFilterAccess: $('modelFilterAccess'),
+  modelFilterClear: $('modelFilterClear'),
+  modelFilterDone: $('modelFilterDone'),
+  modelPickerStatus: $('modelPickerStatus'),
+  modelPickerList: $('modelPickerList'),
+  modelUnlockBtn: $('modelUnlockBtn'),
+  unlockPaidBtn: $('unlockPaidBtn'),
+  unlockPaidModal: $('unlockPaidModal'),
+  closeUnlockPaid: $('closeUnlockPaid'),
+  unlockPaidForm: $('unlockPaidForm'),
+  unlockPaidInput: $('unlockPaidInput'),
+  unlockPaidError: $('unlockPaidError'),
   roleSelect: $('roleSelect'),
   personaSelect: $('personaSelect'),
   voiceSelect: $('voiceSelect'),
@@ -1043,7 +1127,7 @@ function renderPersonaSelect() {
 
 async function loadProviderModels(provider) {
   const key = (providerKeys[provider] || '').trim();
-  const cacheKey = `prov-v6:${provider}:${key ? 'byok' : 'env'}`;
+  const cacheKey = `prov-v7:${provider}:${key ? 'byok' : 'env'}`;
   if (modelsCache[cacheKey] && !key) return modelsCache[cacheKey];
 
   const headers = { Accept: 'application/json' };
@@ -1057,39 +1141,89 @@ async function loadProviderModels(provider) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to load models');
     const models = Array.isArray(data.models) ? data.models.filter((m) => m && m.id) : [];
-    const list = models.length ? models : (PROVIDER_FALLBACKS[provider] || []);
+    const raw = models.length ? models : (PROVIDER_FALLBACKS[provider] || []);
+    const list = raw.map((m) => enrichModelClient(provider, m));
     if (!key) modelsCache[cacheKey] = list;
     return list;
   } catch (err) {
     console.warn(`Could not fetch ${provider} model list:`, err);
-    return PROVIDER_FALLBACKS[provider] || [];
+    return (PROVIDER_FALLBACKS[provider] || []).map((m) => enrichModelClient(provider, m));
   }
 }
 
 function sortModelsForProvider(provider, models) {
   return models.slice().sort((a, b) => {
-    if (provider === 'openrouter') {
-      if (!!a.free !== !!b.free) return a.free ? -1 : 1;
-    }
+    if (!!a.free !== !!b.free) return a.free ? -1 : 1;
     if (!!a.uncensored !== !!b.uncensored) return a.uncensored ? -1 : 1;
     return (a.name || a.id).localeCompare(b.name || b.id);
   });
 }
 
-async function renderModelSelect() {
-  els.modelSelect.innerHTML = '';
+/** Full catalog across providers (one complete list). */
+let allModelsCatalog = [];
+let allModelsLoading = null;
+const modelPickerFilters = {
+  providers: new Set(PROVIDER_IDS),
+  categories: new Set(),
+  access: new Set(), // 'free' | 'paid'
+};
+
+async function loadAllModelsCatalog({ force = false } = {}) {
+  if (!force && allModelsCatalog.length) return allModelsCatalog;
+  if (!force && allModelsLoading) return allModelsLoading;
+  allModelsLoading = (async () => {
+    const lists = await Promise.all(
+      PROVIDER_IDS.map(async (pid) => {
+        const models = await loadProviderModels(pid);
+        return models.map((m) => enrichModelClient(pid, m));
+      }),
+    );
+    allModelsCatalog = lists.flat();
+    allModelsLoading = null;
+    return allModelsCatalog;
+  })();
+  return allModelsLoading;
+}
+
+function modelSearchPrefixMatch(model, query) {
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return true;
+  const name = String(model.name || '').toLowerCase();
+  const id = String(model.id || '').toLowerCase();
+  const leaf = id.includes('/') ? id.slice(id.lastIndexOf('/') + 1) : id;
+  // Prefix match: first letter (or more) against name / id / leaf.
+  return name.startsWith(q) || id.startsWith(q) || leaf.startsWith(q);
+}
+
+function filterCatalogModels(models, { query = '', filters = modelPickerFilters } = {}) {
+  return models.filter((m) => {
+    if (!modelSearchPrefixMatch(m, query)) return false;
+    if (filters.providers.size && !filters.providers.has(m.provider)) return false;
+    if (filters.access.has('free') || filters.access.has('paid')) {
+      const wantFree = filters.access.has('free');
+      const wantPaid = filters.access.has('paid');
+      if (m.free && !wantFree) return false;
+      if (!m.free && !wantPaid) return false;
+    }
+    if (filters.categories.size) {
+      const cats = m.categories || [];
+      if (![...filters.categories].some((c) => cats.includes(c))) return false;
+    }
+    return true;
+  });
+}
+
+function syncHiddenModelSelects(catalog) {
+  if (!els.modelSelect || !els.providerSelect) return;
   const provider = state.activeProvider;
-  const models = await loadProviderModels(provider);
-  const sorted = sortModelsForProvider(provider, models);
-
-  const grp = document.createElement('optgroup');
-  grp.label = `${PROVIDER_LABELS[provider] || provider}${provider === 'venice' ? ' — all uncensored' : ''}`;
-  const showId = provider === 'openrouter';
-  for (const m of sorted) grp.appendChild(makeModelOption(m, { showId }));
-  els.modelSelect.appendChild(grp);
-
-  const available = Array.from(els.modelSelect.options).map((o) => o.value);
-  // Migrate retired OpenRouter :free Dolphin slug → current non-free id.
+  const forProvider = sortModelsForProvider(
+    provider,
+    (catalog || []).filter((m) => m.provider === provider),
+  );
+  els.providerSelect.value = provider;
+  els.modelSelect.innerHTML = '';
+  for (const m of forProvider) els.modelSelect.appendChild(makeModelOption(m, { showId: provider === 'openrouter' }));
+  const available = forProvider.map((m) => m.id);
   if (
     provider === 'openrouter' &&
     state.activeModel === 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free' &&
@@ -1099,12 +1233,53 @@ async function renderModelSelect() {
     saveState();
   }
   if (!available.includes(state.activeModel)) {
-    state.activeModel = available.includes(DEFAULT_MODELS[provider])
+    // Prefer a free model when current is missing / locked.
+    const freeFirst = forProvider.find((m) => m.free) || forProvider[0];
+    const fallbackId = available.includes(DEFAULT_MODELS[provider])
       ? DEFAULT_MODELS[provider]
-      : (available[0] || DEFAULT_MODELS[provider] || state.activeModel);
+      : (freeFirst?.id || DEFAULT_MODELS[provider] || state.activeModel);
+    state.activeModel = fallbackId;
     saveState();
   }
+  // If active is paid and locked, bounce to a free model.
+  const activeMeta = forProvider.find((m) => m.id === state.activeModel);
+  if (activeMeta && !activeMeta.free && !paidUnlocked()) {
+    const free = forProvider.find((m) => m.free);
+    if (free) {
+      state.activeModel = free.id;
+      saveState();
+    }
+  }
   els.modelSelect.value = state.activeModel;
+}
+
+function updateModelPickerLabel() {
+  if (!els.modelPickerLabel) return;
+  const prov = PROVIDER_LABELS[state.activeProvider] || state.activeProvider;
+  const meta = allModelsCatalog.find(
+    (m) => m.provider === state.activeProvider && m.id === state.activeModel,
+  );
+  const name = meta?.name || state.activeModel || 'Select model';
+  const lock = meta && !meta.free && !paidUnlocked() ? ' · locked' : '';
+  els.modelPickerLabel.textContent = `${prov} · ${name}${lock}`;
+  if (els.unlockPaidBtn) {
+    els.unlockPaidBtn.textContent = paidUnlocked() ? 'Paid ✓' : 'Unlock';
+    els.unlockPaidBtn.title = paidUnlocked()
+      ? 'Paid models unlocked this session'
+      : 'Unlock paid models with password';
+  }
+  if (els.modelUnlockBtn) {
+    els.modelUnlockBtn.textContent = paidUnlocked() ? 'Paid unlocked' : 'Unlock paid';
+  }
+}
+
+async function renderModelSelect() {
+  const catalog = await loadAllModelsCatalog();
+  syncHiddenModelSelects(catalog);
+  updateModelPickerLabel();
+  if (els.modelPickerModal && !els.modelPickerModal.classList.contains('hidden')) {
+    renderModelPickerList();
+  }
 }
 
 function makeModelOption(m, { showId = true } = {}) {
@@ -1112,16 +1287,208 @@ function makeModelOption(m, { showId = true } = {}) {
   opt.value = m.id;
   const tags = [];
   if (m.free) tags.push('free');
+  else tags.push('paid');
   if (m.traits && m.traits.length) tags.push(...m.traits);
   const tagStr = tags.length ? `  [${tags.join(', ')}]` : '';
-  // Venice list is short + curated — show clean names only.
-  // OpenRouter keeps id so slugs stay obvious.
   const label = (!showId || !m.name || m.name === m.id)
     ? (m.name || m.id)
     : `${m.name} · ${m.id}`;
   opt.textContent = `${label}${tagStr}`;
   opt.title = m.description || m.id;
+  const locked = !m.free && !paidUnlocked();
+  if (locked) {
+    opt.disabled = true;
+    opt.textContent = `${label}${tagStr} 🔒`;
+  }
   return opt;
+}
+
+function initModelFilterChips() {
+  if (els.modelFilterProviders && !els.modelFilterProviders.childElementCount) {
+    for (const id of PROVIDER_IDS) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'filter-chip active';
+      btn.dataset.provider = id;
+      btn.textContent = PROVIDER_LABELS[id] || id;
+      btn.addEventListener('click', () => {
+        if (modelPickerFilters.providers.has(id)) modelPickerFilters.providers.delete(id);
+        else modelPickerFilters.providers.add(id);
+        if (!modelPickerFilters.providers.size) {
+          PROVIDER_IDS.forEach((p) => modelPickerFilters.providers.add(p));
+        }
+        btn.classList.toggle('active', modelPickerFilters.providers.has(id));
+        renderModelPickerList();
+      });
+      els.modelFilterProviders.appendChild(btn);
+    }
+  }
+  if (els.modelFilterCategories && !els.modelFilterCategories.childElementCount) {
+    for (const cat of MODEL_CATEGORIES) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'filter-chip';
+      btn.dataset.category = cat.id;
+      btn.textContent = cat.label;
+      btn.addEventListener('click', () => {
+        if (modelPickerFilters.categories.has(cat.id)) modelPickerFilters.categories.delete(cat.id);
+        else modelPickerFilters.categories.add(cat.id);
+        btn.classList.toggle('active', modelPickerFilters.categories.has(cat.id));
+        renderModelPickerList();
+      });
+      els.modelFilterCategories.appendChild(btn);
+    }
+  }
+  if (els.modelFilterAccess) {
+    els.modelFilterAccess.querySelectorAll('.filter-chip').forEach((btn) => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', () => {
+        const access = btn.dataset.access;
+        if (modelPickerFilters.access.has(access)) modelPickerFilters.access.delete(access);
+        else modelPickerFilters.access.add(access);
+        btn.classList.toggle('active', modelPickerFilters.access.has(access));
+        renderModelPickerList();
+      });
+    });
+  }
+}
+
+function renderModelPickerList() {
+  const host = els.modelPickerList;
+  if (!host) return;
+  host.innerHTML = '';
+  const query = els.modelSearchInput?.value || '';
+  const filtered = filterCatalogModels(allModelsCatalog, { query });
+  // Sort: free first, then name — one complete list with section headers.
+  const free = filtered.filter((m) => m.free).sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+  const paid = filtered.filter((m) => !m.free).sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+  const unlocked = paidUnlocked();
+
+  if (els.modelPickerStatus) {
+    const bits = [`${filtered.length} model${filtered.length === 1 ? '' : 's'}`];
+    if (query) bits.push(`starting with “${query.trim()}”`);
+    if (!unlocked) bits.push('paid grayed out');
+    els.modelPickerStatus.textContent = bits.join(' · ');
+  }
+
+  const appendGroup = (title, items) => {
+    if (!items.length) return;
+    const h = document.createElement('div');
+    h.className = 'model-picker-group';
+    h.textContent = title;
+    host.appendChild(h);
+    for (const m of items) {
+      const locked = !m.free && !unlocked;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'model-picker-item' +
+        (locked ? ' locked' : '') +
+        (m.provider === state.activeProvider && m.id === state.activeModel ? ' active' : '');
+      btn.disabled = locked;
+      btn.setAttribute('role', 'option');
+      btn.dataset.provider = m.provider;
+      btn.dataset.model = m.id;
+
+      const name = document.createElement('div');
+      name.className = 'model-picker-item-name';
+      name.textContent = m.name || m.id;
+      btn.appendChild(name);
+
+      const meta = document.createElement('div');
+      meta.className = 'model-picker-item-meta';
+      const prov = document.createElement('span');
+      prov.textContent = PROVIDER_LABELS[m.provider] || m.provider;
+      meta.appendChild(prov);
+      const tier = document.createElement('span');
+      tier.className = 'model-tag ' + (m.free ? 'free' : 'paid');
+      tier.textContent = m.free ? 'free' : 'paid';
+      meta.appendChild(tier);
+      if (locked) {
+        const lock = document.createElement('span');
+        lock.className = 'model-tag locked-tag';
+        lock.textContent = 'locked';
+        meta.appendChild(lock);
+      }
+      for (const c of (m.categories || []).slice(0, 3)) {
+        const tag = document.createElement('span');
+        tag.className = 'model-tag';
+        tag.textContent = c;
+        meta.appendChild(tag);
+      }
+      if (m.provider === 'openrouter' && m.name && m.name !== m.id) {
+        const idTag = document.createElement('span');
+        idTag.textContent = m.id;
+        meta.appendChild(idTag);
+      }
+      btn.appendChild(meta);
+
+      if (!locked) {
+        btn.addEventListener('click', () => selectModelFromPicker(m.provider, m.id));
+      } else {
+        btn.addEventListener('click', () => openUnlockPaidModal());
+      }
+      host.appendChild(btn);
+    }
+  };
+
+  if (!filtered.length) {
+    const empty = document.createElement('div');
+    empty.className = 'model-picker-status';
+    empty.style.padding = '16px';
+    empty.textContent = query
+      ? `No models begin with “${query.trim()}”.`
+      : 'No models match these filters.';
+    host.appendChild(empty);
+    return;
+  }
+
+  appendGroup(`Free · ${free.length}`, free);
+  appendGroup(`Paid · ${paid.length}${unlocked ? '' : ' (unlock required)'}`, paid);
+}
+
+function selectModelFromPicker(provider, modelId) {
+  state.activeProvider = provider;
+  state.activeModel = modelId;
+  syncHiddenModelSelects(allModelsCatalog);
+  const chat = activeChat();
+  if (chat) { chat.model = modelId; chat.provider = provider; }
+  if (state.activeRole && roleModels[state.activeRole]) {
+    roleModels[state.activeRole] = { provider, model: modelId };
+    saveRoleModels(roleModels);
+  }
+  saveState();
+  updateModelPickerLabel();
+  closeModelPicker();
+}
+
+async function openModelPicker() {
+  if (!els.modelPickerModal) return;
+  initModelFilterChips();
+  els.modelPickerModal.classList.remove('hidden');
+  els.modelPickerBtn?.setAttribute('aria-expanded', 'true');
+  if (els.modelPickerStatus) els.modelPickerStatus.textContent = 'Loading catalogs…';
+  await loadAllModelsCatalog();
+  syncHiddenModelSelects(allModelsCatalog);
+  updateModelPickerLabel();
+  renderModelPickerList();
+  setTimeout(() => els.modelSearchInput?.focus(), 40);
+}
+function closeModelPicker() {
+  els.modelPickerModal?.classList.add('hidden');
+  els.modelFilterPanel?.classList.add('hidden');
+  els.modelPickerBtn?.setAttribute('aria-expanded', 'false');
+}
+
+function openUnlockPaidModal() {
+  if (!els.unlockPaidModal) return;
+  els.unlockPaidError?.classList.add('hidden');
+  if (els.unlockPaidInput) els.unlockPaidInput.value = '';
+  els.unlockPaidModal.classList.remove('hidden');
+  setTimeout(() => els.unlockPaidInput?.focus(), 40);
+}
+function closeUnlockPaidModal() {
+  els.unlockPaidModal?.classList.add('hidden');
 }
 
 // ---------------------------------------------------------------------------
@@ -1190,7 +1557,7 @@ async function callChat(provider, model, messages, personaId) {
   activeChatAbort = controller;
   const timer = setTimeout(() => controller.abort(), timeoutFor(provider, model));
   const apiKey = (providerKeys[provider] || '').trim();
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = paidAuthHeaders({ 'Content-Type': 'application/json' });
   if (apiKey) headers['X-Provider-Key'] = apiKey;
   try {
     const res = await fetch('/api/chat', {
@@ -1203,6 +1570,7 @@ async function callChat(provider, model, messages, personaId) {
         personaId,
         role: state.activeRole || 'plan',
         apiKey: apiKey || undefined,
+        paidPassword: loadPaidPassword() || undefined,
         stream: false,
       }),
       signal: controller.signal,
@@ -1231,7 +1599,7 @@ async function callChatStream(provider, model, messages, personaId, onEvent) {
   activeChatAbort = controller;
   const timer = setTimeout(() => controller.abort(), timeoutFor(provider, model));
   const apiKey = (providerKeys[provider] || '').trim();
-  const headers = { 'Content-Type': 'application/json', Accept: 'text/event-stream' };
+  const headers = paidAuthHeaders({ 'Content-Type': 'application/json', Accept: 'text/event-stream' });
   if (apiKey) headers['X-Provider-Key'] = apiKey;
 
   try {
@@ -1245,6 +1613,7 @@ async function callChatStream(provider, model, messages, personaId, onEvent) {
         personaId,
         role: state.activeRole || 'plan',
         apiKey: apiKey || undefined,
+        paidPassword: loadPaidPassword() || undefined,
         stream: true,
       }),
       signal: controller.signal,
@@ -1761,7 +2130,7 @@ async function callGroupStream(chat, apiMessages, onEvent) {
   activeChatAbort = controller;
   const timer = setTimeout(() => controller.abort(), Math.max(timeoutFor(state.activeProvider, state.activeModel), 240_000));
   const apiKey = (providerKeys[state.activeProvider] || '').trim();
-  const headers = { 'Content-Type': 'application/json', Accept: 'text/event-stream' };
+  const headers = paidAuthHeaders({ 'Content-Type': 'application/json', Accept: 'text/event-stream' });
   if (apiKey) headers['X-Provider-Key'] = apiKey;
   const personaModelMap = {
     ...personaModels,
@@ -1780,6 +2149,7 @@ async function callGroupStream(chat, apiMessages, onEvent) {
         model: state.activeModel,
         provider: state.activeProvider,
         apiKey: apiKey || undefined,
+        paidPassword: loadPaidPassword() || undefined,
         personaModels: personaModelMap,
         providerKeys,
       }),
@@ -2346,10 +2716,9 @@ els.chatTitle.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); els.chatTitle.blur(); }
 });
 
-els.providerSelect.addEventListener('change', async () => {
+els.providerSelect?.addEventListener('change', async () => {
   state.activeProvider = els.providerSelect.value;
   state.activeModel = DEFAULT_MODELS[state.activeProvider] || state.activeModel;
-  // Persist assignment for the active role
   if (state.activeRole && roleModels[state.activeRole]) {
     roleModels[state.activeRole] = {
       provider: state.activeProvider,
@@ -2361,7 +2730,9 @@ els.providerSelect.addEventListener('change', async () => {
   await renderModelSelect();
   saveState();
 });
-els.modelSelect.addEventListener('change', () => {
+els.modelSelect?.addEventListener('change', () => {
+  // Prefer picker; keep hidden select as a sync fallback.
+  if (!els.modelSelect.value) return;
   state.activeModel = els.modelSelect.value;
   const chat = activeChat();
   if (chat) { chat.model = state.activeModel; chat.provider = state.activeProvider; }
@@ -2373,6 +2744,86 @@ els.modelSelect.addEventListener('change', () => {
     saveRoleModels(roleModels);
   }
   saveState();
+  updateModelPickerLabel();
+});
+
+els.modelPickerBtn?.addEventListener('click', () => {
+  if (els.modelPickerModal?.classList.contains('hidden')) openModelPicker();
+  else closeModelPicker();
+});
+els.closeModelPicker?.addEventListener('click', closeModelPicker);
+els.modelPickerModal?.addEventListener('click', (e) => {
+  if (e.target === els.modelPickerModal) closeModelPicker();
+});
+els.modelSearchInput?.addEventListener('input', () => renderModelPickerList());
+els.modelFilterBtn?.addEventListener('click', () => {
+  els.modelFilterPanel?.classList.toggle('hidden');
+});
+els.modelFilterDone?.addEventListener('click', () => {
+  els.modelFilterPanel?.classList.add('hidden');
+});
+els.modelFilterClear?.addEventListener('click', () => {
+  modelPickerFilters.providers = new Set(PROVIDER_IDS);
+  modelPickerFilters.categories = new Set();
+  modelPickerFilters.access = new Set();
+  els.modelFilterProviders?.querySelectorAll('.filter-chip').forEach((b) => b.classList.add('active'));
+  els.modelFilterCategories?.querySelectorAll('.filter-chip').forEach((b) => b.classList.remove('active'));
+  els.modelFilterAccess?.querySelectorAll('.filter-chip').forEach((b) => b.classList.remove('active'));
+  renderModelPickerList();
+});
+els.modelUnlockBtn?.addEventListener('click', openUnlockPaidModal);
+els.unlockPaidBtn?.addEventListener('click', () => {
+  if (paidUnlocked()) {
+    // Toggle lock off
+    savePaidPassword('');
+    updateModelPickerLabel();
+    renderModelSelect();
+    if (els.modelPickerModal && !els.modelPickerModal.classList.contains('hidden')) {
+      renderModelPickerList();
+    }
+    return;
+  }
+  openUnlockPaidModal();
+});
+els.closeUnlockPaid?.addEventListener('click', closeUnlockPaidModal);
+els.unlockPaidModal?.addEventListener('click', (e) => {
+  if (e.target === els.unlockPaidModal) closeUnlockPaidModal();
+});
+els.unlockPaidForm?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const password = (els.unlockPaidInput?.value || '').trim();
+  if (!password) return;
+  if (els.unlockPaidError) {
+    els.unlockPaidError.classList.add('hidden');
+    els.unlockPaidError.textContent = '';
+  }
+  try {
+    const res = await fetch('/api/unlock-paid', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (els.unlockPaidError) {
+        els.unlockPaidError.textContent = data.error || 'Wrong password.';
+        els.unlockPaidError.classList.remove('hidden');
+      }
+      return;
+    }
+    savePaidPassword(password);
+    closeUnlockPaidModal();
+    updateModelPickerLabel();
+    await renderModelSelect();
+    if (els.modelPickerModal && !els.modelPickerModal.classList.contains('hidden')) {
+      renderModelPickerList();
+    }
+  } catch (err) {
+    if (els.unlockPaidError) {
+      els.unlockPaidError.textContent = err.message || 'Network error';
+      els.unlockPaidError.classList.remove('hidden');
+    }
+  }
 });
 els.personaSelect?.addEventListener('change', () => {
   applyPersona(els.personaSelect.value);
@@ -3406,8 +3857,10 @@ function openKeysModal() {
       saveProviderKeys(providerKeys);
       // Bust cache so next model fetch uses the new key
       Object.keys(modelsCache).forEach((k) => {
-        if (k.startsWith(`${id}:`)) delete modelsCache[k];
+        if (k.includes(`:${id}:`)) delete modelsCache[k];
       });
+      allModelsCatalog = [];
+      allModelsLoading = null;
     });
     label.appendChild(input);
     els.keysForm.appendChild(label);
@@ -3451,6 +3904,8 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeAppMenu();
     if (!els.artifactModal.classList.contains('hidden')) closeArtifactModal();
+    if (els.unlockPaidModal && !els.unlockPaidModal.classList.contains('hidden')) closeUnlockPaidModal();
+    else if (els.modelPickerModal && !els.modelPickerModal.classList.contains('hidden')) closeModelPicker();
     if (els.keysModal && !els.keysModal.classList.contains('hidden')) closeKeysModal();
     if (els.toneModal && !els.toneModal.classList.contains('hidden')) closeToneModal();
   }

@@ -7,6 +7,7 @@
 
 import { loadConfig } from '../lib/config.js';
 import { resolveProvider, withProviderChatExtras, formatProviderError } from '../lib/providers.js';
+import { requirePaidAccess } from '../lib/model-meta.js';
 
 const UPSTREAM_TIMEOUT_MS = 110_000;
 /**
@@ -265,7 +266,7 @@ async function handleJson(req, res, resolved, model, messagesWithSystem, provide
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Provider-Key');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Provider-Key, X-Paid-Password');
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -285,6 +286,11 @@ export default async function handler(req, res) {
   }
   if (!model || typeof model !== 'string') {
     return res.status(400).json({ error: 'model is required' });
+  }
+
+  const paidGate = requirePaidAccess(req, providerId || 'openrouter', model);
+  if (paidGate) {
+    return res.status(paidGate.status).json({ error: paidGate.error, paidLocked: true });
   }
 
   let resolved;
