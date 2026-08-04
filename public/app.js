@@ -93,7 +93,7 @@ const PROVIDER_FALLBACKS = {
 
 const DEFAULT_MODELS = {
   venice: 'venice-uncensored-1-2',
-  openrouter: 'cognitivecomputations/dolphin-mistral-24b-venice-edition',
+  openrouter: 'openrouter/free',
   cerebras: 'gpt-oss-120b',
   groq: 'llama-3.3-70b-versatile',
   nvidia: 'meta/llama-3.3-70b-instruct',
@@ -140,7 +140,8 @@ function inferFreeClient(providerId, model = {}) {
   if (model.free === true) return true;
   if (model.free === false) return false;
   const id = String(model.id || '');
-  if (providerId === 'venice') return true;
+  // Venice burns credits — never treat as free.
+  if (providerId === 'venice') return false;
   if (providerId === 'openrouter') {
     if (id === 'openrouter/free' || /:free$/i.test(id)) return true;
     if (/\(free\)/i.test(String(model.name || ''))) return true;
@@ -171,9 +172,9 @@ function enrichModelClient(providerId, model = {}) {
 }
 
 const DEFAULT_ROLE_MODELS = {
-  write:  { provider: 'venice', model: 'venice-uncensored' },
-  review: { provider: 'venice', model: 'olafangensan-glm-4.7-flash-heretic' },
-  plan:   { provider: 'venice', model: 'qwen3-235b-a22b-instruct-2507' },
+  write:  { provider: 'openrouter', model: 'openrouter/free' },
+  review: { provider: 'openrouter', model: 'openrouter/free' },
+  plan:   { provider: 'openrouter', model: 'openrouter/free' },
 };
 
 function loadProviderKeys() {
@@ -237,10 +238,10 @@ function freshState() {
     activeChatId: null,
     activePersonaId: 'nexus',
     activeRole: 'plan',
-    // Venice by default — OpenRouter free-tier models routinely hang / 429,
-    // which on iOS shows up as a multi-minute "thinking…" then "Load failed".
-    activeProvider: 'venice',
-    activeModel: 'venice-uncensored-1-2',
+    // OpenRouter free router by default — Venice and other paid catalogs
+    // need the paid-models unlock password.
+    activeProvider: 'openrouter',
+    activeModel: 'openrouter/free',
     chatsCollapsed: false,
     chatsCollapsedExplicit: false,
     artifactsCollapsed: true,

@@ -49,7 +49,8 @@ export function inferFree(providerId: string, model: { id?: string; name?: strin
   if (model.free === true) return true;
   if (model.free === false) return false;
   const id = String(model.id || '');
-  if (providerId === 'venice') return true;
+  // Venice burns credits — never free.
+  if (providerId === 'venice') return false;
   if (providerId === 'openrouter') {
     if (id === 'openrouter/free' || /:free$/i.test(id)) return true;
     if (/\(free\)/i.test(String(model.name || ''))) return true;
@@ -58,9 +59,9 @@ export function inferFree(providerId: string, model: { id?: string; name?: strin
 }
 
 const DEFAULT_ROLE_MODELS: Record<RoleId, RoleModel> = {
-  write:  { provider: 'venice', model: 'venice-uncensored' },
-  review: { provider: 'venice', model: 'olafangensan-glm-4.7-flash-heretic' },
-  plan:   { provider: 'venice', model: 'qwen3-235b-a22b-instruct-2507' },
+  write:  { provider: 'openrouter', model: 'openrouter/free' },
+  review: { provider: 'openrouter', model: 'openrouter/free' },
+  plan:   { provider: 'openrouter', model: 'openrouter/free' },
 };
 
 export const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string }>> = {
@@ -104,7 +105,7 @@ export const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string }>
 
 export const DEFAULT_MODELS: Record<string, string> = {
   venice: 'venice-uncensored',
-  openrouter: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
+  openrouter: 'openrouter/free',
   cerebras: 'llama-3.3-70b',
   groq: 'llama-3.3-70b-versatile',
   nvidia: 'meta/llama-3.3-70b-instruct',

@@ -243,8 +243,8 @@ export function App() {
         savedAt: Date.now(),
         repoUrl: prev?.repoUrl ?? null,
         sandboxId: prev?.sandboxId ?? null,
-        provider: handoff.provider || prev?.provider || roleModelsRef.current.write.provider || 'venice',
-        model: handoff.model || prev?.model || roleModelsRef.current.write.model || 'venice-uncensored',
+        provider: handoff.provider || prev?.provider || roleModelsRef.current.write.provider || 'openrouter',
+        model: handoff.model || prev?.model || roleModelsRef.current.write.model || 'openrouter/free',
         autoApplyOn: prev?.autoApplyOn ?? true,
         messages: imported.length ? imported : [],
         pendingChanges: imported.length ? [] : (prev?.pendingChanges || []),
@@ -267,10 +267,10 @@ export function App() {
     return r === 'write' || r === 'review' || r === 'plan' ? r : 'write';
   });
   const [provider,     setProvider]     = useState(
-    restored.current?.provider ?? roleModelsRef.current.write.provider ?? 'venice',
+    restored.current?.provider ?? roleModelsRef.current.write.provider ?? 'openrouter',
   );
   const [model,        setModel]        = useState(
-    restored.current?.model ?? roleModelsRef.current.write.model ?? 'venice-uncensored',
+    restored.current?.model ?? roleModelsRef.current.write.model ?? 'openrouter/free',
   );
   const [models,       setModels]       = useState<CatalogModel[]>(
     () => FALLBACK_MODELS[provider] || FALLBACK_MODELS.venice,
@@ -380,8 +380,8 @@ export function App() {
     setActiveSessionId(s.id);
     setSessionId(s.id);
     setSessionTitle(s.title || 'Workspace');
-    setProvider(s.provider || 'venice');
-    setModel(s.model || 'venice-uncensored');
+    setProvider(s.provider || 'openrouter');
+    setModel(s.model || 'openrouter/free');
     setAutoApplyOn(s.autoApplyOn ?? true);
     setChatMessages((s.messages || []).map(x => ({
       id: x.id,
