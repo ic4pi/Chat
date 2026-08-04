@@ -7,8 +7,8 @@
 //   - Persona manager (hidden screen) opened via ⚙ button or ⌘/Ctrl+K.
 //   - Artifact extraction: any fenced code block > 3 lines in a bot reply is
 //     surfaced in the right sidebar with copy + download.
-//   - No silent model swapping — errors from the selected provider/model are
-//     shown verbatim.
+//   - No silent model swapping for paid/uncensored picks. OpenRouter free-tier
+//     rate-limits rotate to another free model with a visible notice.
 // ============================================================================
 
 const STORAGE_KEY = 'uncensored_chat_state_v3';
@@ -35,17 +35,20 @@ const PROVIDER_FALLBACKS = {
     { id: 'venice-uncensored', name: 'Dolphin Mistral 24B Venice Edition' },
   ],
   openrouter: [
+    { id: 'openrouter/free', name: 'Free Models Router' },
+    { id: 'cohere/north-mini-code:free', name: 'North Mini Code (free)' },
+    { id: 'google/gemma-4-31b-it:free', name: 'Gemma 4 31B (free)' },
+    { id: 'google/gemma-4-26b-a4b-it:free', name: 'Gemma 4 26B A4B (free)' },
+    { id: 'openai/gpt-oss-20b:free', name: 'GPT OSS 20B (free)' },
+    { id: 'nvidia/nemotron-3-nano-30b-a3b:free', name: 'Nemotron 3 Nano 30B (free)' },
+    { id: 'nvidia/nemotron-3-super-120b-a12b:free', name: 'Nemotron 3 Super 120B (free)' },
+    { id: 'inclusionai/ling-3.0-flash:free', name: 'Ling 3.0 Flash (free)' },
+    { id: 'poolside/laguna-s-2.1:free', name: 'Laguna S 2.1 (free)' },
     { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition', name: 'Venice Uncensored (Dolphin 24B)' },
     { id: 'nousresearch/hermes-4-405b', name: 'Hermes 4 405B' },
     { id: 'nousresearch/hermes-4-70b', name: 'Hermes 4 70B' },
     { id: 'nousresearch/hermes-3-llama-3.1-405b', name: 'Hermes 3 405B' },
     { id: 'gryphe/mythomax-l2-13b', name: 'MythoMax 13B' },
-    { id: 'openrouter/free', name: 'Free Models Router' },
-    { id: 'google/gemma-4-31b-it:free', name: 'Gemma 4 31B (free)' },
-    { id: 'google/gemma-4-26b-a4b-it:free', name: 'Gemma 4 26B A4B (free)' },
-    { id: 'openai/gpt-oss-20b:free', name: 'GPT OSS 20B (free)' },
-    { id: 'nvidia/nemotron-3-nano-30b-a3b:free', name: 'Nemotron 3 Nano 30B (free)' },
-    { id: 'qwen/qwen3-coder:free', name: 'Qwen3 Coder (free)' },
     { id: 'meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 70B Instruct' },
     { id: 'qwen/qwen3-coder', name: 'Qwen3 Coder' },
     { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5' },
@@ -94,11 +97,41 @@ const PROVIDER_FALLBACKS = {
 
 const DEFAULT_MODELS = {
   venice: 'venice-uncensored-1-2',
-  openrouter: 'qwen/qwen3-coder:free',
+  openrouter: 'openrouter/free',
   cerebras: 'gpt-oss-120b',
   groq: 'llama-3.3-70b-versatile',
   nvidia: 'meta/llama-3.3-70b-instruct',
 };
+
+/** Preferred free OpenRouter chat models when the primary is busy or retired. */
+const OPENROUTER_FREE_FAILOVER = [
+  'openrouter/free',
+  'cohere/north-mini-code:free',
+  'google/gemma-4-31b-it:free',
+  'openai/gpt-oss-20b:free',
+  'nvidia/nemotron-3-nano-30b-a3b:free',
+  'inclusionai/ling-3.0-flash:free',
+  'google/gemma-4-26b-a4b-it:free',
+  'nvidia/nemotron-3-super-120b-a12b:free',
+  'poolside/laguna-s-2.1:free',
+];
+
+/** Retired OpenRouter free slugs → live replacements. */
+const OPENROUTER_RETIRED_MODELS = {
+  'qwen/qwen3-coder:free': 'cohere/north-mini-code:free',
+  'meta-llama/llama-3.3-70b-instruct:free': 'google/gemma-4-31b-it:free',
+  'nousresearch/hermes-3-llama-3.1-405b:free': 'openrouter/free',
+  'cognitivecomputations/dolphin-mistral-24b-venice-edition:free':
+    'cognitivecomputations/dolphin-mistral-24b-venice-edition',
+  'cognitivecomputations/dolphin3.0-mistral-24b:free':
+    'cognitivecomputations/dolphin-mistral-24b-venice-edition',
+  'mistralai/mistral-7b-instruct:free': 'openai/gpt-oss-20b:free',
+  'huggingfaceh4/zephyr-7b-beta:free': 'openai/gpt-oss-20b:free',
+};
+
+const FAILED_MODELS_STORAGE = 'uncensored_failed_models_v1';
+const FAILED_MODEL_COOLDOWN_MS = 15 * 60 * 1000;
+const OPENROUTER_FREE_FAILOVER_MAX = 3;
 
 const PROVIDER_IDS = ['venice', 'openrouter', 'cerebras', 'groq', 'nvidia'];
 const PROVIDER_LABELS = {
@@ -173,7 +206,7 @@ function enrichModelClient(providerId, model = {}) {
 }
 
 const DEFAULT_ROLE_MODELS = {
-  write:  { provider: 'openrouter', model: 'qwen/qwen3-coder:free' },
+  write:  { provider: 'openrouter', model: 'cohere/north-mini-code:free' },
   review: { provider: 'openrouter', model: 'openrouter/free' },
   plan:   { provider: 'openrouter', model: 'openrouter/free' },
 };
@@ -192,10 +225,17 @@ function loadRoleModels() {
     const raw = localStorage.getItem(ROLES_STORAGE);
     if (!raw) return { ...DEFAULT_ROLE_MODELS };
     const parsed = JSON.parse(raw) || {};
+    const merge = (role, fallback) => {
+      const next = { ...fallback, ...(parsed[role] || {}) };
+      if (next.provider === 'openrouter') {
+        next.model = migrateRetiredOpenRouterModel(next.model);
+      }
+      return next;
+    };
     return {
-      write:  { ...DEFAULT_ROLE_MODELS.write,  ...parsed.write },
-      review: { ...DEFAULT_ROLE_MODELS.review, ...parsed.review },
-      plan:   { ...DEFAULT_ROLE_MODELS.plan,   ...parsed.plan },
+      write:  merge('write', DEFAULT_ROLE_MODELS.write),
+      review: merge('review', DEFAULT_ROLE_MODELS.review),
+      plan:   merge('plan', DEFAULT_ROLE_MODELS.plan),
     };
   } catch {
     return { ...DEFAULT_ROLE_MODELS };
@@ -210,17 +250,89 @@ let roleModels = loadRoleModels();
 let pendingUploads = []; // { kind, name, content }
 const modelsCache = {};
 
+function loadFailedModels() {
+  try {
+    const raw = sessionStorage.getItem(FAILED_MODELS_STORAGE);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveFailedModels(map) {
+  try { sessionStorage.setItem(FAILED_MODELS_STORAGE, JSON.stringify(map || {})); } catch { /* ignore */ }
+}
+
+function markModelFailed(provider, modelId) {
+  if (!provider || !modelId) return;
+  const map = loadFailedModels();
+  map[`${provider}::${modelId}`] = Date.now();
+  // Drop stale entries while writing.
+  const cutoff = Date.now() - FAILED_MODEL_COOLDOWN_MS;
+  for (const [k, ts] of Object.entries(map)) {
+    if (!ts || ts < cutoff) delete map[k];
+  }
+  saveFailedModels(map);
+}
+
+function isModelCoolingDown(provider, modelId) {
+  const ts = loadFailedModels()[`${provider}::${modelId}`];
+  if (!ts) return false;
+  return Date.now() - ts < FAILED_MODEL_COOLDOWN_MS;
+}
+
+function migrateRetiredOpenRouterModel(modelId) {
+  const id = String(modelId || '');
+  return OPENROUTER_RETIRED_MODELS[id] || id;
+}
+
+function isOpenRouterFreeId(modelId) {
+  const id = String(modelId || '');
+  return id === 'openrouter/free' || /:free$/i.test(id);
+}
+
+/**
+ * Build an ordered list of OpenRouter free chat models to try after a
+ * transient failure (429 / provider returned error / no endpoints).
+ * Prefer curated healthy IDs, then anything free in the live catalog.
+ */
+function buildOpenRouterFailoverQueue(failedModelId) {
+  const failed = new Set([String(failedModelId || '')]);
+  const live = (allModelsCatalog || [])
+    .filter((m) => m.provider === 'openrouter' && m.free && m.id && !failed.has(m.id))
+    .filter((m) => !/lyria|content-safety|prompt-guard|safeguard/i.test(m.id))
+    .map((m) => m.id);
+
+  const preferred = OPENROUTER_FREE_FAILOVER.filter(
+    (id) => !failed.has(id) && !isModelCoolingDown('openrouter', id),
+  );
+  const fromLive = live.filter(
+    (id) => !preferred.includes(id) && !isModelCoolingDown('openrouter', id),
+  );
+  // Cooling-down models last (better than giving up entirely).
+  const cooled = [...OPENROUTER_FREE_FAILOVER, ...live].filter(
+    (id) => !failed.has(id) && isModelCoolingDown('openrouter', id),
+  );
+
+  const seen = new Set();
+  const out = [];
+  for (const id of [...preferred, ...fromLive, ...cooled]) {
+    if (!id || seen.has(id) || failed.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= OPENROUTER_FREE_FAILOVER_MAX) break;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 
-// Explicit per-model fallback map. Only these very specific (provider, model)
-// pairs get a silent retry, and only to the paired (provider, model). We do
-// NOT fall back to a random OpenRouter free-tier model — that was the
-// original bug that produced censored refusals from models the user never
-// picked. The only fallback we do is same-spirit: the free OpenRouter mirror
-// of Venice's Dolphin-Mistral falls back to Venice's own copy, funded by the
-// user's Venice credits.
+// Explicit per-model fallback map (same-spirit only). Plus OpenRouter free-tier
+// rotation on 429 / provider errors — always with a visible info notice so the
+// user knows which model actually answered.
 const MODEL_FALLBACKS = {
   openrouter: {
     // Legacy :free slug retired by OpenRouter — bounce to Venice’s copy.
@@ -239,10 +351,9 @@ function freshState() {
     activeChatId: null,
     activePersonaId: 'nexus',
     activeRole: 'plan',
-    // OpenRouter free router by default — Venice and other paid catalogs
-    // need the paid-models unlock password.
+    // Free Models Router by default — load-balances live :free endpoints.
     activeProvider: 'openrouter',
-    activeModel: 'qwen/qwen3-coder:free',
+    activeModel: 'openrouter/free',
     chatsCollapsed: false,
     chatsCollapsedExplicit: false,
     artifactsCollapsed: true,
@@ -315,6 +426,10 @@ function migrate(s) {
       merged.chatsCollapsed = false;
     }
     merged.sidebarDesktopHealV1 = true;
+  }
+  // Migrate retired OpenRouter free slugs (e.g. qwen3-coder:free → north-mini-code).
+  if (merged.activeProvider === 'openrouter') {
+    merged.activeModel = migrateRetiredOpenRouterModel(merged.activeModel);
   }
   return merged;
 }
@@ -1129,7 +1244,7 @@ function renderPersonaSelect() {
 
 async function loadProviderModels(provider) {
   const key = (providerKeys[provider] || '').trim();
-  const cacheKey = `prov-v7:${provider}:${key ? 'byok' : 'env'}`;
+  const cacheKey = `prov-v8:${provider}:${key ? 'byok' : 'env'}`;
   if (modelsCache[cacheKey] && !key) return modelsCache[cacheKey];
 
   const headers = { Accept: 'application/json' };
@@ -1341,6 +1456,13 @@ function syncHiddenModelSelects(catalog) {
   els.modelSelect.innerHTML = '';
   for (const m of forProvider) els.modelSelect.appendChild(makeModelOption(m, { showId: provider === 'openrouter' }));
   const available = forProvider.map((m) => m.id);
+  if (provider === 'openrouter') {
+    const migrated = migrateRetiredOpenRouterModel(state.activeModel);
+    if (migrated !== state.activeModel && available.includes(migrated)) {
+      state.activeModel = migrated;
+      saveState();
+    }
+  }
   if (
     provider === 'openrouter' &&
     state.activeModel === 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free' &&
@@ -1351,7 +1473,10 @@ function syncHiddenModelSelects(catalog) {
   }
   if (!available.includes(state.activeModel)) {
     // Prefer a free model when current is missing / locked.
-    const freeFirst = forProvider.find((m) => m.free) || forProvider[0];
+    const freePreferred = OPENROUTER_FREE_FAILOVER
+      .map((id) => forProvider.find((m) => m.id === id))
+      .find(Boolean);
+    const freeFirst = freePreferred || forProvider.find((m) => m.free) || forProvider[0];
     const fallbackId = available.includes(DEFAULT_MODELS[provider])
       ? DEFAULT_MODELS[provider]
       : (freeFirst?.id || DEFAULT_MODELS[provider] || state.activeModel);
@@ -1991,7 +2116,12 @@ async function sendMessage(text) {
       let usedFallback = null;
 
       if (!attempt.ok && shouldFallback(attempt)) {
-        const fb = MODEL_FALLBACKS?.[state.activeProvider]?.[state.activeModel];
+        const primaryProvider = state.activeProvider;
+        const primaryModel = state.activeModel;
+        markModelFailed(primaryProvider, primaryModel);
+
+        // 1) Explicit same-spirit map (e.g. retired Dolphin-Venice → Venice).
+        const fb = MODEL_FALLBACKS?.[primaryProvider]?.[primaryModel];
         if (fb) {
           updateStatusClock('Retrying on backup model');
           streamBuf = '';
@@ -2014,6 +2144,59 @@ async function sendMessage(text) {
           if (retry.ok) {
             attempt = retry;
             usedFallback = fb;
+          }
+        }
+
+        // 2) OpenRouter free rotation — live catalog + preferred free IDs.
+        //    Visible notice; stick the working free model for the next turn.
+        if (!attempt.ok && primaryProvider === 'openrouter') {
+          if (!allModelsCatalog.length) {
+            try { await loadAllModelsCatalog(); } catch { /* use curated list */ }
+          }
+          const queue = buildOpenRouterFailoverQueue(primaryModel);
+          for (const altId of queue) {
+            if (attempt.ok || activeChatUserStopped) break;
+            updateStatusClock(`Retrying · ${altId}`);
+            streamBuf = '';
+            refreshStreamingBubble();
+            const retry = await callChatStream(
+              'openrouter',
+              altId,
+              apiMessages,
+              state.activePersonaId,
+              (evt) => {
+                if (evt.type === 'status') updateStatusClock(evt.message || 'Working…');
+                else if (evt.type === 'thinking') appendTypingThought(evt.text || '');
+                else if (evt.type === 'token') {
+                  streamBuf += evt.text || '';
+                  updateStatusClock('Writing');
+                  refreshStreamingBubble();
+                }
+              },
+            );
+            if (retry.ok) {
+              attempt = retry;
+              usedFallback = {
+                provider: 'openrouter',
+                model: altId,
+                reason:
+                  `${primaryModel} was busy/unavailable — used free model ${altId} instead.`,
+              };
+              // Free primary: stick to a healthy free model so the next message
+              // doesn't immediately re-hit the same 429. Paid primary: one-off
+              // answer only — keep the user's selection.
+              if (isOpenRouterFreeId(primaryModel)) {
+                state.activeModel = altId;
+                chat.model = altId;
+                saveState();
+                updateModelPickerLabel();
+              } else {
+                usedFallback.reason =
+                  `${primaryModel} rate-limited — answered with free model ${altId} this turn. Pick another model if you want a different one next.`;
+              }
+              break;
+            }
+            markModelFailed('openrouter', altId);
           }
         }
       }
@@ -2053,8 +2236,12 @@ async function sendMessage(text) {
         }
         const where = data.provider ? ` [${data.provider} · ${data.model || state.activeModel}]` : '';
         const rawErr = data.error || attempt.errText || 'Request failed';
+        let tip = '';
+        if (state.activeProvider === 'openrouter' && shouldFallback(attempt)) {
+          tip = ' Tip: pick Free Models Router (openrouter/free) — it load-balances live free endpoints.';
+        }
         const errMsg = friendlyNetworkError({ message: String(rawErr) });
-        chat.messages.push({ role: 'error', content: errMsg + where, ts: Date.now() });
+        chat.messages.push({ role: 'error', content: errMsg + where + tip, ts: Date.now() });
         renderMessages({ scroll: 'bottom' });
         break;
       }

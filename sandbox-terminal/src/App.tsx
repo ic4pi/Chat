@@ -345,7 +345,7 @@ export function App() {
           } else if (provider !== 'openrouter') {
             // No free models on this provider — bounce to OpenRouter free coder.
             setProvider('openrouter');
-            setModel(DEFAULT_MODELS.openrouter || 'qwen/qwen3-coder:free');
+            setModel(DEFAULT_MODELS.openrouter || 'openrouter/free');
           }
         }
       })
