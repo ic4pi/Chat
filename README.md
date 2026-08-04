@@ -27,7 +27,7 @@ In **Vercel → Project → Settings → Environment Variables** add:
 | `NVIDIA_MEDIA_BASE_URL` | *(optional)* self-hosted NIM base URL | Override for Wan/Qwen OpenAI-compatible NIM |
 | `ADMIN_USERNAME` | anything you want | Gate for `/admin` |
 | `ADMIN_PASSWORD` | anything you want | Gate for `/admin` (also unlocks paid models if `PAID_MODELS_PASSWORD` unset) |
-| `PAID_MODELS_PASSWORD` | *(optional)* separate paid-model unlock | Password for paid LLMs in the Model picker; falls back to `ADMIN_PASSWORD` |
+| `PAID_MODELS_PASSWORD` | *(optional)* separate paid-model unlock | If set, also unlocks paid LLMs. **Either this or `ADMIN_PASSWORD` works** — you do not need both. |
 | `SITE_URL` | *(optional)* your deployment URL | Sent as OpenRouter's `HTTP-Referer` |
 
 ### Media Studio keys (Vercel secrets)

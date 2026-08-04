@@ -2800,8 +2800,11 @@ els.unlockPaidForm?.addEventListener('submit', async (e) => {
   try {
     const res = await fetch('/api/unlock-paid', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Paid-Password': password,
+      },
+      body: JSON.stringify({ password, paidPassword: password }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
