@@ -1163,10 +1163,12 @@ function sortModelsForProvider(provider, models) {
 /** Full catalog across providers (one complete list). */
 let allModelsCatalog = [];
 let allModelsLoading = null;
+
+/** Exclusive filters: null = All. Pick one value → show only that. */
 const modelPickerFilters = {
-  providers: new Set(), // empty = all providers
-  categories: new Set(), // empty = all categories
-  access: new Set(), // empty = free+paid; else 'free' / 'paid'
+  provider: null,   // 'venice' | 'openrouter' | …
+  category: null,   // 'coder' | 'general' | …
+  access: null,     // 'free' | 'paid'
 };
 
 async function loadAllModelsCatalog({ force = false } = {}) {
@@ -1186,62 +1188,66 @@ async function loadAllModelsCatalog({ force = false } = {}) {
   return allModelsLoading;
 }
 
+/**
+ * Search: typed text must be a PREFIX of the model name or id leaf.
+ * "S" → only names/ids that START with S. Nothing else.
+ */
 function modelSearchPrefixMatch(model, query) {
   const q = String(query || '').trim().toLowerCase();
   if (!q) return true;
-  const name = String(model.name || '').toLowerCase();
-  const id = String(model.id || '').toLowerCase();
+  const name = String(model.name || '').trim().toLowerCase();
+  const id = String(model.id || '').trim().toLowerCase();
   const leaf = id.includes('/') ? id.slice(id.lastIndexOf('/') + 1) : id;
-  const prov = String(model.provider || '').toLowerCase();
-  const provLabel = String(PROVIDER_LABELS[model.provider] || '').toLowerCase();
-  // Prefix on name, id, leaf, or any whitespace-separated name word.
-  if (name.startsWith(q) || id.startsWith(q) || leaf.startsWith(q)) return true;
-  if (prov.startsWith(q) || provLabel.startsWith(q)) return true;
-  return name.split(/[\s/_.-]+/).some((w) => w.startsWith(q));
+  return name.startsWith(q) || leaf.startsWith(q) || id.startsWith(q);
 }
 
 function filterCatalogModels(models, { query = '', filters = modelPickerFilters } = {}) {
+  const q = String(query || '').trim();
   return models.filter((m) => {
-    if (!modelSearchPrefixMatch(m, query)) return false;
-
-    // Empty provider set = all. Non-empty = must match one selected.
-    if (filters.providers.size > 0 && !filters.providers.has(m.provider)) return false;
-
-    if (filters.access.size > 0) {
-      const wantFree = filters.access.has('free');
-      const wantPaid = filters.access.has('paid');
-      if (m.free && !wantFree) return false;
-      if (!m.free && !wantPaid) return false;
-    }
-
-    if (filters.categories.size > 0) {
+    if (!modelSearchPrefixMatch(m, q)) return false;
+    if (filters.provider && m.provider !== filters.provider) return false;
+    if (filters.access === 'free' && !m.free) return false;
+    if (filters.access === 'paid' && m.free) return false;
+    if (filters.category) {
       const cats = Array.isArray(m.categories) ? m.categories : [];
-      if (![...filters.categories].some((c) => cats.includes(c))) return false;
+      if (!cats.includes(filters.category)) return false;
     }
     return true;
   });
 }
 
 function activeFilterCount() {
-  return (
-    modelPickerFilters.providers.size +
-    modelPickerFilters.categories.size +
-    modelPickerFilters.access.size
-  );
+  let n = 0;
+  if (modelPickerFilters.provider) n += 1;
+  if (modelPickerFilters.category) n += 1;
+  if (modelPickerFilters.access) n += 1;
+  return n;
 }
 
 function syncFilterChipUI() {
   els.modelFilterProviders?.querySelectorAll('.filter-chip').forEach((btn) => {
-    const id = btn.dataset.provider;
-    btn.classList.toggle('active', modelPickerFilters.providers.has(id));
+    const id = btn.dataset.provider || null;
+    const isAll = btn.dataset.all === '1';
+    btn.classList.toggle(
+      'active',
+      isAll ? !modelPickerFilters.provider : modelPickerFilters.provider === id,
+    );
   });
   els.modelFilterCategories?.querySelectorAll('.filter-chip').forEach((btn) => {
-    const id = btn.dataset.category;
-    btn.classList.toggle('active', modelPickerFilters.categories.has(id));
+    const id = btn.dataset.category || null;
+    const isAll = btn.dataset.all === '1';
+    btn.classList.toggle(
+      'active',
+      isAll ? !modelPickerFilters.category : modelPickerFilters.category === id,
+    );
   });
   els.modelFilterAccess?.querySelectorAll('.filter-chip').forEach((btn) => {
-    const id = btn.dataset.access;
-    btn.classList.toggle('active', modelPickerFilters.access.has(id));
+    const id = btn.dataset.access || null;
+    const isAll = btn.dataset.all === '1';
+    btn.classList.toggle(
+      'active',
+      isAll ? !modelPickerFilters.access : modelPickerFilters.access === id,
+    );
   });
   if (els.modelFilterBtn) {
     const n = activeFilterCount();
@@ -1249,67 +1255,76 @@ function syncFilterChipUI() {
   }
 }
 
-function toggleFilterValue(set, value) {
-  if (set.has(value)) set.delete(value);
-  else set.add(value);
+function makeFilterChip(label, { active = false, onPick } = {}) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'filter-chip' + (active ? ' active' : '');
+  btn.textContent = label;
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onPick();
+    syncFilterChipUI();
+    renderModelPickerList();
+  });
+  return btn;
 }
 
 function initModelFilterChips() {
   if (els.modelFilterProviders && !els.modelFilterProviders.childElementCount) {
+    const allBtn = makeFilterChip('All', {
+      active: !modelPickerFilters.provider,
+      onPick: () => { modelPickerFilters.provider = null; },
+    });
+    allBtn.dataset.all = '1';
+    els.modelFilterProviders.appendChild(allBtn);
     for (const id of PROVIDER_IDS) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'filter-chip';
-      btn.dataset.provider = id;
-      btn.textContent = PROVIDER_LABELS[id] || id;
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleFilterValue(modelPickerFilters.providers, id);
-        syncFilterChipUI();
-        renderModelPickerList();
+      const btn = makeFilterChip(PROVIDER_LABELS[id] || id, {
+        onPick: () => { modelPickerFilters.provider = id; },
       });
+      btn.dataset.provider = id;
       els.modelFilterProviders.appendChild(btn);
     }
   }
   if (els.modelFilterCategories && !els.modelFilterCategories.childElementCount) {
+    const allBtn = makeFilterChip('All', {
+      active: !modelPickerFilters.category,
+      onPick: () => { modelPickerFilters.category = null; },
+    });
+    allBtn.dataset.all = '1';
+    els.modelFilterCategories.appendChild(allBtn);
     for (const cat of MODEL_CATEGORIES) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'filter-chip';
-      btn.dataset.category = cat.id;
-      btn.textContent = cat.label;
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleFilterValue(modelPickerFilters.categories, cat.id);
-        syncFilterChipUI();
-        renderModelPickerList();
+      const btn = makeFilterChip(cat.label, {
+        onPick: () => { modelPickerFilters.category = cat.id; },
       });
+      btn.dataset.category = cat.id;
       els.modelFilterCategories.appendChild(btn);
     }
   }
-  if (els.modelFilterAccess) {
-    els.modelFilterAccess.querySelectorAll('.filter-chip').forEach((btn) => {
-      if (btn.dataset.bound) return;
-      btn.dataset.bound = '1';
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const access = btn.dataset.access;
-        toggleFilterValue(modelPickerFilters.access, access);
-        syncFilterChipUI();
-        renderModelPickerList();
-      });
+  if (els.modelFilterAccess && !els.modelFilterAccess.dataset.ready) {
+    els.modelFilterAccess.dataset.ready = '1';
+    els.modelFilterAccess.innerHTML = '';
+    const allBtn = makeFilterChip('All', {
+      active: !modelPickerFilters.access,
+      onPick: () => { modelPickerFilters.access = null; },
     });
+    allBtn.dataset.all = '1';
+    els.modelFilterAccess.appendChild(allBtn);
+    for (const [id, label] of [['free', 'Free'], ['paid', 'Paid']]) {
+      const btn = makeFilterChip(label, {
+        onPick: () => { modelPickerFilters.access = id; },
+      });
+      btn.dataset.access = id;
+      els.modelFilterAccess.appendChild(btn);
+    }
   }
   syncFilterChipUI();
 }
 
 function clearModelFilters() {
-  modelPickerFilters.providers = new Set();
-  modelPickerFilters.categories = new Set();
-  modelPickerFilters.access = new Set();
+  modelPickerFilters.provider = null;
+  modelPickerFilters.category = null;
+  modelPickerFilters.access = null;
   syncFilterChipUI();
   renderModelPickerList();
 }

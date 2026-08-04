@@ -277,24 +277,21 @@
       </div>
     </div>
     <div class="model-picker-toolbar">
-      <input id="modelSearchInput" type="search" autocomplete="off" spellcheck="false" placeholder="Search — type a letter…" />
+      <input id="modelSearchInput" type="text" inputmode="search" autocomplete="off" spellcheck="false" placeholder="Type a letter — only names that start with it" />
       <button id="modelUnlockBtn" class="text-btn" type="button">Unlock paid</button>
     </div>
     <div id="modelFilterPanel" class="model-filter-panel hidden" role="group" aria-label="Model filters">
       <div class="model-filter-section">
-        <div class="model-filter-heading">Providers</div>
+        <div class="model-filter-heading">Provider</div>
         <div id="modelFilterProviders" class="model-filter-chips"></div>
       </div>
       <div class="model-filter-section">
-        <div class="model-filter-heading">Categories</div>
+        <div class="model-filter-heading">Category</div>
         <div id="modelFilterCategories" class="model-filter-chips"></div>
       </div>
       <div class="model-filter-section">
         <div class="model-filter-heading">Access</div>
-        <div id="modelFilterAccess" class="model-filter-chips">
-          <button type="button" class="filter-chip" data-access="free">Free</button>
-          <button type="button" class="filter-chip" data-access="paid">Paid</button>
-        </div>
+        <div id="modelFilterAccess" class="model-filter-chips"></div>
       </div>
       <div class="model-filter-actions">
         <button id="modelFilterClear" class="text-btn" type="button">Clear filters</button>
