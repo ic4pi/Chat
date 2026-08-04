@@ -55,16 +55,36 @@ function normalizeOpenAIStyle(data, providerId = 'openrouter') {
   return enrichModels(
     providerId,
     list
-      .map((m) => ({
-        id: m.id,
-        name: m.name || m.id,
-        description: m.description || '',
-        contextTokens: m.context_length || m.context_window || m.limits?.max_context_length || null,
-        uncensored: /uncensored|dolphin|hermes|heretic|abliterated/i.test(m.id || ''),
-        free: /:free$/i.test(m.id || '') || m.pricing?.prompt === '0' || m.pricing?.prompt === 0,
-        pricing: m.pricing,
-      }))
-      .filter((m) => m.id),
+      .map((m) => {
+        const arch = m.architecture || {};
+        const outputs = Array.isArray(arch.output_modalities)
+          ? arch.output_modalities.map((x) => String(x).toLowerCase())
+          : [];
+        const modality = String(arch.modality || '').toLowerCase();
+        return {
+          id: m.id,
+          name: m.name || m.id,
+          description: m.description || '',
+          contextTokens: m.context_length || m.context_window || m.limits?.max_context_length || null,
+          uncensored: /uncensored|dolphin|hermes|heretic|abliterated/i.test(m.id || ''),
+          free: /:free$/i.test(m.id || '') || m.pricing?.prompt === '0' || m.pricing?.prompt === 0,
+          pricing: m.pricing,
+          modality,
+          outputModalities: outputs,
+        };
+      })
+      .filter((m) => m.id)
+      // Chat UI only — drop music / safety classifiers / audio-out models.
+      .filter((m) => {
+        if (providerId !== 'openrouter') return true;
+        const id = m.id || '';
+        if (/lyria|content-safety|prompt-guard|safeguard/i.test(id)) return false;
+        if (m.outputModalities?.length && !m.outputModalities.includes('text')) return false;
+        if (/->audio|audio$/.test(m.modality || '') && !(m.outputModalities || []).includes('text')) {
+          return false;
+        }
+        return true;
+      }),
   );
 }
 

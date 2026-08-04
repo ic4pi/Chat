@@ -60,7 +60,7 @@ export function inferFree(providerId: string, model: { id?: string; name?: strin
 
 const DEFAULT_ROLE_MODELS: Record<RoleId, RoleModel> = {
   // Free OpenRouter coder — Venice coder is paid/locked without unlock.
-  write:  { provider: 'openrouter', model: 'qwen/qwen3-coder:free' },
+  write:  { provider: 'openrouter', model: 'cohere/north-mini-code:free' },
   review: { provider: 'openrouter', model: 'openrouter/free' },
   plan:   { provider: 'openrouter', model: 'openrouter/free' },
 };
@@ -78,11 +78,13 @@ export const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string }>
     { id: 'mistral-31-24b', name: 'Mistral 3.1 24B' },
   ],
   openrouter: [
-    { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free', name: 'Dolphin-Venice 24B (free)' },
-    { id: 'nousresearch/hermes-3-llama-3.1-405b:free', name: 'Hermes 3 405B (free)' },
-    { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B (free)' },
-    { id: 'qwen/qwen3-coder:free', name: 'Qwen3 Coder (free)' },
     { id: 'openrouter/free', name: 'Free Models Router' },
+    { id: 'cohere/north-mini-code:free', name: 'North Mini Code (free)' },
+    { id: 'google/gemma-4-31b-it:free', name: 'Gemma 4 31B (free)' },
+    { id: 'google/gemma-4-26b-a4b-it:free', name: 'Gemma 4 26B A4B (free)' },
+    { id: 'openai/gpt-oss-20b:free', name: 'GPT OSS 20B (free)' },
+    { id: 'nvidia/nemotron-3-nano-30b-a3b:free', name: 'Nemotron 3 Nano 30B (free)' },
+    { id: 'inclusionai/ling-3.0-flash:free', name: 'Ling 3.0 Flash (free)' },
   ],
   cerebras: [
     { id: 'llama-3.3-70b', name: 'Llama 3.3 70B' },
@@ -107,11 +109,23 @@ export const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string }>
 
 export const DEFAULT_MODELS: Record<string, string> = {
   venice: 'venice-uncensored',
-  openrouter: 'qwen/qwen3-coder:free',
+  openrouter: 'openrouter/free',
   cerebras: 'llama-3.3-70b',
   groq: 'llama-3.3-70b-versatile',
   nvidia: 'meta/llama-3.3-70b-instruct',
 };
+
+const OPENROUTER_RETIRED_MODELS: Record<string, string> = {
+  'qwen/qwen3-coder:free': 'cohere/north-mini-code:free',
+  'meta-llama/llama-3.3-70b-instruct:free': 'google/gemma-4-31b-it:free',
+  'nousresearch/hermes-3-llama-3.1-405b:free': 'openrouter/free',
+  'cognitivecomputations/dolphin-mistral-24b-venice-edition:free':
+    'cognitivecomputations/dolphin-mistral-24b-venice-edition',
+};
+
+function migrateRetiredOpenRouterModel(modelId: string): string {
+  return OPENROUTER_RETIRED_MODELS[modelId] || modelId;
+}
 
 export type ProviderKeys = Record<string, string>;
 
@@ -142,10 +156,17 @@ export function loadRoleModels(): Record<RoleId, RoleModel> {
     const raw = localStorage.getItem(ROLES_STORAGE);
     if (!raw) return { ...DEFAULT_ROLE_MODELS };
     const parsed = JSON.parse(raw) as Partial<Record<RoleId, RoleModel>>;
+    const merge = (role: RoleId): RoleModel => {
+      const next = { ...DEFAULT_ROLE_MODELS[role], ...parsed[role] };
+      if (next.provider === 'openrouter') {
+        next.model = migrateRetiredOpenRouterModel(next.model);
+      }
+      return next;
+    };
     return {
-      write:  { ...DEFAULT_ROLE_MODELS.write,  ...parsed.write },
-      review: { ...DEFAULT_ROLE_MODELS.review, ...parsed.review },
-      plan:   { ...DEFAULT_ROLE_MODELS.plan,   ...parsed.plan },
+      write:  merge('write'),
+      review: merge('review'),
+      plan:   merge('plan'),
     };
   } catch {
     return { ...DEFAULT_ROLE_MODELS };
