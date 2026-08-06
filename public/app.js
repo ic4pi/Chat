@@ -100,6 +100,20 @@ const DEFAULT_MODELS = {
   nvidia: 'meta/llama-3.3-70b-instruct',
 };
 
+// Group personas always use Venice uncensored — one distinct model each.
+// Ordered cheapest → pricier (Venice list pricing); extras wrap on the cheap end.
+const VENICE_UNCENSORED_CHEAP_FIRST = [
+  'olafangensan-glm-4.7-flash-heretic', // ~$0.07 / $0.40
+  'gemma-4-uncensored',                 // ~$0.16 / $0.50
+  'e2ee-gemma-4-26b-a4b-uncensored-p',  // ~$0.19 / $0.88
+  'venice-uncensored-1-2',              // ~$0.20 / $0.90
+  'venice-uncensored',                  // Dolphin Mistral 24B Venice Edition
+  'e2ee-venice-uncensored-24b-p',       // ~$0.25 / $1.15
+  'e2ee-qwen3-6-35b-a3b-uncensored-p',  // ~$0.38 / $1.88
+  'venice-uncensored-role-play',        // ~$0.50 / $2.00
+];
+const VENICE_UNCENSORED_SET = new Set(VENICE_UNCENSORED_CHEAP_FIRST);
+
 const PROVIDER_IDS = ['venice', 'openrouter', 'cerebras', 'groq', 'nvidia'];
 const PROVIDER_LABELS = {
   venice: 'Venice', openrouter: 'OpenRouter', cerebras: 'Cerebras', groq: 'Groq', nvidia: 'NVIDIA',
@@ -1073,6 +1087,7 @@ async function fetchPersonas() {
     saveState();
   }
   ensurePersonaVoices(personas);
+  ensurePersonaModels(personas);
   renderPersonaSelect();
 }
 
@@ -3025,6 +3040,62 @@ function savePersonaModels(map) {
 let personaVoices = loadPersonaVoices();
 let personaModels = loadPersonaModels();
 
+function isVeniceUncensoredAssignment(assigned) {
+  return (
+    assigned &&
+    assigned.provider === 'venice' &&
+    typeof assigned.model === 'string' &&
+    VENICE_UNCENSORED_SET.has(assigned.model)
+  );
+}
+
+function pickVeniceUncensoredModel(used) {
+  const free = VENICE_UNCENSORED_CHEAP_FIRST.find((id) => !used.has(id));
+  if (free) return free;
+  // More personas than curated models — reuse cheapest first.
+  const i = used.size % VENICE_UNCENSORED_CHEAP_FIRST.length;
+  return VENICE_UNCENSORED_CHEAP_FIRST[i];
+}
+
+/**
+ * Every group persona gets a distinct Venice uncensored model (cheaper ones
+ * first). Rewrites non-Venice / non-uncensored leftovers from when the global
+ * default drifted to OpenRouter free coders.
+ */
+function ensurePersonaModels(list) {
+  const personasList = Array.isArray(list) ? list : personas;
+  if (!personasList.length) return;
+
+  const next = { ...personaModels };
+  const used = new Set();
+  let changed = false;
+
+  // Pass 1: keep existing Venice-uncensored picks that are still unique.
+  for (const p of personasList) {
+    const current = next[p.id];
+    if (isVeniceUncensoredAssignment(current) && !used.has(current.model)) {
+      used.add(current.model);
+    } else if (current) {
+      delete next[p.id];
+      changed = true;
+    }
+  }
+
+  // Pass 2: fill gaps with the next cheapest unused Venice uncensored model.
+  for (const p of personasList) {
+    if (isVeniceUncensoredAssignment(next[p.id])) continue;
+    const pick = pickVeniceUncensoredModel(used);
+    next[p.id] = { provider: 'venice', model: pick };
+    used.add(pick);
+    changed = true;
+  }
+
+  if (changed) {
+    personaModels = next;
+    savePersonaModels(personaModels);
+  }
+}
+
 function voiceForPersona(personaId) {
   const id = personaId || state.activePersonaId || 'nexus';
   if (personaVoices[id]) return personaVoices[id];
@@ -3047,8 +3118,18 @@ function setVoiceForPersona(personaId, voice) {
 function modelForPersona(personaId) {
   const id = personaId || state.activePersonaId || 'nexus';
   const assigned = personaModels[id];
-  if (assigned && assigned.provider && assigned.model) return assigned;
-  return { provider: state.activeProvider, model: state.activeModel };
+  if (isVeniceUncensoredAssignment(assigned)) return assigned;
+  // Never fall back to the global OpenRouter free coder — group table stays Venice.
+  const used = new Set(
+    Object.values(personaModels)
+      .filter((a) => isVeniceUncensoredAssignment(a))
+      .map((a) => a.model),
+  );
+  const model = pickVeniceUncensoredModel(used);
+  const next = { provider: 'venice', model };
+  personaModels = { ...personaModels, [id]: next };
+  savePersonaModels(personaModels);
+  return next;
 }
 
 function setModelForPersona(personaId, provider, model) {
@@ -3689,6 +3770,8 @@ async function renderGroupPersonaModels() {
     return;
   }
 
+  ensurePersonaModels(personas);
+
   const list = document.createElement('div');
   list.className = 'group-persona-scroll';
   host.appendChild(list);
@@ -3722,7 +3805,7 @@ async function renderGroupPersonaModels() {
     }
     const initialProvider = PROVIDER_IDS.includes(assigned.provider)
       ? assigned.provider
-      : (state.activeProvider || '');
+      : 'venice';
     provSelect.value = initialProvider;
     provLabel.appendChild(provSelect);
     row.appendChild(provLabel);
@@ -3839,8 +3922,9 @@ els.startGroupBtn?.addEventListener('click', async () => {
     return;
   }
   const rounds = parseInt(els.roundsDisplay?.textContent || '3', 10) || 3;
-  const assigned = collectGroupPersonaModelsFromForm();
   ensurePersonaVoices(personas);
+  ensurePersonaModels(personas);
+  const assigned = collectGroupPersonaModelsFromForm();
   createGroupChat(mode, topic, assigned, rounds);
   closeGroupModal();
   if (isMobileViewport()) state.chatsCollapsed = true;
