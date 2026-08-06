@@ -437,22 +437,47 @@ select:focus, input[type="text"]:focus, textarea:focus {
 }
 .tone-modal { max-width: 440px; width: min(440px, 94vw); }
 .group-modal {
-  max-width: 520px;
-  width: min(520px, 94vw);
-  max-height: min(92vh, 900px);
+  max-width: 560px;
+  width: min(560px, 96vw);
+  max-height: min(92dvh, 920px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
+.group-modal-hint {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 10px 16px 0;
+}
 .group-modal .group-form {
   display: grid;
   gap: 14px;
-  padding: 4px 4px 12px;
+  padding: 12px 16px;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
   flex: 1;
   min-height: 0;
+}
+.group-modal-footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 16px;
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--panel-2);
+  position: relative;
+  z-index: 5;
+}
+.group-start-btn {
+  min-height: 48px;
+  min-width: 140px;
+  padding: 12px 20px;
+  font-size: 15px;
+  touch-action: manipulation;
 }
 .group-persona-models {
   border: 1px solid var(--border);
@@ -598,7 +623,8 @@ select:focus, input[type="text"]:focus, textarea:focus {
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
-.group-topic-label input {
+.group-topic-label input,
+.group-topic-label textarea {
   font-size: 16px;
   min-height: 48px;
   padding: 10px 12px;
@@ -606,6 +632,14 @@ select:focus, input[type="text"]:focus, textarea:focus {
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
+  font-family: inherit;
+  line-height: 1.45;
+  width: 100%;
+  resize: vertical;
+}
+.group-topic-label textarea {
+  min-height: 120px;
+  max-height: 40vh;
 }
 
 /* ── Rounds stepper ── */
@@ -675,6 +709,8 @@ select:focus, input[type="text"]:focus, textarea:focus {
   background: rgba(212,255,63,0.04);
   font-size: 13px;
   color: var(--text);
+  position: relative;
+  z-index: 2;
 }
 .rounds-prompt-label {
   flex: 1;
@@ -686,8 +722,10 @@ select:focus, input[type="text"]:focus, textarea:focus {
   flex-wrap: wrap;
 }
 .rounds-prompt-actions .text-btn {
-  font-size: 12px;
-  padding: 5px 12px;
+  font-size: 13px;
+  min-height: 44px;
+  padding: 10px 14px;
+  touch-action: manipulation;
 }
 .group-btn {
   color: var(--accent);
@@ -1542,6 +1580,29 @@ button#sendBtn:hover:not(:disabled) { background: var(--accent-dim); }
     width: auto;
   }
   .msg { max-width: 100%; }
+
+  /* Group setup: near full-screen on phones so Start isn't buried */
+  .modal-overlay {
+    padding: 8px;
+    align-items: flex-end;
+  }
+  .group-modal {
+    width: 100%;
+    max-width: none;
+    max-height: min(94dvh, 100%);
+    border-radius: 12px 12px 8px 8px;
+  }
+  .group-persona-scroll {
+    max-height: min(36vh, 280px);
+  }
+  .group-start-btn {
+    flex: 1;
+    min-width: 0;
+  }
+  .group-modal-footer .text-btn:not(.primary) {
+    min-height: 48px;
+    padding: 12px 16px;
+  }
 }
 /* Hide the mobile close button on desktop where it isn't needed */
 @media (min-width: 901px) {

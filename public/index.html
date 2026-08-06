@@ -209,14 +209,18 @@
 </div>
 
 <!-- Group module: pick mode + topic, then all personas sit at the table -->
-<div id="groupModal" class="modal-overlay hidden" role="dialog" aria-modal="true">
-  <div class="modal group-modal">
+<div id="groupModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="groupModalTitle">
+  <div class="modal group-modal" role="document">
     <div class="modal-header">
-      <h2>Group table</h2>
-      <button id="closeGroupModal" class="icon-btn" title="Close">×</button>
+      <h2 id="groupModalTitle">Group table</h2>
+      <button id="closeGroupModal" class="icon-btn" title="Close" type="button" aria-label="Close group setup">×</button>
     </div>
-    <p class="keys-hint">All personas join each round. Assign a model per persona, pick a vibe, type what you want to say, and hit Start — that message opens the table. Save as MP3 anytime from the banner.</p>
+    <p class="keys-hint group-modal-hint">Write your opening, pick a vibe, assign models. Start stays pinned at the bottom — your draft is kept if you close and reopen.</p>
     <div class="group-form">
+      <label class="group-topic-label">
+        Your opening message
+        <textarea id="groupTopicInput" rows="5" maxlength="8000" placeholder="What do you want to say to the table?"></textarea>
+      </label>
       <fieldset class="group-modes">
         <legend>Mode</legend>
         <label class="group-mode">
@@ -248,20 +252,17 @@
           <span id="roundsDisplay" class="rounds-display">3</span>
           <button id="roundsPlus"  type="button" class="stepper-btn" aria-label="More rounds">+</button>
         </div>
-        <span class="group-rounds-hint">All personas speak once per round.</span>
+        <span class="group-rounds-hint">Each persona speaks once per round.</span>
       </div>
-      <label class="group-topic-label">
-        Your message
-        <input id="groupTopicInput" type="text" maxlength="500" placeholder="What do you want to say to the table?" />
-      </label>
       <fieldset class="group-persona-models">
         <legend>Persona models</legend>
-        <p class="group-persona-models-hint">Scroll the list. For each persona pick a provider, then a model from that provider.</p>
+        <p class="group-persona-models-hint">Scroll the list. Provider first, then a model from that provider.</p>
         <div id="groupPersonaModels" class="group-persona-models-list"></div>
       </fieldset>
-      <div class="tone-actions">
-        <button id="startGroupBtn" class="text-btn primary" type="button">Start</button>
-      </div>
+    </div>
+    <div class="group-modal-footer">
+      <button id="cancelGroupBtn" class="text-btn" type="button">Cancel</button>
+      <button id="startGroupBtn" class="text-btn primary group-start-btn" type="button">Start group</button>
     </div>
   </div>
 </div>

@@ -482,6 +482,7 @@ const els = {
   groupBtn: $('groupBtn'),
   groupModal: $('groupModal'),
   closeGroupModal: $('closeGroupModal'),
+  cancelGroupBtn: $('cancelGroupBtn'),
   groupTopicInput: $('groupTopicInput'),
   groupPersonaModels: $('groupPersonaModels'),
   startGroupBtn: $('startGroupBtn'),
@@ -2331,7 +2332,7 @@ function showMoreRoundsPrompt(chat) {
 
   const label = document.createElement('span');
   label.className = 'rounds-prompt-label';
-  label.textContent = 'All rounds complete. Add more rounds or finish and save the MP3.';
+  label.textContent = 'Done for now. Talk more (+ rounds) or finish and save the MP3.';
   div.appendChild(label);
 
   const actions = document.createElement('div');
@@ -2363,7 +2364,11 @@ function showMoreRoundsPrompt(chat) {
 
   if (els.chat) {
     els.chat.appendChild(div);
-    if (chatStickToBottom) els.chat.scrollTop = els.chat.scrollHeight;
+    // Keep actions clear of the composer so +1/+3/+5 aren't a buried sliver.
+    div.style.marginBottom = '12px';
+    requestAnimationFrame(() => {
+      div.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
   }
 }
 
@@ -3871,29 +3876,92 @@ function collectGroupPersonaModelsFromForm() {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Group setup draft — survive accidental close / miss-taps so a long opening
+// prompt is never wiped just because Start was hard to hit.
+// ---------------------------------------------------------------------------
+const GROUP_DRAFT_KEY = 'uncensored_group_draft_v1';
+function defaultGroupDraft() {
+  return { topic: '', mode: 'brainstorm', rounds: 3 };
+}
+function readGroupDraft() {
+  try {
+    const raw = localStorage.getItem(GROUP_DRAFT_KEY);
+    if (!raw) return defaultGroupDraft();
+    const parsed = JSON.parse(raw);
+    return {
+      topic: typeof parsed.topic === 'string' ? parsed.topic : '',
+      mode: ['boardroom', 'brainstorm', 'freechat'].includes(parsed.mode) ? parsed.mode : 'brainstorm',
+      rounds: Math.min(20, Math.max(1, parseInt(parsed.rounds, 10) || 3)),
+    };
+  } catch {
+    return defaultGroupDraft();
+  }
+}
+function writeGroupDraft(draft) {
+  try {
+    localStorage.setItem(GROUP_DRAFT_KEY, JSON.stringify(draft));
+  } catch { /* ignore quota */ }
+}
+function captureGroupDraft() {
+  const modeEl = document.querySelector('input[name="groupMode"]:checked');
+  const draft = {
+    topic: els.groupTopicInput?.value || '',
+    mode: modeEl?.value || 'brainstorm',
+    rounds: parseInt(els.roundsDisplay?.textContent || '3', 10) || 3,
+  };
+  writeGroupDraft(draft);
+  return draft;
+}
+function restoreGroupDraft() {
+  const draft = readGroupDraft();
+  if (els.groupTopicInput) els.groupTopicInput.value = draft.topic;
+  const modeEl = document.querySelector(`input[name="groupMode"][value="${draft.mode}"]`);
+  if (modeEl) modeEl.checked = true;
+  if (els.roundsDisplay) els.roundsDisplay.textContent = String(draft.rounds);
+  if (els.roundsMinus) els.roundsMinus.disabled = draft.rounds <= 1;
+  if (els.roundsPlus) els.roundsPlus.disabled = draft.rounds >= 20;
+}
+function clearGroupDraft() {
+  writeGroupDraft(defaultGroupDraft());
+  if (els.groupTopicInput) els.groupTopicInput.value = '';
+  const brainstorm = document.querySelector('input[name="groupMode"][value="brainstorm"]');
+  if (brainstorm) brainstorm.checked = true;
+  if (els.roundsDisplay) els.roundsDisplay.textContent = '3';
+  if (els.roundsMinus) els.roundsMinus.disabled = false;
+  if (els.roundsPlus) els.roundsPlus.disabled = false;
+}
+
 async function openGroupModal() {
   if (!els.groupModal) return;
   els.groupModal.classList.remove('hidden');
-  if (els.groupTopicInput) {
-    els.groupTopicInput.value = '';
-    setTimeout(() => els.groupTopicInput.focus(), 50);
-  }
-  // Reset rounds stepper to 3 each time the modal opens
-  if (els.roundsDisplay) els.roundsDisplay.textContent = '3';
+  // Restore draft — never wipe a carefully written opening on reopen.
+  restoreGroupDraft();
   try {
     await renderGroupPersonaModels();
   } catch (err) {
     console.warn('Could not render persona model assignments:', err);
   }
+  if (els.groupTopicInput) {
+    setTimeout(() => {
+      els.groupTopicInput.focus();
+      // Put caret at end so returning to a draft feels continuous.
+      const len = els.groupTopicInput.value.length;
+      try { els.groupTopicInput.setSelectionRange(len, len); } catch { /* ignore */ }
+    }, 50);
+  }
 }
 function closeGroupModal() {
+  // Snapshot draft before hiding so accidental dismiss never loses the prompt.
+  captureGroupDraft();
   els.groupModal?.classList.add('hidden');
 }
 els.groupBtn?.addEventListener('click', () => { void openGroupModal(); });
 els.closeGroupModal?.addEventListener('click', closeGroupModal);
-els.groupModal?.addEventListener('click', (e) => {
-  if (e.target === els.groupModal) closeGroupModal();
-});
+els.cancelGroupBtn?.addEventListener('click', closeGroupModal);
+// Backdrop taps must NOT dismiss — on mobile the Start control used to sit
+// under the form with only a sliver visible; missing it hit the overlay,
+// closed the modal, wiped the prompt, and dumped you back into normal chat.
 
 // Rounds stepper
 const MIN_ROUNDS = 1;
@@ -3904,6 +3972,7 @@ els.roundsMinus?.addEventListener('click', () => {
   if (els.roundsDisplay) els.roundsDisplay.textContent = String(next);
   if (els.roundsMinus) els.roundsMinus.disabled = next <= MIN_ROUNDS;
   if (els.roundsPlus)  els.roundsPlus.disabled  = false;
+  captureGroupDraft();
 });
 els.roundsPlus?.addEventListener('click', () => {
   const cur = parseInt(els.roundsDisplay?.textContent || '3', 10);
@@ -3911,6 +3980,7 @@ els.roundsPlus?.addEventListener('click', () => {
   if (els.roundsDisplay) els.roundsDisplay.textContent = String(next);
   if (els.roundsPlus)  els.roundsPlus.disabled  = next >= MAX_ROUNDS;
   if (els.roundsMinus) els.roundsMinus.disabled = false;
+  captureGroupDraft();
 });
 els.startGroupBtn?.addEventListener('click', async () => {
   const modeEl = document.querySelector('input[name="groupMode"]:checked');
@@ -3926,7 +3996,9 @@ els.startGroupBtn?.addEventListener('click', async () => {
   ensurePersonaModels(personas);
   const assigned = collectGroupPersonaModelsFromForm();
   createGroupChat(mode, topic, assigned, rounds);
-  closeGroupModal();
+  // Clear draft and hide without re-capturing the emptied form.
+  clearGroupDraft();
+  els.groupModal?.classList.add('hidden');
   if (isMobileViewport()) state.chatsCollapsed = true;
   saveState();
   await renderAll();
@@ -3936,11 +4008,16 @@ els.startGroupBtn?.addEventListener('click', async () => {
   await sendGroupMessage(topic);
 });
 
+els.groupTopicInput?.addEventListener('input', () => { captureGroupDraft(); });
 els.groupTopicInput?.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
+  // Textarea: Ctrl/Cmd+Enter starts. Plain Enter inserts a newline.
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
     e.preventDefault();
     els.startGroupBtn?.click();
   }
+});
+document.querySelectorAll('input[name="groupMode"]').forEach((el) => {
+  el.addEventListener('change', () => { captureGroupDraft(); });
 });
 
 function renderAttachPreview() {
@@ -4068,6 +4145,7 @@ document.addEventListener('keydown', (e) => {
     else if (els.modelPickerModal && !els.modelPickerModal.classList.contains('hidden')) closeModelPicker();
     if (els.keysModal && !els.keysModal.classList.contains('hidden')) closeKeysModal();
     if (els.toneModal && !els.toneModal.classList.contains('hidden')) closeToneModal();
+    if (els.groupModal && !els.groupModal.classList.contains('hidden')) closeGroupModal();
   }
 });
 
