@@ -21,6 +21,7 @@ import { looksLikeSuggestRequest, needsCodeContext } from './agentParse.js';
 import type { FileNode } from './types.js';
 import {
   loadSession,
+  mergeHandoffMessages,
   saveSession,
   clearSession,
   listSessions,
@@ -244,7 +245,8 @@ export function App() {
           content: m.content,
           kind: 'imported',
         }));
-      // Always open THIS chat’s workspace thread — never keep a previous chat’s convo.
+      // Open THIS chat’s workspace thread (not another chat’s), but never wipe
+      // workspace-only turns / pending files from a prior visit to the same chat.
       const prev = loadSession(id);
       const session: StoredSession = {
         v: 2,
@@ -256,8 +258,8 @@ export function App() {
         provider: handoff.provider || prev?.provider || roleModelsRef.current.write.provider || 'openrouter',
         model: handoff.model || prev?.model || roleModelsRef.current.write.model || 'openrouter/free',
         autoApplyOn: prev?.autoApplyOn ?? true,
-        messages: imported.length ? imported : [],
-        pendingChanges: imported.length ? [] : (prev?.pendingChanges || []),
+        messages: mergeHandoffMessages(imported, prev),
+        pendingChanges: prev?.pendingChanges || [],
         fromChat: true,
       };
       saveSession(session);
