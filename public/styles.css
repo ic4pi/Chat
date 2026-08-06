@@ -482,10 +482,10 @@ select:focus, input[type="text"]:focus, textarea:focus {
 .group-persona-models {
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   margin: 0;
   display: grid;
-  gap: 10px;
+  gap: 8px;
   min-height: 0;
 }
 .group-persona-models legend {
@@ -568,10 +568,10 @@ select:focus, input[type="text"]:focus, textarea:focus {
 .group-modes {
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   margin: 0;
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 .group-modes legend {
   font-size: 11px;
@@ -584,7 +584,7 @@ select:focus, input[type="text"]:focus, textarea:focus {
   display: flex;
   gap: 10px;
   align-items: flex-start;
-  padding: 8px;
+  padding: 6px 8px;
   border-radius: 6px;
   cursor: pointer;
   border: 1px solid transparent;
@@ -609,7 +609,7 @@ select:focus, input[type="text"]:focus, textarea:focus {
   display: block;
   font-size: 12px;
   color: var(--muted);
-  margin-top: 2px;
+  margin-top: 1px;
   line-height: 1.35;
   text-transform: none;
   letter-spacing: 0;
@@ -638,8 +638,8 @@ select:focus, input[type="text"]:focus, textarea:focus {
   resize: vertical;
 }
 .group-topic-label textarea {
-  min-height: 120px;
-  max-height: 40vh;
+  min-height: 96px;
+  max-height: 32vh;
 }
 
 /* ── Rounds stepper ── */
@@ -1593,7 +1593,15 @@ button#sendBtn:hover:not(:disabled) { background: var(--accent-dim); }
     border-radius: 12px 12px 8px 8px;
   }
   .group-persona-scroll {
-    max-height: min(36vh, 280px);
+    max-height: min(40vh, 320px);
+  }
+  .group-modal-hint {
+    font-size: 12px;
+    padding: 8px 14px 0;
+  }
+  .group-modal .group-form {
+    padding: 10px 14px;
+    gap: 12px;
   }
   .group-start-btn {
     flex: 1;
