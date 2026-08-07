@@ -92,7 +92,7 @@ Chat history, active chat / persona / model selection, sidebar preferences, and 
 | `/api/media-generate` | Image/video generation proxy | none (keys server-side) |
 | `/api/animate-sequence` | Frame-chain AI animation → video | none (keys server-side; prefer local CLI) |
 | `/api/group-chat` | Multi-persona round-table | none (keys server-side) |
-| `/api/generate` | Multi-LLM code-slice orchestrator (`POST /generate` rewrite) | none (keys server-side) |
+| `/api/generate` | Multi-LLM code-slice orchestrator (`POST /generate` rewrite). Needs `OPENROUTER_API_KEY` (or BYOK), Vercel Pro for `maxDuration: 300`, and an open Workspace sandbox to apply files. Default slices: HTML/CSS/JS (max 6). | none (keys server-side) |
 | `/api/models?provider=venice` | Live Venice model catalog | none |
 | `/api/public-config` | Persona IDs and names (no prompts) | none |
 | `/api/admin-config` | Full config incl. system prompts | HTTP Basic auth |

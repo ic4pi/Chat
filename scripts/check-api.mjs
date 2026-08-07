@@ -206,8 +206,18 @@ const unknown = slices.resolveChunkModel({}, 'not-a-real-chunk');
 if (unknown.model !== slices.GENERAL_PURPOSE_MODEL.model || !unknown.usedFallback) {
   fail('unknown chunk must use GENERAL_PURPOSE_MODEL');
 }
+if (!Array.isArray(slices.DEFAULT_ENABLED_CHUNKS) || slices.DEFAULT_ENABLED_CHUNKS.length < 1) {
+  fail('DEFAULT_ENABLED_CHUNKS must list a short default set');
+}
 const genSrc = readFileSync(path.join(root, 'api/generate.js'), 'utf8');
-for (const sym of ['resolveChunkModel', 'chunkModels', 'GENERAL_PURPOSE_MODEL', 'selectChunks']) {
+for (const sym of [
+  'resolveChunkModel',
+  'chunkModels',
+  'GENERAL_PURPOSE_MODEL',
+  'selectChunks',
+  'TOTAL_BUDGET_MS',
+  'MAX_SLICES_PER_RUN',
+]) {
   if (!genSrc.includes(sym)) fail(`api/generate.js must reference ${sym}`);
 }
 ok('code-slices + generate contract');

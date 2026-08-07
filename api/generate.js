@@ -35,13 +35,28 @@ import {
 import { requirePaidAccess } from '../lib/model-meta.js';
 import { resolveProvider, withProviderChatExtras, formatProviderError } from '../lib/providers.js';
 
+/** Per-slice upstream call budget (capped). Keep under Vercel function limit. */
 const UPSTREAM_TIMEOUT_MS = Math.max(
   10_000,
-  Math.min(Number(process.env.GENERATE_TIMEOUT_MS) || 55_000, 280_000),
+  Math.min(Number(process.env.GENERATE_TIMEOUT_MS) || 45_000, 90_000),
 );
-const MAX_TOKENS_PER_CHUNK = 4096;
-const MAX_PROMPT_CHARS = 24_000;
-const MAX_CONTEXT_CHARS = 40_000;
+/** Hard wall-clock for the whole orchestrator — must stay under maxDuration 300. */
+const TOTAL_BUDGET_MS = Math.max(
+  30_000,
+  Math.min(Number(process.env.GENERATE_TOTAL_MS) || 280_000, 290_000),
+);
+const MAX_TOKENS_PER_CHUNK = 3072;
+const MAX_PROMPT_CHARS = 16_000;
+const MAX_CONTEXT_CHARS = 12_000;
+/** Cap prior-slice text fed into later prompts (avoids ballooning + timeouts). */
+const MAX_PRIOR_CHARS = 10_000;
+const MAX_SLICES_PER_RUN = 6;
+
+function totalBudgetMs(sliceCount) {
+  // Spend at most TOTAL_BUDGET_MS; never schedule more than ~sliceCount * per-slice.
+  const bySlices = UPSTREAM_TIMEOUT_MS * Math.max(1, sliceCount);
+  return Math.min(TOTAL_BUDGET_MS, bySlices);
+}
 
 function sseWrite(res, obj) {
   res.write(`data: ${JSON.stringify(obj)}\n\n`);
@@ -137,7 +152,10 @@ export default async function handler(req, res) {
       ? clientKey
       : (typeof headerKey === 'string' ? headerKey : '');
 
-  const selected = selectChunks(requestedChunks);
+  let selected = selectChunks(requestedChunks);
+  if (selected.length > MAX_SLICES_PER_RUN) {
+    selected = selected.slice(0, MAX_SLICES_PER_RUN);
+  }
 
   // Gate paid models before starting the run.
   for (const chunk of selected) {
@@ -250,17 +268,29 @@ async function runChunks({
     );
 
     const system = buildChunkSystemPrompt(chunk);
-    const priorBlock = prior.length
-      ? prior
-          .map((p) => `### Already generated — ${p.label}\n${p.content}`)
-          .join('\n\n')
-      : '(This is the first slice.)';
+    // Prefer recent slices; truncate so later calls stay inside context/time budgets.
+    let priorBlock = '(This is the first slice.)';
+    if (prior.length) {
+      const pieces = [];
+      let used = 0;
+      for (let i = prior.length - 1; i >= 0; i -= 1) {
+        const p = prior[i];
+        const block = `### Already generated — ${p.label}\n${p.content}`;
+        const room = Math.max(800, MAX_PRIOR_CHARS - used);
+        const clipped = truncate(block, room);
+        if (used + clipped.length > MAX_PRIOR_CHARS && pieces.length) break;
+        pieces.unshift(clipped);
+        used += clipped.length;
+      }
+      priorBlock = pieces.join('\n\n');
+    }
 
     const userPayload = [
       `FEATURE REQUEST:\n${promptText}`,
       context ? `\nADDITIONAL CONTEXT:\n${context}` : '',
       `\nPRIOR SLICES:\n${priorBlock}`,
       `\nNow produce ONLY the "${chunk.label}" slice.`,
+      'Prefer distinct file paths for this slice. Do not rewrite unrelated prior files unless required.',
     ]
       .filter(Boolean)
       .join('\n');
@@ -346,10 +376,8 @@ async function handleStream(res, opts) {
   if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
   const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    UPSTREAM_TIMEOUT_MS * Math.min(opts.selected.length + 1, 12),
-  );
+  const budget = totalBudgetMs(opts.selected.length);
+  const timer = setTimeout(() => controller.abort(), budget);
   res.on('close', () => {
     if (!controller.signal.aborted) controller.abort();
   });
@@ -357,8 +385,9 @@ async function handleStream(res, opts) {
   try {
     sseWrite(res, {
       type: 'status',
-      message: `Starting generate · ${opts.selected.length} slices…`,
+      message: `Starting generate · ${opts.selected.length} slices (budget ${Math.round(budget / 1000)}s)…`,
       chunks: opts.selected.map((c) => c.id),
+      budgetMs: budget,
     });
 
     const results = await runChunks({
@@ -389,10 +418,7 @@ async function handleStream(res, opts) {
 
 async function handleJson(res, opts) {
   const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    UPSTREAM_TIMEOUT_MS * Math.min(opts.selected.length + 1, 12),
-  );
+  const timer = setTimeout(() => controller.abort(), totalBudgetMs(opts.selected.length));
   try {
     const results = await runChunks({
       ...opts,

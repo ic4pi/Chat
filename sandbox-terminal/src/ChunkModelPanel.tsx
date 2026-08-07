@@ -11,8 +11,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   CHUNK_LIST,
   loadChunkModels,
+  loadEnabledChunks,
   modelBadgeLabel,
   saveChunkModels,
+  saveEnabledChunks,
   setChunkModel,
   type ChunkId,
   type ChunkModel,
@@ -46,6 +48,8 @@ export interface ChunkModelPanelProps {
   /** Optional repo / file context appended server-side. */
   contextText?: string;
   disabled?: boolean;
+  /** When false, Generate is blocked — files cannot be applied without a sandbox. */
+  sandboxReady?: boolean;
   onComplete?: (results: GenerateChunkResult[], combined: string) => void;
   onStatus?: (message: string) => void;
 }
@@ -135,15 +139,12 @@ async function readSseGenerate(
 export function ChunkModelPanel({
   contextText,
   disabled,
+  sandboxReady = true,
   onComplete,
   onStatus,
 }: ChunkModelPanelProps) {
   const [chunkModels, setChunkModels] = useState<Record<ChunkId, ChunkModel>>(() => loadChunkModels());
-  const [enabled, setEnabled] = useState<Record<ChunkId, boolean>>(() => {
-    const out = {} as Record<ChunkId, boolean>;
-    for (const c of CHUNK_LIST) out[c.id] = true;
-    return out;
-  });
+  const [enabled, setEnabled] = useState<Record<ChunkId, boolean>>(() => loadEnabledChunks());
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -199,16 +200,28 @@ export function ChunkModelPanel({
   }, [chunkModels, persist]);
 
   const handleToggle = useCallback((chunkId: ChunkId, on: boolean) => {
-    setEnabled((prev) => ({ ...prev, [chunkId]: on }));
+    setEnabled((prev) => {
+      const next = { ...prev, [chunkId]: on };
+      saveEnabledChunks(next);
+      return next;
+    });
   }, []);
 
   const handleGenerate = useCallback(async () => {
     const text = prompt.trim();
     if (!text || busy || disabled) return;
+    if (!sandboxReady) {
+      setError('Open a blank project or GitHub repo first — Generate needs a sandbox to save files.');
+      return;
+    }
 
     const activeChunks = CHUNK_LIST.filter((c) => enabled[c.id]).map((c) => c.id);
     if (!activeChunks.length) {
       setError('Enable at least one code slice.');
+      return;
+    }
+    if (activeChunks.length > 6) {
+      setError('Enable at most 6 slices per run (avoids Vercel timeouts).');
       return;
     }
 
@@ -297,7 +310,7 @@ export function ChunkModelPanel({
     } finally {
       setBusy(false);
     }
-  }, [prompt, busy, disabled, enabled, chunkModels, contextText, onComplete, onStatus]);
+  }, [prompt, busy, disabled, sandboxReady, enabled, chunkModels, contextText, onComplete, onStatus]);
 
   const handleCancel = useCallback(() => {
     abortRef.current?.abort();
@@ -322,9 +335,19 @@ export function ChunkModelPanel({
           LLM per code slice
         </h2>
         <span style={{ fontSize: 10, color: '#666' }}>
-          Choices save in this browser. Generate routes each slice to its model.
+          Choices save here. Default run: HTML + CSS + JS (max 6). Needs an open sandbox to save files.
         </span>
       </div>
+
+      {!sandboxReady && (
+        <div role="status" style={{
+          marginBottom: 10, padding: '8px 10px', borderRadius: 6,
+          background: '#2a1a0a', border: '1px solid #6a4a1a', color: '#ffcc66', fontSize: 12,
+        }}>
+          Open a <strong style={{ color: '#ffe0a0' }}>blank project</strong> or <strong style={{ color: '#ffe0a0' }}>GitHub repo</strong> first.
+          Generate is locked until a sandbox can receive files.
+        </div>
+      )}
 
       <ul
         role="list"
@@ -469,19 +492,20 @@ export function ChunkModelPanel({
           }}
         />
         <p id="chunk-generate-hint" style={{ margin: 0, fontSize: 10, color: '#555' }}>
-          Generate sends your selections to the orchestrator (<code style={{ color: '#888' }}>POST /api/generate</code>).
-          Unconfigured models fall back to the general-purpose model.
+          Generate → <code style={{ color: '#888' }}>POST /api/generate</code>.
+          Unconfigured models fall back to general-purpose. Keep ≤6 slices enabled.
         </p>
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <button
             type="button"
             onClick={() => { void handleGenerate(); }}
-            disabled={busy || disabled || !prompt.trim()}
+            disabled={busy || disabled || !sandboxReady || !prompt.trim()}
             aria-busy={busy}
+            title={!sandboxReady ? 'Open a blank project or repo first' : 'Generate enabled slices'}
             style={{
-              background: busy ? '#1a1a1a' : '#d4ff3f',
-              color: busy ? '#888' : '#0a0a0a',
+              background: busy || !sandboxReady ? '#1a1a1a' : '#d4ff3f',
+              color: busy || !sandboxReady ? '#888' : '#0a0a0a',
               border: 'none',
               borderRadius: 4,
               padding: '8px 16px',
@@ -490,7 +514,7 @@ export function ChunkModelPanel({
               fontWeight: 700,
               letterSpacing: '0.04em',
               textTransform: 'uppercase',
-              cursor: busy || disabled || !prompt.trim() ? 'not-allowed' : 'pointer',
+              cursor: busy || disabled || !sandboxReady || !prompt.trim() ? 'not-allowed' : 'pointer',
             }}
           >
             {busy ? 'Generating…' : 'Generate'}

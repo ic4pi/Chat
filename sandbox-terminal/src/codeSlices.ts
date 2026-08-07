@@ -28,6 +28,9 @@ export const GENERAL_PURPOSE_MODEL: ChunkModel & { badge: string } = {
   badge: 'General',
 };
 
+/** Default enabled slices — short enough for Vercel generate budget. */
+export const DEFAULT_ENABLED_CHUNKS: ChunkId[] = ['html', 'css', 'js'];
+
 export const DEFAULT_CHUNK_MODELS: Record<ChunkId, ChunkModel> = {
   html: { provider: 'openrouter', model: 'qwen/qwen3-coder:free' },
   css: { provider: 'openrouter', model: 'qwen/qwen3-coder:free' },
@@ -41,6 +44,7 @@ export const DEFAULT_CHUNK_MODELS: Record<ChunkId, ChunkModel> = {
 };
 
 const CHUNK_STORAGE = 'uncensored_chunk_models_v1';
+const ENABLED_STORAGE = 'uncensored_chunk_enabled_v1';
 
 export function modelBadgeLabel(modelId: string): string {
   if (!modelId) return GENERAL_PURPOSE_MODEL.badge;
@@ -102,6 +106,38 @@ export function loadChunkModels(): Record<ChunkId, ChunkModel> {
 export function saveChunkModels(map: Record<ChunkId, ChunkModel>): void {
   try {
     localStorage.setItem(CHUNK_STORAGE, JSON.stringify(map));
+  } catch { /* ignore */ }
+}
+
+export function defaultEnabledMap(): Record<ChunkId, boolean> {
+  const defaults = new Set<string>(DEFAULT_ENABLED_CHUNKS);
+  const out = {} as Record<ChunkId, boolean>;
+  for (const c of CHUNK_LIST) out[c.id] = defaults.has(c.id);
+  return out;
+}
+
+export function loadEnabledChunks(): Record<ChunkId, boolean> {
+  const defaults = defaultEnabledMap();
+  try {
+    const raw = localStorage.getItem(ENABLED_STORAGE);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw) as Partial<Record<ChunkId, boolean>>;
+    if (!parsed || typeof parsed !== 'object') return defaults;
+    const out = { ...defaults };
+    for (const c of CHUNK_LIST) {
+      if (typeof parsed[c.id] === 'boolean') out[c.id] = parsed[c.id]!;
+    }
+    // Never leave the user with zero enabled after load corruption.
+    if (!CHUNK_LIST.some((c) => out[c.id])) return defaults;
+    return out;
+  } catch {
+    return defaults;
+  }
+}
+
+export function saveEnabledChunks(map: Record<ChunkId, boolean>): void {
+  try {
+    localStorage.setItem(ENABLED_STORAGE, JSON.stringify(map));
   } catch { /* ignore */ }
 }
 

@@ -17,7 +17,12 @@ import {
   MAX_AUDIT_FULL_FILES,
   type SearchHit,
 } from './contextBudget.js';
-import { extractFileChanges, looksLikeSuggestRequest, needsCodeContext } from './agentParse.js';
+import {
+  extractFileChangeReport,
+  formatRejectedSandboxWarning,
+  looksLikeSuggestRequest,
+  needsCodeContext,
+} from './agentParse.js';
 import type { FileNode } from './types.js';
 import {
   loadSession,
@@ -619,9 +624,36 @@ export function App() {
           : `✗ ${r.label} · ${r.error || 'failed'}`;
       })
       .join('\n');
+
+    const report = extractFileChangeReport(combined);
+    // Last write wins when slices emit the same path.
+    const byPath = new Map<string, string>();
+    const dupes: string[] = [];
+    for (const c of report.accepted) {
+      if (byPath.has(c.path)) dupes.push(c.path);
+      byPath.set(c.path, c.content);
+    }
+    const changes = [...byPath.entries()].map(([path, content]) => ({ path, content }));
+
+    const applyNotes: string[] = [];
+    if (!repo.root || !repo.sandboxId) {
+      applyNotes.push('⚠ No sandbox open — File: blocks were not saved. Start blank / Open repo, then re-run Generate.');
+    } else if (!changes.length && !report.rejected.length) {
+      applyNotes.push('⚠ No File: blocks found — nothing written to the sandbox.');
+    } else if (changes.length) {
+      applyNotes.push(`→ Applying ${changes.length} file${changes.length === 1 ? '' : 's'} to sandbox…`);
+    }
+    if (dupes.length) {
+      const uniq = [...new Set(dupes)];
+      applyNotes.push(`⚠ Duplicate path${uniq.length === 1 ? '' : 's'} (last slice wins): ${uniq.join(', ')}`);
+    }
+    const rejectWarn = formatRejectedSandboxWarning(report.rejected);
+
     const body = [
       '## Slice generate',
       summary,
+      applyNotes.length ? `\n${applyNotes.join('\n')}` : '',
+      rejectWarn ? `\n${rejectWarn}` : '',
       combined ? `\n${combined}` : '',
     ].filter(Boolean).join('\n');
 
@@ -634,12 +666,11 @@ export function App() {
       },
     ]);
 
-    const changes = extractFileChanges(combined);
-    if (changes.length) {
-      void handleFileChanges(changes.map((c) => ({ path: c.path, content: c.content })));
+    if (changes.length && repo.root && repo.sandboxId) {
+      void handleFileChanges(changes);
     }
     setMobileTab('chat');
-  }, [handleFileChanges]);
+  }, [handleFileChanges, repo.root, repo.sandboxId]);
 
   const handlePush = useCallback(async (token: string, message: string) => {
     if (!repo.sandboxId) {
@@ -889,6 +920,7 @@ export function App() {
       {showSlices && (
         <div id="chunk-model-panel">
           <ChunkModelPanel
+            sandboxReady={!!repo.sandboxId && !!repo.root}
             contextText={
               [
                 repo.repoUrl ? `Repo: ${repo.repoUrl}` : '',
