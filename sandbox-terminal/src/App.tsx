@@ -18,7 +18,7 @@ import {
   type SearchHit,
 } from './contextBudget.js';
 import {
-  extractFileChangeReport,
+  extractFilesForApply,
   formatRejectedSandboxWarning,
   looksLikeSuggestRequest,
   needsCodeContext,
@@ -360,14 +360,17 @@ export function App() {
     return () => { cancelled = true; };
   }, [provider, activeApiKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Re-open last GitHub repo + restore pending file drafts once on mount.
+  // Re-open last GitHub repo / blank sandbox + restore pending drafts on mount.
   useEffect(() => {
     const s = restored.current;
     if (!s) return;
     let cancelled = false;
     (async () => {
       if (s.repoUrl) {
-        await repo.openRepo(s.repoUrl);
+        await repo.openRepo(s.repoUrl, s.sandboxId);
+      } else if (s.sandboxId) {
+        // Blank projects have no URL — must resume by sandbox id or coding dies after refresh.
+        await repo.startBlankProject(s.title || 'untitled-project', s.sandboxId);
       }
       if (!cancelled && s.pendingChanges?.length) {
         repo.setPendingChanges(s.pendingChanges);
@@ -419,7 +422,8 @@ export function App() {
     setSessionKey(k => k + 1);
     if (s.pendingChanges?.length) repo.setPendingChanges(s.pendingChanges);
     else repo.clearChanges();
-    if (s.repoUrl) void repo.openRepo(s.repoUrl);
+    if (s.repoUrl) void repo.openRepo(s.repoUrl, s.sandboxId);
+    else if (s.sandboxId) void repo.startBlankProject(s.title || 'untitled-project', s.sandboxId);
   }, [repo]);
 
   const startFreshHome = useCallback(() => {
@@ -483,6 +487,10 @@ export function App() {
       const results = await repo.applyChanges(files);
       setApplyResults(results);
       setAppliedPaths(new Set(results.filter(r => r.ok).map(r => r.path)));
+      if (results.some(r => r.ok)) {
+        // New files must show up in the explorer immediately.
+        void repo.refreshTree();
+      }
       return results;
     } finally { setApplying(false); }
   }, [repo]);
@@ -596,7 +604,8 @@ export function App() {
 
     // Default path: write immediately. During an active verify loop we only
     // write (the loop applies explicitly too) — never nest another verify().
-    if (autoApplyOn && repo.root && enriched.length > 0) {
+    // sandboxId alone is enough — blank restore may briefly race root.
+    if (autoApplyOn && (repo.root || repo.sandboxId) && enriched.length > 0) {
       if (verifyingRef.current) {
         await handleApply(enriched);
       } else {
@@ -625,7 +634,8 @@ export function App() {
       })
       .join('\n');
 
-    const report = extractFileChangeReport(combined);
+    // Generate always means write — promote bare fences if models forgot File:.
+    const report = extractFilesForApply(combined, { promoteBare: true });
     // Last write wins when slices emit the same path.
     const byPath = new Map<string, string>();
     const dupes: string[] = [];
@@ -948,7 +958,10 @@ export function App() {
     }}>
       {applyFailed.length > 0 ? (
         <div style={{ color: '#ffb4b4', fontWeight: 800, marginBottom: 4, letterSpacing: '0.03em' }}>
-          ⛔ SANDBOX PROTECTED — {applyFailed.length} write{applyFailed.length === 1 ? '' : 's'} blocked
+          ⛔ WRITE FAILED — {applyFailed.length} file{applyFailed.length === 1 ? '' : 's'} not saved
+          {(applyFailed[0]?.error || '').toLowerCase().includes('sandbox')
+            ? ' (open/resume a sandbox first)'
+            : ''}
         </div>
       ) : (
         <div style={{ color: '#8fbf6f', fontWeight: 700, marginBottom: 4 }}>

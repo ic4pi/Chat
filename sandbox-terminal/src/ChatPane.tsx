@@ -28,6 +28,7 @@ import type { FileNode } from './types.js';
 import {
   extractFileChangeReport,
   extractFileChanges,
+  extractFilesForApply,
   formatRejectedSandboxWarning,
   looksLikeApplyRequest,
   looksLikeSuggestRequest,
@@ -120,7 +121,8 @@ function buildSystemPrompt(
     '- You do NOT have interactive shell/tool calls in this chat.',
     '- To change the repo: emit File: blocks with FULL file contents. The host writes them to the sandbox.',
     '- After accepted writes, the HOST runs Auto-test / static smoke and may inject failures back to you.',
-    '- Untitled ``` code blocks can be run via ▶ Run in Sandbox — they do not write files.',
+    '- Prefer File: <relative-path> then a fenced FULL file. That is how code is saved.',
+    '- Untitled ``` fences are only for throwaway demos (▶ Run). For real work, always use File: headers.',
     '- Do not claim you already ran tests or saved files unless you emitted accepted File: blocks.',
     '',
     'HARD RULE — NEVER DEGRADE THIS SANDBOX:',
@@ -144,7 +146,8 @@ function buildSystemPrompt(
     '',
     'If the user wants changes written: output File: blocks with FULL file contents.',
     'If they only want advice: plain English, cite real paths from context. Do not dump untitled example code.',
-    'Never invent paths. Use only paths from the tree / open files / search hits.',
+    'When editing existing files: use real paths from the tree / open files / search hits.',
+    'When creating new files (blank project or new feature): choose sensible relative paths (e.g. index.html, styles.css, app.js).',
     '',
     'QUALITY BAR (websites / apps):',
     '- Ship something that looks finished: real <title>, working CSS, readable layout, no broken local asset links.',
@@ -817,10 +820,18 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         (latestRef.current as { _pendingImages?: unknown })._pendingImages = undefined;
       }
 
+      // Review defaults to advice, but "apply this" / "fix it" must still write.
+      // Plan stays locked until the user switches role or clearly says apply
+      // (apply while Plan is ignored for writes — they must leave Plan).
+      const userAskedApply = kind === 'user' && looksLikeApplyRequest(text);
       const suggestTurn = kind === 'user' && (
-        looksLikeSuggestRequest(text) || activeRole === 'plan' || activeRole === 'review'
+        activeRole === 'plan'
+        || (activeRole === 'review' && !userAskedApply)
+        || (looksLikeSuggestRequest(text) && !userAskedApply)
       );
-      const applyTurn = kind === 'user' && looksLikeApplyRequest(text) && activeRole !== 'plan';
+      const applyTurn = kind === 'user' && userAskedApply && activeRole !== 'plan';
+      // Write role: coding asks and File: dumps should land even without magic words.
+      const writeRoleOpen = activeRole === 'write' && !suggestTurn;
 
       // Light chat ("hey", "thanks"): don't paste tree/files into the model.
       const lightTurn = !needsCodeContext(text);
@@ -842,20 +853,23 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       );
       if (activeRole === 'plan') {
         systemPrompt +=
-          '\n\nROLE=PLAN: architecture and steps only. No File: blocks, no fenced code, no scripts until the user says to apply/implement.';
+          '\n\nROLE=PLAN: architecture and steps only. No File: blocks, no fenced code, no scripts until the user switches to Write and says to apply/implement.';
       } else if (suggestTurn) {
         systemPrompt +=
           '\n\nSUGGEST-ONLY this turn: plain advice, real paths, no File: blocks, no placeholders.';
-      } else if (applyTurn) {
+      } else if (applyTurn || writeRoleOpen) {
         systemPrompt +=
-          '\n\nAPPLY this turn: output complete File: blocks only (FULL files). Stubs are rejected and will not save.';
+          '\n\nAPPLY this turn: output complete File: blocks only (FULL files). '
+          + 'Example:\nFile: index.html\n```html\n<!doctype html>…\n```\n'
+          + 'Stubs are rejected and will not save. Invent sensible new paths when creating files.';
       }
 
       // Always hit agent-chat — it accepts systemPrompt. /api/chat ignores it
       // and is the main-chat persona endpoint, not the agent.
       let reply = await callAgentWithContinue(history, systemPrompt, sid, prov, mod, key);
       let segs  = parseSegments(reply);
-      let report = extractFileChangeReport(reply);
+      // Promote bare fences on apply/write turns so "here's the page: ```html" still saves.
+      let report = extractFilesForApply(reply, { promoteBare: applyTurn || writeRoleOpen });
       let fc = report.accepted;
 
       // Suggest-only: ignore any File: blocks the model wrongly emitted.
@@ -867,6 +881,29 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             ? { type: 'text' as const, content: `(Suggestion for ${s.path} — not saved. Say “apply this” if you want it written.)` }
             : s,
         );
+      } else if (fc.length > 0) {
+        // Reflect promoted / accepted paths in the rendered segments.
+        const byPath = new Map(fc.map(f => [f.path, f.content]));
+        segs = segs.map(s => {
+          if (s.type === 'file-change' && byPath.has(s.path)) {
+            return { ...s, content: byPath.get(s.path)! };
+          }
+          if (s.type === 'code') {
+            for (const [path, content] of byPath) {
+              if (content === s.content) {
+                byPath.delete(path);
+                return { type: 'file-change' as const, path, lang: s.lang, content };
+              }
+            }
+          }
+          return s;
+        });
+        // Any promoted files not matched to a segment still show as file-change.
+        for (const [path, content] of byPath) {
+          if (!segs.some(s => s.type === 'file-change' && s.path === path)) {
+            segs.push({ type: 'file-change', path, lang: '', content });
+          }
+        }
       }
 
       setMessages(m => [...m, {
@@ -888,9 +925,9 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       const rejectedFirst = report.rejected;
       const shouldNudge = (fc.length === 0 || rejectedFirst.length > 0)
         && kind === 'user'
-        && applyTurn
+        && (applyTurn || writeRoleOpen)
         && !suggestTurn
-        && (!!root || ctx.size > 0)
+        && (!!root || !!sid || ctx.size > 0)
         && (Date.now() - sendStartedAt) < NUDGE_BUDGET_MS;
 
       if (shouldNudge) {
@@ -909,7 +946,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         ];
         reply = await callAgentWithContinue(nudgedHistory, systemPrompt, sid, prov, mod, key);
         segs  = parseSegments(reply);
-        report = extractFileChangeReport(reply);
+        report = extractFilesForApply(reply, { promoteBare: true });
         fc = report.accepted;
 
         setMessages(m => [...m, {

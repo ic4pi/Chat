@@ -6,9 +6,10 @@
   "scripts": {
     "dev": "vercel dev",
     "check": "node scripts/check-api.mjs",
-    "test": "node scripts/check-api.mjs",
+    "test": "node scripts/check-api.mjs && node scripts/test-file-tree.mjs",
     "animate": "node scripts/animate-sequence.mjs",
-    "test:animate": "node scripts/test-animate-local.mjs"
+    "test:animate": "node scripts/test-animate-local.mjs",
+    "test:file-tree": "node scripts/test-file-tree.mjs"
   },
   "dependencies": {
     "@vercel/sandbox": "^2.6.0",

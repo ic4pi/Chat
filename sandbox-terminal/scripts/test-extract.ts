@@ -5,9 +5,12 @@
 import {
   extractFileChangeReport,
   extractFileChanges,
+  extractFilesForApply,
   formatRejectedSandboxWarning,
+  looksLikeApplyRequest,
   looksLikeIncompleteFileContent,
   looksLikeWorkRequest,
+  promoteBareFencesToFiles,
 } from '../src/agentParse.ts';
 
 let failed = 0;
@@ -45,7 +48,50 @@ assert(none.length === 0, 'planning prose yields no changes');
 
 assert(looksLikeWorkRequest('fix the auth bug'), 'detects fix request');
 assert(looksLikeWorkRequest('build a todo app'), 'detects build request');
+assert(looksLikeApplyRequest('write a hello world html page'), 'detects write a…');
+assert(looksLikeApplyRequest('write me a todo app'), 'detects write me…');
+assert(looksLikeApplyRequest('code a landing page'), 'detects code a…');
+assert(looksLikeApplyRequest('make a button that counts'), 'detects make a…');
+assert(looksLikeApplyRequest('generate an index.html'), 'detects generate…');
+assert(looksLikeApplyRequest('apply this'), 'detects apply this');
 assert(!looksLikeWorkRequest('what is a closure?'), 'ignores pure question');
+assert(!looksLikeApplyRequest('suggest improvements'), 'suggest stays suggest');
+assert(
+  looksLikeApplyRequest('suggest improvements then apply this'),
+  'suggest + apply this still applies',
+);
+
+const bareHtml = extractFilesForApply(
+  'Sure — here is a page:\n\n```html\n<!doctype html>\n<html><head><title>Hi</title></head><body><h1>Hello</h1></body></html>\n```\n',
+  { promoteBare: true },
+);
+assert(
+  bareHtml.accepted.length === 1 && bareHtml.accepted[0]!.path === 'index.html',
+  'promotes bare html fence to index.html',
+);
+
+const bareTrio = extractFilesForApply(
+  '```html\n<!doctype html><title>App</title>\n```\n```css\nbody { margin: 0 }\n```\n```js\nconsole.log(1)\n```\n',
+  { promoteBare: true },
+);
+assert(
+  bareTrio.accepted.length === 3
+    && bareTrio.accepted.some(f => f.path === 'index.html')
+    && bareTrio.accepted.some(f => f.path === 'styles.css')
+    && bareTrio.accepted.some(f => f.path === 'app.js'),
+  'promotes html/css/js trio',
+);
+
+const noPromoteWhenFile = promoteBareFencesToFiles(
+  'File: real.html\n```html\n<!doctype html><title>X</title>\n```\n```css\nbody{}\n```',
+  extractFileChangeReport(
+    'File: real.html\n```html\n<!doctype html><title>X</title>\n```\n```css\nbody{}\n```',
+  ),
+);
+assert(
+  noPromoteWhenFile.accepted.length === 1 && noPromoteWhenFile.accepted[0]!.path === 'real.html',
+  'does not invent paths when File: already present',
+);
 
 const stub = `// ... existing imports ...\n\nfunction budgetMessages() {}\n// Then in handler:\n`;
 assert(looksLikeIncompleteFileContent(stub, 'api/agent-chat.js'), 'flags incomplete patch stub');
