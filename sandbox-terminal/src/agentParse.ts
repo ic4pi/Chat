@@ -73,6 +73,72 @@ export function looksLikeIncompleteFileContent(content: string, filePath = ''): 
   return incompleteFileReason(content, filePath) != null;
 }
 
+/** Default relative path when the model omits `File:` but emits a clear fence. */
+export function defaultPathForLang(lang: string, used: Set<string>): string {
+  const l = (lang || '').toLowerCase().replace(/^\./, '');
+  const pick = (base: string) => {
+    if (!used.has(base)) return base;
+    const dot = base.lastIndexOf('.');
+    const stem = dot > 0 ? base.slice(0, dot) : base;
+    const ext = dot > 0 ? base.slice(dot) : '';
+    let i = 2;
+    while (used.has(`${stem}${i}${ext}`)) i += 1;
+    return `${stem}${i}${ext}`;
+  };
+  if (l === 'html' || l === 'htm') return pick('index.html');
+  if (l === 'css' || l === 'scss' || l === 'less') return pick('styles.css');
+  if (l === 'javascript' || l === 'js' || l === 'jsx') return pick('app.js');
+  if (l === 'typescript' || l === 'ts') return pick('app.ts');
+  if (l === 'tsx') return pick('App.tsx');
+  if (l === 'python' || l === 'py') return pick('main.py');
+  if (l === 'json') return pick('data.json');
+  if (l === 'md' || l === 'markdown') return pick('README.md');
+  if (l === 'go') return pick('main.go');
+  if (l === 'rust' || l === 'rs') return pick('src/main.rs');
+  if (l === 'java') return pick('Main.java');
+  if (l === 'c') return pick('main.c');
+  if (l === 'cpp' || l === 'c++' || l === 'cc') return pick('main.cpp');
+  if (l === 'sh' || l === 'bash' || l === 'shell') return pick('script.sh');
+  if (l === 'svg') return pick('image.svg');
+  // Unknown / empty lang — only promote when content clearly looks like HTML.
+  return pick('snippet.txt');
+}
+
+/**
+ * When the model forgot `File:` headers but clearly dumped complete code fences
+ * (common on "write a hello world page"), promote those fences to files so the
+ * sandbox actually receives them. Never runs when any File: block was present.
+ */
+export function promoteBareFencesToFiles(text: string, report: FileChangeReport): FileChangeReport {
+  if (report.accepted.length > 0 || report.rejected.length > 0) return report;
+  // Explicit File: markers means the model tried the protocol — don't invent.
+  if (/\bFile:\s*\S+/i.test(text)) return report;
+
+  const fenceRe = /```([a-zA-Z0-9_+\-.]*)\s*\r?\n([\s\S]*?)```/g;
+  const accepted: FileChange[] = [];
+  const rejected: RejectedFileChange[] = [];
+  const used = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = fenceRe.exec(text)) !== null) {
+    const lang = (m[1] || '').trim();
+    const content = m[2] || '';
+    if (!content.trim()) continue;
+    // Skip tiny prose fences / one-liners that aren't real files.
+    if (content.trim().length < 20 && !lang) continue;
+    let path = defaultPathForLang(lang, used);
+    // Empty lang but looks like HTML → index.html
+    if ((!lang || lang === 'txt') && /^\s*</.test(content) && /<\/[a-z]/i.test(content)) {
+      path = defaultPathForLang('html', used);
+    }
+    used.add(path);
+    const reason = incompleteFileReason(content, path);
+    if (reason) rejected.push({ path, reason });
+    else accepted.push({ path, content });
+  }
+  if (!accepted.length && !rejected.length) return report;
+  return { accepted, rejected };
+}
+
 /** Parse LLM output; return accepted full files + rejected stubs with reasons. */
 export function extractFileChangeReport(text: string): FileChangeReport {
   const accepted: FileChange[] = [];
@@ -94,6 +160,16 @@ export function extractFileChangeReport(text: string): FileChangeReport {
     }
   }
   return { accepted, rejected };
+}
+
+/**
+ * Extract files for writing: prefer explicit File: blocks; on apply turns,
+ * also promote bare code fences when the model forgot the header.
+ */
+export function extractFilesForApply(text: string, opts?: { promoteBare?: boolean }): FileChangeReport {
+  const report = extractFileChangeReport(text);
+  if (opts?.promoteBare) return promoteBareFencesToFiles(text, report);
+  return report;
 }
 
 /** Parse LLM output for "File: path\\n```lang\\ncontent```" blocks (accepted only). */
@@ -132,11 +208,12 @@ export function looksLikeSuggestRequest(text: string): boolean {
 export function looksLikeApplyRequest(text: string): boolean {
   const t = text.toLowerCase();
   if (t.length < 4) return false;
-  // Suggest/review language wins — never treat as apply.
+  // Suggest/review language wins — unless the user also explicitly says apply.
   if (looksLikeSuggestRequest(t)) {
-    return /\b(apply (it|them|this|the changes)|implement (it|them|this|now)|go ahead and (fix|change|write)|do it now|write the (fix|code|files)|save (it|them|the fix))\b/.test(t);
+    return /\b(apply (it|them|this|the changes|that)|implement (it|them|this|now)|go ahead and (fix|change|write|apply)|do it now|write (the|it|them)|save (it|them|the fix)|put it in (the )?(repo|sandbox|files?))\b/.test(t);
   }
-  return /\b(apply|implement|write the|do it|go ahead|ship it|save (it|the)|patch it|fix (it|this|my|the)|build|create|add|update|refactor|rewrite|replace|delete|remove|rename|make the)\b/.test(t);
+  // Common coding asks people actually type ("write a…", "code a…", "make a…").
+  return /\b(apply|implement|write (the|a|an|me|my|us|our|some|this|that)|write\b.{0,40}\b(page|app|site|file|component|script|function|endpoint|api|html|css|js)|code (a|an|the|me|my|this|that)|do it|go ahead|ship it|save (it|the)|patch it|fix (it|this|my|the|a|an)|build|create|add|update|refactor|rewrite|replace|delete|remove|rename|make (the|a|an|me|my|us|our|this|that)|generate (a|an|the|me|my)|scaffold|bootstrap)\b/.test(t);
 }
 
 /** @deprecated use looksLikeSuggestRequest */

@@ -45,7 +45,8 @@ const TOTAL_BUDGET_MS = Math.max(
   30_000,
   Math.min(Number(process.env.GENERATE_TOTAL_MS) || 280_000, 290_000),
 );
-const MAX_TOKENS_PER_CHUNK = 3072;
+/** Enough for a full HTML/CSS/JS file; still fits several slices under maxDuration. */
+const MAX_TOKENS_PER_CHUNK = 4096;
 const MAX_PROMPT_CHARS = 16_000;
 const MAX_CONTEXT_CHARS = 12_000;
 /** Cap prior-slice text fed into later prompts (avoids ballooning + timeouts). */
