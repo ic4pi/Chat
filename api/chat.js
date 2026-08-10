@@ -9,7 +9,12 @@ import { loadConfig } from '../lib/config.js';
 import { resolveProvider, withProviderChatExtras, formatProviderError } from '../lib/providers.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
 
-const UPSTREAM_TIMEOUT_MS = 110_000;
+/**
+ * Headroom under vercel.json maxDuration 300. Must stay below the platform
+ * kill so AbortController can emit a clean SSE timedOut/done instead of a
+ * silent drop. Reasoning models often burn 1–2+ minutes before content.
+ */
+const UPSTREAM_TIMEOUT_MS = 280_000;
 /**
  * Room for a full normal reply (lyrics, essays, short plans) in one message.
  * Auto-continue only kicks in on hard cutoffs (length / timeout), not by design.
@@ -173,8 +178,10 @@ async function handleStream(req, res, resolved, model, messagesWithSystem, provi
     return finalizeReply();
   } catch (err) {
     const aborted = err?.name === 'AbortError' || controller.signal.aborted;
-    // Keep any streamed text and mark incomplete so the client can auto-continue.
-    if (aborted && fullReply.trim()) {
+    // Keep streamed content or reasoning and mark incomplete so the client
+    // can auto-continue — reasoning-only timeouts used to wipe ~minutes of
+    // thinking with a bare error and nothing left on screen.
+    if (aborted && (fullReply.trim() || fullReasoning.trim())) {
       return finalizeReply({ incomplete: true, timedOut: true });
     }
     sseWrite(res, {
@@ -185,6 +192,7 @@ async function handleStream(req, res, resolved, model, messagesWithSystem, provi
       provider: resolved.label,
       model,
       partialReply: fullReply || undefined,
+      reasoning: fullReasoning || undefined,
     });
     return res.end();
   } finally {

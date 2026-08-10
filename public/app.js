@@ -1598,10 +1598,10 @@ function friendlyNetworkError(err) {
   return raw || 'Network error';
 }
 
-// Client cap sits under the server's 120s maxDuration so we surface a clean
+// Client cap sits under the server's 300s maxDuration so we surface a clean
 // error instead of waiting on a dead socket. Free-tier OpenRouter gets a
-// shorter leash so a dead free model doesn't burn two minutes before fallback.
-const CHAT_CLIENT_TIMEOUT_MS = 115_000;
+// shorter leash so a dead free model doesn't burn minutes before fallback.
+const CHAT_CLIENT_TIMEOUT_MS = 290_000;
 const CHAT_FREE_TIER_TIMEOUT_MS = 45_000;
 
 /** Active chat/group fetch — Stop aborts this. */
@@ -1850,7 +1850,7 @@ const AUTO_CONTINUE_USER_TEXT =
 const AUTO_CONTINUE_AFTER_TIMEOUT_TEXT =
   'Continue from where you left off. Finish as much as you can in this reply. End with ⟦MORE⟧ only if a large amount still remains; otherwise finish and end with ⟦DONE⟧.';
 const AUTO_CONTINUE_EMPTY_TIMEOUT_TEXT =
-  'Previous attempt timed out before any text arrived. Restart and answer as fully as you can in one reply. End with ⟦MORE⟧ only if the ask is too large to finish; otherwise end with ⟦DONE⟧.';
+  'Previous attempt timed out during thinking before the answer text arrived. Restart and answer as fully as you can in one reply — spend less time thinking if needed. End with ⟦MORE⟧ only if the ask is too large to finish; otherwise end with ⟦DONE⟧.';
 
 function stripContinueMarkers(text) {
   return String(text || '')
@@ -2041,6 +2041,35 @@ async function sendMessage(text) {
       const data = attempt.data || {};
       const rawReply = (attempt.ok ? (data.reply || streamBuf) : (streamBuf || data.partialReply || '')).trim();
       const timedOut = Boolean(data.timedOut) || (!attempt.ok && isTimeoutLikeError(data.error || attempt.errText));
+      const hadReasoning = Boolean(
+        (typeof data.reasoning === 'string' && data.reasoning.trim())
+        || (els.typingThoughts?.textContent || '').trim(),
+      );
+
+      // Timed out after thinking but before answer text — don't leave an empty
+      // "(empty response)" bubble; keep a short note and auto-continue once.
+      if (!rawReply && timedOut && (attempt.ok || hadReasoning)) {
+        if (emptyTimeoutRetries < 1 && autoRound < AUTO_CONTINUE_MAX) {
+          emptyTimeoutRetries += 1;
+          autoRound += 1;
+          chat.messages.push({
+            role: 'info',
+            content: hadReasoning
+              ? 'Timed out during thinking — retrying with a shorter think…'
+              : 'Timed out with no text — retrying…',
+            ts: Date.now(),
+          });
+          chat.messages.push({
+            role: 'user',
+            content: AUTO_CONTINUE_EMPTY_TIMEOUT_TEXT,
+            ts: Date.now(),
+            autoContinue: true,
+          });
+          renderMessages({ scroll: 'bottom' });
+          saveState();
+          continue;
+        }
+      }
 
       if (!attempt.ok && !rawReply) {
         if (attempt.stopped || activeChatUserStopped) {
