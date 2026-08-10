@@ -75,10 +75,10 @@ const API_URL =
 
 // Auto-context must NEVER block the user bubble from appearing.
 const BEFORE_SEND_TIMEOUT_MS = 8_000;
-/** Above Hobby default (55s) and Pro override (up to 280s) so the API's clear error wins. */
+/** Above Pro agent-chat abort (~280s) so the API's clear error wins. */
 const CHAT_TIMEOUT_MS = 300_000;
-/** Skip the corrective nudge if the first model call already burned most of the Hobby window. */
-const NUDGE_BUDGET_MS = 40_000;
+/** Skip corrective nudge only when the whole Pro window is nearly spent. */
+const NUDGE_BUDGET_MS = 240_000;
 
 // ---------------------------------------------------------------------------
 // System prompt
@@ -313,12 +313,12 @@ function friendlyError(raw: string): string {
     return 'Request timed out waiting for the model. Try a faster model or a shorter prompt.';
   }
   if (lower.includes('http 504') || lower.includes('504') || lower.includes('gateway timeout')) {
-    return 'Workspace hit the ~60s server time limit before the model finished. Try a faster model, or ask to fix one file at a time.';
+    return 'Workspace hit the server time limit before the model finished. Try a faster model, or ask to fix one file at a time.';
   }
   return raw || 'Request failed';
 }
 
-type AgentReply = { reply: string; incomplete?: boolean; timedOut?: boolean };
+type AgentReply = { reply: string; incomplete?: boolean; timedOut?: boolean; reasoning?: string };
 
 /** True when the model was cut off mid File:/fence — worth one continuation turn. */
 function looksTruncatedReply(text: string): boolean {
@@ -353,8 +353,13 @@ function mergeContinuation(prev: string, next: string): string {
   return `${a}\n${b}`;
 }
 
-/** Read SSE from /api/agent-chat (stream:true). Falls back if the body is plain JSON. */
-async function readAgentReply(res: Response): Promise<AgentReply> {
+/** Read SSE from /api/agent-chat (stream:true). Falls back if the body is plain JSON.
+ *  onEvent receives status/token/thinking/done/error for live UI updates.
+ */
+async function readAgentReply(
+  res: Response,
+  onEvent?: (ev: { type?: string; text?: string; message?: string }) => void,
+): Promise<AgentReply> {
   const ctype = (res.headers.get('content-type') || '').toLowerCase();
   if (!ctype.includes('text/event-stream') || !res.body) {
     const data = await res.json() as { reply?: string; error?: string; incomplete?: boolean };
@@ -366,6 +371,7 @@ async function readAgentReply(res: Response): Promise<AgentReply> {
   const decoder = new TextDecoder();
   let buffer = '';
   let reply = '';
+  let reasoning = '';
   let incomplete = false;
   let timedOut = false;
   let streamError: string | null = null;
@@ -384,32 +390,45 @@ async function readAgentReply(res: Response): Promise<AgentReply> {
         let ev: {
           type?: string;
           text?: string;
+          message?: string;
           reply?: string;
           error?: string;
           partialReply?: string;
+          reasoning?: string;
           incomplete?: boolean;
           timedOut?: boolean;
         };
         try { ev = JSON.parse(payload); } catch { continue; }
+        onEvent?.(ev);
         if (ev.type === 'token' && typeof ev.text === 'string') {
           reply += ev.text;
+        } else if (ev.type === 'thinking' && typeof ev.text === 'string') {
+          reasoning += ev.text;
         } else if (ev.type === 'done' && typeof ev.reply === 'string') {
           reply = ev.reply;
           incomplete = !!ev.incomplete;
           timedOut = !!ev.timedOut;
+          if (typeof ev.reasoning === 'string' && ev.reasoning) reasoning = ev.reasoning;
         } else if (ev.type === 'error') {
           streamError = ev.error || 'Stream error';
           if (typeof ev.partialReply === 'string' && ev.partialReply.trim()) {
             reply = ev.partialReply;
             incomplete = true;
           }
+          if (typeof ev.reasoning === 'string' && ev.reasoning.trim()) {
+            reasoning = ev.reasoning;
+          }
         }
       }
     }
   }
 
+  // Reasoning-only timeout: treat as incomplete so Workspace can continue.
+  if (timedOut && !reply.trim() && reasoning.trim()) {
+    return { reply: '', incomplete: true, timedOut: true, reasoning };
+  }
   if (streamError && !reply.trim()) throw new Error(streamError);
-  return { reply: reply || '(empty response)', incomplete, timedOut };
+  return { reply: reply || '(empty response)', incomplete, timedOut, reasoning: reasoning || undefined };
 }
 
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
@@ -633,6 +652,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   const [messages,  setMessages]  = useState<Message[]>(() => initialMessages ?? []);
   const [input,    setInput]    = useState('');
   const [loading,  setLoading]  = useState(false);
+  const [liveThoughts, setLiveThoughts] = useState('');
   const [error,    setError]    = useState<string | null>(null);
   const [uploads,  setUploads]  = useState<PendingUpload[]>([]);
   const [speakOn,  setSpeakOn]  = useState(() => loadSpeakPref());
@@ -659,7 +679,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading]);
+  }, [messages, loading, liveThoughts]);
 
   useEffect(() => {
     onMessagesChange?.(messages);
@@ -677,6 +697,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
     const userMsg: Message = { id: uid(), role: 'user', content: text, kind };
     setMessages(m => [...m, userMsg]);
     setLoading(true);
+    setLiveThoughts('');
     setError(null);
 
     const callAgent = async (
@@ -720,7 +741,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           }
           throw new Error(`HTTP ${res.status}`);
         }
-        return await readAgentReply(res);
+        return await readAgentReply(res, (ev) => {
+          if (ev.type === 'thinking' && typeof ev.text === 'string' && ev.text) {
+            setLiveThoughts((prev) => prev + ev.text);
+          }
+        });
       } finally {
         clearTimeout(timer);
       }
@@ -739,25 +764,40 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       let result = await callAgent(history, systemPrompt, sid, prov, mod, key);
       let reply = result.reply;
       let continues = 0;
-      // One or two continuations when max_tokens / timeout cut mid File: block.
+      // Continue when max_tokens / timeout cut mid File: block, or when the
+      // model burned the window on thinking with no answer text yet.
       while (
         continues < 2
-        && (result.incomplete || looksTruncatedReply(reply))
+        && (
+          result.incomplete
+          || looksTruncatedReply(reply)
+          || (result.timedOut && (!reply.trim() || reply === '(empty response)'))
+        )
         && (Date.now() - sendStartedAt) < NUDGE_BUDGET_MS * 2
       ) {
         continues += 1;
-        const contPrompt =
-          'Your previous reply was cut off mid-output. Continue EXACTLY from where you left off. '
-          + 'Finish any open File: / fenced blocks with COMPLETE file contents. '
-          + 'Do not restart files you already finished. Do not apologize.';
-        const contHistory = [
-          ...history,
-          { role: 'assistant', content: reply },
-          { role: 'user', content: contPrompt },
-        ];
+        const emptyThink = result.timedOut && (!reply.trim() || reply === '(empty response)');
+        const contPrompt = emptyThink
+          ? 'Previous attempt timed out during thinking before any answer text. '
+            + 'Answer now with complete File: / fenced blocks. Spend less time thinking.'
+          : 'Your previous reply was cut off mid-output. Continue EXACTLY from where you left off. '
+            + 'Finish any open File: / fenced blocks with COMPLETE file contents. '
+            + 'Do not restart files you already finished. Do not apologize.';
+        const contHistory = emptyThink
+          ? [...history, { role: 'user', content: contPrompt }]
+          : [
+              ...history,
+              { role: 'assistant', content: reply },
+              { role: 'user', content: contPrompt },
+            ];
+        setLiveThoughts('');
         result = await callAgent(contHistory, systemPrompt, sid, prov, mod, key);
-        reply = mergeContinuation(reply, result.reply);
-        if (!result.incomplete && !looksTruncatedReply(result.reply)) break;
+        reply = emptyThink
+          ? result.reply
+          : mergeContinuation(reply, result.reply);
+        if (!result.incomplete && !looksTruncatedReply(result.reply) && result.reply.trim() && result.reply !== '(empty response)') {
+          break;
+        }
       }
       return reply;
     };
@@ -884,7 +924,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       // Only nudge for explicit APPLY asks — never for suggestions/reviews.
       // Also nudge when stubs were rejected (sandbox would otherwise stay broken-looking).
-      // Skip if the first call already used most of the ~60s Hobby window (avoids a second 504).
+      // Skip if the first call already used most of the Pro time window (avoids a second timeout).
       const rejectedFirst = report.rejected;
       const shouldNudge = (fc.length === 0 || rejectedFirst.length > 0)
         && kind === 'user'
@@ -941,6 +981,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       return [];
     } finally {
       setLoading(false);
+      setLiveThoughts('');
       sendingRef.current = false;
     }
   }, []);
@@ -1179,8 +1220,27 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           </div>
         ))}
         {loading && (
-          <div data-testid="thinking" style={{ alignSelf: 'flex-start', fontSize: 12, color: '#555' }}>
-            thinking…
+          <div data-testid="thinking" style={{ alignSelf: 'flex-start', maxWidth: '92%' }}>
+            <div style={{ fontSize: 12, color: '#555', marginBottom: liveThoughts ? 6 : 0 }}>
+              thinking…
+            </div>
+            {liveThoughts ? (
+              <pre data-testid="thinking-stream" style={{
+                margin: 0,
+                maxHeight: 160,
+                overflow: 'auto',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                fontSize: 11,
+                lineHeight: 1.45,
+                color: '#888',
+                background: '#101010',
+                border: '1px solid #1e1e1e',
+                borderRadius: 4,
+                padding: '8px 10px',
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+              }}>{liveThoughts}</pre>
+            ) : null}
           </div>
         )}
         <div ref={bottomRef} />

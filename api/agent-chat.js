@@ -6,10 +6,10 @@
  * a BYOK apiKey for Venice / OpenRouter / Cerebras / Groq / NVIDIA.
  *
  * Default is SSE streaming so tokens reach the browser before Vercel's
- * Hobby ~60s hard kill. Non-stream JSON remains available via stream:false.
+ * function kill. Non-stream JSON remains available via stream:false.
  *
- * IMPORTANT: keep UPSTREAM_TIMEOUT_MS under vercel.json maxDuration (Hobby
- * caps at 60s). A longer abort timer never fires — Vercel returns opaque 504.
+ * IMPORTANT: keep UPSTREAM_TIMEOUT_MS under vercel.json maxDuration (300).
+ * A longer abort timer never fires — Vercel returns opaque 504.
  */
 
 import { estimateTokens } from '../lib/context-filters.js';
@@ -22,12 +22,14 @@ const MAX_SYSTEM_TOKENS = 70_000;
 const MAX_HISTORY_TOKENS = 25_000;
 
 /**
- * Leave headroom under Vercel Hobby's hard 60s cap by default.
- * On Pro (vercel.json maxDuration 300), set AGENT_CHAT_TIMEOUT_MS=280000.
+ * Headroom under vercel.json maxDuration 300. Reasoning models (Qwen,
+ * GLM Flash Heretic, etc.) often spend 1–2+ minutes on thinking tokens
+ * before any content — the old Hobby 55s default killed those mid-thought.
+ * Override with AGENT_CHAT_TIMEOUT_MS if needed.
  */
 const UPSTREAM_TIMEOUT_MS = Math.max(
   10_000,
-  Math.min(Number(process.env.AGENT_CHAT_TIMEOUT_MS) || 55_000, 280_000),
+  Math.min(Number(process.env.AGENT_CHAT_TIMEOUT_MS) || 280_000, 280_000),
 );
 const CHUNK_MAX_TOKENS = 8192;
 
@@ -118,12 +120,14 @@ async function handleStream(res, resolved, model, messagesWithSystem, providerId
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
   let fullReply = '';
+  let fullReasoning = '';
   let finishReason = '';
 
   const finalizeReply = (opts = {}) => {
     sseWrite(res, {
       type: 'done',
       reply: fullReply,
+      reasoning: fullReasoning || undefined,
       incomplete: opts.incomplete || finishReason === 'length' || undefined,
       timedOut: opts.timedOut || undefined,
       provider: resolved.label,
@@ -199,7 +203,11 @@ async function handleStream(res, resolved, model, messagesWithSystem, providerId
         try { chunk = JSON.parse(payload); } catch { continue; }
         const fr = chunk?.choices?.[0]?.finish_reason;
         if (typeof fr === 'string' && fr) finishReason = fr;
-        const { text } = extractDelta(chunk);
+        const { text, reasoning } = extractDelta(chunk);
+        if (reasoning) {
+          fullReasoning += reasoning;
+          sseWrite(res, { type: 'thinking', text: reasoning });
+        }
         if (text) {
           fullReply += text;
           sseWrite(res, { type: 'token', text });
@@ -210,8 +218,8 @@ async function handleStream(res, resolved, model, messagesWithSystem, providerId
     return finalizeReply();
   } catch (err) {
     const aborted = err?.name === 'AbortError' || controller.signal.aborted;
-    // Keep any streamed text so Workspace can still apply File: blocks.
-    if (aborted && fullReply.trim()) {
+    // Keep any streamed text / reasoning so Workspace can continue or show thoughts.
+    if (aborted && (fullReply.trim() || fullReasoning.trim())) {
       return finalizeReply({ incomplete: true, timedOut: true });
     }
     sseWrite(res, {
@@ -222,6 +230,7 @@ async function handleStream(res, resolved, model, messagesWithSystem, providerId
       provider: resolved.label,
       model,
       partialReply: fullReply || undefined,
+      reasoning: fullReasoning || undefined,
     });
     return res.end();
   } finally {
@@ -328,7 +337,7 @@ export default async function handler(req, res) {
     ? [{ role: 'system', content: budgeted.system }, ...budgeted.messages]
     : budgeted.messages;
 
-  // Default stream:true — Workspace needs tokens before the 60s Hobby kill.
+  // Default stream:true — Workspace needs tokens before the function time limit.
   const useStream = wantStream !== false;
   if (useStream) {
     return handleStream(res, resolved, model, messagesWithSystem, providerId, budgeted);

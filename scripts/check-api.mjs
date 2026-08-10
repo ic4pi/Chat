@@ -222,4 +222,29 @@ for (const sym of [
 }
 ok('code-slices + generate contract');
 
+// 6) Reasoning models need Pro-length budgets — Hobby-era 55s/60s kills
+// mid-thought with nothing to show (Qwen uncensored, GLM Flash Heretic, etc.).
+const vercel = JSON.parse(readFileSync(path.join(root, 'vercel.json'), 'utf8'));
+for (const route of ['api/chat.js', 'api/agent-chat.js', 'api/group-chat.js']) {
+  const dur = vercel.functions?.[route]?.maxDuration;
+  if (dur !== 300) {
+    fail(`${route} maxDuration must be 300 (got ${dur}) — thinking streams need headroom`);
+  }
+}
+const agentChatSrc = readFileSync(path.join(root, 'api/agent-chat.js'), 'utf8');
+if (/ \|\| 55_000\b/.test(agentChatSrc) || / \|\| 55000\b/.test(agentChatSrc)) {
+  fail('api/agent-chat.js must not default AGENT_CHAT_TIMEOUT_MS to Hobby 55s');
+}
+if (!/ \|\| 280_000\b/.test(agentChatSrc)) {
+  fail('api/agent-chat.js must default UPSTREAM_TIMEOUT_MS to 280_000');
+}
+const chatSrc = readFileSync(path.join(root, 'api/chat.js'), 'utf8');
+if (!/UPSTREAM_TIMEOUT_MS\s*=\s*280_000\b/.test(chatSrc)) {
+  fail('api/chat.js UPSTREAM_TIMEOUT_MS must be 280_000 under maxDuration 300');
+}
+if (!agentChatSrc.includes("type: 'thinking'") || !chatSrc.includes("type: 'thinking'")) {
+  fail('chat + agent-chat must SSE-forward thinking/reasoning deltas');
+}
+ok('thinking timeout budgets');
+
 console.log('check-api: all checks passed');
