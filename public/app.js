@@ -131,13 +131,34 @@ const MODEL_CATEGORIES = [
   { id: 'uncensored', label: 'Uncensored' },
 ];
 
+/**
+ * Persist paid unlock in localStorage (same as BYOK keys) so leaving the page
+ * does not force re-entry. Migrates any leftover sessionStorage value once.
+ */
 function loadPaidPassword() {
-  try { return sessionStorage.getItem(PAID_PASS_STORAGE) || ''; } catch { return ''; }
+  try {
+    const fromLocal = localStorage.getItem(PAID_PASS_STORAGE);
+    if (fromLocal) return fromLocal;
+    const fromSession = sessionStorage.getItem(PAID_PASS_STORAGE);
+    if (fromSession) {
+      localStorage.setItem(PAID_PASS_STORAGE, fromSession);
+      sessionStorage.removeItem(PAID_PASS_STORAGE);
+      return fromSession;
+    }
+    return '';
+  } catch {
+    return '';
+  }
 }
 function savePaidPassword(pw) {
   try {
-    if (pw) sessionStorage.setItem(PAID_PASS_STORAGE, pw);
-    else sessionStorage.removeItem(PAID_PASS_STORAGE);
+    if (pw) {
+      localStorage.setItem(PAID_PASS_STORAGE, pw);
+      try { sessionStorage.removeItem(PAID_PASS_STORAGE); } catch { /* ignore */ }
+    } else {
+      localStorage.removeItem(PAID_PASS_STORAGE);
+      try { sessionStorage.removeItem(PAID_PASS_STORAGE); } catch { /* ignore */ }
+    }
   } catch { /* ignore */ }
 }
 function paidUnlocked() {
@@ -1398,7 +1419,7 @@ function updateModelPickerLabel() {
   if (els.unlockPaidBtn) {
     els.unlockPaidBtn.textContent = paidUnlocked() ? 'Paid ✓' : 'Unlock';
     els.unlockPaidBtn.title = paidUnlocked()
-      ? 'Paid models unlocked this session'
+      ? 'Paid models unlocked on this device — click to lock'
       : 'Unlock paid models with password';
   }
   if (els.modelUnlockBtn) {
@@ -1778,7 +1799,14 @@ async function callChatStream(provider, model, messages, personaId, onEvent) {
       };
     }
     if (!donePayload) {
-      return { ok: false, status: 502, data: null, errText: 'Stream ended without a reply' };
+      // Platform kill / proxy drop mid-thinking often ends the SSE with no
+      // `done` event — treat like a timeout so auto-continue can recover.
+      return {
+        ok: false,
+        status: 504,
+        data: { error: 'Stream ended without a reply', timedOut: true },
+        errText: 'Stream ended without a reply',
+      };
     }
     return {
       ok: true,

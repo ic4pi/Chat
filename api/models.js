@@ -13,6 +13,7 @@ import {
 } from '../lib/providers.js';
 import { resolveNvidiaModels, filterNvidiaChatModels } from '../lib/nvidia-models.js';
 import { enrichModels } from '../lib/model-meta.js';
+import { handleUnlockPaid, isUnlockPaidRequest } from '../lib/unlock-paid-handler.js';
 
 /** Exact Venice models the app exposes — nothing else. */
 const VENICE_ONLY = FALLBACK_MODELS.venice || [];
@@ -99,8 +100,14 @@ async function fetchCatalog(url, { apiKey, extraHeaders } = {}) {
 }
 
 export default async function handler(req, res) {
+  // /api/unlock-paid is rewritten here so Hobby stays under the 12-function cap.
+  if (isUnlockPaidRequest(req)) {
+    return handleUnlockPaid(req, res);
+  }
+
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Provider-Key');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Provider-Key, X-Paid-Password');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });

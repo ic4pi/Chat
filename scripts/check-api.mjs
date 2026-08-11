@@ -10,7 +10,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -246,5 +246,57 @@ if (!agentChatSrc.includes("type: 'thinking'") || !chatSrc.includes("type: 'thin
   fail('chat + agent-chat must SSE-forward thinking/reasoning deltas');
 }
 ok('thinking timeout budgets');
+
+// 7) Paid unlock must persist in localStorage (not session-only).
+const appSrc = readFileSync(path.join(root, 'public/app.js'), 'utf8');
+const prefsSrc = readFileSync(path.join(root, 'sandbox-terminal/src/providerPrefs.ts'), 'utf8');
+for (const [label, src] of [['public/app.js', appSrc], ['providerPrefs.ts', prefsSrc]]) {
+  if (!src.includes('localStorage.getItem(PAID_PASS_STORAGE)')) {
+    fail(`${label} must read paid unlock from localStorage`);
+  }
+  if (!src.includes('localStorage.setItem(PAID_PASS_STORAGE')) {
+    fail(`${label} must write paid unlock to localStorage`);
+  }
+  if (/sessionStorage\.setItem\(PAID_PASS_STORAGE/.test(src)) {
+    fail(`${label} must not save paid unlock to sessionStorage`);
+  }
+}
+if (/sessionStorage\.getItem\('uncensored_paid_password_v1'\)/.test(
+  readFileSync(path.join(root, 'sandbox-terminal/src/ChatPane.tsx'), 'utf8'),
+)) {
+  fail('ChatPane must use loadPaidPassword(), not raw sessionStorage');
+}
+ok('paid unlock persistence');
+
+// 8) Hobby chat project caps at 12 serverless functions — folding unlock into
+// models.js (rewrite /api/unlock-paid) keeps deploys unblocked.
+const apiJs = [];
+function walkApi(dir) {
+  for (const name of readdirSync(dir)) {
+    const abs = path.join(dir, name);
+    const st = statSync(abs);
+    if (st.isDirectory()) walkApi(abs);
+    else if (name.endsWith('.js')) apiJs.push(path.relative(root, abs));
+  }
+}
+walkApi(path.join(root, 'api'));
+if (apiJs.length > 12) {
+  fail(`Hobby allows ≤12 serverless functions; found ${apiJs.length}: ${apiJs.join(', ')}`);
+}
+if (existsSync(path.join(root, 'api/unlock-paid.js'))) {
+  fail('api/unlock-paid.js must be folded into api/models.js (Hobby 12-function cap)');
+}
+const modelsUnlockSrc = readFileSync(path.join(root, 'api/models.js'), 'utf8');
+if (!modelsUnlockSrc.includes('handleUnlockPaid') || !modelsUnlockSrc.includes('isUnlockPaidRequest')) {
+  fail('api/models.js must handle unlock-paid rewrite');
+}
+const vercelUnlock = JSON.parse(readFileSync(path.join(root, 'vercel.json'), 'utf8'));
+const hasUnlockRewrite = (vercelUnlock.rewrites || []).some(
+  (r) => r.source === '/api/unlock-paid' && String(r.destination || '').includes('op=unlock-paid'),
+);
+if (!hasUnlockRewrite) {
+  fail('vercel.json must rewrite /api/unlock-paid → /api/models?op=unlock-paid');
+}
+ok(`hobby function cap (${apiJs.length}/12)`);
 
 console.log('check-api: all checks passed');

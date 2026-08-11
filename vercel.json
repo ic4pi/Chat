@@ -11,6 +11,8 @@
 
     { "source": "/generate",                 "destination": "/api/generate" },
 
+    { "source": "/api/unlock-paid",           "destination": "/api/models?op=unlock-paid" },
+
     { "source": "/api/run",                  "destination": "/api/sandbox/run" },
     { "source": "/api/run-code",             "destination": "/api/sandbox/run-code" },
     { "source": "/api/init-repo",            "destination": "/api/sandbox/init-repo" },

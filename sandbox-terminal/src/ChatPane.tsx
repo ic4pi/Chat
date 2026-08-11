@@ -44,6 +44,7 @@ import {
   type SearchHit,
 } from './contextBudget.js';
 import { copyText, downloadTextFile } from './downloadFile.js';
+import { loadPaidPassword } from './providerPrefs.js';
 import {
   cleanForSpeech,
   getSpeechRecognition,
@@ -712,8 +713,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       const chatHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
       if (sid) chatHeaders['X-Sandbox-Session'] = sid;
       if (key) chatHeaders['X-Provider-Key'] = key;
-      let paidPw = '';
-      try { paidPw = sessionStorage.getItem('uncensored_paid_password_v1') || ''; } catch { /* ignore */ }
+      const paidPw = loadPaidPassword();
       if (paidPw) chatHeaders['X-Paid-Password'] = paidPw;
 
       const controller = new AbortController();
