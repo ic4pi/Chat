@@ -24,6 +24,7 @@ import {
   FALLBACK_MODELS,
   PROVIDER_LIST,
   fetchModels,
+  loadPaidPassword,
   loadProviderKeys,
   paidUnlocked,
   type CatalogModel,
@@ -235,8 +236,7 @@ export function ChunkModelPanel({
     abortRef.current = controller;
 
     const keys = loadProviderKeys();
-    let paidPw = '';
-    try { paidPw = sessionStorage.getItem('uncensored_paid_password_v1') || ''; } catch { /* ignore */ }
+    const paidPw = loadPaidPassword();
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (paidPw) headers['X-Paid-Password'] = paidPw;

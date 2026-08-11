@@ -30,14 +30,36 @@ const KEYS_STORAGE = 'uncensored_provider_keys_v1';
 const ROLES_STORAGE = 'uncensored_role_models_v1';
 const PAID_PASS_STORAGE = 'uncensored_paid_password_v1';
 
+/**
+ * Persist paid unlock in localStorage (same as BYOK keys) so Chat ↔ Workspace
+ * navigation and tab closes do not force re-entry. Migrates any leftover
+ * sessionStorage value once.
+ */
 export function loadPaidPassword(): string {
-  try { return sessionStorage.getItem(PAID_PASS_STORAGE) || ''; } catch { return ''; }
+  try {
+    const fromLocal = localStorage.getItem(PAID_PASS_STORAGE);
+    if (fromLocal) return fromLocal;
+    const fromSession = sessionStorage.getItem(PAID_PASS_STORAGE);
+    if (fromSession) {
+      localStorage.setItem(PAID_PASS_STORAGE, fromSession);
+      sessionStorage.removeItem(PAID_PASS_STORAGE);
+      return fromSession;
+    }
+    return '';
+  } catch {
+    return '';
+  }
 }
 
 export function savePaidPassword(pw: string): void {
   try {
-    if (pw) sessionStorage.setItem(PAID_PASS_STORAGE, pw);
-    else sessionStorage.removeItem(PAID_PASS_STORAGE);
+    if (pw) {
+      localStorage.setItem(PAID_PASS_STORAGE, pw);
+      try { sessionStorage.removeItem(PAID_PASS_STORAGE); } catch { /* ignore */ }
+    } else {
+      localStorage.removeItem(PAID_PASS_STORAGE);
+      try { sessionStorage.removeItem(PAID_PASS_STORAGE); } catch { /* ignore */ }
+    }
   } catch { /* ignore */ }
 }
 

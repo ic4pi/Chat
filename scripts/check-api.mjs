@@ -222,4 +222,26 @@ for (const sym of [
 }
 ok('code-slices + generate contract');
 
+// 6) Paid unlock must persist in localStorage (not session-only).
+const appSrc = readFileSync(path.join(root, 'public/app.js'), 'utf8');
+const prefsSrc = readFileSync(path.join(root, 'sandbox-terminal/src/providerPrefs.ts'), 'utf8');
+for (const [label, src] of [['public/app.js', appSrc], ['providerPrefs.ts', prefsSrc]]) {
+  if (!src.includes('localStorage.getItem(PAID_PASS_STORAGE)')) {
+    fail(`${label} must read paid unlock from localStorage`);
+  }
+  if (!src.includes('localStorage.setItem(PAID_PASS_STORAGE')) {
+    fail(`${label} must write paid unlock to localStorage`);
+  }
+  // Primary store must not be session-only (migration reads are fine).
+  if (/sessionStorage\.setItem\(PAID_PASS_STORAGE/.test(src)) {
+    fail(`${label} must not save paid unlock to sessionStorage`);
+  }
+}
+if (/sessionStorage\.getItem\('uncensored_paid_password_v1'\)/.test(
+  readFileSync(path.join(root, 'sandbox-terminal/src/ChatPane.tsx'), 'utf8'),
+)) {
+  fail('ChatPane must use loadPaidPassword(), not raw sessionStorage');
+}
+ok('paid unlock persistence');
+
 console.log('check-api: all checks passed');

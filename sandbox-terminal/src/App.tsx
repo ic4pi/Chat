@@ -831,7 +831,7 @@ export function App() {
               })
               .catch((err: Error) => window.alert(err.message || 'Unlock failed'));
           }}
-          title={paidUnlocked() ? 'Paid models unlocked — click to lock' : 'Unlock paid models'}
+          title={paidUnlocked() ? 'Paid models unlocked on this device — click to lock' : 'Unlock paid models'}
           style={{ background: paidUnlocked() ? '#1a2a0a' : '#151515',
             color: paidUnlocked() ? '#8fbf6f' : '#888',
             border: '1px solid #2a2a2a', borderRadius: 4, padding: '3px 8px',
