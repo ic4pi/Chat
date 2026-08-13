@@ -31,7 +31,22 @@ const UPSTREAM_TIMEOUT_MS = Math.max(
   10_000,
   Math.min(Number(process.env.AGENT_CHAT_TIMEOUT_MS) || 280_000, 280_000),
 );
-const CHUNK_MAX_TOKENS = 8192;
+
+/**
+ * Agent replies must contain COMPLETE File: blocks — the write endpoint
+ * rejects truncated files. 8192 was too small for real source files
+ * (api/group-chat.js, public/app.js class sizes) and caused a loop of
+ * length-cut replies → rejected writes. 16k output is supported by the
+ * coding models on all five providers we route to.
+ */
+const CHUNK_MAX_TOKENS = 16_384;
+
+/** Comment-frame keepalive so idle proxies don't kill silent reasoning phases. */
+const KEEPALIVE_MS = 15_000;
+
+/** Continuation marker — same protocol as /api/chat so the client handles one signal. */
+const MORE_MARKER = '⟦MORE⟧';
+const MARKER_RE = /⟦\s*MORE\s*⟧|⟦\s*DONE\s*⟧/i;
 
 function truncateToTokens(text, maxTokens) {
   const maxChars = maxTokens * 4;
@@ -104,11 +119,18 @@ function extractDelta(chunk) {
   return { text, reasoning };
 }
 
+/** Never write to a closed/destroyed response — client may have disconnected. */
 function sseWrite(res, obj) {
+  if (res.writableEnded || res.destroyed) return;
   res.write(`data: ${JSON.stringify(obj)}\n\n`);
 }
 
-async function handleStream(res, resolved, model, messagesWithSystem, providerId, budgeted) {
+function sseComment(res, text) {
+  if (res.writableEnded || res.destroyed) return;
+  res.write(`:${text}\n\n`);
+}
+
+async function handleStream(req, res, resolved, model, messagesWithSystem, providerId, budgeted) {
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
@@ -119,16 +141,36 @@ async function handleStream(res, resolved, model, messagesWithSystem, providerId
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+
+  // Reasoning models can be silent for 1–2 min before the first delta;
+  // some proxies drop idle SSE connections well before that.
+  const keepalive = setInterval(() => sseComment(res, 'keepalive'), KEEPALIVE_MS);
+
+  // Stop paying for upstream generation the moment the browser goes away.
+  let clientClosed = false;
+  const onClose = () => {
+    clientClosed = true;
+    if (!controller.signal.aborted) controller.abort();
+  };
+  res.on('close', onClose);
+
   let fullReply = '';
   let fullReasoning = '';
   let finishReason = '';
 
   const finalizeReply = (opts = {}) => {
+    let reply = fullReply;
+    const incomplete = Boolean(opts.incomplete || finishReason === 'length');
+    // Continuation marker — same protocol as /api/chat. Never add it when the
+    // client is gone (nobody to continue) or the model already emitted one.
+    if (incomplete && !clientClosed && reply.trim() && !MARKER_RE.test(reply)) {
+      reply = `${reply.trimEnd()}\n\n${MORE_MARKER}`;
+    }
     sseWrite(res, {
       type: 'done',
-      reply: fullReply,
+      reply,
       reasoning: fullReasoning || undefined,
-      incomplete: opts.incomplete || finishReason === 'length' || undefined,
+      incomplete: incomplete || undefined,
       timedOut: opts.timedOut || undefined,
       provider: resolved.label,
       model,
@@ -218,6 +260,10 @@ async function handleStream(res, resolved, model, messagesWithSystem, providerId
     return finalizeReply();
   } catch (err) {
     const aborted = err?.name === 'AbortError' || controller.signal.aborted;
+    if (clientClosed) {
+      // Browser disconnected mid-stream; nothing to report to anyone.
+      return res.end();
+    }
     // Keep any streamed text / reasoning so Workspace can continue or show thoughts.
     if (aborted && (fullReply.trim() || fullReasoning.trim())) {
       return finalizeReply({ incomplete: true, timedOut: true });
@@ -235,6 +281,8 @@ async function handleStream(res, resolved, model, messagesWithSystem, providerId
     return res.end();
   } finally {
     clearTimeout(timer);
+    clearInterval(keepalive);
+    res.off('close', onClose);
   }
 }
 
@@ -277,11 +325,16 @@ async function handleJson(res, resolved, model, messagesWithSystem, providerId, 
       });
     }
 
-    const reply = data.choices?.[0]?.message?.content ?? '';
+    const reply = String(data.choices?.[0]?.message?.content ?? '');
     const finishReason = data.choices?.[0]?.finish_reason || '';
+    const incomplete = finishReason === 'length';
+    const out =
+      incomplete && reply.trim() && !MARKER_RE.test(reply)
+        ? `${reply.trimEnd()}\n\n${MORE_MARKER}`
+        : reply;
     return res.status(200).json({
-      reply,
-      incomplete: finishReason === 'length' || undefined,
+      reply: out,
+      incomplete: incomplete || undefined,
       model,
       provider: resolved.label,
       tokens: budgeted.tokens,
@@ -303,8 +356,8 @@ async function handleJson(res, resolved, model, messagesWithSystem, providerId, 
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Sandbox-Session, X-Provider-Key, X-Paid-Password');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
 
@@ -340,7 +393,7 @@ export default async function handler(req, res) {
   // Default stream:true — Workspace needs tokens before the function time limit.
   const useStream = wantStream !== false;
   if (useStream) {
-    return handleStream(res, resolved, model, messagesWithSystem, providerId, budgeted);
+    return handleStream(req, res, resolved, model, messagesWithSystem, providerId, budgeted);
   }
   return handleJson(res, resolved, model, messagesWithSystem, providerId, budgeted);
 }
