@@ -119,18 +119,43 @@ function buildSystemPrompt(
     '',
     'HOW THIS WORKSPACE WORKS (read carefully):',
     '- You do NOT have interactive shell/tool calls in this chat.',
-    '- To change the repo: emit File: blocks with FULL file contents. The host writes them to the sandbox.',
-    '- After accepted writes, the HOST runs Auto-test / static smoke and may inject failures back to you.',
+    '- Two ways to change the repo — pick the smaller one that does the job:',
+    '',
+    '  1) EDIT an existing file (PREFERRED for existing files — smaller, safer, cannot truncate mid-file):',
+    '     Edit: <relative-path>',
+    '     <<<<<<< SEARCH',
+    '     <text copied EXACTLY from the current file — every space, every line>',
+    '     =======',
+    '     <the replacement text>',
+    '     >>>>>>> REPLACE',
+    '     - SEARCH must be copied verbatim from the file as it exists in context. If it does not match',
+    '       character-for-character, the edit is rejected and nothing is written.',
+    '     - Keep SEARCH as SHORT as possible while still being unique in the file — a few lines around',
+    '       the change, not the whole function, unless the whole function is what is changing.',
+    '     - Multiple Edit: blocks for the same file are applied in the order you write them, each',
+    '       against the result of the one before it — so you can make several small changes to one file.',
+    '',
+    '  2) WRITE a brand-new file, or fully replace one on explicit request (FULL contents only):',
+    '     File: <relative-path>',
+    '     ```lang',
+    '     <complete file content — every line, no omissions>',
+    '     ```',
+    '',
+    '- The host writes accepted blocks to the sandbox. After accepted writes, the HOST runs Auto-test /',
+    '  static smoke and may inject failures back to you.',
     '- Untitled ``` code blocks can be run via ▶ Run in Sandbox — they do not write files.',
-    '- Do not claim you already ran tests or saved files unless you emitted accepted File: blocks.',
+    '- Do not claim you already ran tests or saved files unless you emitted accepted blocks.',
     '',
     'HARD RULE — NEVER DEGRADE THIS SANDBOX:',
-    '- Incomplete File: blocks are REJECTED before write. Nothing partial is saved.',
-    '- Forbidden: diffs, patches, stubs, "// ... existing imports ...", "// ... existing code ...", "Then in handler:", "rest of file unchanged".',
-    '- If a file is long, still output the ENTIRE file. Prefer one full file over five stubs.',
-    '- If output may truncate, finish the highest-priority file first (complete), then others.',
-    '- Truncating api/*.js or lib/sandbox-api/* has taken production to HTTP 500. Do not do it.',
-    '- Never claim a fix was applied unless you emitted complete accepted File: blocks.',
+    '- Incomplete File:/Edit: blocks are REJECTED before write. Nothing partial is saved.',
+    '- Inside a File: block specifically, forbidden: stubs, "// ... existing imports ...",',
+    '  "// ... existing code ...", "Then in handler:", "rest of file unchanged" — if you are rewriting a',
+    '  whole file, write the WHOLE file. (That is exactly what Edit: blocks exist to avoid needing.)',
+    '- If a File: block is long, still output the ENTIRE file — or better, use Edit: blocks instead so',
+    '  there is nothing large enough to truncate.',
+    '- Truncating api/*.js or lib/sandbox-api/* has taken production to HTTP 500. Prefer Edit: blocks',
+    '  for changes to these files so a token-limit cutoff can never corrupt them mid-file.',
+    '- Never claim a fix was applied unless you emitted complete accepted blocks.',
     '',
     'SANDBOX FACTS (do not invent limitations):',
     '- This is a Vercel Sandbox microVM (Amazon Linux 2023), NOT a local laptop.',
@@ -896,12 +921,17 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       let reply = await callAgentWithContinue(history, systemPrompt, sid, prov, mod, key);
       let segs  = parseSegments(reply);
       let report = extractFileChangeReport(reply);
-      let fc = report.accepted;
+      // Full-file writes (new files / explicit rewrites) + unresolved Edit:
+      // blocks (resolved against on-disk content by the caller via onFc).
+      let fc: PendingChange[] = [
+        ...report.accepted.map(f => ({ path: f.path, content: f.content })),
+        ...report.edits.map(e => ({ path: e.path, content: '', edit: e })),
+      ];
 
-      // Suggest-only: ignore any File: blocks the model wrongly emitted.
+      // Suggest-only: ignore any File:/Edit: blocks the model wrongly emitted.
       if (suggestTurn) {
         fc = [];
-        report = { accepted: [], rejected: [] };
+        report = { accepted: [], edits: [], rejected: [] };
         segs = segs.map(s =>
           s.type === 'file-change'
             ? { type: 'text' as const, content: `(Suggestion for ${s.path} — not saved. Say “apply this” if you want it written.)` }
@@ -950,7 +980,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         reply = await callAgentWithContinue(nudgedHistory, systemPrompt, sid, prov, mod, key);
         segs  = parseSegments(reply);
         report = extractFileChangeReport(reply);
-        fc = report.accepted;
+        fc = [
+          ...report.accepted.map(f => ({ path: f.path, content: f.content })),
+          ...report.edits.map(e => ({ path: e.path, content: '', edit: e })),
+        ];
 
         setMessages(m => [...m, {
           id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,

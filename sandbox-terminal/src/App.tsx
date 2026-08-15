@@ -22,6 +22,7 @@ import {
   formatRejectedSandboxWarning,
   looksLikeSuggestRequest,
   needsCodeContext,
+  applyFileEdit,
 } from './agentParse.js';
 import type { FileNode } from './types.js';
 import {
@@ -574,21 +575,62 @@ export function App() {
   }, [repo.root, repo.sandboxId, repo.tree, repo.contextFiles]);
 
   const handleFileChanges = useCallback(async (changes: PendingChange[]) => {
-    const enriched = await Promise.all(changes.map(async c => {
-      if (!repo.root) return c;
+    // Group by path — multiple Edit: blocks against the same file must apply
+    // in order, each against the previous one's result, not all independently
+    // against the same starting content.
+    const byPath = new Map<string, PendingChange[]>();
+    for (const c of changes) {
+      const arr = byPath.get(c.path) ?? [];
+      arr.push(c);
+      byPath.set(c.path, arr);
+    }
+
+    const fetchOriginal = async (path: string): Promise<string | undefined> => {
+      if (!repo.root) return undefined;
       try {
         const headers: Record<string, string> = {};
         if (repo.sandboxId) headers['X-Sandbox-Session'] = repo.sandboxId;
         const url = repo.sandboxId
-          ? `${API_URL}/file?path=${encodeURIComponent(c.path)}`
-          : `${API_URL}/file?root=${encodeURIComponent(repo.root)}&path=${encodeURIComponent(c.path)}`;
+          ? `${API_URL}/file?path=${encodeURIComponent(path)}`
+          : `${API_URL}/file?root=${encodeURIComponent(repo.root)}&path=${encodeURIComponent(path)}`;
         const res = await fetch(url, { headers });
-        if (!res.ok) return c;
+        if (!res.ok) return undefined;
         const data = await res.json() as { content?: string };
-        return { ...c, original: data.content };
-      } catch { return c; }
-    }));
-    repo.setPendingChanges(enriched);
+        return data.content;
+      } catch { return undefined; }
+    };
+
+    const resolved: PendingChange[] = [];
+    for (const [path, group] of byPath) {
+      const original = await fetchOriginal(path);
+
+      // A full File: block (no .edit) always wins for this path — it's an
+      // explicit full rewrite, so any Edit: blocks for the same path in this
+      // batch are superseded rather than composed with it.
+      const fullFile = [...group].reverse().find(c => !c.edit);
+      if (fullFile) {
+        resolved.push({ ...fullFile, original });
+        continue;
+      }
+
+      // Sequentially apply every Edit: block for this path, each against the
+      // previous result, so multiple edits to the same file compose correctly.
+      let running = original;
+      let applyError: string | undefined;
+      for (const c of group) {
+        if (!c.edit) continue;
+        const result = applyFileEdit(running, c.edit);
+        if ('error' in result) { applyError = result.error; break; }
+        running = result.content;
+      }
+      resolved.push(
+        applyError
+          ? { path, content: original ?? '', original, applyError }
+          : { path, content: running ?? '', original },
+      );
+    }
+
+    repo.setPendingChanges(resolved);
     setAppliedPaths(new Set());
     setApplyResults([]);
     // Don't reset verify state mid-loop — the retry injector owns that lifecycle.
@@ -596,11 +638,11 @@ export function App() {
 
     // Default path: write immediately. During an active verify loop we only
     // write (the loop applies explicitly too) — never nest another verify().
-    if (autoApplyOn && repo.root && enriched.length > 0) {
+    if (autoApplyOn && repo.root && resolved.length > 0) {
       if (verifyingRef.current) {
-        await handleApply(enriched);
+        await handleApply(resolved);
       } else {
-        await handleApplyAndVerify(enriched);
+        await handleApplyAndVerify(resolved);
       }
     }
   }, [repo, autoVerify, autoApplyOn, handleApply, handleApplyAndVerify]);
