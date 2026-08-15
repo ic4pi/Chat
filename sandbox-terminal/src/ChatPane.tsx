@@ -346,6 +346,19 @@ function friendlyError(raw: string): string {
 
 type AgentReply = { reply: string; incomplete?: boolean; timedOut?: boolean; reasoning?: string };
 
+// Backend appends this when a reply is cut off at the token/time ceiling
+// (see MORE_MARKER in api/agent-chat.js). It must never end up inside the
+// merged reply text — embedded mid-file it silently corrupts File:/Edit:
+// content instead of being rejected, since it doesn't match any stub pattern.
+const CONTINUE_MARKER_RE = /⟦\s*(MORE|DONE)\s*⟧/gi;
+
+function stripContinueMarkers(text: string): string {
+  return String(text || '')
+    .replace(CONTINUE_MARKER_RE, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 /** True when the model was cut off mid File:/fence — worth one continuation turn. */
 function looksTruncatedReply(text: string): boolean {
   if (!text || text === '(empty response)') return false;
@@ -787,7 +800,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       key?: string,
     ): Promise<string> => {
       let result = await callAgent(history, systemPrompt, sid, prov, mod, key);
-      let reply = result.reply;
+      let reply = stripContinueMarkers(result.reply);
       let continues = 0;
       // Continue when max_tokens / timeout cut mid File: block, or when the
       // model burned the window on thinking with no answer text yet.
@@ -804,9 +817,9 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         const emptyThink = result.timedOut && (!reply.trim() || reply === '(empty response)');
         const contPrompt = emptyThink
           ? 'Previous attempt timed out during thinking before any answer text. '
-            + 'Answer now with complete File: / fenced blocks. Spend less time thinking.'
+            + 'Answer now with complete File: / Edit: / fenced blocks. Spend less time thinking.'
           : 'Your previous reply was cut off mid-output. Continue EXACTLY from where you left off. '
-            + 'Finish any open File: / fenced blocks with COMPLETE file contents. '
+            + 'Finish any open File: / Edit: / fenced blocks with COMPLETE content. '
             + 'Do not restart files you already finished. Do not apologize.';
         const contHistory = emptyThink
           ? [...history, { role: 'user', content: contPrompt }]
@@ -817,10 +830,9 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             ];
         setLiveThoughts('');
         result = await callAgent(contHistory, systemPrompt, sid, prov, mod, key);
-        reply = emptyThink
-          ? result.reply
-          : mergeContinuation(reply, result.reply);
-        if (!result.incomplete && !looksTruncatedReply(result.reply) && result.reply.trim() && result.reply !== '(empty response)') {
+        const cleaned = stripContinueMarkers(result.reply);
+        reply = emptyThink ? cleaned : mergeContinuation(reply, cleaned);
+        if (!result.incomplete && !looksTruncatedReply(cleaned) && cleaned.trim() && cleaned !== '(empty response)') {
           break;
         }
       }
