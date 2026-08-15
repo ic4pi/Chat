@@ -11,6 +11,7 @@
 import { useState, useCallback } from 'react';
 import type { FileNode } from './types.js';
 import { isJunkContextPath, MAX_FILE_CHARS, truncateForContext } from './contextBudget.js';
+import type { FileEdit } from './agentParse.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
@@ -20,6 +21,10 @@ export interface PendingChange {
   content: string;
   /** content currently on disk (undefined = new file) */
   original?: string;
+  /** Unapplied Edit: block metadata — present only for entries not yet resolved to full content. */
+  edit?: FileEdit;
+  /** Set when applying an Edit: block failed (e.g. SEARCH text not found). Never written when set. */
+  applyError?: string;
 }
 
 export interface RepoContextState {
@@ -256,8 +261,18 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
   const applyChanges = useCallback(async (files?: PendingChange[]) => {
     // Prefer an explicit list — callers that just received model output must
     // not wait on React state (pendingChanges) or they race and write nothing.
-    const toWrite = files ?? pendingChanges;
-    if (!toWrite.length) return [];
+    const all = files ?? pendingChanges;
+    if (!all.length) return [];
+
+    // Entries where an Edit: block failed to apply (e.g. SEARCH text not
+    // found) never get written — surface them as failures alongside the
+    // real write results instead of silently dropping or writing stale content.
+    const preFailed = all.filter(c => c.applyError);
+    const toWrite = all.filter(c => !c.applyError);
+    const preFailedResults = preFailed.map(c => ({ path: c.path, ok: false, error: c.applyError }));
+
+    if (!toWrite.length) return preFailedResults;
+
     const body = sandboxId
       ? { files: toWrite.map(c => ({ path: c.path, content: c.content })) }
       : { root, files: toWrite.map(c => ({ path: c.path, content: c.content })) };
@@ -287,7 +302,7 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
         if (contextFiles.has(p)) await addToContext(p, { force: true });
       }
     }
-    return results;
+    return [...results, ...preFailedResults];
   }, [root, sandboxId, pendingChanges, contextFiles, sessionHeaders, addToContext]);
 
   const clearChanges = useCallback(() => setPendingChanges([]), []);

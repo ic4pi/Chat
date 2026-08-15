@@ -16,8 +16,17 @@ export interface RejectedFileChange {
   reason: string;
 }
 
+/** A targeted search/replace edit against a file already on disk (small — no full-file rewrite). */
+export interface FileEdit {
+  path:    string;
+  search:  string;
+  replace: string;
+}
+
 export interface FileChangeReport {
   accepted: FileChange[];
+  /** Edit: blocks — unapplied. Caller must resolve against on-disk content via applyFileEdit(). */
+  edits: FileEdit[];
   rejected: RejectedFileChange[];
 }
 
@@ -73,7 +82,79 @@ export function looksLikeIncompleteFileContent(content: string, filePath = ''): 
   return incompleteFileReason(content, filePath) != null;
 }
 
-/** Parse LLM output; return accepted full files + rejected stubs with reasons. */
+/** Why a search/replace Edit: block is unsafe to apply (or null if OK). Pure — doesn't check the file exists. */
+export function incompleteEditReason(edit: FileEdit): string | null {
+  if (!edit.search || !edit.search.trim()) {
+    return 'empty SEARCH block — nothing to locate, write the exact existing text';
+  }
+  if (edit.search === edit.replace) {
+    return 'SEARCH and REPLACE are identical — no-op edit';
+  }
+  if (!edit.replace.trim() && edit.search.trim().length > 0) {
+    // Deleting content is a legitimate use, but an accidentally-empty REPLACE
+    // from a truncated generation looks identical — require it be explicit.
+    return 'empty REPLACE block — if you meant to delete this text, confirm by re-sending';
+  }
+  if (/\bYOUR[_ -]?CODE[_ -]?HERE\b|\bINSERT[_ -]?CODE[_ -]?HERE\b|<placeholders?>/i.test(edit.replace)) {
+    return 'placeholder junk in REPLACE — write real complete code';
+  }
+  if (/(?:^|\n)\s*(?:\/\/|#|\/\*|<!--)\s*\.\.\.\s*existing\b/i.test(edit.replace)) {
+    return 'stub comment "… existing …" in REPLACE — write the real replacement code';
+  }
+  return null;
+}
+
+/**
+ * Apply one SEARCH/REPLACE edit against the file's current on-disk content.
+ * Pure — no I/O. Caller fetches `original` from the sandbox first.
+ * Matches the FIRST occurrence only (deterministic; ambiguous multi-match
+ * SEARCH text is a prompting problem, not something to silently guess at).
+ */
+export function applyFileEdit(
+  original: string | undefined,
+  edit: FileEdit,
+): { content: string } | { error: string } {
+  if (original == null) {
+    return { error: 'file not found in the sandbox — use a File: block to create a new file instead' };
+  }
+  const idx = original.indexOf(edit.search);
+  if (idx === -1) {
+    return {
+      error:
+        'SEARCH text was not found in the current file — it may have changed since it was last read, ' +
+        'or the text does not match exactly (whitespace counts). Re-check the file and try again.',
+    };
+  }
+  return { content: original.slice(0, idx) + edit.replace + original.slice(idx + edit.search.length) };
+}
+
+// Match: Edit: <path> then a SEARCH/REPLACE block, e.g.
+//   Edit: src/foo.ts
+//   <<<<<<< SEARCH
+//   old text
+//   =======
+//   new text
+//   >>>>>>> REPLACE
+const EDIT_RE =
+  /^[*_]*Edit:\s*(.+?)[*_]*\s*\r?\n(?:\r?\n)?<{5,}\s*SEARCH\s*\r?\n([\s\S]*?)\r?\n={5,}\s*\r?\n([\s\S]*?)\r?\n>{5,}\s*REPLACE\b/gm;
+
+function extractFileEdits(text: string): { accepted: FileEdit[]; rejected: RejectedFileChange[] } {
+  const accepted: FileEdit[] = [];
+  const rejected: RejectedFileChange[] = [];
+  EDIT_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = EDIT_RE.exec(text)) !== null) {
+    const filePath = m[1]!.trim().replace(/^[`'"]+|[`'"]+$/g, '');
+    if (!filePath || filePath.includes('\n')) continue;
+    const edit: FileEdit = { path: filePath, search: m[2]!, replace: m[3]! };
+    const reason = incompleteEditReason(edit);
+    if (reason) rejected.push({ path: filePath, reason });
+    else accepted.push(edit);
+  }
+  return { accepted, rejected };
+}
+
+/** Parse LLM output; return accepted full files + accepted edits + rejected stubs with reasons. */
 export function extractFileChangeReport(text: string): FileChangeReport {
   const accepted: FileChange[] = [];
   const rejected: RejectedFileChange[] = [];
@@ -93,7 +174,9 @@ export function extractFileChangeReport(text: string): FileChangeReport {
       accepted.push({ path: filePath, content });
     }
   }
-  return { accepted, rejected };
+  const editResult = extractFileEdits(text);
+  rejected.push(...editResult.rejected);
+  return { accepted, edits: editResult.accepted, rejected };
 }
 
 /** Parse LLM output for "File: path\\n```lang\\ncontent```" blocks (accepted only). */
@@ -167,9 +250,16 @@ export function needsCodeContext(text: string): boolean {
 
 /** Only used when the user explicitly asked to apply/write. */
 export const NUDGE_PROMPT =
-  'STOP. You did not output any usable File: blocks, so nothing was written.\n' +
-  'NEVER degrade the sandbox with stubs, diffs, or “… existing …” comments.\n' +
-  'Output COMPLETE file(s) now — every line of each file:\n\n' +
+  'STOP. You did not output any usable File: or Edit: blocks, so nothing was written.\n' +
+  'NEVER use vague stubs or "… existing …" comments in either format.\n' +
+  'For an EXISTING file, prefer a targeted edit — copy the exact text to replace:\n\n' +
+  'Edit: <relative-path>\n' +
+  '<<<<<<< SEARCH\n' +
+  '<exact existing text, verbatim>\n' +
+  '=======\n' +
+  '<replacement text>\n' +
+  '>>>>>>> REPLACE\n\n' +
+  'For a NEW file, output the complete contents:\n\n' +
   'File: <relative-path>\n' +
   '```lang\n' +
   '<full file content — no omissions>\n' +
@@ -178,10 +268,17 @@ export const NUDGE_PROMPT =
 export function nudgeAfterRejects(rejected: RejectedFileChange[]): string {
   const detail = rejected.map(r => `- ${r.path}: ${r.reason}`).join('\n');
   return (
-    'STOP. Your File: blocks were REJECTED to protect the sandbox.\n' +
+    'STOP. Your File:/Edit: blocks were REJECTED to protect the sandbox.\n' +
     'Nothing was saved. Incomplete patches have wiped production APIs before.\n' +
     `${detail}\n\n` +
-    'Output each file again in FULL — every import, every function, no ellipses:\n\n' +
+    'Try again. For an existing file, use a targeted edit with the SEARCH text copied exactly:\n\n' +
+    'Edit: <relative-path>\n' +
+    '<<<<<<< SEARCH\n' +
+    '<exact existing text, verbatim>\n' +
+    '=======\n' +
+    '<replacement text>\n' +
+    '>>>>>>> REPLACE\n\n' +
+    'For a new file, output it in FULL — every import, every function, no ellipses:\n\n' +
     'File: <relative-path>\n' +
     '```lang\n' +
     '<complete file>\n' +
