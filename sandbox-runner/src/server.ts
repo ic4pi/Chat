@@ -338,7 +338,7 @@ const LANG_CONFIG: Record<string, { ext: string; runner: string[]; shell?: strin
   go:         { ext: '.go',  runner: ['go', 'run'] },
 };
 
-const DEFAULT_LANG_CONFIG = { ext: '.sh', runner: ['bash'] };
+const DEFAULT_LANG_CONFIG: { ext: string; runner: string[]; shell?: string } = { ext: '.sh', runner: ['bash'] };
 
 app.post('/run-code', async (req: Request, res: Response): Promise<void> => {
   const { code, language, timeoutMs } = req.body as {
