@@ -7,7 +7,8 @@
  *   4. Cargo.toml → cargo test
  *   5. go.mod → go test ./...
  *   6. Makefile with a "test" target → make test
- *   7. No test file found → null
+ *   7. Static HTML (index.html, no package.json etc.) → built-in smoke check
+ *   8. No test file found → null
  */
 
 import * as fs   from 'fs';
@@ -149,6 +150,90 @@ function detectFromMakefile(root: string): DetectedTest | null {
 }
 
 // ---------------------------------------------------------------------------
+// Static HTML — no build tooling, no package.json. Covers plain
+// index.html generator output (esoteric-page-builder, one-off landing
+// pages, etc). No headless browser available in-sandbox, so this checks
+// what a browser load would immediately fail on:
+//   - every local <script src>/<link href>/<img src> reference resolves
+//     to a real file
+//   - every local <script src> JS file is at least syntactically valid
+// Self-contained (no extra deps) — shipped as a base64 node -e one-liner
+// so it runs inside the target sandbox regardless of what's installed
+// there.
+// ---------------------------------------------------------------------------
+
+const STATIC_SMOKE_SCRIPT = `
+import fs from 'node:fs';
+import path from 'node:path';
+import { execSync } from 'node:child_process';
+
+const candidates = ['index.html', 'public/index.html', 'dist/index.html'];
+const htmlPath = candidates.find((p) => fs.existsSync(p));
+if (!htmlPath) {
+  console.error('SMOKE FAIL: no index.html found');
+  process.exit(1);
+}
+
+const html = fs.readFileSync(htmlPath, 'utf8');
+const dir = path.dirname(htmlPath);
+const failures = [];
+const isExternal = (ref) =>
+  /^(https?:)?\\/\\//.test(ref) || ref.startsWith('data:') || ref.startsWith('#') || ref.startsWith('mailto:');
+
+const refRe = /(?:src|href)\\s*=\\s*["']([^"'>]+)["']/g;
+let m;
+while ((m = refRe.exec(html))) {
+  const ref = m[1];
+  if (isExternal(ref)) continue;
+  const clean = ref.split('#')[0].split('?')[0];
+  if (!clean) continue;
+  const full = path.join(dir, clean);
+  if (!fs.existsSync(full)) failures.push('missing local asset: ' + ref);
+}
+
+const jsRe = /<script[^>]+src\\s*=\\s*["']([^"'>]+)["'][^>]*>/g;
+while ((m = jsRe.exec(html))) {
+  const ref = m[1];
+  if (isExternal(ref)) continue;
+  const clean = ref.split('#')[0].split('?')[0];
+  const full = path.join(dir, clean);
+  if (!fs.existsSync(full)) continue;
+  try {
+    execSync('node --check ' + JSON.stringify(full), { stdio: 'pipe' });
+  } catch (e) {
+    const msg = (e.stderr || e.message || '').toString().split('\\n')[0];
+    failures.push('JS syntax error in ' + ref + ': ' + msg);
+  }
+}
+
+if (failures.length) {
+  console.error('SMOKE FAIL (' + failures.length + '):');
+  for (const f of failures) console.error(' - ' + f);
+  process.exit(1);
+}
+console.log('SMOKE PASS: ' + htmlPath + ' — local assets resolve, referenced JS parses');
+`.trim();
+
+function detectFromStaticHtml(root: string): DetectedTest | null {
+  const candidates = ['index.html', 'public/index.html', 'dist/index.html'];
+  const found = candidates.find((c) => exists(path.join(root, c)));
+  if (!found) return null;
+
+  // eval() can't run top-level `import`, so decode to a temp .mjs file (forces
+  // ESM regardless of the project's own package.json "type") and run that.
+  const b64 = Buffer.from(STATIC_SMOKE_SCRIPT, 'utf8').toString('base64');
+  const command =
+    `bash -c "printf '%s' '${b64}' | base64 -d > .smoke-check.mjs && ` +
+    `node .smoke-check.mjs; rc=\\$?; rm -f .smoke-check.mjs; exit \\$rc"`;
+  return {
+    command,
+    source: `static HTML (${found})`,
+    confidence: 'guessed',
+    note: 'built-in smoke check: verifies local asset refs resolve and referenced JS is syntactically valid',
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -160,6 +245,7 @@ export function detectTestCommand(root: string): DetectedTest {
     detectFromCargo,
     detectFromGoMod,
     detectFromMakefile,
+    detectFromStaticHtml,
   ];
 
   for (const detect of detectors) {
