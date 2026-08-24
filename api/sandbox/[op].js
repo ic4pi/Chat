@@ -19,7 +19,6 @@ import writeFiles from '../../lib/sandbox-api/write-files.js';
 import search from '../../lib/sandbox-api/search.js';
 import detectTestCommand from '../../lib/sandbox-api/detect-test-command.js';
 import gitPush from '../../lib/sandbox-api/git-push.js';
-import selfTest from '../../lib/sandbox-api/self-test.js';
 
 const OPS = {
   run,
@@ -32,7 +31,6 @@ const OPS = {
   search,
   'detect-test-command': detectTestCommand,
   'git-push': gitPush,
-  'self-test': selfTest, // TEMPORARY — debugging auto-verify loop, remove after
 };
 
 export default async function handler(req, res) {
