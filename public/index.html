@@ -413,9 +413,15 @@
       <span class="m-sub">Images and video</span>
     </a>
     <button id="toneBtn" class="module-card" type="button">
-      <span class="m-ico">✦</span>
+      <span class="m-ico">◑</span>
       <span class="m-name">Voice</span>
       <span class="m-sub">Role and speech</span>
+    </button>
+    <button id="memoryBtn" class="module-card" type="button">
+      <span class="m-ico">✦</span>
+      <span class="m-name">Memory</span>
+      <span class="m-sub">Notes, topics, nudges</span>
+      <span id="memoryBadge" class="m-badge hidden"></span>
     </button>
     <button id="modelPickerBtn2" class="module-card wide" type="button">
       <span class="m-ico">⚙</span>
@@ -433,5 +439,55 @@
   </div>
 </div>
 
+
+<!-- Handoff sheet: where a message goes when you promote it. -->
+<div id="handoffScrim" class="sheet-scrim"></div>
+<div id="handoffSheet" class="sheet" role="dialog" aria-modal="true" aria-label="Send this somewhere">
+  <div class="sheet-grabber"></div>
+  <p class="sheet-label">Send this to</p>
+  <div id="handoffPreview" class="handoff-preview"></div>
+  <div class="module-grid">
+    <button class="module-card" data-handoff="workspace" type="button">
+      <span class="m-ico">⌘</span>
+      <span class="m-name">Workspace</span>
+      <span class="m-sub">Build it</span>
+    </button>
+    <button class="module-card" data-handoff="group" type="button">
+      <span class="m-ico">◎</span>
+      <span class="m-name">Group</span>
+      <span class="m-sub">Get other takes</span>
+    </button>
+    <button class="module-card" data-handoff="media" type="button">
+      <span class="m-ico">◆</span>
+      <span class="m-name">Media</span>
+      <span class="m-sub">Make an image</span>
+    </button>
+    <button class="module-card" data-handoff="note" type="button">
+      <span class="m-ico">✦</span>
+      <span class="m-name">Memory</span>
+      <span class="m-sub">Keep for later</span>
+    </button>
+  </div>
+  <div id="handoffStatus" class="handoff-status"></div>
+</div>
+
+<!-- Memory screen: nudges, topics, unfiled notes, document builder. -->
+<div id="memoryScrim" class="sheet-scrim"></div>
+<div id="memorySheet" class="sheet" role="dialog" aria-modal="true" aria-label="Memory">
+  <div class="sheet-grabber"></div>
+  <p class="sheet-label">Nudges</p>
+  <div id="nudgeList" class="nudge-list"></div>
+  <p class="sheet-label">Topics</p>
+  <div id="topicList" class="topic-list"></div>
+  <div class="sheet-foot">
+    <button id="buildDocBtn" class="text-btn" type="button">Build a document</button>
+  </div>
+</div>
+
+<script type="module">
+  import * as hub from '/hub-client.js';
+  window.hub = hub;
+  window.dispatchEvent(new Event('hub-ready'));
+</script>
 </body>
 </html>

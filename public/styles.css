@@ -1843,3 +1843,111 @@ code, pre, .model-picker-label, .chip-meta, .persona-blurb-desc { font-family: v
   outline: none;
 }
 .chat-title-row h1:focus { color: var(--text); }
+
+/* ---- Handoff + memory ------------------------------------------------- */
+
+/* Handoff control only exists when the hub is reachable. */
+.handoff-btn { display: none; }
+.hub-on .msg { position: relative; }
+.hub-on .handoff-btn {
+  display: grid;
+  place-items: center;
+  position: absolute;
+  top: 2px; right: -4px;
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted-2);
+  font-size: 13px;
+  opacity: 0;
+  transition: opacity .18s, color .18s, border-color .18s;
+}
+.hub-on .msg:hover .handoff-btn,
+.hub-on .msg:focus-within .handoff-btn { opacity: 1; }
+@media (hover: none) { .hub-on .handoff-btn { opacity: .55; } }
+.hub-on .handoff-btn:hover { color: var(--id); border-color: var(--id-line); }
+
+.handoff-preview {
+  padding: 11px 13px;
+  margin-bottom: 16px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.handoff-status {
+  margin-top: 14px;
+  min-height: 18px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+  text-align: center;
+}
+
+.m-badge {
+  position: absolute;
+  top: 10px; right: 10px;
+  min-width: 18px; height: 18px;
+  padding: 0 5px;
+  display: grid; place-items: center;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #171200;
+  font-family: var(--ui);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.nudge-list { margin-bottom: 22px; }
+.nudge-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 13px;
+  margin-bottom: 7px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--user-bubble);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.nudge-row span { flex: 1; }
+.nudge-dismiss {
+  flex: 0 0 auto;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  color: var(--muted-2);
+  font-size: 15px;
+  line-height: 1;
+}
+.nudge-dismiss:hover { color: var(--text); background: var(--panel-2); }
+
+.topic-list { display: flex; flex-wrap: wrap; gap: 7px; }
+.topic-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--user-bubble);
+  color: var(--muted);
+  font-family: var(--ui);
+  font-size: 12px;
+  transition: border-color .18s, color .18s, background .18s;
+}
+.topic-chip.selected {
+  border-color: var(--id-line);
+  background: var(--id-soft);
+  color: var(--text);
+}
+.topic-count {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted-2);
+}
+.empty-note {
+  margin: 0;
+  padding: 14px 2px;
+  color: var(--muted-2);
+  font-size: 12px;
+}
