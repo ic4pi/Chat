@@ -482,7 +482,7 @@ const els = {
   personaSelect: $('personaSelect'),
   voiceSelect: $('voiceSelect'),
   menuBtn: $('menuBtn'),
-  appMenu: $('appMenu'),
+  appMenu: null, // replaced by the menu sheet (#appSheet)
   personaBlurb: $('personaBlurb'),
   personaBlurbName: $('personaBlurbName'),
   personaBlurbDesc: $('personaBlurbDesc'),
@@ -1157,6 +1157,7 @@ function renderPersonaSelect() {
   fill(els.tonePersonaSelect);
   syncVoiceSelectToPersona();
   renderPersonaDescription();
+  renderPersonaChip();
 }
 
 
@@ -3229,35 +3230,155 @@ function applyPersona(personaId) {
   if (chat) chat.personaId = state.activePersonaId;
   syncVoiceSelectToPersona();
   renderPersonaDescription();
+  renderPersonaChip();
   saveState();
 }
 
+// ---------------------------------------------------------------------------
+// Menu sheet + persona cards
+//
+// The topbar dropdown became a bottom sheet: on a phone the top-right corner
+// is the hardest place to reach, and personas were buried a modal deep inside
+// it. Persona identity now lives in the topbar permanently, and switching is
+// one tap on a card instead of a <select>.
+// ---------------------------------------------------------------------------
+
+const sheetEls = {
+  sheet: document.getElementById('appSheet'),
+  scrim: document.getElementById('sheetScrim'),
+  grid: document.getElementById('personaGrid'),
+  chip: document.getElementById('personaChip'),
+  chipAvatar: document.getElementById('chipAvatar'),
+  chipName: document.getElementById('chipName'),
+  chipMeta: document.getElementById('chipMeta'),
+  modelSub: document.getElementById('sheetModelSub'),
+};
+
+/** Stable hue per persona id, so a persona keeps its colour across reloads. */
+function personaHue(id) {
+  let h = 0;
+  const str = String(id || '');
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
+  return h;
+}
+
+function personaInitials(name) {
+  return (
+    String(name || '')
+      .replace(/[^A-Za-z ]/g, '')
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => w[0])
+      .join('')
+      .toUpperCase() || '?'
+  );
+}
+
 function closeAppMenu() {
-  if (!els.appMenu || els.appMenu.classList.contains('hidden')) return;
-  els.appMenu.classList.add('hidden');
-  if (els.menuBtn) els.menuBtn.setAttribute('aria-expanded', 'false');
+  sheetEls.sheet?.classList.remove('open');
+  sheetEls.scrim?.classList.remove('open');
+  els.menuBtn?.setAttribute('aria-expanded', 'false');
+  sheetEls.chip?.setAttribute('aria-expanded', 'false');
+}
+
+function openAppMenu() {
+  renderPersonaCards();
+  if (sheetEls.modelSub) {
+    sheetEls.modelSub.textContent =
+      `${state.activeProvider || ''} · ${state.activeModel || ''}`.trim();
+  }
+  sheetEls.sheet?.classList.add('open');
+  sheetEls.scrim?.classList.add('open');
+  els.menuBtn?.setAttribute('aria-expanded', 'true');
 }
 
 function toggleAppMenu() {
-  if (!els.appMenu || !els.menuBtn) return;
-  const open = els.appMenu.classList.contains('hidden');
-  els.appMenu.classList.toggle('hidden', !open);
-  els.menuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (sheetEls.sheet?.classList.contains('open')) closeAppMenu();
+  else openAppMenu();
+}
+
+/** Paints the topbar chip and retunes the app's identity hue. */
+function renderPersonaChip() {
+  const p = activePersona();
+  if (!p) return;
+  document.documentElement.style.setProperty('--id-h', String(personaHue(p.id)));
+  if (sheetEls.chipAvatar) sheetEls.chipAvatar.textContent = personaInitials(p.name);
+  if (sheetEls.chipName) sheetEls.chipName.textContent = p.name || 'Persona';
+  if (sheetEls.chipMeta) {
+    sheetEls.chipMeta.textContent =
+      `${state.activeModel || ''} · ${state.activeRole || ''}`.trim();
+  }
+}
+
+function renderPersonaCards() {
+  const grid = sheetEls.grid;
+  if (!grid) return;
+  grid.innerHTML = '';
+  for (const p of personas) {
+    const hue = personaHue(p.id);
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'persona-card' + (p.id === state.activePersonaId ? ' active' : '');
+    card.style.setProperty('--pc-h', String(hue));
+    card.style.setProperty('--pc', `hsl(${hue} 78% 68%)`);
+    card.style.setProperty('--pc-soft', `hsl(${hue} 78% 68% / .12)`);
+    card.style.setProperty('--pc-line', `hsl(${hue} 78% 68% / .45)`);
+
+    const av = document.createElement('span');
+    av.className = 'persona-avatar';
+    av.textContent = personaInitials(p.name);
+
+    const nm = document.createElement('span');
+    nm.className = 'pc-name';
+    nm.textContent = p.name;
+    if (p.id === state.activePersonaId) {
+      const dot = document.createElement('span');
+      dot.className = 'pc-dot';
+      dot.textContent = '●';
+      nm.appendChild(dot);
+    }
+
+    const ds = document.createElement('span');
+    ds.className = 'pc-desc';
+    ds.textContent = p.description || 'No description yet.';
+
+    card.append(av, nm, ds);
+    card.addEventListener('click', () => {
+      applyPersona(p.id);
+      renderPersonaChip();
+      renderPersonaCards();
+      setTimeout(closeAppMenu, 160);
+    });
+    grid.appendChild(card);
+  }
 }
 
 els.menuBtn?.addEventListener('click', (e) => {
   e.stopPropagation();
   toggleAppMenu();
 });
-els.appMenu?.addEventListener('click', (e) => {
-  // Close after choosing an action (links + buttons).
-  const item = e.target.closest('.app-menu-item');
-  if (item) closeAppMenu();
+sheetEls.chip?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleAppMenu();
 });
-document.addEventListener('click', (e) => {
-  if (!els.appMenu || els.appMenu.classList.contains('hidden')) return;
-  const wrap = e.target.closest?.('.topbar-menu-wrap');
-  if (!wrap) closeAppMenu();
+sheetEls.scrim?.addEventListener('click', closeAppMenu);
+sheetEls.sheet?.addEventListener('click', (e) => {
+  if (e.target.closest('.module-card') || e.target.closest('.sheet-foot')) closeAppMenu();
+});
+
+// Sheet duplicates of controls that also live in the topbar.
+document.getElementById('modelPickerBtn2')?.addEventListener('click', () => {
+  closeAppMenu();
+  els.modelPickerBtn?.click();
+});
+document.getElementById('keysBtn2')?.addEventListener('click', () => {
+  closeAppMenu();
+  els.keysBtn?.click();
+});
+document.getElementById('unlockPaidBtn2')?.addEventListener('click', () => {
+  closeAppMenu();
+  els.unlockPaidBtn?.click();
 });
 
 function openToneModal() {

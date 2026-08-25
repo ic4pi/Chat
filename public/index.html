@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <title>Jive — Uncensored No-Code Agent</title>
 <meta name="description" content="Jive — uncensored no-code agent. Chat • Code • Create. Chat room, persona collective, think tank." />
-<meta name="theme-color" content="#000000" />
+<meta name="theme-color" content="#0B0D12" />
 <link rel="icon" href="/favicon.ico" sizes="any" />
 <link rel="icon" type="image/png" href="/favicon.png" />
 <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -22,6 +22,9 @@
 <meta name="twitter:description" content="Chat • Code • Create. Chat room, persona collective, think tank." />
 <meta name="twitter:image" content="https://chat-pearl-ten.vercel.app/og-image.png" />
 <link rel="image_src" href="/og-image.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -59,17 +62,15 @@
       <div class="topbar-row primary">
         <button id="toggleChats" class="icon-btn" title="Toggle chat list">☰</button>
         <button id="newChatTopBtn" class="icon-btn accent" title="New chat" aria-label="New chat">+</button>
-        <h1 id="chatTitle" contenteditable="true" spellcheck="false">Untitled</h1>
-        <div class="topbar-menu-wrap">
-          <button id="menuBtn" class="text-btn ctrl-btn menu-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Workspace, Group, Media, Persona">Menu ▾</button>
-          <div id="appMenu" class="app-menu hidden" role="menu">
-            <button id="workspaceBtn" class="app-menu-item" type="button" role="menuitem">Workspace</button>
-            <button id="groupBtn" class="app-menu-item" type="button" role="menuitem">Group</button>
-            <a id="mediaLink" class="app-menu-item" href="/media" role="menuitem">Media</a>
-            <button id="toneBtn" class="app-menu-item" type="button" role="menuitem">Persona · Voice</button>
-            <a id="adminLink" class="app-menu-item" href="/admin" target="_blank" rel="noopener" role="menuitem">Admin</a>
-          </div>
-        </div>
+        <button id="personaChip" class="persona-chip" type="button" aria-haspopup="dialog" aria-expanded="false" title="Switch persona">
+          <span id="chipAvatar" class="persona-avatar">?</span>
+          <span class="chip-text">
+            <span id="chipName" class="chip-name">Persona</span>
+            <span id="chipMeta" class="chip-meta"></span>
+          </span>
+          <span class="chip-caret">▾</span>
+        </button>
+        <button id="menuBtn" class="icon-btn" type="button" aria-haspopup="dialog" aria-expanded="false" title="Menu" aria-label="Menu">⋯</button>
         <button id="toggleArtifacts" class="icon-btn" title="Toggle artifacts">📎</button>
       </div>
       <div class="topbar-row controls">
@@ -123,6 +124,10 @@
         </optgroup>
       </select>
     </header>
+
+    <div class="chat-title-row">
+      <h1 id="chatTitle" contenteditable="true" spellcheck="false">Untitled</h1>
+    </div>
 
     <div id="chat"></div>
     <div id="typing" class="typing-bar" hidden>
@@ -380,5 +385,53 @@
   })();
 </script>
 <script src="/app.js" type="module"></script>
+
+<!-- Menu sheet — replaces the topbar dropdown. Original button ids are kept
+     so all existing app.js click handlers bind unchanged. -->
+<div id="sheetScrim" class="sheet-scrim"></div>
+<div id="appSheet" class="sheet" role="dialog" aria-modal="true" aria-label="Menu">
+  <div class="sheet-grabber"></div>
+
+  <p class="sheet-label">Who you're talking to</p>
+  <div id="personaGrid" class="persona-grid"></div>
+
+  <p class="sheet-label">Go to</p>
+  <div class="module-grid">
+    <button id="workspaceBtn" class="module-card" type="button">
+      <span class="m-ico">⌘</span>
+      <span class="m-name">Workspace</span>
+      <span class="m-sub">Build and run code</span>
+    </button>
+    <button id="groupBtn" class="module-card" type="button">
+      <span class="m-ico">◎</span>
+      <span class="m-name">Group</span>
+      <span class="m-sub">Put personas at a table</span>
+    </button>
+    <a id="mediaLink" class="module-card" href="/media">
+      <span class="m-ico">◆</span>
+      <span class="m-name">Media</span>
+      <span class="m-sub">Images and video</span>
+    </a>
+    <button id="toneBtn" class="module-card" type="button">
+      <span class="m-ico">✦</span>
+      <span class="m-name">Voice</span>
+      <span class="m-sub">Role and speech</span>
+    </button>
+    <button id="modelPickerBtn2" class="module-card wide" type="button">
+      <span class="m-ico">⚙</span>
+      <span style="display:flex;flex-direction:column;gap:2px">
+        <span class="m-name">Model</span>
+        <span id="sheetModelSub" class="m-sub">—</span>
+      </span>
+    </button>
+  </div>
+
+  <div class="sheet-foot">
+    <button id="keysBtn2" class="text-btn" type="button">Keys</button>
+    <button id="unlockPaidBtn2" class="text-btn" type="button">Unlock paid</button>
+    <a id="adminLink" class="text-btn" href="/admin" target="_blank" rel="noopener">Admin</a>
+  </div>
+</div>
+
 </body>
 </html>
