@@ -56,29 +56,29 @@ function FileDiff({ change, onDismiss }: {
   const lines = change.content.split('\n').length;
 
   return (
-    <div style={{ border: '1px solid #2a2a2a', borderRadius: 6,
+    <div style={{ border: '1px solid #4A3624', borderRadius: 6,
       overflow: 'hidden', marginBottom: 6 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8,
         padding: '5px 8px', background: '#111',
-        borderBottom: open ? '1px solid #1e1e1e' : 'none', flexWrap: 'wrap' }}>
+        borderBottom: open ? '1px solid #35271C' : 'none', flexWrap: 'wrap' }}>
         <button type="button" onClick={() => setOpen(o => !o)}
           style={{ background: 'transparent', border: 'none',
             color: '#888', cursor: 'pointer', fontSize: 11, padding: 0 }}>
           {open ? '▾' : '▸'}
         </button>
-        <span style={{ fontSize: 11, color: '#e8e8e8', flex: 1, minWidth: 80,
+        <span style={{ fontSize: 11, color: '#EEE0C8', flex: 1, minWidth: 80,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
           title={change.path}>
           {change.path}
         </span>
-        {isNew && <span style={{ fontSize: 10, color: '#d4ff3f', border: '1px solid #d4ff3f',
+        {isNew && <span style={{ fontSize: 10, color: '#C9963E', border: '1px solid #C9963E',
           borderRadius: 3, padding: '1px 5px' }}>new</span>}
         <span style={{ fontSize: 10, color: '#555' }}>{lines} lines</span>
-        <span style={{ fontSize: 10, color: '#8fbf6f' }}>+{added}</span>
+        <span style={{ fontSize: 10, color: '#6BCB9E' }}>+{added}</span>
         {removed > 0 && <span style={{ fontSize: 10, color: '#ff6a6a' }}>−{removed}</span>}
         <button type="button"
           onClick={() => downloadTextFile(change.path, change.content)}
-          style={{ background: '#1a2a0a', color: '#8fbf6f', border: '1px solid #2a4a1a',
+          style={{ background: '#1B2A22', color: '#6BCB9E', border: '1px solid #2E5747',
             borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
             fontFamily: 'inherit', fontSize: 10, fontWeight: 700 }}>
           Download
@@ -88,7 +88,7 @@ function FileDiff({ change, onDismiss }: {
             const ok = await copyText(change.content);
             if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
           }}
-          style={{ background: 'transparent', color: copied ? '#d4ff3f' : '#888',
+          style={{ background: 'transparent', color: copied ? '#C9963E' : '#888',
             border: '1px solid #333', borderRadius: 4, padding: '2px 8px',
             cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
           {copied ? 'Copied' : 'Copy'}
@@ -106,7 +106,7 @@ function FileDiff({ change, onDismiss }: {
               padding: '0 10px',
               background: line.kind === '+' ? 'rgba(143,191,111,.1)'
                 : line.kind === '-' ? 'rgba(255,106,106,.1)' : 'transparent',
-              color: line.kind === '+' ? '#8fbf6f'
+              color: line.kind === '+' ? '#6BCB9E'
                 : line.kind === '-' ? '#ff6a6a' : '#888',
             }}>
               <span style={{ opacity: .4, marginRight: 8, userSelect: 'none' }}>
@@ -174,20 +174,20 @@ export function DiffPanel({
 
   return (
     <div data-testid="diff-panel" style={{
-      borderTop: '1px solid #1e1e1e', background: '#0a0a0a', flexShrink: 0,
+      borderTop: '1px solid #35271C', background: '#1C140F', flexShrink: 0,
       fontFamily: '"JetBrains Mono",ui-monospace,monospace',
       maxHeight: expanded ? 'min(38vh, 320px)' : undefined,
       display: 'flex', flexDirection: 'column', minHeight: 0,
     }}>
       {/* Always-visible compact action bar */}
-      <div style={{ padding: '6px 10px', background: '#0f0f0f',
-        borderBottom: expanded ? '1px solid #1e1e1e' : 'none', flexShrink: 0 }}>
+      <div style={{ padding: '6px 10px', background: '#211812',
+        borderBottom: expanded ? '1px solid #35271C' : 'none', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           <button type="button" onClick={() => setExpanded(e => !e)}
             data-testid="diff-expand-btn"
             title={expanded ? 'Collapse changes panel' : 'Expand to review diffs'}
             style={{ ...btnBase, background: expanded ? 'rgba(212,255,63,0.12)' : 'transparent',
-              color: '#d4ff3f', borderColor: '#3a4a18', fontWeight: 700, padding: '4px 8px' }}>
+              color: '#C9963E', borderColor: '#3a4a18', fontWeight: 700, padding: '4px 8px' }}>
             {expanded ? '▾' : '▸'} {changes.length} file{changes.length !== 1 ? 's' : ''}
           </button>
           <span style={{ fontSize: 10, color: '#666', flex: 1, minWidth: 0,
@@ -202,22 +202,22 @@ export function DiffPanel({
           <button type="button"
             onClick={() => { void downloadAllFiles(allFiles); }}
             data-testid="download-all-btn"
-            style={{ ...btnBase, background: '#1a2a0a', color: '#8fbf6f',
-              borderColor: '#2a4a1a', fontWeight: 700 }}>
+            style={{ ...btnBase, background: '#1B2A22', color: '#6BCB9E',
+              borderColor: '#2E5747', fontWeight: 700 }}>
             Download
           </button>
           <button type="button" onClick={onApply} disabled={applying || pending.length === 0}
             data-testid="apply-btn"
             style={{ ...btnBase,
-              background: pending.length > 0 ? '#222' : '#1a1a1a',
-              color: pending.length > 0 ? '#e8e8e8' : '#444',
+              background: pending.length > 0 ? '#222' : '#2C2018',
+              color: pending.length > 0 ? '#EEE0C8' : '#444',
               cursor: pending.length > 0 ? 'pointer' : 'default' }}>
             {applying ? 'Saving…' : 'Save'}
           </button>
           {canPush ? (
             <button type="button" onClick={() => { setShowPush(s => !s); setExpanded(true); }}
               data-testid="push-toggle-btn"
-              style={{ ...btnBase, background: '#d4ff3f', color: '#0a0a0a',
+              style={{ ...btnBase, background: '#C9963E', color: '#1C140F',
                 border: 'none', fontWeight: 700, padding: '4px 12px' }}>
               {showPush ? 'Hide push' : 'Push'}
             </button>
@@ -239,10 +239,10 @@ export function DiffPanel({
       {expanded && (
         <div style={{ overflowY: 'auto', minHeight: 0, flex: 1 }}>
           {showPush && canPush && (
-            <div style={{ margin: '8px 10px', padding: '8px 10px', background: '#0a0a0a',
-              border: '1px solid #2a2a2a', borderRadius: 6 }}>
+            <div style={{ margin: '8px 10px', padding: '8px 10px', background: '#1C140F',
+              border: '1px solid #4A3624', borderRadius: 6 }}>
               <div style={{ fontSize: 10, color: '#888', marginBottom: 6, lineHeight: 1.4 }}>
-                GitHub token with <code style={{ color: '#d4ff3f' }}>repo</code> scope.
+                GitHub token with <code style={{ color: '#C9963E' }}>repo</code> scope.
                 Push re-runs sandbox checks and refuses on failure.
               </div>
               <input
@@ -260,7 +260,7 @@ export function DiffPanel({
                 placeholder="ghp_… or github_pat_…"
                 autoComplete="off"
                 style={{ width: '100%', boxSizing: 'border-box', marginBottom: 6,
-                  background: '#111', color: '#e8e8e8', border: '1px solid #333',
+                  background: '#111', color: '#EEE0C8', border: '1px solid #333',
                   borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 12 }}
               />
               <input
@@ -268,7 +268,7 @@ export function DiffPanel({
                 onChange={e => setCommitMsg(e.target.value)}
                 placeholder="Commit message"
                 style={{ width: '100%', boxSizing: 'border-box', marginBottom: 8,
-                  background: '#111', color: '#e8e8e8', border: '1px solid #333',
+                  background: '#111', color: '#EEE0C8', border: '1px solid #333',
                   borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 12 }}
               />
               <div style={{ display: 'flex', gap: 8, marginBottom: pushError || pushOk ? 8 : 0 }}>
@@ -281,8 +281,8 @@ export function DiffPanel({
                     } catch { /* ignore */ }
                     onPush(token.trim(), commitMsg.trim() || 'Apply agent changes from sandbox');
                   }}
-                  style={{ flex: 1, background: token.trim() && !pushing ? '#d4ff3f' : '#1a1a1a',
-                    color: token.trim() && !pushing ? '#0a0a0a' : '#555',
+                  style={{ flex: 1, background: token.trim() && !pushing ? '#C9963E' : '#2C2018',
+                    color: token.trim() && !pushing ? '#1C140F' : '#555',
                     border: 'none', borderRadius: 4, padding: '7px 14px',
                     cursor: token.trim() && !pushing ? 'pointer' : 'default',
                     fontFamily: 'inherit', fontSize: 12, fontWeight: 700 }}>
@@ -290,7 +290,7 @@ export function DiffPanel({
                 </button>
                 {onCopyGitCommands && (
                   <button type="button" onClick={onCopyGitCommands}
-                    style={{ ...btnBase, background: 'transparent', color: '#89ddff',
+                    style={{ ...btnBase, background: 'transparent', color: '#8FD9C4',
                       borderColor: '#234' }}>
                     Git cmds
                   </button>
@@ -313,7 +313,7 @@ export function DiffPanel({
                 <div style={{ fontSize: 11, color: '#ff6a6a', lineHeight: 1.4 }}>{pushError}</div>
               )}
               {pushOk && (
-                <div style={{ fontSize: 11, color: '#8fbf6f', lineHeight: 1.4 }}>{pushOk}</div>
+                <div style={{ fontSize: 11, color: '#6BCB9E', lineHeight: 1.4 }}>{pushOk}</div>
               )}
             </div>
           )}
@@ -330,7 +330,7 @@ export function DiffPanel({
       {/* Surface push result even when collapsed */}
       {!expanded && (pushError || pushOk) && (
         <div style={{ padding: '4px 10px 6px', fontSize: 11, lineHeight: 1.35,
-          color: pushError ? '#ff6a6a' : '#8fbf6f' }}>
+          color: pushError ? '#ff6a6a' : '#6BCB9E' }}>
           {pushError || pushOk}
         </div>
       )}

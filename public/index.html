@@ -72,7 +72,7 @@
       </button>
 
       <button id="menuBtn" class="icon-btn" type="button" aria-haspopup="dialog" aria-expanded="false" title="Menu" aria-label="Menu">⋯</button>
-      <button id="toggleArtifacts" class="icon-btn" title="Toggle artifacts">📎</button>
+      <button id="toggleArtifacts" class="icon-btn" title="Toggle artifacts"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="16" rx="2"/><path d="M3.5 14h5l1.2 2h4.6l1.2-2h5.5"/></svg></button>
 
       <!-- Hidden native controls kept for state + persistence; the sheet is
            the real UI for all of these now. -->
@@ -168,14 +168,14 @@
       <div id="attachPreview" class="attach-preview hidden"></div>
       <div class="input-row">
         <input id="attachInput" type="file" multiple accept="image/*,.txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.css,.html,.yml,.yaml,.csv" hidden />
-        <button id="attachBtn" type="button" class="icon-btn" title="Upload photo or file">📎</button>
-        <button id="micBtn" type="button" class="icon-btn" title="Mic: dictation, or voice chat when 🔊 is on (Chrome/Safari)">🎤</button>
-        <button id="speakBtn" type="button" class="icon-btn" title="Speak replies with neural voice" aria-pressed="false">🔊</button>
+        <button id="attachBtn" type="button" class="icon-btn" title="Upload photo or file"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 8.5 9.6 16.4a3.5 3.5 0 0 1-5-5l8.4-8.4a2.5 2.5 0 0 1 3.5 3.5L8 15a1 1 0 0 1-1.5-1.5l7-7"/></svg></button>
+        <button id="micBtn" type="button" class="icon-btn" title="Mic: dictation, or voice chat when sound is on (Chrome/Safari)"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg></button>
+        <button id="speakBtn" type="button" class="icon-btn" title="Speak replies with neural voice" aria-pressed="false"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 8.5a5 5 0 0 1 0 7M19.5 6a8.5 8.5 0 0 1 0 12"/></svg></button>
         <textarea id="input" rows="1" placeholder="Plan or ask… (code builds in Workspace)" autofocus></textarea>
         <button id="stopBtn" type="button" class="text-btn danger hidden" title="Stop reply + voice (Esc or Enter also stops)">Stop</button>
         <button id="sendBtn" type="submit">Send</button>
       </div>
-      <div id="voiceHint" class="voice-hint"><b>Stop</b> / <b>Esc</b> / <b>Enter</b> while generating cancels the reply and speech. <b>🔊</b> on + <b>🎤</b> = voice chat (auto-send). <b>🔊</b> off + mic = dictation only. Code builds in <b>Workspace</b>.</div>
+      <div id="voiceHint" class="voice-hint"><b>Stop</b> / <b>Esc</b> / <b>Enter</b> while generating cancels the reply and speech. <b>Sound</b> on + <b>Mic</b> = voice chat (auto-send). <b>Sound</b> off + mic = dictation only. Code builds in <b>Workspace</b>.</div>
     </form>
   </main>
 

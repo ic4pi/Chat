@@ -48,11 +48,11 @@ export interface TerminalHandle {
 
 // ── xterm theme ──────────────────────────────────────────────────────────────
 const THEME = {
-  background: '#0a0a0a', foreground: '#e8e8e8',
-  cursor: '#d4ff3f', cursorAccent: '#0a0a0a',
+  background: '#1C140F', foreground: '#EEE0C8',
+  cursor: '#C9963E', cursorAccent: '#1C140F',
   selectionBackground: 'rgba(212,255,63,.2)',
-  black: '#0a0a0a', red: '#ff6a6a', green: '#8fbf6f', yellow: '#d4ff3f',
-  blue: '#5b8dee', magenta: '#c792ea', cyan: '#89ddff', white: '#e8e8e8',
+  black: '#1C140F', red: '#ff6a6a', green: '#6BCB9E', yellow: '#C9963E',
+  blue: '#5b8dee', magenta: '#c792ea', cyan: '#8FD9C4', white: '#EEE0C8',
   brightBlack: '#555', brightRed: '#ff9b9b', brightGreen: '#b5d89b',
   brightYellow: '#e8ff8a', brightBlue: '#82aaff', brightMagenta: '#dbb0f0',
   brightCyan: '#aadeff', brightWhite: '#ffffff',
@@ -363,17 +363,17 @@ export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function Sandbo
   }, [runShellInput, history]);
 
   const dotColor = {
-    idle: '#555', connecting: '#5b8dee', streaming: '#8fbf6f',
-    done: exitCode === 0 ? '#8fbf6f' : exitCode !== null ? '#ff6a6a' : '#8fbf6f',
+    idle: '#555', connecting: '#5b8dee', streaming: '#6BCB9E',
+    done: exitCode === 0 ? '#6BCB9E' : exitCode !== null ? '#ff6a6a' : '#6BCB9E',
     error: '#ff6a6a', cancelled: '#888',
   }[status];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0a0a0a' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#1C140F' }}>
       {/* toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
-        borderBottom: '1px solid #1e1e1e', background: '#0f0f0f', flexShrink: 0 }}>
-        <span style={{ color: '#d4ff3f', fontSize: 11, letterSpacing: '0.1em',
+        borderBottom: '1px solid #35271C', background: '#211812', flexShrink: 0 }}>
+        <span style={{ color: '#C9963E', fontSize: 11, letterSpacing: '0.1em',
           textTransform: 'uppercase', whiteSpace: 'nowrap', userSelect: 'none' }}>
           // shell
         </span>
@@ -386,17 +386,17 @@ export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function Sandbo
           onChange={e => { setCommand(e.target.value); setHistIdx(-1); }}
           onKeyDown={handleKey} disabled={isRunning}
           placeholder="bash -c '…'" autoFocus
-          style={{ flex: 1, minWidth: 0, background: '#151515', color: '#e8e8e8',
-            border: '1px solid #2a2a2a', borderRadius: 4, padding: '5px 10px',
+          style={{ flex: 1, minWidth: 0, background: '#241A13', color: '#EEE0C8',
+            border: '1px solid #4A3624', borderRadius: 4, padding: '5px 10px',
             fontFamily: 'inherit', fontSize: 13, outline: 'none', opacity: isRunning ? .6 : 1 }} />
         {isRunning
           ? <button onClick={cancel}  data-testid="cancel-btn"
-              style={{ background: '#2a1010', color: '#ff6a6a', border: '1px solid #5a2020',
+              style={{ background: '#2E1712', color: '#ff6a6a', border: '1px solid #6B3A2C',
                 borderRadius: 4, padding: '5px 14px', cursor: 'pointer',
                 fontFamily: 'inherit', fontSize: 12, fontWeight: 700 }}>Cancel</button>
           : <button onClick={runShellInput} disabled={!command.trim()} data-testid="run-btn"
-              style={{ background: command.trim() ? '#d4ff3f' : '#1a1a1a',
-                color: command.trim() ? '#0a0a0a' : '#444', border: 'none',
+              style={{ background: command.trim() ? '#C9963E' : '#2C2018',
+                color: command.trim() ? '#1C140F' : '#444', border: 'none',
                 borderRadius: 4, padding: '5px 16px', cursor: command.trim() ? 'pointer' : 'default',
                 fontFamily: 'inherit', fontSize: 12, fontWeight: 700 }}>Run</button>}
         <button onClick={clear} style={{ background: 'transparent', color: '#555',

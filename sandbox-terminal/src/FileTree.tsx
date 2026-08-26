@@ -9,11 +9,11 @@ import React, { useState, useCallback } from 'react';
 import type { FileNode } from './types.js';
 
 const EXT_COLOR: Record<string, string> = {
-  '.ts': '#5b8dee', '.tsx': '#5b8dee', '.js': '#d4ff3f', '.jsx': '#d4ff3f',
-  '.py': '#89ddff', '.rb': '#ff6a6a', '.go': '#89ddff', '.rs': '#ff9b9b',
+  '.ts': '#5b8dee', '.tsx': '#5b8dee', '.js': '#C9963E', '.jsx': '#C9963E',
+  '.py': '#8FD9C4', '.rb': '#ff6a6a', '.go': '#8FD9C4', '.rs': '#ff9b9b',
   '.json': '#c792ea', '.yaml': '#c792ea', '.yml': '#c792ea', '.toml': '#c792ea',
-  '.md': '#8fbf6f', '.sh': '#8fbf6f', '.bash': '#8fbf6f',
-  '.css': '#89ddff', '.html': '#ff9b9b', '.sql': '#c792ea',
+  '.md': '#6BCB9E', '.sh': '#6BCB9E', '.bash': '#6BCB9E',
+  '.css': '#8FD9C4', '.html': '#ff9b9b', '.sql': '#c792ea',
 };
 
 // ---------------------------------------------------------------------------
@@ -37,7 +37,7 @@ function TreeNode({ node, depth, contextPaths, onClickFile }: {
             padding: '2px 0 2px 4px', cursor: 'pointer', fontSize: 12,
             color: '#888', paddingLeft: 8 + depth * 14,
             userSelect: 'none', borderRadius: 3 }}
-          onMouseEnter={e => (e.currentTarget.style.background = '#1a1a1a')}
+          onMouseEnter={e => (e.currentTarget.style.background = '#2C2018')}
           onMouseLeave={e => (e.currentTarget.style.background = '')}
         >
           <span style={{ fontSize: 10, opacity: .6 }}>{open ? '▾' : '▸'}</span>
@@ -63,20 +63,20 @@ function TreeNode({ node, depth, contextPaths, onClickFile }: {
         padding: '2px 4px 2px 0', paddingLeft: 8 + depth * 14,
         cursor: 'pointer', fontSize: 12, borderRadius: 3,
         background: inCtx ? 'rgba(212,255,63,.08)' : 'transparent',
-        borderLeft: inCtx ? '2px solid #d4ff3f' : '2px solid transparent',
+        borderLeft: inCtx ? '2px solid #C9963E' : '2px solid transparent',
       }}
-      onMouseEnter={e => (e.currentTarget.style.background = inCtx ? 'rgba(212,255,63,.12)' : '#1a1a1a')}
+      onMouseEnter={e => (e.currentTarget.style.background = inCtx ? 'rgba(212,255,63,.12)' : '#2C2018')}
       onMouseLeave={e => (e.currentTarget.style.background = inCtx ? 'rgba(212,255,63,.08)' : '')}
     >
       <span style={{ color, fontSize: 10, fontWeight: 700, minWidth: 26,
         textAlign: 'right', opacity: .7 }}>
         {node.ext?.slice(1) ?? ''}
       </span>
-      <span style={{ color: inCtx ? '#e8e8e8' : '#ccc', flex: 1,
+      <span style={{ color: inCtx ? '#EEE0C8' : '#ccc', flex: 1,
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {node.name}
       </span>
-      {inCtx && <span style={{ fontSize: 9, color: '#d4ff3f', opacity: .7 }}>●</span>}
+      {inCtx && <span style={{ fontSize: 9, color: '#C9963E', opacity: .7 }}>●</span>}
     </div>
   );
 }
@@ -129,7 +129,7 @@ export function FileTree({
       background: '#090909', fontFamily: '"JetBrains Mono",ui-monospace,monospace' }}>
 
       {/* ── repo path input ── */}
-      <div style={{ padding: '8px 10px', borderBottom: '1px solid #1e1e1e', flexShrink: 0 }}>
+      <div style={{ padding: '8px 10px', borderBottom: '1px solid #35271C', flexShrink: 0 }}>
         <div style={{ fontSize: 10, color: '#555', letterSpacing: '0.1em',
           textTransform: 'uppercase', marginBottom: 6 }}>// project</div>
         <div style={{ display: 'flex', gap: 6 }}>
@@ -138,12 +138,12 @@ export function FileTree({
             onChange={e => setInputPath(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleOpen()}
             placeholder="GitHub URL (optional) — or start blank"
-            style={{ flex: 1, minWidth: 0, background: '#111', color: '#e8e8e8',
-              border: '1px solid #2a2a2a', borderRadius: 4, padding: '4px 8px',
+            style={{ flex: 1, minWidth: 0, background: '#111', color: '#EEE0C8',
+              border: '1px solid #4A3624', borderRadius: 4, padding: '4px 8px',
               fontFamily: 'inherit', fontSize: 11, outline: 'none' }} />
           <button onClick={handleOpen} disabled={loading || !inputPath.trim()}
-            style={{ background: inputPath.trim() ? '#d4ff3f' : '#1a1a1a',
-              color: inputPath.trim() ? '#0a0a0a' : '#444',
+            style={{ background: inputPath.trim() ? '#C9963E' : '#2C2018',
+              color: inputPath.trim() ? '#1C140F' : '#444',
               border: 'none', borderRadius: 4, padding: '4px 10px',
               cursor: inputPath.trim() ? 'pointer' : 'default',
               fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
@@ -157,8 +157,8 @@ export function FileTree({
             disabled={loading}
             style={{
               marginTop: 8, width: '100%',
-              background: '#1a1a1a', color: '#d4ff3f',
-              border: '1px solid #2a4a1a', borderRadius: 4,
+              background: '#2C2018', color: '#C9963E',
+              border: '1px solid #2E5747', borderRadius: 4,
               padding: '6px 10px', cursor: loading ? 'default' : 'pointer',
               fontFamily: 'inherit', fontSize: 11, fontWeight: 700,
             }}
@@ -172,7 +172,7 @@ export function FileTree({
         {pythonReady != null && (
           <div style={{
             marginTop: 5, fontSize: 10, lineHeight: 1.4,
-            color: pythonReady ? '#8fbf6f' : '#ff6a6a',
+            color: pythonReady ? '#6BCB9E' : '#ff6a6a',
           }}>
             {pythonReady ? '●' : '✗'} Python {pythonReady ? 'ready' : 'missing'}
             {pythonDetail ? ` — ${pythonDetail.slice(0, 80)}` : ''}
@@ -181,7 +181,7 @@ export function FileTree({
         {rustReady != null && (
           <div style={{
             marginTop: 3, fontSize: 10, lineHeight: 1.4,
-            color: rustReady ? '#8fbf6f' : '#ff6a6a',
+            color: rustReady ? '#6BCB9E' : '#ff6a6a',
           }}>
             {rustReady ? '●' : '✗'} Rust {rustReady ? 'ready' : 'missing'}
             {rustDetail ? ` — ${rustDetail.slice(0, 80)}` : ''}
@@ -190,7 +190,7 @@ export function FileTree({
         {goReady != null && (
           <div style={{
             marginTop: 3, fontSize: 10, lineHeight: 1.4,
-            color: goReady ? '#8fbf6f' : '#ff6a6a',
+            color: goReady ? '#6BCB9E' : '#ff6a6a',
           }}>
             {goReady ? '●' : '✗'} Go {goReady ? 'ready' : 'missing'}
             {goDetail ? ` — ${goDetail.slice(0, 80)}` : ''}
@@ -220,10 +220,10 @@ export function FileTree({
 
       {/* ── optional pinned files (advanced; auto-pick does the real work) ── */}
       {contextFiles.size > 0 && (
-        <div style={{ borderTop: '1px solid #1e1e1e', padding: '8px 10px', flexShrink: 0 }}>
+        <div style={{ borderTop: '1px solid #35271C', padding: '8px 10px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center',
             justifyContent: 'space-between', marginBottom: 5 }}>
-            <span style={{ fontSize: 10, color: '#d4ff3f', letterSpacing: '0.08em',
+            <span style={{ fontSize: 10, color: '#C9963E', letterSpacing: '0.08em',
               textTransform: 'uppercase' }}>
               Pinned ({contextFiles.size})
             </span>
