@@ -30,6 +30,8 @@ const SYNTAX_FILES = [
   'api/sandbox/[op].js',
   'lib/sandbox-api/git-push.js',
   'lib/code-slices.js',
+  'lib/hub.js',
+  'api/hub/[route].js',
 ];
 
 function fail(msg) {
@@ -74,6 +76,7 @@ const HANDLER_IMPORTS = [
   'api/group-chat.js',
   'api/generate.js',
   'api/admin-config.js',
+  'api/hub/[route].js',
 ];
 for (const rel of HANDLER_IMPORTS) {
   const abs = path.join(root, rel);

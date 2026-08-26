@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <title>Jive — Uncensored No-Code Agent</title>
 <meta name="description" content="Jive — uncensored no-code agent. Chat • Code • Create. Chat room, persona collective, think tank." />
-<meta name="theme-color" content="#1C140F" />
+<meta name="theme-color" content="#0B0D12" />
 <link rel="icon" href="/favicon.ico" sizes="any" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <link rel="icon" type="image/png" href="/favicon.png" />
 <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 <meta property="og:type" content="website" />
@@ -24,14 +25,16 @@
 <link rel="image_src" href="/og-image.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Special+Elite&family=Vollkorn:wght@400;500;600&family=Cutive+Mono&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
 
-<!-- Match sidebar.collapsed defaults so first paint doesn't put #main in a
-     0-width track, then animate open on desktop once JS runs. -->
-<div id="app" class="chats-collapsed artifacts-collapsed">
+<!-- Both sidebar columns start collapsed (0-width) by default — see the
+     base #app rule in styles.css. JS adds .chats-open / .artifacts-open
+     once it decides the real state (open by default on desktop, collapsed
+     on mobile) via applySidebarState(). -->
+<div id="app">
 
   <!-- Backdrop shown behind sidebars on mobile; tap to dismiss. -->
   <div id="backdrop" class="backdrop hidden"></div>
@@ -39,6 +42,18 @@
   <!-- Left sidebar: chat list. Starts collapsed by default; JS opens it on
        desktop viewports so mobile doesn't flash an overlay before JS runs. -->
   <aside id="chatsSidebar" class="sidebar left collapsed">
+    <div class="brand-row">
+      <svg class="brand-mark" viewBox="0 0 100 100" aria-hidden="true">
+        <defs>
+          <linearGradient id="brandGrad" x1="4" y1="4" x2="96" y2="96" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#FF3D8E" />
+            <stop offset="1" stop-color="#34D399" />
+          </linearGradient>
+        </defs>
+        <path fill="url(#brandGrad)" d="M50,4 C53,30 70,47 96,50 C70,53 53,70 50,96 C47,70 30,53 4,50 C30,47 47,30 50,4 Z" />
+      </svg>
+      <span class="brand-word">JIVE</span>
+    </div>
     <div class="sidebar-header">
       <span class="sidebar-title">Chats</span>
       <div class="sidebar-header-actions">
@@ -158,6 +173,12 @@
       </button>
     </nav>
 
+    <div id="nudgeBanner" class="nudge-banner hidden" role="status">
+      <span id="nudgeBannerText" class="nudge-banner-text"></span>
+      <button id="nudgeBannerView" class="text-btn" type="button">View</button>
+      <button id="nudgeBannerDismiss" class="icon-btn" type="button" title="Dismiss">×</button>
+    </div>
+
     <div id="chat"></div>
     <div id="typing" class="typing-bar" hidden>
       <div id="typingStatus" class="typing-status">Waiting for model…</div>
@@ -179,15 +200,56 @@
     </form>
   </main>
 
-  <!-- Right sidebar: artifacts -->
+  <!-- Right sidebar: artifacts / outline / compare / reminders -->
   <aside id="artifactsSidebar" class="sidebar right collapsed">
     <div class="sidebar-header">
-      <span class="sidebar-title">Artifacts</span>
+      <span class="sidebar-title">Sidebar</span>
       <button id="closeArtifacts" class="icon-btn" title="Hide">×</button>
     </div>
-    <ul id="artifactList" class="artifact-list"></ul>
-    <div class="artifact-empty">
-      Code blocks and documents the model produces will appear here with copy &amp; download buttons.
+    <div id="sidebarTabs" class="sidebar-tabs" role="tablist">
+      <button class="sidebar-tab active" data-tab="artifacts" role="tab" aria-selected="true" type="button">Artifacts</button>
+      <button class="sidebar-tab" data-tab="outline" role="tab" aria-selected="false" type="button">Outline</button>
+      <button class="sidebar-tab" data-tab="compare" role="tab" aria-selected="false" type="button">Compare</button>
+      <button class="sidebar-tab" data-tab="reminders" role="tab" aria-selected="false" type="button">
+        Reminders<span id="remindersTabBadge" class="tab-badge hidden"></span>
+      </button>
+    </div>
+
+    <div id="artifactsPanel" class="tab-panel">
+      <ul id="artifactList" class="artifact-list"></ul>
+      <div class="artifact-empty">
+        Code blocks and documents the model produces will appear here with copy &amp; download buttons.
+      </div>
+    </div>
+
+    <div id="outlinePanel" class="tab-panel hidden">
+      <ul id="outlineList" class="artifact-list outline-list"></ul>
+      <div id="outlineEmpty" class="artifact-empty">
+        Your messages will show up here as waypoints — tap one to jump back to it.
+      </div>
+    </div>
+
+    <div id="comparePanel" class="tab-panel hidden">
+      <div class="compare-setup">
+        <div id="comparePickList" class="compare-pick-list"></div>
+        <button id="comparePickBtn" class="text-btn" type="button">Choose models (2–3)</button>
+        <textarea id="compareInput" rows="3" placeholder="Ask all selected models the same question…"></textarea>
+        <div class="compare-setup-actions">
+          <button id="compareSendBtn" class="text-btn primary" type="button" disabled>Ask all</button>
+          <button id="compareStopBtn" class="text-btn danger hidden" type="button">Stop</button>
+        </div>
+      </div>
+      <div id="comparePanels" class="compare-panels"></div>
+      <div id="compareEmpty" class="artifact-empty">
+        Pick 2–3 models and ask them the same question — answers stream in side by side.
+      </div>
+    </div>
+
+    <div id="remindersPanel" class="tab-panel hidden">
+      <ul id="reminderList" class="nudge-list"></ul>
+      <div id="reminderEmpty" class="artifact-empty">
+        Nothing has gone quiet yet.
+      </div>
     </div>
   </aside>
 

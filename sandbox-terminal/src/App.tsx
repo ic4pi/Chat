@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { FileTree }         from './FileTree.js';
 import { ChatPane }         from './ChatPane.js';
 import type { ChatHandle, Message }  from './ChatPane.js';

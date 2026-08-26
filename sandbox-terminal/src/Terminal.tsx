@@ -111,7 +111,7 @@ export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function Sandbo
   const [status,    setStatus]    = useState<RunStatus>('idle');
   const [exitCode,  setExitCode]  = useState<number | null>(null);
   const [history,   setHistory]   = useState<string[]>([]);
-  const [histIdx,   setHistIdx]   = useState(-1);
+  const [_histIdx,  setHistIdx]  = useState(-1);
 
   const sessionHeaders = useCallback((): Record<string, string> => {
     const h: Record<string, string> = { 'Content-Type': 'application/json' };

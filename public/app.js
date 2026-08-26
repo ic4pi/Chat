@@ -281,6 +281,7 @@ function freshState() {
     chatsCollapsed: false,
     chatsCollapsedExplicit: false,
     artifactsCollapsed: true,
+    artifactsActiveTab: 'artifacts',
   };
 }
 
@@ -460,6 +461,7 @@ const els = {
   modelPickerBtn: $('modelPickerBtn'),
   modelPickerLabel: $('modelPickerLabel'),
   modelPickerModal: $('modelPickerModal'),
+  modelPickerTitle: $('modelPickerTitle'),
   closeModelPicker: $('closeModelPicker'),
   modelSearchInput: $('modelSearchInput'),
   modelFilterBtn: $('modelFilterBtn'),
@@ -516,6 +518,27 @@ const els = {
   micBtn: $('micBtn'),
   speakBtn: $('speakBtn'),
   artifactList: $('artifactList'),
+  sidebarTabs: $('sidebarTabs'),
+  artifactsPanel: $('artifactsPanel'),
+  outlinePanel: $('outlinePanel'),
+  outlineList: $('outlineList'),
+  outlineEmpty: $('outlineEmpty'),
+  comparePanel: $('comparePanel'),
+  comparePickList: $('comparePickList'),
+  comparePickBtn: $('comparePickBtn'),
+  compareInput: $('compareInput'),
+  compareSendBtn: $('compareSendBtn'),
+  compareStopBtn: $('compareStopBtn'),
+  comparePanels: $('comparePanels'),
+  compareEmpty: $('compareEmpty'),
+  remindersPanel: $('remindersPanel'),
+  reminderList: $('reminderList'),
+  reminderEmpty: $('reminderEmpty'),
+  remindersTabBadge: $('remindersTabBadge'),
+  nudgeBanner: $('nudgeBanner'),
+  nudgeBannerText: $('nudgeBannerText'),
+  nudgeBannerView: $('nudgeBannerView'),
+  nudgeBannerDismiss: $('nudgeBannerDismiss'),
   artifactModal: $('artifactModal'),
   artifactModalTitle: $('artifactModalTitle'),
   artifactModalContent: $('artifactModalContent'),
@@ -544,12 +567,18 @@ const els = {
 function applySidebarState() {
   const chatsCollapsed = effectiveChatsCollapsed();
   const artifactsCollapsed = !!state.artifactsCollapsed;
-  els.app.classList.toggle('chats-collapsed', chatsCollapsed);
-  els.app.classList.toggle('artifacts-collapsed', artifactsCollapsed);
+  // #app's grid-template-columns rules key off .chats-open/.artifacts-open
+  // (see styles.css) — toggle those, not the -collapsed names, or the
+  // sidebar's CSS column never widens and the panel never visibly opens.
+  els.app.classList.toggle('chats-open', !chatsCollapsed);
+  els.app.classList.toggle('artifacts-open', !artifactsCollapsed);
   els.chatsSidebar.classList.toggle('collapsed', chatsCollapsed);
   els.artifactsSidebar.classList.toggle('collapsed', artifactsCollapsed);
   const anySidebarOpen = !chatsCollapsed || !artifactsCollapsed;
-  els.backdrop.classList.toggle('visible', isMobileViewport() && anySidebarOpen);
+  // .backdrop starts with the .hidden utility class (display:none !important)
+  // — toggle that directly rather than a separate "visible" class, which had
+  // no matching CSS rule and meant the scrim could never actually show.
+  els.backdrop.classList.toggle('hidden', !(isMobileViewport() && anySidebarOpen));
 }
 
 function closeChatsSidebar() {
@@ -567,6 +596,90 @@ function closeAllSidebars() {
   closeChatsSidebar();
   closeArtifactsSidebar();
 }
+function openArtifactsSidebar() {
+  state.artifactsCollapsed = false;
+  saveState();
+  applySidebarState();
+}
+
+// ---------------------------------------------------------------------------
+// Right sidebar tabs — Artifacts / Outline / Compare / Reminders
+// ---------------------------------------------------------------------------
+
+const SIDEBAR_TABS = ['artifacts', 'outline', 'compare', 'reminders'];
+
+function setArtifactsTab(name) {
+  if (!SIDEBAR_TABS.includes(name)) name = 'artifacts';
+  state.artifactsActiveTab = name;
+  saveState();
+
+  els.sidebarTabs?.querySelectorAll('.sidebar-tab').forEach((btn) => {
+    const active = btn.dataset.tab === name;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  const panels = {
+    artifacts: els.artifactsPanel,
+    outline: els.outlinePanel,
+    compare: els.comparePanel,
+    reminders: els.remindersPanel,
+  };
+  for (const [tab, panel] of Object.entries(panels)) {
+    panel?.classList.toggle('hidden', tab !== name);
+  }
+
+  if (name === 'outline') renderOutline();
+  else if (name === 'reminders') refreshReminders();
+}
+
+els.sidebarTabs?.addEventListener('click', (e) => {
+  const btn = e.target.closest('.sidebar-tab');
+  if (btn) setArtifactsTab(btn.dataset.tab);
+});
+
+/** "2m ago" / "3h ago" / falls back to a short date past a day. */
+function formatRelativeTime(ts) {
+  const diff = Date.now() - Number(ts || 0);
+  if (!Number.isFinite(diff) || diff < 0) return '';
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 7) return `${day}d ago`;
+  return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+/** One waypoint per user message — click to jump back to it in #chat. */
+function renderOutline() {
+  if (!els.outlineList) return;
+  els.outlineList.innerHTML = '';
+  const chat = activeChat();
+  const rows = (chat?.messages || [])
+    .map((m, idx) => ({ m, idx }))
+    .filter(({ m }) => m.role === 'user');
+
+  if (els.outlineEmpty) els.outlineEmpty.classList.toggle('hidden', rows.length > 0);
+
+  for (const { m, idx } of rows) {
+    const li = document.createElement('li');
+    li.className = 'outline-row';
+    const text = document.createElement('div');
+    text.className = 'title';
+    const raw = (m.content || '').replace(/\s+/g, ' ').trim();
+    text.textContent = raw.length > 60 ? raw.slice(0, 60) + '…' : (raw || '(empty)');
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = formatRelativeTime(m.ts);
+    li.append(text, meta);
+    li.addEventListener('click', () => {
+      const target = els.chat.querySelector(`.msg[data-idx="${idx}"]`);
+      target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    els.outlineList.appendChild(li);
+  }
+}
 
 function renderChatList() {
   els.chatList.innerHTML = '';
@@ -579,6 +692,7 @@ function renderChatList() {
     nameEl.textContent = c.name || 'Untitled';
     nameEl.title = c.name || 'Untitled';
     nameEl.addEventListener('click', () => {
+      abortCompareRun(); // Compare is scratch space scoped to one chat — don't leak into the next
       state.activeChatId = c.id;
       state.activeProvider = c.provider;
       state.activeModel = c.model;
@@ -710,12 +824,12 @@ function renderMessages(opts = {}) {
   }
 
   let pinEl = null;
-  for (const m of chat.messages) {
-    const el = renderMessageInto(els.chat, m);
+  chat.messages.forEach((m, idx) => {
+    const el = renderMessageInto(els.chat, m, idx);
     if (opts.pinMsgTs && m.ts === opts.pinMsgTs && m.role === 'assistant') {
       pinEl = el;
     }
-  }
+  });
   // Default pin: latest assistant message
   if (scroll === 'assistant-start' && !pinEl) {
     const bots = els.chat.querySelectorAll('.msg.bot');
@@ -736,6 +850,8 @@ function renderMessages(opts = {}) {
       els.chat.scrollTop = els.chat.scrollHeight;
     }
   }
+
+  renderOutline();
 }
 
 function escapeHtml(s) {
@@ -746,7 +862,7 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
-function renderMessageInto(container, m) {
+function renderMessageInto(container, m, idx) {
   const cls =
     m.role === 'user' ? 'user' :
     m.role === 'error' ? 'error' :
@@ -756,6 +872,10 @@ function renderMessageInto(container, m) {
   const div = document.createElement('div');
   div.className = 'msg ' + cls + (m.streaming ? ' streaming' : '') + (m.personaId ? ' group-turn' : '');
   if (m.ts) div.dataset.ts = String(m.ts);
+  // Index, not timestamp — two messages can share a millisecond (e.g. an
+  // info+user pair pushed back to back), which would make data-ts an
+  // unreliable scroll-jump target for the Outline tab.
+  if (idx != null) div.dataset.idx = String(idx);
 
   if (m.autoContinue) div.classList.add('auto-continue');
 
@@ -1472,6 +1592,12 @@ function makeModelOption(m, { showId = true } = {}) {
   return opt;
 }
 
+// ---- Compare mode: a multi-select grafted onto the existing (normally
+// single-select) model picker, rather than a second picker built from
+// scratch — reuses catalog loading/search/filters as-is. ----
+let comparePickerMode = false;
+let compareSelection = []; // [{ provider, id, name }], max 3
+
 function renderModelPickerList() {
   const host = els.modelPickerList;
   if (!host) return;
@@ -1502,9 +1628,10 @@ function renderModelPickerList() {
       const locked = !m.free && !unlocked;
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'model-picker-item' +
-        (locked ? ' locked' : '') +
-        (m.provider === state.activeProvider && m.id === state.activeModel ? ' active' : '');
+      const isActive = comparePickerMode
+        ? compareSelection.some((c) => c.provider === m.provider && c.id === m.id)
+        : (m.provider === state.activeProvider && m.id === state.activeModel);
+      btn.className = 'model-picker-item' + (locked ? ' locked' : '') + (isActive ? ' active' : '');
       btn.disabled = locked;
       btn.setAttribute('role', 'option');
       btn.dataset.provider = m.provider;
@@ -1544,7 +1671,10 @@ function renderModelPickerList() {
       btn.appendChild(meta);
 
       if (!locked) {
-        btn.addEventListener('click', () => selectModelFromPicker(m.provider, m.id));
+        btn.addEventListener('click', () => {
+          if (comparePickerMode) toggleCompareModelSelection(m.provider, m.id, m.name || m.id);
+          else selectModelFromPicker(m.provider, m.id);
+        });
       } else {
         btn.addEventListener('click', () => openUnlockPaidModal());
       }
@@ -1585,6 +1715,7 @@ function selectModelFromPicker(provider, modelId) {
 async function openModelPicker() {
   if (!els.modelPickerModal) return;
   initModelFilterChips();
+  if (els.modelPickerTitle) els.modelPickerTitle.textContent = comparePickerMode ? 'Pick 2–3 models to compare' : 'Models';
   els.modelPickerModal.classList.remove('hidden');
   els.modelPickerBtn?.setAttribute('aria-expanded', 'true');
   if (els.modelPickerStatus) els.modelPickerStatus.textContent = 'Loading catalogs…';
@@ -1598,7 +1729,146 @@ function closeModelPicker() {
   els.modelPickerModal?.classList.add('hidden');
   els.modelFilterPanel?.classList.add('hidden');
   els.modelPickerBtn?.setAttribute('aria-expanded', 'false');
+  if (comparePickerMode) {
+    comparePickerMode = false;
+    if (els.modelPickerTitle) els.modelPickerTitle.textContent = 'Models';
+    renderComparePickList();
+  }
 }
+
+/** Opens the existing model picker in multi-select mode for Compare. */
+function openComparePicker() {
+  comparePickerMode = true;
+  void openModelPicker();
+}
+
+function toggleCompareModelSelection(provider, id, name) {
+  const i = compareSelection.findIndex((c) => c.provider === provider && c.id === id);
+  if (i >= 0) {
+    compareSelection.splice(i, 1);
+  } else {
+    if (compareSelection.length >= 3) {
+      if (els.modelPickerStatus) els.modelPickerStatus.textContent = 'Up to 3 models for Compare — remove one first.';
+      return;
+    }
+    compareSelection.push({ provider, id, name });
+  }
+  renderModelPickerList();
+}
+
+/** Removable chips showing the current Compare selection, plus gating the Ask-all button. */
+function renderComparePickList() {
+  if (!els.comparePickList) return;
+  els.comparePickList.innerHTML = '';
+  for (const c of compareSelection) {
+    const chip = document.createElement('span');
+    chip.className = 'model-tag compare-chip';
+    chip.textContent = c.name;
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.textContent = '×';
+    x.setAttribute('aria-label', `Remove ${c.name}`);
+    x.addEventListener('click', () => {
+      compareSelection = compareSelection.filter((s) => !(s.provider === c.provider && s.id === c.id));
+      renderComparePickList();
+    });
+    chip.appendChild(x);
+    els.comparePickList.appendChild(chip);
+  }
+  if (els.compareSendBtn) {
+    els.compareSendBtn.disabled = compareSelection.length < 2 || compareSelection.length > 3;
+  }
+}
+els.comparePickBtn?.addEventListener('click', openComparePicker);
+
+// ---------------------------------------------------------------------------
+// Compare — ask 2-3 models the same question, answers stream in side by
+// side. Self-contained scratch space: results render only in the sidebar
+// panels, never appended to chat.messages (keeps the one-reply-per-turn
+// data model, and keeps Outline/Artifacts from tripling up on this output).
+// Not persisted across reloads — cleared on chat switch or page load.
+// ---------------------------------------------------------------------------
+
+let compareRun = { controllers: [] };
+
+function abortCompareRun() {
+  for (const c of compareRun.controllers) { try { c.abort(); } catch { /* ignore */ } }
+  compareRun = { controllers: [] };
+  els.compareStopBtn?.classList.add('hidden');
+}
+
+async function runCompareModel({ provider, id, name }, question, panelBodyEl) {
+  const controller = new AbortController();
+  compareRun.controllers.push(controller);
+  let buf = '';
+  try {
+    const result = await streamChatResponse({
+      provider,
+      model: id,
+      messages: [{ role: 'user', content: question }],
+      personaId: state.activePersonaId,
+      signal: controller.signal,
+      onEvent: (evt) => {
+        if (evt.type === 'token' && typeof evt.text === 'string') {
+          buf += evt.text;
+          panelBodyEl.innerHTML = '';
+          renderMarkdownInto(panelBodyEl, buf || '…');
+        }
+      },
+    });
+    if (!result.ok) {
+      panelBodyEl.innerHTML = '';
+      panelBodyEl.classList.add('compare-error');
+      panelBodyEl.textContent = result.errText || result.data?.error || `${name} failed.`;
+    } else if (!buf) {
+      // Non-streaming fallback path already delivered the full reply.
+      buf = result.data?.reply || '';
+      panelBodyEl.innerHTML = '';
+      renderMarkdownInto(panelBodyEl, buf || '(empty reply)');
+    }
+  } catch (err) {
+    panelBodyEl.innerHTML = '';
+    panelBodyEl.classList.add('compare-error');
+    panelBodyEl.textContent = friendlyNetworkError(err);
+  }
+}
+
+async function runCompare() {
+  const question = (els.compareInput?.value || '').trim();
+  if (!question || compareSelection.length < 2 || compareSelection.length > 3) return;
+
+  abortCompareRun(); // clear any still-running previous round first
+  if (els.comparePanels) els.comparePanels.innerHTML = '';
+  els.compareEmpty?.classList.add('hidden');
+  els.compareStopBtn?.classList.remove('hidden');
+  if (els.compareSendBtn) els.compareSendBtn.disabled = true;
+
+  const picks = compareSelection.slice();
+  const panels = picks.map((c) => {
+    const panel = document.createElement('div');
+    panel.className = 'compare-panel';
+    const head = document.createElement('div');
+    head.className = 'compare-panel-head';
+    head.textContent = c.name;
+    const body = document.createElement('div');
+    body.className = 'compare-panel-body';
+    body.textContent = '…';
+    panel.append(head, body);
+    els.comparePanels?.appendChild(panel);
+    return { c, body };
+  });
+
+  await Promise.allSettled(panels.map(({ c, body }) => runCompareModel(c, question, body)));
+
+  els.compareStopBtn?.classList.add('hidden');
+  if (els.compareSendBtn) els.compareSendBtn.disabled = compareSelection.length < 2 || compareSelection.length > 3;
+}
+
+els.compareSendBtn?.addEventListener('click', () => void runCompare());
+els.compareStopBtn?.addEventListener('click', () => abortCompareRun());
+els.compareInput?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void runCompare(); }
+});
 
 function openUnlockPaidModal() {
   if (!els.unlockPaidModal) return;
@@ -1711,13 +1981,14 @@ async function callChat(provider, model, messages, personaId) {
 }
 
 /**
- * Stream a chat completion. onEvent({type, ...}) for status/token/thinking/done/error.
- * Returns { ok, status, data, errText } shaped like callChat for fallbacks.
+ * The actual SSE fetch + parse for a chat completion — reentrant and free of
+ * shared module state (no activeChatAbort/chatBusy). Takes its own
+ * AbortSignal so multiple calls can run concurrently without clobbering each
+ * other (this is what Compare mode calls directly, once per model).
+ * onEvent({type, ...}) for status/token/thinking/done/error.
+ * Returns { ok, status, data, errText } shaped like callChat.
  */
-async function callChatStream(provider, model, messages, personaId, onEvent) {
-  const controller = new AbortController();
-  activeChatAbort = controller;
-  const timer = setTimeout(() => controller.abort(), timeoutFor(provider, model));
+async function streamChatResponse({ provider, model, messages, personaId, signal, onEvent, wasUserStopped }) {
   const apiKey = (providerKeys[provider] || '').trim();
   const headers = paidAuthHeaders({ 'Content-Type': 'application/json', Accept: 'text/event-stream' });
   if (apiKey) headers['X-Provider-Key'] = apiKey;
@@ -1736,7 +2007,7 @@ async function callChatStream(provider, model, messages, personaId, onEvent) {
         paidPassword: loadPaidPassword() || undefined,
         stream: true,
       }),
-      signal: controller.signal,
+      signal,
     });
 
     const ctype = (res.headers.get('content-type') || '').toLowerCase();
@@ -1837,10 +2108,29 @@ async function callChatStream(provider, model, messages, personaId, onEvent) {
       errText: null,
     };
   } catch (err) {
-    if (activeChatUserStopped || err?.name === 'AbortError') {
+    if ((wasUserStopped && wasUserStopped()) || err?.name === 'AbortError') {
       return { ok: false, status: 0, data: null, errText: 'Stopped.', stopped: true };
     }
     return { ok: false, status: 0, data: null, errText: friendlyNetworkError(err), stopped: false };
+  }
+}
+
+/**
+ * Thin wrapper around streamChatResponse() for the main chat path — owns the
+ * shared activeChatAbort/timeout bookkeeping that the Stop button and
+ * Esc/Enter-to-stop key off. Behavior is unchanged from before the
+ * streamChatResponse extraction; only the SSE body itself moved.
+ */
+async function callChatStream(provider, model, messages, personaId, onEvent) {
+  const controller = new AbortController();
+  activeChatAbort = controller;
+  const timer = setTimeout(() => controller.abort(), timeoutFor(provider, model));
+  try {
+    return await streamChatResponse({
+      provider, model, messages, personaId, onEvent,
+      signal: controller.signal,
+      wasUserStopped: () => activeChatUserStopped,
+    });
   } finally {
     clearTimeout(timer);
     if (activeChatAbort === controller) activeChatAbort = null;
@@ -2202,6 +2492,7 @@ async function sendMessage(text) {
         if (state.artifactsCollapsed) {
           state.artifactsCollapsed = false;
           applySidebarState();
+          setArtifactsTab('artifacts');
         }
       }
       renderMessages({
@@ -2828,6 +3119,7 @@ els.input.addEventListener('keydown', (e) => {
 });
 
 function handleNewChat() {
+  abortCompareRun();
   createChat();
   if (isMobileViewport()) {
     state.chatsCollapsed = true;
@@ -4374,6 +4666,7 @@ function showBootError(msg) {
   el.textContent = 'Boot error: ' + msg + '\n\nTry a hard refresh, or open Chats → Clear chats / Reset settings.';
 }
 
+setArtifactsTab(state.artifactsActiveTab || 'artifacts');
 renderAll().catch((err) => {
   console.error('renderAll failed:', err);
   showBootError(err?.stack || err?.message || String(err));
@@ -4404,7 +4697,7 @@ const hubUI = {
 window.addEventListener('hub-ready', async () => {
   hubOn = await window.hub.hubReady();
   document.body.classList.toggle('hub-on', hubOn);
-  if (hubOn) refreshNudgeBadge();
+  if (hubOn) { refreshNudgeBadge(); refreshReminders(); }
 });
 
 function closeHandoff() {
@@ -4496,6 +4789,33 @@ document.querySelectorAll('[data-handoff]').forEach((btn) => {
 
 // ---- Memory screen -------------------------------------------------------
 
+/**
+ * Shared row-builder for nudges — used by both the Memory sheet's nudge
+ * list and the Reminders tab, so the two surfaces can't drift apart.
+ * `onDismissed()` fires after a successful server-side dismiss (both
+ * callers use it to refresh their own badge/tab state).
+ */
+function renderNudgeRows(container, nudges, onDismissed) {
+  for (const n of nudges) {
+    const row = document.createElement('div');
+    row.className = 'nudge-row';
+    const txt = document.createElement('span');
+    txt.textContent = n.message;
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'nudge-dismiss';
+    x.title = 'Dismiss this reminder';
+    x.textContent = '×';
+    x.addEventListener('click', async () => {
+      await window.hub.dismissNudge(n.id);
+      row.remove();
+      onDismissed?.();
+    });
+    row.append(txt, x);
+    container.appendChild(row);
+  }
+}
+
 async function openMemory() {
   if (!hubOn) return;
   closeAppMenu();
@@ -4513,23 +4833,7 @@ async function openMemory() {
       if (!nudges.length) {
         hubUI.nudgeList.innerHTML = '<p class="empty-note">Nothing has gone quiet yet.</p>';
       }
-      for (const n of nudges) {
-        const row = document.createElement('div');
-        row.className = 'nudge-row';
-        const txt = document.createElement('span');
-        txt.textContent = n.message;
-        const x = document.createElement('button');
-        x.type = 'button';
-        x.className = 'nudge-dismiss';
-        x.textContent = '×';
-        x.addEventListener('click', async () => {
-          await window.hub.dismissNudge(n.id);
-          row.remove();
-          refreshNudgeBadge();
-        });
-        row.append(txt, x);
-        hubUI.nudgeList.appendChild(row);
-      }
+      renderNudgeRows(hubUI.nudgeList, nudges, () => { refreshNudgeBadge(); refreshReminders(); });
     }
 
     if (hubUI.topicList) {
@@ -4587,6 +4891,63 @@ async function refreshNudgeBadge() {
 }
 
 document.getElementById('memoryBtn')?.addEventListener('click', openMemory);
+
+// ---- Reminders tab + ambient banner ---------------------------------------
+// Same nudges the Memory sheet already shows, surfaced somewhere the user
+// doesn't have to know to go looking for. No-ops entirely when the hub isn't
+// configured (hubOn stays false) — mirrors refreshNudgeBadge's guard.
+
+// Banner "×" only hides it for this tab session — it does not call the
+// server. The row-level "×" in the tab (or the Memory sheet) is the real,
+// persistent dismiss. Tracked here so refreshReminders() doesn't keep
+// re-showing a banner the user just closed.
+const bannerDismissedIds = new Set();
+
+async function refreshReminders() {
+  if (!hubOn) return;
+  try {
+    const { nudges } = await window.hub.getNudges();
+
+    if (els.remindersTabBadge) {
+      els.remindersTabBadge.textContent = nudges.length || '';
+      els.remindersTabBadge.classList.toggle('hidden', !nudges.length);
+    }
+
+    if (els.reminderList) {
+      els.reminderList.innerHTML = '';
+      renderNudgeRows(els.reminderList, nudges, () => refreshReminders());
+    }
+    if (els.reminderEmpty) els.reminderEmpty.classList.toggle('hidden', nudges.length > 0);
+
+    const visible = nudges.filter((n) => !bannerDismissedIds.has(n.id));
+    if (els.nudgeBanner) {
+      if (visible.length) {
+        if (els.nudgeBannerText) {
+          els.nudgeBannerText.textContent = visible.length === 1
+            ? visible[0].message
+            : `${visible.length} topics have gone quiet.`;
+        }
+        els.nudgeBanner.classList.remove('hidden');
+      } else {
+        els.nudgeBanner.classList.add('hidden');
+      }
+    }
+  } catch {
+    /* reminders are ambient, not critical — fail silently */
+  }
+}
+
+els.nudgeBannerView?.addEventListener('click', () => {
+  openArtifactsSidebar();
+  setArtifactsTab('reminders');
+});
+els.nudgeBannerDismiss?.addEventListener('click', async () => {
+  try {
+    const { nudges } = await window.hub.getNudges();
+    for (const n of nudges) bannerDismissedIds.add(n.id);
+  } catch { /* best effort */ }
+  els.nudgeBanner?.classList.add('hidden');
+});
 
 // ---- Status row (compact model/role controls under the topbar) ----------
 document.getElementById('statusModelBtn')?.addEventListener('click', () => {
