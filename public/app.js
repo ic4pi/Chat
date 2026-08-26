@@ -772,6 +772,20 @@ function renderMessageInto(container, m) {
       : m.role;
   div.appendChild(label);
 
+  // Moderator turns get a visible star in the live discussion — the same
+  // signal shown in group setup, so who closes the table out is never a
+  // guess mid-conversation.
+  if (m.role === 'assistant' && m.personaId) {
+    const p = personas.find((x) => x.id === m.personaId);
+    if (p && (p.isModerator || p.is_moderator)) {
+      const star = document.createElement('span');
+      star.className = 'mod-badge';
+      star.textContent = '★';
+      star.title = 'Moderator';
+      div.appendChild(star);
+    }
+  }
+
   const content = document.createElement('div');
   content.className = 'content';
 
@@ -3256,10 +3270,13 @@ const sheetEls = {
 
 /** Stable hue per persona id, so a persona keeps its colour across reloads. */
 function personaHue(id) {
+  // Restricted to warm bands (copper through amber through rust) so every
+  // persona reads as brass hardware, not a screen-glow neon.
+  const BANDS = [18, 32, 45, 8, 355, 38, 25];
   let h = 0;
   const str = String(id || '');
-  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
-  return h;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 997;
+  return BANDS[h % BANDS.length];
 }
 
 function personaInitials(name) {
@@ -3967,6 +3984,13 @@ async function renderGroupPersonaModels() {
     const name = document.createElement('div');
     name.className = 'group-persona-name';
     name.textContent = p.name;
+    if (p.isModerator || p.is_moderator) {
+      const badge = document.createElement('span');
+      badge.className = 'mod-badge';
+      badge.textContent = '★ Moderator';
+      badge.title = 'Closes the discussion and writes the final decision';
+      name.appendChild(badge);
+    }
     row.appendChild(name);
 
     const assigned = modelForPersona(p.id);
@@ -4354,3 +4378,266 @@ renderAll().catch((err) => {
   console.error('renderAll failed:', err);
   showBootError(err?.stack || err?.message || String(err));
 });
+
+// ===========================================================================
+// Hub wiring — module handoff
+//
+// A thought in a chat can become a workspace project, a group discussion, an
+// image prompt, or a filed note. All of it goes through window.hub, which is
+// loaded as an ES module and degrades to nothing when the hub is unconfigured.
+// ===========================================================================
+
+let hubOn = false;
+let handoffSource = null; // { chat, content, messageId }
+
+const hubUI = {
+  handoffSheet: document.getElementById('handoffSheet'),
+  handoffScrim: document.getElementById('handoffScrim'),
+  handoffPreview: document.getElementById('handoffPreview'),
+  handoffStatus: document.getElementById('handoffStatus'),
+  memorySheet: document.getElementById('memorySheet'),
+  memoryScrim: document.getElementById('memoryScrim'),
+  nudgeList: document.getElementById('nudgeList'),
+  topicList: document.getElementById('topicList'),
+};
+
+window.addEventListener('hub-ready', async () => {
+  hubOn = await window.hub.hubReady();
+  document.body.classList.toggle('hub-on', hubOn);
+  if (hubOn) refreshNudgeBadge();
+});
+
+function closeHandoff() {
+  hubUI.handoffSheet?.classList.remove('open');
+  hubUI.handoffScrim?.classList.remove('open');
+  if (hubUI.handoffStatus) hubUI.handoffStatus.textContent = '';
+}
+
+/** Opens the handoff sheet for one message. */
+function openHandoff(content, messageId) {
+  if (!hubOn) return;
+  handoffSource = { chat: activeChat(), content, messageId };
+  if (hubUI.handoffPreview) {
+    hubUI.handoffPreview.textContent =
+      content.length > 220 ? content.slice(0, 220) + '…' : content;
+  }
+  hubUI.handoffSheet?.classList.add('open');
+  hubUI.handoffScrim?.classList.add('open');
+}
+
+hubUI.handoffScrim?.addEventListener('click', closeHandoff);
+hubUI.memoryScrim?.addEventListener('click', () => {
+  hubUI.memorySheet?.classList.remove('open');
+  hubUI.memoryScrim?.classList.remove('open');
+});
+
+/** A small "send this somewhere" control on every assistant message. */
+function attachHandoffButton(msgEl, content, messageId) {
+  if (!hubOn || !msgEl || msgEl.querySelector('.handoff-btn')) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'handoff-btn';
+  btn.title = 'Send this somewhere';
+  btn.setAttribute('aria-label', 'Send this somewhere');
+  btn.textContent = '⤳';
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openHandoff(content, messageId);
+  });
+  msgEl.appendChild(btn);
+}
+window.attachHandoffButton = attachHandoffButton;
+
+document.querySelectorAll('[data-handoff]').forEach((btn) => {
+  btn.addEventListener('click', async () => {
+    if (!handoffSource) return;
+    const target = btn.dataset.handoff;
+    const status = hubUI.handoffStatus;
+    if (status) status.textContent = 'Sending…';
+
+    try {
+      const { chat, content, messageId } = handoffSource;
+
+      if (target === 'note') {
+        await window.hub.ensureThread(chat);
+        if (status) status.textContent = 'Filed. The next sweep will sort it.';
+        setTimeout(closeHandoff, 1200);
+        return;
+      }
+
+      const payload = { seedContent: content, messageId, title: chat?.title || 'Untitled' };
+
+      if (target === 'group') {
+        // Everyone joins by default; deselecting happens in the group screen.
+        payload.personaIds = personas.map((p) => p.id);
+        if (payload.personaIds.length < 2) {
+          if (status) status.textContent = 'Need at least two personas for a group.';
+          return;
+        }
+      }
+
+      const out = await window.hub.promote(chat, target, payload);
+      saveState();
+
+      if (target === 'media' && out.mediaThreadId) {
+        if (status) status.textContent = 'Generating…';
+        const gen = await window.hub.generateMedia(out.mediaThreadId);
+        if (status) status.textContent = gen.url ? `Done — ${gen.provider}.` : 'Sent to Media.';
+      } else if (status) {
+        status.textContent = `Sent to ${target}.`;
+      }
+
+      setTimeout(closeHandoff, 1400);
+    } catch (err) {
+      if (status) status.textContent = `Failed: ${err.message}`;
+    }
+  });
+});
+
+// ---- Memory screen -------------------------------------------------------
+
+async function openMemory() {
+  if (!hubOn) return;
+  closeAppMenu();
+  hubUI.memorySheet?.classList.add('open');
+  hubUI.memoryScrim?.classList.add('open');
+
+  try {
+    const [{ nudges }, { topics }] = await Promise.all([
+      window.hub.getNudges(),
+      window.hub.getTopics(),
+    ]);
+
+    if (hubUI.nudgeList) {
+      hubUI.nudgeList.innerHTML = '';
+      if (!nudges.length) {
+        hubUI.nudgeList.innerHTML = '<p class="empty-note">Nothing has gone quiet yet.</p>';
+      }
+      for (const n of nudges) {
+        const row = document.createElement('div');
+        row.className = 'nudge-row';
+        const txt = document.createElement('span');
+        txt.textContent = n.message;
+        const x = document.createElement('button');
+        x.type = 'button';
+        x.className = 'nudge-dismiss';
+        x.textContent = '×';
+        x.addEventListener('click', async () => {
+          await window.hub.dismissNudge(n.id);
+          row.remove();
+          refreshNudgeBadge();
+        });
+        row.append(txt, x);
+        hubUI.nudgeList.appendChild(row);
+      }
+    }
+
+    if (hubUI.topicList) {
+      hubUI.topicList.innerHTML = '';
+      if (!topics.length) {
+        hubUI.topicList.innerHTML =
+          '<p class="empty-note">Topics appear after the first sweep runs.</p>';
+      }
+      for (const t of topics) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'topic-chip';
+        chip.dataset.topicId = t.id;
+        chip.innerHTML = `${t.name}<span class="topic-count">${t.note_count}</span>`;
+        chip.addEventListener('click', () => chip.classList.toggle('selected'));
+        hubUI.topicList.appendChild(chip);
+      }
+    }
+  } catch (err) {
+    if (hubUI.nudgeList) hubUI.nudgeList.innerHTML = `<p class="empty-note">${err.message}</p>`;
+  }
+}
+
+document.getElementById('buildDocBtn')?.addEventListener('click', async () => {
+  const picked = [...document.querySelectorAll('.topic-chip.selected')].map(
+    (c) => c.dataset.topicId
+  );
+  if (!picked.length) return alert('Pick at least one topic first.');
+
+  const type = prompt(
+    'Document type:\nstory_bible, outline, manuscript, memoir, mock_textbook,\nresearch_journal, biography, ad_copy, business_doc, newsletter',
+    'outline'
+  );
+  if (!type) return;
+
+  try {
+    const out = await window.hub.buildDocument(type.trim(), picked);
+    alert(`Built "${out.title}" — ${out.sectionCount} sections.`);
+  } catch (err) {
+    alert(`Failed: ${err.message}`);
+  }
+});
+
+async function refreshNudgeBadge() {
+  try {
+    const { nudges } = await window.hub.getNudges();
+    const badge = document.getElementById('memoryBadge');
+    if (badge) {
+      badge.textContent = nudges.length || '';
+      badge.classList.toggle('hidden', !nudges.length);
+    }
+  } catch {
+    /* badge is cosmetic */
+  }
+}
+
+document.getElementById('memoryBtn')?.addEventListener('click', openMemory);
+
+// ---- Status row (compact model/role controls under the topbar) ----------
+document.getElementById('statusModelBtn')?.addEventListener('click', () => {
+  document.getElementById('modelPickerBtn')?.click();
+});
+document.getElementById('statusRoleBtn')?.addEventListener('click', () => {
+  const sel = document.getElementById('roleSelect');
+  if (!sel) return;
+  const opts = [...sel.options].map((o) => o.value);
+  const next = opts[(opts.indexOf(sel.value) + 1) % opts.length];
+  sel.value = next;
+  sel.dispatchEvent(new Event('change', { bubbles: true }));
+});
+function syncStatusRow() {
+  const roleLabel = document.getElementById('statusRoleLabel');
+  const roleSel = document.getElementById('roleSelect');
+  if (roleLabel && roleSel) {
+    roleLabel.textContent = roleSel.options[roleSel.selectedIndex]?.text || roleSel.value;
+  }
+  const modelLabel = document.getElementById('statusModelLabel');
+  const pickerLabel = document.getElementById('modelPickerLabel');
+  if (modelLabel && pickerLabel) modelLabel.textContent = pickerLabel.textContent;
+}
+document.getElementById('roleSelect')?.addEventListener('change', syncStatusRow);
+new MutationObserver(syncStatusRow).observe(
+  document.getElementById('modelPickerLabel') || document.body,
+  { childList: true, characterData: true, subtree: true }
+);
+setTimeout(syncStatusRow, 300);
+
+// ---- Persistent module nav -----------------------------------------------
+// Real navigation instead of a button that opens a menu that has to be
+// searched. Every module reachable from every screen, always visible.
+
+document.getElementById('navWorkspace')?.addEventListener('click', () => {
+  els.workspaceBtn?.click(); // reuses the existing openInWorkspace() handler
+});
+document.getElementById('navGroup')?.addEventListener('click', () => {
+  els.groupBtn?.click(); // reuses the existing openGroupModal() handler
+});
+document.getElementById('navMemory')?.addEventListener('click', () => {
+  document.getElementById('memoryBtn')?.click();
+});
+
+// Keep the nav's memory badge in sync with the sheet's badge.
+(function syncNavMemoryBadge() {
+  const src = document.getElementById('memoryBadge');
+  const dst = document.getElementById('navMemoryBadge');
+  if (!src || !dst) return;
+  new MutationObserver(() => {
+    dst.textContent = src.textContent;
+    dst.classList.toggle('hidden', src.classList.contains('hidden'));
+  }).observe(src, { childList: true, attributes: true, attributeFilter: ['class'] });
+})();

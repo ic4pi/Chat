@@ -1,11 +1,11 @@
-/* Neon-green chrome — same accent language as Group / Workspace buttons. */
+/* Walnut + brass chrome, matching the chat surface. */
 
 .media-body {
   overflow: auto;
   height: auto;
   min-height: 100dvh;
   background: var(--bg);
-  color: var(--accent);
+  color: var(--text);
   color-scheme: dark;
 }
 
@@ -14,7 +14,7 @@
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
-  border-bottom: 1px solid var(--accent-dim);
+  border-bottom: 1px solid var(--border-2);
   position: sticky;
   top: 0;
   background: var(--bg);
@@ -22,16 +22,17 @@
 }
 .media-topbar h1 {
   margin: 0;
-  font-size: 14px;
-  font-weight: 700;
+  font-family: var(--display);
+  font-size: 13px;
+  font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--text);
   flex: 1;
 }
 .media-top-hint {
   font-size: 11px;
-  color: var(--accent);
+  color: var(--text);
   opacity: 0.75;
 }
 .media-back,
@@ -39,8 +40,8 @@
 .media-back:link,
 .media-back:hover,
 .media-back:active {
-  color: var(--accent);
-  border-color: var(--accent);
+  color: var(--text);
+  border-color: var(--text);
   font-weight: 700;
   background: rgba(212, 255, 63, 0.08);
 }
@@ -93,7 +94,7 @@
   min-height: 40px;
   font-weight: 700;
   border-radius: 6px;
-  color: var(--accent);
+  color: var(--text);
   border: 1px solid var(--accent-dim);
   background: transparent;
 }
@@ -112,18 +113,18 @@
   flex-direction: column;
   gap: 6px;
   font-size: 11px;
-  color: var(--accent);
+  color: var(--text);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
 .media-field > span {
   padding: 0 2px;
-  color: var(--accent);
+  color: var(--text);
 }
 .media-field .opt {
   text-transform: none;
   letter-spacing: 0;
-  color: var(--accent);
+  color: var(--text);
   opacity: 0.7;
   font-style: normal;
   font-size: 11px;
@@ -151,7 +152,7 @@
 }
 .media-field input[type="file"] {
   font-size: 13px;
-  color: var(--accent);
+  color: var(--text);
   padding: 10px;
   border: 1px solid var(--accent-dim);
   border-radius: 8px;
@@ -174,8 +175,8 @@
 }
 .media-generate,
 .media-generate:visited {
-  color: var(--accent);
-  border-color: var(--accent);
+  color: var(--text);
+  border-color: var(--text);
   font-weight: 700;
   min-height: 40px;
   padding: 0 16px;
@@ -183,12 +184,12 @@
 }
 .media-generate:hover {
   background: rgba(212, 255, 63, 0.16);
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--text);
+  color: var(--text);
 }
 .media-status {
   font-size: 12px;
-  color: var(--accent);
+  color: var(--text);
   opacity: 0.8;
   text-transform: none;
   letter-spacing: 0;
@@ -200,13 +201,13 @@
 .media-keys-note {
   margin: 0;
   font-size: 12px;
-  color: var(--accent);
+  color: var(--text);
   line-height: 1.45;
   text-transform: none;
   letter-spacing: 0;
 }
 .media-keys-note code {
-  color: var(--accent);
+  color: var(--text);
   font-size: 12px;
   font-weight: 700;
 }
@@ -259,7 +260,7 @@
 }
 .media-empty {
   margin: 0;
-  color: var(--accent);
+  color: var(--text);
   opacity: 0.75;
   font-size: 13px;
 }

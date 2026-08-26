@@ -268,7 +268,13 @@ if (/sessionStorage\.getItem\('uncensored_paid_password_v1'\)/.test(
 }
 ok('paid unlock persistence');
 
-// 8) Hobby chat project caps at 12 serverless functions — folding unlock into
+// 8) Serverless function cap. This project is on a Pro team, which does not
+//    carry Hobby's 12-function limit, so the ceiling here is a discipline
+//    check rather than a hard platform constraint: every new function should
+//    have to justify itself. The whole context hub is deliberately one
+//    dynamic route (api/hub/[route].js) rather than six files for this reason.
+//    If this project is ever moved back to Hobby, drop FUNCTION_CAP to 12.
+// 8a) Folding unlock into
 // models.js (rewrite /api/unlock-paid) keeps deploys unblocked.
 const apiJs = [];
 function walkApi(dir) {
@@ -280,11 +286,12 @@ function walkApi(dir) {
   }
 }
 walkApi(path.join(root, 'api'));
-if (apiJs.length > 12) {
-  fail(`Hobby allows ≤12 serverless functions; found ${apiJs.length}: ${apiJs.join(', ')}`);
+const FUNCTION_CAP = 20; // Pro. Was 12 under Hobby.
+if (apiJs.length > FUNCTION_CAP) {
+  fail(`Function cap is ${FUNCTION_CAP}; found ${apiJs.length}: ${apiJs.join(', ')}`);
 }
 if (existsSync(path.join(root, 'api/unlock-paid.js'))) {
-  fail('api/unlock-paid.js must be folded into api/models.js (Hobby 12-function cap)');
+  fail('api/unlock-paid.js must be folded into api/models.js (function cap)');
 }
 const modelsUnlockSrc = readFileSync(path.join(root, 'api/models.js'), 'utf8');
 if (!modelsUnlockSrc.includes('handleUnlockPaid') || !modelsUnlockSrc.includes('isUnlockPaidRequest')) {
@@ -297,6 +304,6 @@ const hasUnlockRewrite = (vercelUnlock.rewrites || []).some(
 if (!hasUnlockRewrite) {
   fail('vercel.json must rewrite /api/unlock-paid → /api/models?op=unlock-paid');
 }
-ok(`hobby function cap (${apiJs.length}/12)`);
+ok(`function cap (${apiJs.length}/${FUNCTION_CAP})`);
 
 console.log('check-api: all checks passed');

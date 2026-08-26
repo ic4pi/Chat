@@ -103,3 +103,11 @@
   .admin-section .persona-list-pane,
   .admin-section .persona-edit-pane { min-height: auto; }
 }
+
+/* Retheme: display face on admin headings and controls, matching chat. */
+.admin-topbar h1,
+.admin-card h2,
+.admin-card h3,
+.admin-body button { font-family: var(--ui); }
+.admin-body { font-family: var(--body); color: var(--text); }
+.admin-body code, .admin-body pre { font-family: var(--mono); }

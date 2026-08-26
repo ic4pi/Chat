@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <title>Jive — Uncensored No-Code Agent</title>
 <meta name="description" content="Jive — uncensored no-code agent. Chat • Code • Create. Chat room, persona collective, think tank." />
-<meta name="theme-color" content="#0B0D12" />
+<meta name="theme-color" content="#1C140F" />
 <link rel="icon" href="/favicon.ico" sizes="any" />
 <link rel="icon" type="image/png" href="/favicon.png" />
 <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -24,7 +24,7 @@
 <link rel="image_src" href="/og-image.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Special+Elite&family=Vollkorn:wght@400;500;600&family=Cutive+Mono&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -59,53 +59,47 @@
   <!-- Main chat pane -->
   <main id="main">
     <header id="topbar">
-      <div class="topbar-row primary">
-        <button id="toggleChats" class="icon-btn" title="Toggle chat list">☰</button>
-        <button id="newChatTopBtn" class="icon-btn accent" title="New chat" aria-label="New chat">+</button>
-        <button id="personaChip" class="persona-chip" type="button" aria-haspopup="dialog" aria-expanded="false" title="Switch persona">
-          <span id="chipAvatar" class="persona-avatar">?</span>
-          <span class="chip-text">
-            <span id="chipName" class="chip-name">Persona</span>
-            <span id="chipMeta" class="chip-meta"></span>
-          </span>
-          <span class="chip-caret">▾</span>
-        </button>
-        <button id="menuBtn" class="icon-btn" type="button" aria-haspopup="dialog" aria-expanded="false" title="Menu" aria-label="Menu">⋯</button>
-        <button id="toggleArtifacts" class="icon-btn" title="Toggle artifacts">📎</button>
-      </div>
-      <div class="topbar-row controls">
-        <label class="ctrl ctrl-inline">
-          <span>role</span>
-          <select id="roleSelect">
-            <option value="plan">Plan</option>
-            <option value="review">Review</option>
-            <option value="write">Write</option>
-          </select>
-        </label>
-        <!-- Hidden native selects kept for role/persona persistence sync -->
-        <select id="providerSelect" class="sr-only" tabindex="-1" aria-hidden="true">
-          <option value="venice">Venice</option>
-          <option value="openrouter">OpenRouter</option>
-          <option value="cerebras">Cerebras</option>
-          <option value="groq">Groq</option>
-          <option value="nvidia">NVIDIA</option>
+      <button id="toggleChats" class="icon-btn" title="Toggle chat list">☰</button>
+      <button id="newChatTopBtn" class="icon-btn accent" title="New chat" aria-label="New chat">+</button>
+
+      <button id="personaChip" class="persona-chip" type="button" aria-haspopup="dialog" aria-expanded="false" title="Switch persona">
+        <span id="chipAvatar" class="persona-avatar">?</span>
+        <span class="chip-text">
+          <span id="chipName" class="chip-name">Persona</span>
+          <span id="chipMeta" class="chip-meta"></span>
+        </span>
+        <span class="chip-caret">▾</span>
+      </button>
+
+      <button id="menuBtn" class="icon-btn" type="button" aria-haspopup="dialog" aria-expanded="false" title="Menu" aria-label="Menu">⋯</button>
+      <button id="toggleArtifacts" class="icon-btn" title="Toggle artifacts">📎</button>
+
+      <!-- Hidden native controls kept for state + persistence; the sheet is
+           the real UI for all of these now. -->
+      <label class="sr-only">role
+        <select id="roleSelect" tabindex="-1" aria-hidden="true">
+          <option value="plan">Plan</option>
+          <option value="review">Review</option>
+          <option value="write">Write</option>
         </select>
-        <select id="modelSelect" class="sr-only" tabindex="-1" aria-hidden="true"></select>
-        <div class="ctrl ctrl-inline model-picker-wrap">
-          <span>model</span>
-          <button id="modelPickerBtn" class="model-picker-btn" type="button" aria-haspopup="dialog" aria-expanded="false" title="Search and pick a model">
-            <span id="modelPickerLabel" class="model-picker-label">Loading…</span>
-            <span class="model-picker-caret">▾</span>
-          </button>
-        </div>
-        <button id="unlockPaidBtn" class="text-btn ctrl-btn" type="button" title="Unlock paid models">Unlock</button>
-        <button id="keysBtn" class="text-btn ctrl-btn" type="button" title="Bring your own API keys">Keys</button>
+      </label>
+      <select id="providerSelect" class="sr-only" tabindex="-1" aria-hidden="true">
+        <option value="venice">Venice</option>
+        <option value="openrouter">OpenRouter</option>
+        <option value="cerebras">Cerebras</option>
+        <option value="groq">Groq</option>
+        <option value="nvidia">NVIDIA</option>
+      </select>
+      <select id="modelSelect" class="sr-only" tabindex="-1" aria-hidden="true"></select>
+      <button id="modelPickerBtn" class="sr-only" type="button" tabindex="-1" aria-hidden="true">
+        <span id="modelPickerLabel" class="model-picker-label">Loading…</span>
+      </button>
+      <button id="unlockPaidBtn" class="sr-only" type="button" tabindex="-1" aria-hidden="true">Unlock</button>
+      <button id="keysBtn" class="sr-only" type="button" tabindex="-1" aria-hidden="true">Keys</button>
+      <div id="personaBlurb" class="sr-only" hidden>
+        <span id="personaBlurbName"></span>
+        <span id="personaBlurbDesc"></span>
       </div>
-      <div id="personaBlurb" class="persona-blurb" hidden>
-        <span id="personaBlurbName" class="persona-blurb-name"></span>
-        <span id="personaBlurbDesc" class="persona-blurb-desc"></span>
-      </div>
-      <!-- Hidden selects kept for voice/persona state sync used by speech + applyPersona -->
       <select id="personaSelect" class="sr-only" tabindex="-1" aria-hidden="true"></select>
       <select id="voiceSelect" class="sr-only" tabindex="-1" aria-hidden="true">
         <optgroup label="Female">
@@ -125,9 +119,44 @@
       </select>
     </header>
 
+    <!-- Compact status row: model + role, always visible, tap to open the
+         full picker. Keeps the topbar itself to a single clean line. -->
+    <div class="status-row">
+      <button id="statusModelBtn" class="status-pill" type="button" title="Change model">
+        <span class="status-dot"></span>
+        <span id="statusModelLabel">Loading…</span>
+      </button>
+      <button id="statusRoleBtn" class="status-pill ghost" type="button" title="Change role">
+        <span id="statusRoleLabel">Plan</span>
+      </button>
+    </div>
+
     <div class="chat-title-row">
       <h1 id="chatTitle" contenteditable="true" spellcheck="false">Untitled</h1>
     </div>
+
+
+    <!-- Always-visible module nav. This is the fix for "I can't get to
+         Workspace" — real navigation, not a button that opens a menu that
+         has to be found first. Every module is one tap away, always. -->
+    <nav id="modNav" class="mod-nav" aria-label="Modules">
+      <button class="mod-nav-btn active" data-mod="chat" type="button" aria-current="page">
+        <span class="mn-ico">☷</span><span class="mn-label">Chat</span>
+      </button>
+      <button id="navWorkspace" class="mod-nav-btn" data-mod="workspace" type="button">
+        <span class="mn-ico">⚙</span><span class="mn-label">Workspace</span>
+      </button>
+      <button id="navGroup" class="mod-nav-btn" data-mod="group" type="button">
+        <span class="mn-ico">◎</span><span class="mn-label">Group</span>
+      </button>
+      <a id="navMedia" class="mod-nav-btn" href="/media" data-mod="media">
+        <span class="mn-ico">◆</span><span class="mn-label">Media</span>
+      </a>
+      <button id="navMemory" class="mod-nav-btn" data-mod="memory" type="button">
+        <span class="mn-ico">✦</span><span class="mn-label">Memory</span>
+        <span id="navMemoryBadge" class="mn-badge hidden"></span>
+      </button>
+    </nav>
 
     <div id="chat"></div>
     <div id="typing" class="typing-bar" hidden>
@@ -413,9 +442,15 @@
       <span class="m-sub">Images and video</span>
     </a>
     <button id="toneBtn" class="module-card" type="button">
-      <span class="m-ico">✦</span>
+      <span class="m-ico">◑</span>
       <span class="m-name">Voice</span>
       <span class="m-sub">Role and speech</span>
+    </button>
+    <button id="memoryBtn" class="module-card" type="button">
+      <span class="m-ico">✦</span>
+      <span class="m-name">Memory</span>
+      <span class="m-sub">Notes, topics, nudges</span>
+      <span id="memoryBadge" class="m-badge hidden"></span>
     </button>
     <button id="modelPickerBtn2" class="module-card wide" type="button">
       <span class="m-ico">⚙</span>
@@ -433,5 +468,55 @@
   </div>
 </div>
 
+
+<!-- Handoff sheet: where a message goes when you promote it. -->
+<div id="handoffScrim" class="sheet-scrim"></div>
+<div id="handoffSheet" class="sheet" role="dialog" aria-modal="true" aria-label="Send this somewhere">
+  <div class="sheet-grabber"></div>
+  <p class="sheet-label">Send this to</p>
+  <div id="handoffPreview" class="handoff-preview"></div>
+  <div class="module-grid">
+    <button class="module-card" data-handoff="workspace" type="button">
+      <span class="m-ico">⌘</span>
+      <span class="m-name">Workspace</span>
+      <span class="m-sub">Build it</span>
+    </button>
+    <button class="module-card" data-handoff="group" type="button">
+      <span class="m-ico">◎</span>
+      <span class="m-name">Group</span>
+      <span class="m-sub">Get other takes</span>
+    </button>
+    <button class="module-card" data-handoff="media" type="button">
+      <span class="m-ico">◆</span>
+      <span class="m-name">Media</span>
+      <span class="m-sub">Make an image</span>
+    </button>
+    <button class="module-card" data-handoff="note" type="button">
+      <span class="m-ico">✦</span>
+      <span class="m-name">Memory</span>
+      <span class="m-sub">Keep for later</span>
+    </button>
+  </div>
+  <div id="handoffStatus" class="handoff-status"></div>
+</div>
+
+<!-- Memory screen: nudges, topics, unfiled notes, document builder. -->
+<div id="memoryScrim" class="sheet-scrim"></div>
+<div id="memorySheet" class="sheet" role="dialog" aria-modal="true" aria-label="Memory">
+  <div class="sheet-grabber"></div>
+  <p class="sheet-label">Nudges</p>
+  <div id="nudgeList" class="nudge-list"></div>
+  <p class="sheet-label">Topics</p>
+  <div id="topicList" class="topic-list"></div>
+  <div class="sheet-foot">
+    <button id="buildDocBtn" class="text-btn" type="button">Build a document</button>
+  </div>
+</div>
+
+<script type="module">
+  import * as hub from '/hub-client.js';
+  window.hub = hub;
+  window.dispatchEvent(new Event('hub-ready'));
+</script>
 </body>
 </html>

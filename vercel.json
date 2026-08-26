@@ -3,35 +3,132 @@
   "buildCommand": null,
   "installCommand": "npm install --ignore-scripts",
   "rewrites": [
-    { "source": "/",       "destination": "/index.html" },
-    { "source": "/admin",  "destination": "/api/admin" },
-    { "source": "/agent",  "destination": "/agent/index.html" },
-    { "source": "/media",  "destination": "/media/index.html" },
-    { "source": "/media/", "destination": "/media/index.html" },
-
-    { "source": "/generate",                 "destination": "/api/generate" },
-
-    { "source": "/api/unlock-paid",           "destination": "/api/models?op=unlock-paid" },
-
-    { "source": "/api/run",                  "destination": "/api/sandbox/run" },
-    { "source": "/api/run-code",             "destination": "/api/sandbox/run-code" },
-    { "source": "/api/init-repo",            "destination": "/api/sandbox/init-repo" },
-    { "source": "/api/init-blank",           "destination": "/api/sandbox/init-blank" },
-    { "source": "/api/files",                "destination": "/api/sandbox/files" },
-    { "source": "/api/file",                 "destination": "/api/sandbox/file" },
-    { "source": "/api/write-files",          "destination": "/api/sandbox/write-files" },
-    { "source": "/api/search",               "destination": "/api/sandbox/search" },
-    { "source": "/api/detect-test-command",  "destination": "/api/sandbox/detect-test-command" },
-    { "source": "/api/git-push",             "destination": "/api/sandbox/git-push" }
+    {
+      "source": "/",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/admin",
+      "destination": "/api/admin"
+    },
+    {
+      "source": "/agent",
+      "destination": "/agent/index.html"
+    },
+    {
+      "source": "/media",
+      "destination": "/media/index.html"
+    },
+    {
+      "source": "/media/",
+      "destination": "/media/index.html"
+    },
+    {
+      "source": "/generate",
+      "destination": "/api/generate"
+    },
+    {
+      "source": "/api/unlock-paid",
+      "destination": "/api/models?op=unlock-paid"
+    },
+    {
+      "source": "/api/run",
+      "destination": "/api/sandbox/run"
+    },
+    {
+      "source": "/api/run-code",
+      "destination": "/api/sandbox/run-code"
+    },
+    {
+      "source": "/api/init-repo",
+      "destination": "/api/sandbox/init-repo"
+    },
+    {
+      "source": "/api/init-blank",
+      "destination": "/api/sandbox/init-blank"
+    },
+    {
+      "source": "/api/files",
+      "destination": "/api/sandbox/files"
+    },
+    {
+      "source": "/api/file",
+      "destination": "/api/sandbox/file"
+    },
+    {
+      "source": "/api/write-files",
+      "destination": "/api/sandbox/write-files"
+    },
+    {
+      "source": "/api/search",
+      "destination": "/api/sandbox/search"
+    },
+    {
+      "source": "/api/detect-test-command",
+      "destination": "/api/sandbox/detect-test-command"
+    },
+    {
+      "source": "/api/git-push",
+      "destination": "/api/sandbox/git-push"
+    },
+    {
+      "source": "/api/hub/initiate",
+      "destination": "/api/hub/[route]?route=initiate"
+    },
+    {
+      "source": "/api/hub/moderate",
+      "destination": "/api/hub/[route]?route=moderate"
+    },
+    {
+      "source": "/api/hub/document",
+      "destination": "/api/hub/[route]?route=document"
+    },
+    {
+      "source": "/api/hub/media",
+      "destination": "/api/hub/[route]?route=media"
+    },
+    {
+      "source": "/api/hub/state",
+      "destination": "/api/hub/[route]?route=state"
+    },
+    {
+      "source": "/api/hub/sweep",
+      "destination": "/api/hub/[route]?route=sweep"
+    }
   ],
   "functions": {
-    "api/chat.js":                 { "maxDuration": 300 },
-    "api/sandbox/[op].js":         { "maxDuration": 60 },
-    "api/agent-chat.js":           { "maxDuration": 300 },
-    "api/group-chat.js":           { "maxDuration": 300 },
-    "api/generate.js":             { "maxDuration": 300 },
-    "api/tts.js":                  { "maxDuration": 60 },
-    "api/media-generate.js":       { "maxDuration": 60 },
-    "api/animate-sequence.js":     { "maxDuration": 60 }
-  }
+    "api/chat.js": {
+      "maxDuration": 300
+    },
+    "api/sandbox/[op].js": {
+      "maxDuration": 60
+    },
+    "api/agent-chat.js": {
+      "maxDuration": 300
+    },
+    "api/group-chat.js": {
+      "maxDuration": 300
+    },
+    "api/generate.js": {
+      "maxDuration": 300
+    },
+    "api/tts.js": {
+      "maxDuration": 60
+    },
+    "api/media-generate.js": {
+      "maxDuration": 60
+    },
+    "api/animate-sequence.js": {
+      "maxDuration": 60
+    },
+    "api/hub/[route].js": {
+      "maxDuration": 300
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/hub/sweep?route=sweep",
+      "schedule": "0 9 */3 * *"
+    }
+  ]
 }
