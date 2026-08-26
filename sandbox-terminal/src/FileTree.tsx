@@ -5,7 +5,7 @@
  *   3. Active context list (files currently sent to the model)
  */
 
-import React, { useState, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import type { FileNode } from './types.js';
 
 const EXT_COLOR: Record<string, string> = {

@@ -11,6 +11,7 @@
     "test:animate": "node scripts/test-animate-local.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.112.4",
     "@vercel/sandbox": "^2.6.0",
     "cors": "^2.8.5",
     "edge-tts-universal": "^1.4.0",

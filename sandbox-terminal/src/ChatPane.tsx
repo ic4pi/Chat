@@ -22,12 +22,11 @@
  * are rendered as runnable snippets with "▶ Run in Sandbox".
  */
 
-import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { PendingChange } from './useRepoContext.js';
 import type { FileNode } from './types.js';
 import {
   extractFileChangeReport,
-  extractFileChanges,
   formatRejectedSandboxWarning,
   looksLikeApplyRequest,
   looksLikeSuggestRequest,
@@ -473,7 +472,7 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | undefined>
 // Small UI atoms
 // ---------------------------------------------------------------------------
 
-function FileChangeBlock({ path, lang, content, isApplied }: {
+function FileChangeBlock({ path, content, isApplied }: {
   path: string; lang: string; content: string;
   isApplied: boolean; onRun: () => void;
 }) {
