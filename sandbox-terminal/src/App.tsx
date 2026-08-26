@@ -169,8 +169,8 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
   const failed = verifyState === 'failed';
   const running = verifyState === 'running' || verifyState === 'detecting'
     || String(verifyState).startsWith('retry');
-  const color = passed ? '#0a0a0a' : failed ? '#fff' : '#0a0a0a';
-  const bg = passed ? '#8fbf6f' : failed ? '#8a1f1f' : '#d4ff3f';
+  const color = passed ? '#1C140F' : failed ? '#fff' : '#1C140F';
+  const bg = passed ? '#6BCB9E' : failed ? '#8a1f1f' : '#C9963E';
   const shortCmd = testCommand
     ? (testCommand.length > 64 ? `${testCommand.slice(0, 64)}…` : testCommand)
     : '…';
@@ -180,28 +180,28 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
     failed ? `SANDBOX FAILED — Push LOCKED after ${attempt} attempts. Fix until green.` :
     `SANDBOX AUTO-FIX — attempt ${attempt}/5 (do not push yet)`;
   if (askCommand) return (
-    <div data-testid="verify-banner" style={{ padding: '10px 12px', background: '#5a1010',
+    <div data-testid="verify-banner" style={{ padding: '10px 12px', background: '#7A3527',
       borderTop: '2px solid #ff6a6a', flexShrink: 0 }}>
       <div style={{ fontSize: 13, fontWeight: 800, color: '#ffb4b4', marginBottom: 4,
         letterSpacing: '0.04em' }}>
         PUSH LOCKED — no sandbox check found
       </div>
       <div style={{ fontSize: 11, color: '#ffd0d0', marginBottom: 6, lineHeight: 1.45 }}>
-        Enter <code style={{ color: '#d4ff3f' }}>npm test</code> / your command, or add{' '}
-        <code style={{ color: '#d4ff3f' }}>index.html</code> for built-in smoke. Nothing ships unproven.
+        Enter <code style={{ color: '#C9963E' }}>npm test</code> / your command, or add{' '}
+        <code style={{ color: '#C9963E' }}>index.html</code> for built-in smoke. Nothing ships unproven.
       </div>
       <div style={{ display: 'flex', gap: 6 }}>
         <input value={cmd} onChange={e => setCmd(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && cmd.trim() && onSetCommand(cmd.trim())}
           placeholder="e.g. npm test"
-          style={{ flex: 1, background: '#151515', color: '#e8e8e8', border: '1px solid #333',
+          style={{ flex: 1, background: '#241A13', color: '#EEE0C8', border: '1px solid #333',
             borderRadius: 4, padding: '4px 8px', fontFamily: 'inherit', fontSize: 12, outline: 'none' }} />
         <button onClick={() => cmd.trim() && onSetCommand(cmd.trim())}
-          style={{ background: '#d4ff3f', color: '#0a0a0a', border: 'none', borderRadius: 4,
+          style={{ background: '#C9963E', color: '#1C140F', border: 'none', borderRadius: 4,
             padding: '4px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
           Set & Run</button>
         <button onClick={onDismiss}
-          style={{ background: '#1a1a1a', color: '#888', border: '1px solid #333',
+          style={{ background: '#2C2018', color: '#888', border: '1px solid #333',
             borderRadius: 4, padding: '4px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11 }}>
           Later</button>
       </div>
@@ -212,7 +212,7 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
       padding: '10px 12px', background: bg, borderTop: `2px solid ${passed ? '#6a9a4a' : failed ? '#ff6a6a' : '#b8d92a'}`,
       flexShrink: 0 }}>
       <div style={{ width: 10, height: 10, borderRadius: '50%',
-        background: passed || running ? '#0a0a0a' : '#fff', flexShrink: 0 }} />
+        background: passed || running ? '#1C140F' : '#fff', flexShrink: 0 }} />
       <span style={{ fontSize: 13, fontWeight: 800, color, flex: 1, lineHeight: 1.35,
         letterSpacing: '0.02em' }}>{label}</span>
       {(passed || failed) && (
@@ -782,26 +782,26 @@ export function App() {
   // ── Shared topbar ────────────────────────────────────────────────────────
   const topbar = (
     <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0,
-      borderBottom: '1px solid #1e1e1e', background: '#080808' }}>
+      borderBottom: '1px solid #35271C', background: '#080808' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
         padding: '6px 12px' }}>
-        <a href="/" style={{ color: '#d4ff3f', fontSize: 12, textDecoration: 'none',
+        <a href="/" style={{ color: '#C9963E', fontSize: 12, textDecoration: 'none',
           whiteSpace: 'nowrap', padding: '2px 0', fontWeight: 700 }}>← Chat</a>
         <button type="button" onClick={() => { setHomeList(listSessions()); setShowHome(true); }}
           title="Browse saved workspace conversations"
           style={{ background: showHome ? 'rgba(212,255,63,0.16)' : 'transparent',
-            color: '#d4ff3f', border: '1px solid #8fa62b', borderRadius: 4,
+            color: '#C9963E', border: '1px solid #B8863A', borderRadius: 4,
             padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10,
             fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
           Home
         </button>
-        <span style={{ color: '#d4ff3f', fontSize: 11, whiteSpace: 'nowrap',
+        <span style={{ color: '#C9963E', fontSize: 11, whiteSpace: 'nowrap',
           overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 }}
           title={sessionTitle}>
           {sessionTitle}
         </span>
         {fromChat && (
-          <span style={{ fontSize: 10, color: '#8fa62b', whiteSpace: 'nowrap' }}>
+          <span style={{ fontSize: 10, color: '#B8863A', whiteSpace: 'nowrap' }}>
             from chat
           </span>
         )}
@@ -828,18 +828,18 @@ export function App() {
         )}
         <select value={role} onChange={e => handleRoleChange(e.target.value as RoleId)}
           title="Role — uses the model you assigned for write / review / plan"
-          style={{ background: '#111', color: '#e8e8e8', border: '1px solid #333',
+          style={{ background: '#111', color: '#EEE0C8', border: '1px solid #333',
             borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11, cursor: 'pointer' }}>
           {ROLE_LIST.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
         </select>
         <select value={provider} onChange={e => handleProviderChange(e.target.value)}
-          style={{ background: '#111', color: '#e8e8e8', border: '1px solid #333',
+          style={{ background: '#111', color: '#EEE0C8', border: '1px solid #333',
             borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11, cursor: 'pointer' }}>
           {PROVIDER_LIST.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
         </select>
         <select value={model} onChange={e => handleModelChange(e.target.value)}
           disabled={modelsLoading}
-          style={{ background: '#111', color: '#e8e8e8', border: '1px solid #333',
+          style={{ background: '#111', color: '#EEE0C8', border: '1px solid #333',
             borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11,
             cursor: 'pointer', maxWidth: 220, flex: 1, minWidth: 0 }}>
           {models.map(m => {
@@ -874,23 +874,23 @@ export function App() {
               .catch((err: Error) => window.alert(err.message || 'Unlock failed'));
           }}
           title={paidUnlocked() ? 'Paid models unlocked on this device — click to lock' : 'Unlock paid models'}
-          style={{ background: paidUnlocked() ? '#1a2a0a' : '#151515',
-            color: paidUnlocked() ? '#8fbf6f' : '#888',
-            border: '1px solid #2a2a2a', borderRadius: 4, padding: '3px 8px',
+          style={{ background: paidUnlocked() ? '#1B2A22' : '#241A13',
+            color: paidUnlocked() ? '#6BCB9E' : '#888',
+            border: '1px solid #4A3624', borderRadius: 4, padding: '3px 8px',
             cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
           {paidUnlocked() ? 'Paid ✓' : 'Unlock'}
         </button>
         <button type="button" onClick={() => setShowKeys(s => !s)}
           title="Bring your own API keys"
-          style={{ background: activeApiKey ? '#1a2a0a' : '#151515', color: activeApiKey ? '#8fbf6f' : '#888',
-            border: '1px solid #2a2a2a', borderRadius: 4, padding: '3px 8px',
+          style={{ background: activeApiKey ? '#1B2A22' : '#241A13', color: activeApiKey ? '#6BCB9E' : '#888',
+            border: '1px solid #4A3624', borderRadius: 4, padding: '3px 8px',
             cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
           Keys
         </button>
         <button type="button" onClick={() => { setShowRoles(s => !s); setShowSlices(false); }}
           title="Assign models per role"
-          style={{ background: showRoles ? '#1a2a0a' : '#151515', color: '#888',
-            border: '1px solid #2a2a2a', borderRadius: 4, padding: '3px 8px',
+          style={{ background: showRoles ? '#1B2A22' : '#241A13', color: '#888',
+            border: '1px solid #4A3624', borderRadius: 4, padding: '3px 8px',
             cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
           Roles
         </button>
@@ -899,9 +899,9 @@ export function App() {
           title="Assign an LLM per coding chunk (HTML, CSS, JS…) and Generate"
           aria-expanded={showSlices}
           aria-controls="chunk-model-panel"
-          style={{ background: showSlices ? '#1a2a0a' : '#151515',
-            color: showSlices ? '#d4ff3f' : '#888',
-            border: '1px solid #2a2a2a', borderRadius: 4, padding: '3px 8px',
+          style={{ background: showSlices ? '#1B2A22' : '#241A13',
+            color: showSlices ? '#C9963E' : '#888',
+            border: '1px solid #4A3624', borderRadius: 4, padding: '3px 8px',
             cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
           Slices
         </button>
@@ -915,24 +915,24 @@ export function App() {
             style={{ display: 'flex', alignItems: 'center', gap: 4,
             fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
             Auto-save <input type="checkbox" checked={autoApplyOn} onChange={e => setAutoApplyOn(e.target.checked)}
-              style={{ accentColor: '#d4ff3f' }} />
+              style={{ accentColor: '#C9963E' }} />
           </label>
           <label title="Off by default. When on, code snippets run in the sandbox terminal."
             style={{ display: 'flex', alignItems: 'center', gap: 4,
             fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
             Auto-run <input type="checkbox" checked={autoRun} onChange={e => setAutoRun(e.target.checked)}
-              style={{ accentColor: '#d4ff3f' }} />
+              style={{ accentColor: '#C9963E' }} />
           </label>
           <label title="On by default. Runs npm run check / project tests after saves so bad edits get fixed before you push."
             style={{ display: 'flex', alignItems: 'center', gap: 4,
             fontSize: 10, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
             Auto-test <input type="checkbox" checked={autoVerifyOn} onChange={e => setAutoVerifyOn(e.target.checked)}
-              style={{ accentColor: '#d4ff3f' }} />
+              style={{ accentColor: '#C9963E' }} />
           </label>
         </div>
       </div>
       {showKeys && (
-        <div style={{ padding: '8px 12px', borderTop: '1px solid #1a1a1a',
+        <div style={{ padding: '8px 12px', borderTop: '1px solid #2C2018',
           display: 'grid', gap: 6, gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
           <div style={{ gridColumn: '1 / -1', fontSize: 10, color: '#666', lineHeight: 1.4 }}>
             Keys stay in this browser only. Used when set; otherwise the server env key is used.
@@ -944,14 +944,14 @@ export function App() {
                 value={keys[p.id] || ''}
                 placeholder={`${p.label} API key`}
                 onChange={e => handleKeySave(p.id, e.target.value)}
-                style={{ background: '#111', color: '#e8e8e8', border: '1px solid #333',
+                style={{ background: '#111', color: '#EEE0C8', border: '1px solid #333',
                   borderRadius: 4, padding: '4px 8px', fontFamily: 'inherit', fontSize: 11 }} />
             </label>
           ))}
         </div>
       )}
       {showRoles && (
-        <div style={{ padding: '8px 12px', borderTop: '1px solid #1a1a1a', fontSize: 10, color: '#888', lineHeight: 1.5 }}>
+        <div style={{ padding: '8px 12px', borderTop: '1px solid #2C2018', fontSize: 10, color: '#888', lineHeight: 1.5 }}>
           Switch the role dropdown to use a different model for writing, reviewing, or planning.
           Changing provider/model while a role is selected saves that assignment.
           Current: write={roleModels.write.model.split('/').pop()} ·
@@ -993,12 +993,12 @@ export function App() {
           ⛔ SANDBOX PROTECTED — {applyFailed.length} write{applyFailed.length === 1 ? '' : 's'} blocked
         </div>
       ) : (
-        <div style={{ color: '#8fbf6f', fontWeight: 700, marginBottom: 4 }}>
+        <div style={{ color: '#6BCB9E', fontWeight: 700, marginBottom: 4 }}>
           Saved to sandbox — not GitHub yet. Push stays locked until Auto-test is green.
         </div>
       )}
       {applyOk.map(r => (
-        <div key={r.path} style={{ color: '#8fbf6f' }}>✓ {r.path}</div>
+        <div key={r.path} style={{ color: '#6BCB9E' }}>✓ {r.path}</div>
       ))}
       {applyFailed.map(r => (
         <div key={r.path} style={{ color: '#ff6a6a', marginTop: 2 }}>
@@ -1105,7 +1105,7 @@ export function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column',
       height: '100dvh', maxHeight: '100dvh', width: '100%', maxWidth: '100%',
-      background: '#0a0a0a', fontFamily: '"JetBrains Mono",ui-monospace,monospace',
+      background: '#1C140F', fontFamily: '"JetBrains Mono",ui-monospace,monospace',
       overflow: 'hidden' }}>
       {topbar}
 
@@ -1116,12 +1116,12 @@ export function App() {
           <div role="dialog" aria-label="Workspace home"
             onClick={e => e.stopPropagation()}
             style={{ width: 'min(520px, 100%)', maxHeight: 'min(80dvh, 640px)', overflow: 'auto',
-              background: '#131313', border: '1px solid #d4ff3f', borderRadius: 8, padding: 14 }}>
+              background: '#131313', border: '1px solid #C9963E', borderRadius: 8, padding: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
               <h2 style={{ margin: 0, flex: 1, fontSize: 13, letterSpacing: '0.08em',
-                textTransform: 'uppercase', color: '#d4ff3f' }}>Home · Workspaces</h2>
+                textTransform: 'uppercase', color: '#C9963E' }}>Home · Workspaces</h2>
               <button type="button" onClick={startFreshHome}
-                style={{ background: 'rgba(212,255,63,0.12)', color: '#d4ff3f', border: '1px solid #8fa62b',
+                style={{ background: 'rgba(212,255,63,0.12)', color: '#C9963E', border: '1px solid #B8863A',
                   borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
                   fontSize: 11, fontWeight: 700 }}>New</button>
               <button type="button" onClick={() => setShowHome(false)}
@@ -1131,7 +1131,7 @@ export function App() {
             </div>
             <p style={{ margin: '0 0 12px', fontSize: 12, color: '#888', lineHeight: 1.4 }}>
               Open a saved workspace conversation, or start a fresh Home workspace.
-              Opening <b style={{ color: '#d4ff3f' }}>Workspace</b> from Chat always loads that chat here.
+              Opening <b style={{ color: '#C9963E' }}>Workspace</b> from Chat always loads that chat here.
             </p>
             {homeList.length === 0 ? (
               <p style={{ color: '#666', fontSize: 12 }}>No saved workspaces yet.</p>
@@ -1140,10 +1140,10 @@ export function App() {
                 {homeList.map(s => (
                   <li key={s.id}>
                     <button type="button" onClick={() => openStoredSession(s)}
-                      style={{ width: '100%', textAlign: 'left', background: s.id === sessionId ? 'rgba(212,255,63,0.1)' : '#0a0a0a',
-                        border: `1px solid ${s.id === sessionId ? '#d4ff3f' : '#333'}`, borderRadius: 6,
+                      style={{ width: '100%', textAlign: 'left', background: s.id === sessionId ? 'rgba(212,255,63,0.1)' : '#1C140F',
+                        border: `1px solid ${s.id === sessionId ? '#C9963E' : '#333'}`, borderRadius: 6,
                         padding: '10px 12px', cursor: 'pointer', fontFamily: 'inherit' }}>
-                      <div style={{ color: '#d4ff3f', fontSize: 13, fontWeight: 700,
+                      <div style={{ color: '#C9963E', fontSize: 13, fontWeight: 700,
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {s.title || 'Workspace'}
                       </div>
@@ -1166,11 +1166,11 @@ export function App() {
         /* ── Desktop: 3-column grid (single ChatPane + Terminal) ── */
         <div style={{ flex: 1, minHeight: 0, display: 'grid',
           gridTemplateColumns: '240px 1fr 420px', overflow: 'hidden' }}>
-          <div style={{ borderRight: '1px solid #1e1e1e', overflow: 'hidden',
+          <div style={{ borderRight: '1px solid #35271C', overflow: 'hidden',
             display: 'flex', flexDirection: 'column' }}>
             {fileTree}
           </div>
-          <div style={{ borderRight: '1px solid #1e1e1e', overflow: 'hidden',
+          <div style={{ borderRight: '1px solid #35271C', overflow: 'hidden',
             display: 'flex', flexDirection: 'column' }}>
             {chatColumn}
           </div>
@@ -1196,7 +1196,7 @@ export function App() {
               <SandboxTerminal ref={termRef} sandboxId={repo.sandboxId} />
             </div>
           </div>
-          <div style={{ display: 'flex', flexShrink: 0, borderTop: '1px solid #1e1e1e',
+          <div style={{ display: 'flex', flexShrink: 0, borderTop: '1px solid #35271C',
             background: '#080808', paddingBottom: 'env(safe-area-inset-bottom)',
             position: 'relative', zIndex: 50 }}
             className="mobile-tabs">
@@ -1209,8 +1209,8 @@ export function App() {
                 aria-current={mobileTab === t.id ? 'page' : undefined}
                 style={{ flex: 1, padding: '14px 0', minHeight: 48,
                   background: mobileTab === t.id ? '#111' : 'transparent',
-                  color: mobileTab === t.id ? '#d4ff3f' : '#aaa', border: 'none',
-                  borderTop: mobileTab === t.id ? '2px solid #d4ff3f' : '2px solid transparent',
+                  color: mobileTab === t.id ? '#C9963E' : '#aaa', border: 'none',
+                  borderTop: mobileTab === t.id ? '2px solid #C9963E' : '2px solid transparent',
                   fontFamily: 'inherit', fontSize: 12, fontWeight: mobileTab === t.id ? 700 : 500,
                   cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.08em',
                   WebkitTapHighlightColor: 'transparent' }}>

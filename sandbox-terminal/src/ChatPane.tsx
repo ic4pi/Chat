@@ -481,21 +481,21 @@ function FileChangeBlock({ path, lang, content, isApplied }: {
   const [copied, setCopied] = useState(false);
   const lines = content.split('\n').length;
   return (
-    <div style={{ margin: '8px 0', border: '1px solid #2a4a1a',
+    <div style={{ margin: '8px 0', border: '1px solid #2E5747',
       borderRadius: 6, background: '#0c1a0c', overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '5px 10px', borderBottom: '1px solid #1e3a1e', gap: 8, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-          <span style={{ fontSize: 10, color: '#8fbf6f', fontWeight: 700 }}>FILE</span>
-          <span style={{ fontSize: 11, color: '#e8e8e8', overflow: 'hidden',
+          <span style={{ fontSize: 10, color: '#6BCB9E', fontWeight: 700 }}>FILE</span>
+          <span style={{ fontSize: 11, color: '#EEE0C8', overflow: 'hidden',
             textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{path}</span>
           <span style={{ fontSize: 10, color: '#555' }}>{lines} lines</span>
-          {isApplied && <span style={{ fontSize: 10, color: '#d4ff3f' }}>✓ saved</span>}
+          {isApplied && <span style={{ fontSize: 10, color: '#C9963E' }}>✓ saved</span>}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <button type="button"
             onClick={() => downloadTextFile(path, content)}
-            style={{ background: '#d4ff3f', color: '#0a0a0a', border: 'none',
+            style={{ background: '#C9963E', color: '#1C140F', border: 'none',
               borderRadius: 4, padding: '3px 10px', cursor: 'pointer',
               fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
             Download
@@ -505,8 +505,8 @@ function FileChangeBlock({ path, lang, content, isApplied }: {
               const ok = await copyText(content);
               if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
             }}
-            style={{ background: 'transparent', color: copied ? '#d4ff3f' : '#8fbf6f',
-              border: '1px solid #2a4a1a', borderRadius: 4, padding: '3px 8px',
+            style={{ background: 'transparent', color: copied ? '#C9963E' : '#6BCB9E',
+              border: '1px solid #2E5747', borderRadius: 4, padding: '3px 8px',
               cursor: 'pointer', fontFamily: 'inherit', fontSize: 11 }}>
             {copied ? 'Copied' : 'Copy'}
           </button>
@@ -532,10 +532,10 @@ function CodeBlock({ lang, content, onRun }: {
 }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div style={{ margin: '8px 0', background: '#0b0b0b',
-      border: '1px solid #2a2a2a', borderRadius: 6, overflow: 'hidden' }}>
+    <div style={{ margin: '8px 0', background: '#1D150F',
+      border: '1px solid #4A3624', borderRadius: 6, overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '4px 10px', borderBottom: '1px solid #1e1e1e', gap: 8 }}>
+        padding: '4px 10px', borderBottom: '1px solid #35271C', gap: 8 }}>
         <span style={{ fontSize: 10, color: '#666', textTransform: 'uppercase',
           letterSpacing: '0.1em' }}>{lang || 'code'}</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -544,13 +544,13 @@ function CodeBlock({ lang, content, onRun }: {
               const ok = await copyText(content);
               if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
             }}
-            style={{ background: 'transparent', color: copied ? '#d4ff3f' : '#8fbf6f',
-              border: '1px solid #2a4a1a', borderRadius: 4, padding: '2px 10px',
+            style={{ background: 'transparent', color: copied ? '#C9963E' : '#6BCB9E',
+              border: '1px solid #2E5747', borderRadius: 4, padding: '2px 10px',
               cursor: 'pointer', fontFamily: 'inherit', fontSize: 11 }}>
             {copied ? 'Copied' : 'Copy'}
           </button>
           <button onClick={onRun} data-testid="run-code-btn"
-            style={{ background: '#1a2a0a', color: '#8fbf6f', border: '1px solid #2a4a1a',
+            style={{ background: '#1B2A22', color: '#6BCB9E', border: '1px solid #2E5747',
               borderRadius: 4, padding: '2px 10px', cursor: 'pointer',
               fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
             ▶ Run in Sandbox
@@ -558,7 +558,7 @@ function CodeBlock({ lang, content, onRun }: {
         </div>
       </div>
       <pre style={{ margin: 0, padding: '8px 12px', overflowX: 'auto',
-        fontSize: 12, lineHeight: 1.5, color: '#e8e8e8',
+        fontSize: 12, lineHeight: 1.5, color: '#EEE0C8',
         maxHeight: 300, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
         {content}
       </pre>
@@ -1142,14 +1142,14 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
   return (
     <div data-testid="chat-pane" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
-      background: '#0a0a0a', color: '#e8e8e8',
+      background: '#1C140F', color: '#EEE0C8',
       fontFamily: '"JetBrains Mono",ui-monospace,monospace' }}>
 
       {/* header */}
-      <div style={{ padding: '7px 12px', borderBottom: '1px solid #1e1e1e',
-        background: '#0f0f0f', flexShrink: 0, display: 'flex',
+      <div style={{ padding: '7px 12px', borderBottom: '1px solid #35271C',
+        background: '#211812', flexShrink: 0, display: 'flex',
         alignItems: 'center', gap: 10 }}>
-        <span style={{ color: '#d4ff3f', fontSize: 10, letterSpacing: '0.1em',
+        <span style={{ color: '#C9963E', fontSize: 10, letterSpacing: '0.1em',
           textTransform: 'uppercase' }}>// agent</span>
         {(autoSelectedFiles.length > 0 || contextFiles.size > 0) && (
           <span style={{ fontSize: 10, color: '#555' }}>
@@ -1166,7 +1166,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       {autoSelectedFiles.length > 0 && (
         <div style={{ padding: '5px 12px', background: 'rgba(212,255,63,.05)',
           borderBottom: '1px solid rgba(212,255,63,.15)', flexShrink: 0,
-          fontSize: 10, color: '#8fa62b', lineHeight: 1.6 }}>
+          fontSize: 10, color: '#B8863A', lineHeight: 1.6 }}>
           <span style={{ fontWeight: 700 }}>Looking at:</span>{' '}
           {autoSelectedFiles.map(p => p.split('/').pop() || p).join(', ')}
         </div>
@@ -1187,11 +1187,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             width: msg.role === 'assistant' ? '100%' : undefined,
           }}>
             {msg.role === 'user' && msg.kind === 'retry-inject' ? (
-              <div style={{ padding: '5px 10px', background: '#111a0a',
+              <div style={{ padding: '5px 10px', background: '#16231C',
                 border: '1px dashed #2a4020', borderRadius: 6,
                 fontSize: 11, color: '#a8c898', whiteSpace: 'pre-wrap',
                 maxHeight: 160, overflowY: 'auto' }}>
-                <span style={{ fontWeight: 700, display: 'block', marginBottom: 3, color: '#d4ff3f' }}>
+                <span style={{ fontWeight: 700, display: 'block', marginBottom: 3, color: '#C9963E' }}>
                   ⟳ Auto-retry — test failure injected
                 </span>
                 {msg.content.slice(0, 500)}{msg.content.length > 500 ? '…' : ''}
@@ -1213,7 +1213,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                   fontWeight: 700,
                   letterSpacing: '0.08em',
                   textTransform: 'uppercase',
-                  color: '#d4ff3f',
+                  color: '#C9963E',
                   marginBottom: 4,
                 }}>
                   You asked
@@ -1242,7 +1242,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                   fontWeight: 700,
                   letterSpacing: '0.08em',
                   textTransform: 'uppercase',
-                  color: '#8fbf6f',
+                  color: '#6BCB9E',
                   marginBottom: 4,
                 }}>
                   Agent
@@ -1268,7 +1268,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 lineHeight: 1.45,
                 color: '#888',
                 background: '#101010',
-                border: '1px solid #1e1e1e',
+                border: '1px solid #35271C',
                 borderRadius: 4,
                 padding: '8px 10px',
                 fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
@@ -1280,11 +1280,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       </div>
 
       {uploads.length > 0 && (
-        <div style={{ padding: '6px 12px', borderTop: '1px solid #1e1e1e',
+        <div style={{ padding: '6px 12px', borderTop: '1px solid #35271C',
           display: 'flex', flexWrap: 'wrap', gap: 6, background: '#0c0c0c' }}>
           {uploads.map((u, i) => (
             <span key={`${u.name}-${i}`} style={{
-              fontSize: 10, color: '#aaa', background: '#151515', border: '1px solid #2a2a2a',
+              fontSize: 10, color: '#aaa', background: '#241A13', border: '1px solid #4A3624',
               borderRadius: 4, padding: '2px 8px', display: 'inline-flex', gap: 6, alignItems: 'center',
             }}>
               {u.kind === 'image' ? '🖼' : '📄'} {u.name}
@@ -1297,33 +1297,33 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       {/* input */}
       <form data-testid="chat-form" onSubmit={e => { e.preventDefault(); void send(); }}
-        style={{ borderTop: '1px solid #1e1e1e', padding: '10px 12px',
+        style={{ borderTop: '1px solid #35271C', padding: '10px 12px',
           display: 'flex', gap: 8, flexShrink: 0, alignItems: 'flex-end',
-          background: '#0a0a0a' }}>
+          background: '#1C140F' }}>
         <input ref={fileInputRef} type="file" multiple accept="image/*,.txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.css,.html,.yml,.yaml,.toml,.env,.csv"
           style={{ display: 'none' }}
           onChange={e => { void handleFiles(e.target.files); }} />
         <button type="button" title="Upload photo or file"
           onClick={() => fileInputRef.current?.click()}
           disabled={loading}
-          style={{ background: '#151515', color: '#aaa', border: '1px solid #2a2a2a',
+          style={{ background: '#241A13', color: '#aaa', border: '1px solid #4A3624',
             borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
             fontFamily: 'inherit', fontSize: 12, alignSelf: 'flex-end' }}>📎</button>
         <button type="button" data-testid="workspace-mic" title={listening ? 'Stop listening' : (speakOn ? 'Voice chat — tap to talk' : 'Dictate into the box')}
           onClick={toggleMic}
           disabled={loading}
-          style={{ background: listening ? '#3a1a1a' : '#151515',
+          style={{ background: listening ? '#3A1E15' : '#241A13',
             color: listening ? '#ff8a8a' : '#aaa',
-            border: `1px solid ${listening ? '#6a2a2a' : '#2a2a2a'}`,
+            border: `1px solid ${listening ? '#6a2a2a' : '#4A3624'}`,
             borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
             fontFamily: 'inherit', fontSize: 12, alignSelf: 'flex-end' }}>
           {listening ? '●' : '🎙'}
         </button>
         <button type="button" data-testid="workspace-speak" title={speakOn ? 'Voice replies on — tap to mute' : 'Voice replies off — tap to speak answers'}
           onClick={toggleSpeak}
-          style={{ background: speakOn ? '#1a2a0a' : '#151515',
-            color: speakOn ? '#d4ff3f' : '#aaa',
-            border: `1px solid ${speakOn ? '#2a4a1a' : '#2a2a2a'}`,
+          style={{ background: speakOn ? '#1B2A22' : '#241A13',
+            color: speakOn ? '#C9963E' : '#aaa',
+            border: `1px solid ${speakOn ? '#2E5747' : '#4A3624'}`,
             borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
             fontFamily: 'inherit', fontSize: 12, alignSelf: 'flex-end' }}>
           {speakOn ? '🔊' : '🔇'}
@@ -1341,15 +1341,15 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             : listening ? (speakOn ? 'Listening — will send…' : 'Listening…')
             : 'What should change?'}
           disabled={loading}
-          style={{ flex: 1, background: '#111', color: '#f0f0f0',
-            border: '1px solid #2a2a2a', borderRadius: 4,
+          style={{ flex: 1, background: '#111', color: '#F5ECD8',
+            border: '1px solid #4A3624', borderRadius: 4,
             padding: '7px 10px', fontFamily: 'inherit', fontSize: 16,
             outline: 'none', resize: 'vertical', minHeight: 48, maxHeight: 120,
-            WebkitTextFillColor: '#f0f0f0',
+            WebkitTextFillColor: '#F5ECD8',
             opacity: 1 }} />
         <button type="submit" data-testid="chat-send" disabled={(!input.trim() && uploads.length === 0) || loading}
-          style={{ background: (input.trim() || uploads.length) && !loading ? '#d4ff3f' : '#1a1a1a',
-            color: (input.trim() || uploads.length) && !loading ? '#0a0a0a' : '#888',
+          style={{ background: (input.trim() || uploads.length) && !loading ? '#C9963E' : '#2C2018',
+            color: (input.trim() || uploads.length) && !loading ? '#1C140F' : '#888',
             border: 'none', borderRadius: 4, padding: '8px 16px',
             cursor: (input.trim() || uploads.length) && !loading ? 'pointer' : 'default',
             fontFamily: 'inherit', fontSize: 12, fontWeight: 700,

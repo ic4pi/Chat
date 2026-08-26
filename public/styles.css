@@ -126,7 +126,20 @@ body::before {
 
 /* ---- Sidebars --------------------------------------------------------- */
 
-.sidebar { overflow: hidden; background: var(--panel); display: flex; flex-direction: column; min-width: 0; }
+/* min-width/min-height: 0 is load-bearing here. Grid items default to a
+   content-based minimum size, which means without this a long chat or a
+   long persona list makes #main (or a sidebar) grow to fit ALL of its
+   content instead of clipping to the viewport row — and once that happens,
+   overflow-y:auto on #chat has nothing to scroll *inside*, because the
+   thing that was supposed to contain it has already grown past the screen
+   and body's overflow:hidden clips the rest away entirely. */
+.sidebar { overflow: hidden; background: var(--panel); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+
+#main {
+  display: flex; flex-direction: column;
+  height: 100%; min-height: 0; min-width: 0;
+  overflow: hidden;
+}
 
 .sidebar-header {
   display: flex; align-items: center; justify-content: space-between;
@@ -143,7 +156,8 @@ body::before {
 
 .chat-list, .artifact-list {
   list-style: none; margin: 0; padding: 8px;
-  overflow-y: auto; flex: 1 1 auto;
+  overflow-y: auto; -webkit-overflow-scrolling: touch;
+  flex: 1 1 auto; min-height: 0;
 }
 .chat-list li, .artifact-list li {
   padding: 10px 11px; margin-bottom: 3px;
@@ -324,7 +338,7 @@ body::before {
 
 /* ---- Chat ----------------------------------------------------------------- */
 
-#chat { flex: 1 1 auto; overflow-y: auto; padding: 20px 16px 10px; display: flex; flex-direction: column; }
+#chat { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 20px 16px 10px; display: flex; flex-direction: column; }
 
 .msg { max-width: 88%; margin-bottom: 18px; font-size: 15px; line-height: 1.65; position: relative; }
 .msg.user {
@@ -668,3 +682,8 @@ select { appearance: none; }
 .artifact-view { background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--r); padding: 14px; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; overflow-x: auto; max-height: 60vh; }
 
 @media (prefers-reduced-motion: reduce) { *, *::before { transition: none !important; } }
+
+/* Line icons in icon-btn — replaces the emoji glyphs that read as a mobile
+   game's cartoon UI against serif steampunk type. */
+.icon-btn svg { display: block; }
+.mod-nav-btn.active svg, .icon-btn.accent svg { color: var(--brass-lt); }

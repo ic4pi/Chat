@@ -57,7 +57,7 @@ export interface ChunkModelPanelProps {
 
 const selectStyle: React.CSSProperties = {
   background: '#111',
-  color: '#e8e8e8',
+  color: '#EEE0C8',
   border: '1px solid #333',
   borderRadius: 4,
   padding: '5px 8px',
@@ -76,8 +76,8 @@ const badgeStyle: React.CSSProperties = {
   padding: '2px 7px',
   borderRadius: 999,
   background: 'rgba(212,255,63,0.12)',
-  color: '#d4ff3f',
-  border: '1px solid #8fa62b',
+  color: '#C9963E',
+  border: '1px solid #B8863A',
   whiteSpace: 'nowrap',
   maxWidth: 140,
   overflow: 'hidden',
@@ -321,8 +321,8 @@ export function ChunkModelPanel({
       aria-labelledby="chunk-model-panel-title"
       style={{
         padding: '10px 12px 12px',
-        borderTop: '1px solid #1a1a1a',
-        background: '#0a0a0a',
+        borderTop: '1px solid #2C2018',
+        background: '#1C140F',
         maxHeight: 'min(55vh, 480px)',
         overflow: 'auto',
       }}
@@ -330,7 +330,7 @@ export function ChunkModelPanel({
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
         <h2
           id="chunk-model-panel-title"
-          style={{ margin: 0, fontSize: 12, fontWeight: 700, color: '#d4ff3f', letterSpacing: '0.06em', textTransform: 'uppercase' }}
+          style={{ margin: 0, fontSize: 12, fontWeight: 700, color: '#C9963E', letterSpacing: '0.06em', textTransform: 'uppercase' }}
         >
           LLM per code slice
         </h2>
@@ -373,7 +373,7 @@ export function ChunkModelPanel({
                 gap: 8,
                 alignItems: 'start',
                 padding: '8px 10px',
-                border: '1px solid #1e1e1e',
+                border: '1px solid #35271C',
                 borderRadius: 6,
                 background: enabled[chunk.id] ? '#0e0e0e' : '#080808',
                 opacity: enabled[chunk.id] ? 1 : 0.55,
@@ -388,13 +388,13 @@ export function ChunkModelPanel({
                   checked={!!enabled[chunk.id]}
                   onChange={(e) => handleToggle(chunk.id, e.target.checked)}
                   aria-labelledby={rowLabelId}
-                  style={{ accentColor: '#d4ff3f' }}
+                  style={{ accentColor: '#C9963E' }}
                 />
               </label>
 
               <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span id={rowLabelId} style={{ fontSize: 13, fontWeight: 600, color: '#e8e8e8' }}>
+                  <span id={rowLabelId} style={{ fontSize: 13, fontWeight: 600, color: '#EEE0C8' }}>
                     {chunk.label}
                   </span>
                   <span
@@ -504,8 +504,8 @@ export function ChunkModelPanel({
             aria-busy={busy}
             title={!sandboxReady ? 'Open a blank project or repo first' : 'Generate enabled slices'}
             style={{
-              background: busy || !sandboxReady ? '#1a1a1a' : '#d4ff3f',
-              color: busy || !sandboxReady ? '#888' : '#0a0a0a',
+              background: busy || !sandboxReady ? '#2C2018' : '#C9963E',
+              color: busy || !sandboxReady ? '#888' : '#1C140F',
               border: 'none',
               borderRadius: 4,
               padding: '8px 16px',
@@ -538,7 +538,7 @@ export function ChunkModelPanel({
             </button>
           )}
           {status && (
-            <span role="status" aria-live="polite" style={{ fontSize: 11, color: '#8fbf6f' }}>
+            <span role="status" aria-live="polite" style={{ fontSize: 11, color: '#6BCB9E' }}>
               {status}
             </span>
           )}
