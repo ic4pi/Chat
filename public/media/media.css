@@ -1,7 +1,4 @@
-/* Ink + brass chrome, matching the chat surface.
-   Accent is now a warm brass rather than neon green, so it is used for
-   emphasis and controls only — body copy reads in --text. Brass at body
-   weight over ink goes muddy fast. */
+/* Walnut + brass chrome, matching the chat surface. */
 
 .media-body {
   overflow: auto;
@@ -17,7 +14,7 @@
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-2);
   position: sticky;
   top: 0;
   background: var(--bg);
@@ -25,9 +22,9 @@
 }
 .media-topbar h1 {
   margin: 0;
-  font-family: var(--ui);
-  font-size: 14px;
-  font-weight: 700;
+  font-family: var(--display);
+  font-size: 13px;
+  font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text);

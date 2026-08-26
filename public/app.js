@@ -772,6 +772,20 @@ function renderMessageInto(container, m) {
       : m.role;
   div.appendChild(label);
 
+  // Moderator turns get a visible star in the live discussion — the same
+  // signal shown in group setup, so who closes the table out is never a
+  // guess mid-conversation.
+  if (m.role === 'assistant' && m.personaId) {
+    const p = personas.find((x) => x.id === m.personaId);
+    if (p && (p.isModerator || p.is_moderator)) {
+      const star = document.createElement('span');
+      star.className = 'mod-badge';
+      star.textContent = '★';
+      star.title = 'Moderator';
+      div.appendChild(star);
+    }
+  }
+
   const content = document.createElement('div');
   content.className = 'content';
 
@@ -3256,10 +3270,13 @@ const sheetEls = {
 
 /** Stable hue per persona id, so a persona keeps its colour across reloads. */
 function personaHue(id) {
+  // Restricted to warm bands (copper through amber through rust) so every
+  // persona reads as brass hardware, not a screen-glow neon.
+  const BANDS = [18, 32, 45, 8, 355, 38, 25];
   let h = 0;
   const str = String(id || '');
-  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
-  return h;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 997;
+  return BANDS[h % BANDS.length];
 }
 
 function personaInitials(name) {
@@ -3967,6 +3984,13 @@ async function renderGroupPersonaModels() {
     const name = document.createElement('div');
     name.className = 'group-persona-name';
     name.textContent = p.name;
+    if (p.isModerator || p.is_moderator) {
+      const badge = document.createElement('span');
+      badge.className = 'mod-badge';
+      badge.textContent = '★ Moderator';
+      badge.title = 'Closes the discussion and writes the final decision';
+      name.appendChild(badge);
+    }
     row.appendChild(name);
 
     const assigned = modelForPersona(p.id);
@@ -4563,3 +4587,57 @@ async function refreshNudgeBadge() {
 }
 
 document.getElementById('memoryBtn')?.addEventListener('click', openMemory);
+
+// ---- Status row (compact model/role controls under the topbar) ----------
+document.getElementById('statusModelBtn')?.addEventListener('click', () => {
+  document.getElementById('modelPickerBtn')?.click();
+});
+document.getElementById('statusRoleBtn')?.addEventListener('click', () => {
+  const sel = document.getElementById('roleSelect');
+  if (!sel) return;
+  const opts = [...sel.options].map((o) => o.value);
+  const next = opts[(opts.indexOf(sel.value) + 1) % opts.length];
+  sel.value = next;
+  sel.dispatchEvent(new Event('change', { bubbles: true }));
+});
+function syncStatusRow() {
+  const roleLabel = document.getElementById('statusRoleLabel');
+  const roleSel = document.getElementById('roleSelect');
+  if (roleLabel && roleSel) {
+    roleLabel.textContent = roleSel.options[roleSel.selectedIndex]?.text || roleSel.value;
+  }
+  const modelLabel = document.getElementById('statusModelLabel');
+  const pickerLabel = document.getElementById('modelPickerLabel');
+  if (modelLabel && pickerLabel) modelLabel.textContent = pickerLabel.textContent;
+}
+document.getElementById('roleSelect')?.addEventListener('change', syncStatusRow);
+new MutationObserver(syncStatusRow).observe(
+  document.getElementById('modelPickerLabel') || document.body,
+  { childList: true, characterData: true, subtree: true }
+);
+setTimeout(syncStatusRow, 300);
+
+// ---- Persistent module nav -----------------------------------------------
+// Real navigation instead of a button that opens a menu that has to be
+// searched. Every module reachable from every screen, always visible.
+
+document.getElementById('navWorkspace')?.addEventListener('click', () => {
+  els.workspaceBtn?.click(); // reuses the existing openInWorkspace() handler
+});
+document.getElementById('navGroup')?.addEventListener('click', () => {
+  els.groupBtn?.click(); // reuses the existing openGroupModal() handler
+});
+document.getElementById('navMemory')?.addEventListener('click', () => {
+  document.getElementById('memoryBtn')?.click();
+});
+
+// Keep the nav's memory badge in sync with the sheet's badge.
+(function syncNavMemoryBadge() {
+  const src = document.getElementById('memoryBadge');
+  const dst = document.getElementById('navMemoryBadge');
+  if (!src || !dst) return;
+  new MutationObserver(() => {
+    dst.textContent = src.textContent;
+    dst.classList.toggle('hidden', src.classList.contains('hidden'));
+  }).observe(src, { childList: true, attributes: true, attributeFilter: ['class'] });
+})();
