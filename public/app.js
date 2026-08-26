@@ -544,8 +544,11 @@ const els = {
 function applySidebarState() {
   const chatsCollapsed = effectiveChatsCollapsed();
   const artifactsCollapsed = !!state.artifactsCollapsed;
-  els.app.classList.toggle('chats-collapsed', chatsCollapsed);
-  els.app.classList.toggle('artifacts-collapsed', artifactsCollapsed);
+  // #app's grid-template-columns rules key off .chats-open/.artifacts-open
+  // (see styles.css) — toggle those, not the -collapsed names, or the
+  // sidebar's CSS column never widens and the panel never visibly opens.
+  els.app.classList.toggle('chats-open', !chatsCollapsed);
+  els.app.classList.toggle('artifacts-open', !artifactsCollapsed);
   els.chatsSidebar.classList.toggle('collapsed', chatsCollapsed);
   els.artifactsSidebar.classList.toggle('collapsed', artifactsCollapsed);
   const anySidebarOpen = !chatsCollapsed || !artifactsCollapsed;

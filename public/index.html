@@ -29,9 +29,11 @@
 </head>
 <body>
 
-<!-- Match sidebar.collapsed defaults so first paint doesn't put #main in a
-     0-width track, then animate open on desktop once JS runs. -->
-<div id="app" class="chats-collapsed artifacts-collapsed">
+<!-- Both sidebar columns start collapsed (0-width) by default — see the
+     base #app rule in styles.css. JS adds .chats-open / .artifacts-open
+     once it decides the real state (open by default on desktop, collapsed
+     on mobile) via applySidebarState(). -->
+<div id="app">
 
   <!-- Backdrop shown behind sidebars on mobile; tap to dismiss. -->
   <div id="backdrop" class="backdrop hidden"></div>
