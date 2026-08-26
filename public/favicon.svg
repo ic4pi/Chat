@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="jiveGrad" x1="4" y1="4" x2="96" y2="96" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF3D8E"/>
+      <stop offset="1" stop-color="#34D399"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#jiveGrad)" d="M50,4 C53,30 70,47 96,50 C70,53 53,70 50,96 C47,70 30,53 4,50 C30,47 47,30 50,4 Z"/>
+</svg>
