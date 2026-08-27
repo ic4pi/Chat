@@ -143,6 +143,10 @@ body::before {
 /* ---- Sidebars --------------------------------------------------------- */
 
 .sidebar { position: relative; z-index: 40; overflow: hidden; background: var(--panel); display: flex; flex-direction: column; min-width: 0; }
+/* Left sidebar specifically scrolls as a whole when Chats + Persona + LLM
+   combined don't fit — Chats keeps a 160px floor (above) instead of being
+   squeezed to nothing, and this is the fallback for the rest. */
+#chatsSidebar.sidebar.left { overflow-y: auto; overflow-x: hidden; }
 
 .brand-row {
   display: flex; align-items: center; gap: 8px;
@@ -196,6 +200,55 @@ body::before {
 }
 
 .artifact-empty { padding: 20px 16px; color: var(--muted-2); font-size: 12.5px; line-height: 1.5; text-align: center; }
+
+/* ---- Left sidebar collapsible sections: Chats / Persona / LLM ---------- */
+
+.side-accordion {
+  flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0;
+  border-bottom: 1px solid var(--border);
+}
+/* Only Chats grows to fill the sidebar when open — Persona/LLM are
+   supplementary lookups, not the primary always-large list. */
+.side-accordion.open[data-accordion="chats"] { flex: 1 1 auto; min-height: 160px; }
+
+.side-accordion-header { display: flex; align-items: center; }
+.side-accordion-header-actions { display: flex; gap: 4px; padding-right: 10px; flex: 0 0 auto; }
+
+.side-accordion-toggle {
+  width: 100%; flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 14px; text-align: left;
+  padding-top: max(14px, env(safe-area-inset-top));
+}
+.side-accordion-header .side-accordion-toggle { padding-top: 14px; }
+.side-accordion-toggle:hover .side-accordion-title { color: var(--brass-lt); }
+
+.side-accordion-title {
+  font-family: var(--display); font-weight: 600; font-size: 12.5px;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--brass);
+  flex: 0 0 auto;
+}
+.side-accordion-summary {
+  flex: 1 1 auto; min-width: 0; margin: 0 8px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--mono); font-size: 11px; color: var(--muted-2); text-align: right;
+}
+.side-accordion-caret {
+  flex: 0 0 auto; color: var(--muted-2); font-size: 10px;
+  transition: transform .18s var(--ease);
+}
+.side-accordion.open .side-accordion-caret { transform: rotate(180deg); }
+
+.side-accordion-body { display: none; min-height: 0; flex-direction: column; }
+.side-accordion.open .side-accordion-body { display: flex; }
+.side-accordion.open[data-accordion="chats"] .side-accordion-body { flex: 1 1 auto; min-height: 0; }
+.side-accordion:not([data-accordion="chats"]) .side-accordion-body {
+  max-height: 280px; overflow-y: auto; padding: 0 10px 14px;
+}
+
+.sidebar-persona-grid { grid-template-columns: 1fr; gap: 6px; margin-bottom: 0; }
+.sidebar-model-list { max-height: none; }
+#sidebarMoreModelsBtn { width: 100%; margin-top: 8px; }
 
 /* ---- Right sidebar tabs (Artifacts / Outline / Compare / Reminders) ---- */
 

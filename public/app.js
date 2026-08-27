@@ -518,6 +518,11 @@ const els = {
   attachPreview: $('attachPreview'),
   micBtn: $('micBtn'),
   speakBtn: $('speakBtn'),
+  sidebarPersonaGrid: $('sidebarPersonaGrid'),
+  sidebarPersonaSummary: $('sidebarPersonaSummary'),
+  sidebarModelList: $('sidebarModelList'),
+  sidebarModelSummary: $('sidebarModelSummary'),
+  sidebarMoreModelsBtn: $('sidebarMoreModelsBtn'),
   artifactList: $('artifactList'),
   sidebarTabs: $('sidebarTabs'),
   artifactsPanel: $('artifactsPanel'),
@@ -1278,6 +1283,7 @@ async function fetchPersonas() {
   ensurePersonaVoices(personas);
   ensurePersonaModels(personas);
   renderPersonaSelect();
+  renderPersonaCards();
 }
 
 function activePersona() {
@@ -1593,6 +1599,7 @@ function updateModelPickerLabel() {
   if (els.modelUnlockBtn) {
     els.modelUnlockBtn.textContent = paidUnlocked() ? 'Paid unlocked' : 'Unlock paid';
   }
+  renderSidebarSummaries();
 }
 
 async function renderModelSelect() {
@@ -1743,7 +1750,55 @@ function selectModelFromPicker(provider, modelId) {
   saveState();
   updateModelPickerLabel();
   closeModelPicker();
+  renderSidebarModelList();
 }
+
+/**
+ * Compact free-model list for the left sidebar's LLM accordion — free only
+ * (paid needs the unlock flow anyway), reusing the same catalog data and
+ * selection logic as the full picker rather than a second implementation.
+ * Lazy: only loads the catalog the first time the accordion is opened.
+ */
+async function renderSidebarModelList() {
+  if (!els.sidebarModelList) return;
+  await loadAllModelsCatalog();
+  const free = allModelsCatalog
+    .filter((m) => m.free)
+    .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+  els.sidebarModelList.innerHTML = '';
+  for (const m of free) {
+    const li = document.createElement('li');
+    li.className = 'model-picker-item' +
+      (m.provider === state.activeProvider && m.id === state.activeModel ? ' active' : '');
+    li.setAttribute('role', 'option');
+    const name = document.createElement('div');
+    name.className = 'model-picker-item-name';
+    name.textContent = m.name || m.id;
+    const meta = document.createElement('div');
+    meta.className = 'model-picker-item-meta';
+    const prov = document.createElement('span');
+    prov.textContent = PROVIDER_LABELS[m.provider] || m.provider;
+    meta.appendChild(prov);
+    li.append(name, meta);
+    li.addEventListener('click', () => selectModelFromPicker(m.provider, m.id));
+    els.sidebarModelList.appendChild(li);
+  }
+  renderSidebarSummaries();
+}
+els.sidebarMoreModelsBtn?.addEventListener('click', () => void openModelPicker());
+
+// Left sidebar's Chats/Persona/LLM collapsible sections — plain expand/
+// collapse, not persisted (Chats starts open, the other two closed, on
+// every fresh load, matching their "not needed every turn" role).
+els.chatsSidebar?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-accordion-toggle]');
+  if (!btn) return;
+  const section = btn.closest('.side-accordion');
+  if (!section) return;
+  const opening = !section.classList.contains('open');
+  section.classList.toggle('open', opening);
+  if (opening && section.dataset.accordion === 'llm') void renderSidebarModelList();
+});
 
 async function openModelPicker() {
   if (!els.modelPickerModal) return;
@@ -3689,46 +3744,65 @@ function renderPersonaChip() {
   }
 }
 
+/**
+ * Renders persona cards into every grid that shows them — the menu sheet's
+ * grid and the left sidebar's Persona accordion — so there's one source of
+ * truth for the card markup and both stay in sync automatically.
+ */
 function renderPersonaCards() {
-  const grid = sheetEls.grid;
-  if (!grid) return;
-  grid.innerHTML = '';
-  for (const p of personas) {
-    const hue = personaHue(p.id);
-    const card = document.createElement('button');
-    card.type = 'button';
-    card.className = 'persona-card' + (p.id === state.activePersonaId ? ' active' : '');
-    card.style.setProperty('--pc-h', String(hue));
-    card.style.setProperty('--pc', `hsl(${hue} 78% 68%)`);
-    card.style.setProperty('--pc-soft', `hsl(${hue} 78% 68% / .12)`);
-    card.style.setProperty('--pc-line', `hsl(${hue} 78% 68% / .45)`);
+  const grids = [sheetEls.grid, els.sidebarPersonaGrid].filter(Boolean);
+  if (!grids.length) return;
+  for (const grid of grids) {
+    grid.innerHTML = '';
+    for (const p of personas) {
+      const hue = personaHue(p.id);
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'persona-card' + (p.id === state.activePersonaId ? ' active' : '');
+      card.style.setProperty('--pc-h', String(hue));
+      card.style.setProperty('--pc', `hsl(${hue} 78% 68%)`);
+      card.style.setProperty('--pc-soft', `hsl(${hue} 78% 68% / .12)`);
+      card.style.setProperty('--pc-line', `hsl(${hue} 78% 68% / .45)`);
 
-    const av = document.createElement('span');
-    av.className = 'persona-avatar';
-    av.textContent = personaInitials(p.name);
+      const av = document.createElement('span');
+      av.className = 'persona-avatar';
+      av.textContent = personaInitials(p.name);
 
-    const nm = document.createElement('span');
-    nm.className = 'pc-name';
-    nm.textContent = p.name;
-    if (p.id === state.activePersonaId) {
-      const dot = document.createElement('span');
-      dot.className = 'pc-dot';
-      dot.textContent = '●';
-      nm.appendChild(dot);
+      const nm = document.createElement('span');
+      nm.className = 'pc-name';
+      nm.textContent = p.name;
+      if (p.id === state.activePersonaId) {
+        const dot = document.createElement('span');
+        dot.className = 'pc-dot';
+        dot.textContent = '●';
+        nm.appendChild(dot);
+      }
+
+      const ds = document.createElement('span');
+      ds.className = 'pc-desc';
+      ds.textContent = p.description || 'No description yet.';
+
+      card.append(av, nm, ds);
+      card.addEventListener('click', () => {
+        applyPersona(p.id);
+        renderPersonaChip();
+        renderPersonaCards();
+        setTimeout(closeAppMenu, 160);
+      });
+      grid.appendChild(card);
     }
+  }
+  renderSidebarSummaries();
+}
 
-    const ds = document.createElement('span');
-    ds.className = 'pc-desc';
-    ds.textContent = p.description || 'No description yet.';
-
-    card.append(av, nm, ds);
-    card.addEventListener('click', () => {
-      applyPersona(p.id);
-      renderPersonaChip();
-      renderPersonaCards();
-      setTimeout(closeAppMenu, 160);
-    });
-    grid.appendChild(card);
+/** Keeps the left sidebar's Persona/LLM accordion headers showing the current pick. */
+function renderSidebarSummaries() {
+  if (els.sidebarPersonaSummary) {
+    const p = activePersona();
+    els.sidebarPersonaSummary.textContent = p?.name || '';
+  }
+  if (els.sidebarModelSummary) {
+    els.sidebarModelSummary.textContent = state.activeModel || '';
   }
 }
 
