@@ -516,6 +516,7 @@ const els = {
   attachBtn: $('attachBtn'),
   attachInput: $('attachInput'),
   attachPreview: $('attachPreview'),
+  smartReplyChips: $('smartReplyChips'),
   micBtn: $('micBtn'),
   interruptBtn: $('interruptBtn'),
   speakBtn: $('speakBtn'),
@@ -542,6 +543,15 @@ const els = {
   reminderList: $('reminderList'),
   reminderEmpty: $('reminderEmpty'),
   remindersTabBadge: $('remindersTabBadge'),
+  summaryPanel: $('summaryPanel'),
+  summaryRefreshBtn: $('summaryRefreshBtn'),
+  summaryBody: $('summaryBody'),
+  summaryTldr: $('summaryTldr'),
+  summaryDecisionsBlock: $('summaryDecisionsBlock'),
+  summaryDecisions: $('summaryDecisions'),
+  summaryQuestionsBlock: $('summaryQuestionsBlock'),
+  summaryQuestions: $('summaryQuestions'),
+  summaryEmpty: $('summaryEmpty'),
   nudgeBanner: $('nudgeBanner'),
   nudgeBannerText: $('nudgeBannerText'),
   nudgeBannerView: $('nudgeBannerView'),
@@ -549,6 +559,8 @@ const els = {
   artifactModal: $('artifactModal'),
   artifactModalTitle: $('artifactModalTitle'),
   artifactModalContent: $('artifactModalContent'),
+  artifactPreviewFrame: $('artifactPreviewFrame'),
+  artifactPreviewToggle: $('artifactPreviewToggle'),
   artifactCopyBtn: $('artifactCopyBtn'),
   artifactDownloadBtn: $('artifactDownloadBtn'),
   closeArtifactModal: $('closeArtifactModal'),
@@ -618,7 +630,7 @@ function openArtifactsSidebar() {
 // Right sidebar tabs — Artifacts / Outline / Compare / Reminders
 // ---------------------------------------------------------------------------
 
-const SIDEBAR_TABS = ['artifacts', 'outline', 'compare', 'reminders'];
+const SIDEBAR_TABS = ['artifacts', 'outline', 'compare', 'reminders', 'summary'];
 
 function setArtifactsTab(name) {
   if (!SIDEBAR_TABS.includes(name)) name = 'artifacts';
@@ -635,6 +647,7 @@ function setArtifactsTab(name) {
     outline: els.outlinePanel,
     compare: els.comparePanel,
     reminders: els.remindersPanel,
+    summary: els.summaryPanel,
   };
   for (const [tab, panel] of Object.entries(panels)) {
     panel?.classList.toggle('hidden', tab !== name);
@@ -642,6 +655,7 @@ function setArtifactsTab(name) {
 
   if (name === 'outline') renderOutline();
   else if (name === 'reminders') refreshReminders();
+  else if (name === 'summary') void renderSummary();
 }
 
 els.sidebarTabs?.addEventListener('click', (e) => {
@@ -719,6 +733,96 @@ function renderOutline() {
     els.outlineList.appendChild(li);
   }
 }
+
+let summaryLoading = false;
+
+/** Renders one bullet list ("Decisions" / "Open questions") or hides its block if empty. */
+function fillSummaryList(ul, block, items) {
+  if (!ul || !block) return;
+  ul.innerHTML = '';
+  if (!items || !items.length) { block.classList.add('hidden'); return; }
+  block.classList.remove('hidden');
+  for (const text of items) {
+    const li = document.createElement('li');
+    li.className = 'summary-item';
+    li.textContent = text;
+    ul.appendChild(li);
+  }
+}
+
+function paintSummary(cache, emptyText) {
+  if (!cache) {
+    els.summaryBody?.classList.add('hidden');
+    if (els.summaryEmpty) {
+      els.summaryEmpty.textContent =
+        emptyText || 'A running TL;DR, decisions, and open questions for this chat will show up here.';
+    }
+    els.summaryEmpty?.classList.remove('hidden');
+    return;
+  }
+  els.summaryEmpty?.classList.add('hidden');
+  els.summaryBody?.classList.remove('hidden');
+  if (els.summaryTldr) els.summaryTldr.textContent = cache.tldr || '(nothing to summarize yet)';
+  fillSummaryList(els.summaryDecisions, els.summaryDecisionsBlock, cache.decisions);
+  fillSummaryList(els.summaryQuestions, els.summaryQuestionsBlock, cache.openQuestions);
+}
+
+/** Rolling TL;DR + decisions + open questions for the current chat. Caches
+ * on the chat object, keyed to message count, so opening the tab repeatedly
+ * without new messages doesn't refetch — only Refresh or new activity does. */
+async function renderSummary(force = false) {
+  if (!els.summaryBody) return;
+  const chat = activeChat();
+  if (!chat) { paintSummary(null); return; }
+
+  const msgs = (chat.messages || []).filter((m) => m.role === 'user' || m.role === 'assistant');
+  if (msgs.length < 2) { paintSummary(null); return; }
+
+  if (!force && chat.summaryCache && chat.summaryCache.uptoCount === msgs.length) {
+    paintSummary(chat.summaryCache);
+    return;
+  }
+
+  if (summaryLoading) return;
+  summaryLoading = true;
+  els.summaryEmpty?.classList.add('hidden');
+  els.summaryBody?.classList.remove('hidden');
+  if (els.summaryTldr) els.summaryTldr.textContent = 'Summarizing…';
+  els.summaryDecisionsBlock?.classList.add('hidden');
+  els.summaryQuestionsBlock?.classList.add('hidden');
+  if (els.summaryRefreshBtn) els.summaryRefreshBtn.disabled = true;
+
+  try {
+    const res = await fetch('/api/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'summary',
+        messages: msgs.map((m) => ({
+          role: m.role,
+          content: typeof m.content === 'string' ? m.content : String(m.content ?? ''),
+        })),
+      }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+    const data = await res.json();
+    chat.summaryCache = {
+      tldr: data.tldr || '',
+      decisions: Array.isArray(data.decisions) ? data.decisions : [],
+      openQuestions: Array.isArray(data.openQuestions) ? data.openQuestions : [],
+      uptoCount: msgs.length,
+    };
+    saveState();
+    paintSummary(chat.summaryCache);
+  } catch (err) {
+    paintSummary(null, `Couldn't summarize: ${err.message || 'network error'}.`);
+  } finally {
+    summaryLoading = false;
+    if (els.summaryRefreshBtn) els.summaryRefreshBtn.disabled = false;
+  }
+}
+
+els.summaryRefreshBtn?.addEventListener('click', () => void renderSummary(true));
 
 function renderChatList() {
   els.chatList.innerHTML = '';
@@ -1140,6 +1244,13 @@ function extractArtifacts(text, { role = 'plan' } = {}) {
   return artifacts;
 }
 
+/** Self-contained HTML pages can be rendered live in a sandboxed iframe. */
+function isHtmlArtifact(a) {
+  if (!a) return false;
+  if ((a.language || '').toLowerCase() === 'html') return true;
+  return /^\s*(<!doctype html|<html[\s>])/i.test(a.content || '');
+}
+
 function renderArtifacts() {
   els.artifactList.innerHTML = '';
   const chat = activeChat();
@@ -1183,6 +1294,15 @@ function renderArtifacts() {
     dlBtn.addEventListener('click', (e) => { e.stopPropagation(); downloadArtifact(a); });
 
     actions.appendChild(viewBtn);
+    if (isHtmlArtifact(a)) {
+      const previewBtn = document.createElement('button');
+      previewBtn.textContent = 'Preview';
+      previewBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openArtifactModal(a, { preview: true });
+      });
+      actions.appendChild(previewBtn);
+    }
     actions.appendChild(copyBtn);
     actions.appendChild(dlBtn);
 
@@ -1243,16 +1363,36 @@ function downloadArtifact(a) {
 }
 
 let currentArtifact = null;
-function openArtifactModal(a) {
+/** Swaps the modal between raw code (<pre>) and a sandboxed live preview.
+ * allow-scripts only — no allow-same-origin — so anything the model wrote
+ * can't reach the real app's cookies, localStorage, or parent DOM. */
+function setArtifactPreviewMode(on) {
+  if (!els.artifactPreviewFrame || !els.artifactModalContent) return;
+  if (on && currentArtifact) els.artifactPreviewFrame.srcdoc = currentArtifact.content;
+  els.artifactPreviewFrame.classList.toggle('hidden', !on);
+  els.artifactModalContent.classList.toggle('hidden', on);
+  if (els.artifactPreviewToggle) els.artifactPreviewToggle.textContent = on ? 'Code' : 'Preview';
+}
+
+function openArtifactModal(a, { preview = false } = {}) {
   currentArtifact = a;
   els.artifactModalTitle.textContent = `${a.title}  ·  ${a.language}`;
   els.artifactModalContent.textContent = a.content;
+  const canPreview = isHtmlArtifact(a);
+  els.artifactPreviewToggle?.classList.toggle('hidden', !canPreview);
+  setArtifactPreviewMode(canPreview && preview);
   els.artifactModal.classList.remove('hidden');
 }
 function closeArtifactModal() {
   currentArtifact = null;
+  if (els.artifactPreviewFrame) els.artifactPreviewFrame.srcdoc = '';
   els.artifactModal.classList.add('hidden');
 }
+
+els.artifactPreviewToggle?.addEventListener('click', () => {
+  const showingPreview = !els.artifactPreviewFrame?.classList.contains('hidden');
+  setArtifactPreviewMode(!showingPreview);
+});
 
 // ---------------------------------------------------------------------------
 // Personas
@@ -2331,9 +2471,71 @@ function isTimeoutLikeError(msg) {
   return /took too long|timed out|timeout|aborted/.test(s);
 }
 
+// ---------------------------------------------------------------------------
+// Smart Reply chips — short AI-suggested next-things-to-say after a solo-chat
+// reply. Not for group chat (no single "next thing to say") or voice-chat
+// mode (speakReplies on already has its own hands-free flow).
+// ---------------------------------------------------------------------------
+
+let smartRepliesRequestId = 0;
+
+function clearSmartReplyChips() {
+  smartRepliesRequestId += 1; // invalidate any in-flight fetch, too
+  if (els.smartReplyChips) {
+    els.smartReplyChips.innerHTML = '';
+    els.smartReplyChips.classList.add('hidden');
+  }
+}
+
+function renderSmartReplyChips(replies) {
+  if (!els.smartReplyChips) return;
+  els.smartReplyChips.innerHTML = '';
+  if (!replies || !replies.length) { els.smartReplyChips.classList.add('hidden'); return; }
+  for (const text of replies) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'reply-chip';
+    chip.textContent = text;
+    chip.addEventListener('click', () => {
+      clearSmartReplyChips();
+      void sendMessage(text);
+    });
+    els.smartReplyChips.appendChild(chip);
+  }
+  els.smartReplyChips.classList.remove('hidden');
+}
+
+async function triggerSmartReplies(chat) {
+  if (!chat || chat.kind === 'group' || speakReplies) return;
+  const msgs = (chat.messages || []).filter((m) => m.role === 'user' || m.role === 'assistant');
+  if (!msgs.length) return;
+  const requestId = (smartRepliesRequestId += 1);
+  try {
+    const res = await fetch('/api/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'smart-replies',
+        messages: msgs.slice(-6).map((m) => ({
+          role: m.role,
+          content: typeof m.content === 'string' ? m.content : String(m.content ?? ''),
+        })),
+      }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (requestId !== smartRepliesRequestId) return; // stale — superseded by a newer turn or a clear
+    if (chat.id !== activeChat()?.id) return; // user switched chats while this was in flight
+    renderSmartReplyChips(Array.isArray(data.replies) ? data.replies : []);
+  } catch {
+    // Silent — chips are a nicety, not a load-bearing feature.
+  }
+}
+
 async function sendMessage(text) {
   // Accidental Enter while a reply is streaming must NOT start another request.
   if (chatBusy) return;
+  clearSmartReplyChips();
 
   const chat = ensureActiveChat();
   if (chat.kind === 'group') {
@@ -2694,6 +2896,7 @@ async function sendMessage(text) {
 
     chat.updatedAt = Date.now();
     saveState();
+    void triggerSmartReplies(chat);
   } catch (err) {
     const idx = chat.messages.findIndex((m) => m.role === 'assistant' && m.streaming);
     if (idx !== -1) {
@@ -3251,6 +3454,7 @@ els.stopBtn?.addEventListener('click', () => {
 els.input.addEventListener('input', () => {
   els.input.style.height = 'auto';
   els.input.style.height = Math.min(els.input.scrollHeight, 200) + 'px';
+  clearSmartReplyChips();
 });
 els.input.addEventListener('keydown', (e) => {
   // Esc always stops generation + speech.
@@ -4411,6 +4615,7 @@ els.micBtn?.addEventListener('click', () => {
   rec.onstart = () => {
     listening = true;
     els.micBtn?.classList.add('listening');
+    clearSmartReplyChips();
   };
   rec.onerror = () => stopListening();
   rec.onend = () => {
