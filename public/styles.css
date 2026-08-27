@@ -118,6 +118,10 @@ body::before {
    min-height: auto, which lets content grow past the row instead of
    scrolling internally — min-height: 0 is what makes the clip take effect. */
 #main {
+  /* Pinned explicitly rather than relying on DOM-order auto-placement:
+     once a sidebar becomes position:fixed (mobile), it's removed from grid
+     layout entirely, which would otherwise shift #main into column 1. */
+  grid-column: 2;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -142,7 +146,11 @@ body::before {
 
 /* ---- Sidebars --------------------------------------------------------- */
 
-.sidebar { overflow: hidden; background: var(--panel); display: flex; flex-direction: column; min-width: 0; }
+.sidebar { position: relative; z-index: 40; overflow: hidden; background: var(--panel); display: flex; flex-direction: column; min-width: 0; }
+/* Left sidebar specifically scrolls as a whole when Chats + Persona + LLM
+   combined don't fit — Chats keeps a 160px floor (above) instead of being
+   squeezed to nothing, and this is the fallback for the rest. */
+#chatsSidebar.sidebar.left { overflow-y: auto; overflow-x: hidden; }
 
 .brand-row {
   display: flex; align-items: center; gap: 8px;
@@ -196,6 +204,55 @@ body::before {
 }
 
 .artifact-empty { padding: 20px 16px; color: var(--muted-2); font-size: 12.5px; line-height: 1.5; text-align: center; }
+
+/* ---- Left sidebar collapsible sections: Chats / Persona / LLM ---------- */
+
+.side-accordion {
+  flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0;
+  border-bottom: 1px solid var(--border);
+}
+/* Only Chats grows to fill the sidebar when open — Persona/LLM are
+   supplementary lookups, not the primary always-large list. */
+.side-accordion.open[data-accordion="chats"] { flex: 1 1 auto; min-height: 160px; }
+
+.side-accordion-header { display: flex; align-items: center; }
+.side-accordion-header-actions { display: flex; gap: 4px; padding-right: 10px; flex: 0 0 auto; }
+
+.side-accordion-toggle {
+  width: 100%; flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 14px; text-align: left;
+  padding-top: max(14px, env(safe-area-inset-top));
+}
+.side-accordion-header .side-accordion-toggle { padding-top: 14px; }
+.side-accordion-toggle:hover .side-accordion-title { color: var(--brass-lt); }
+
+.side-accordion-title {
+  font-family: var(--display); font-weight: 600; font-size: 12.5px;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--brass);
+  flex: 0 0 auto;
+}
+.side-accordion-summary {
+  flex: 1 1 auto; min-width: 0; margin: 0 8px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--mono); font-size: 11px; color: var(--muted-2); text-align: right;
+}
+.side-accordion-caret {
+  flex: 0 0 auto; color: var(--muted-2); font-size: 10px;
+  transition: transform .18s var(--ease);
+}
+.side-accordion.open .side-accordion-caret { transform: rotate(180deg); }
+
+.side-accordion-body { display: none; min-height: 0; flex-direction: column; }
+.side-accordion.open .side-accordion-body { display: flex; }
+.side-accordion.open[data-accordion="chats"] .side-accordion-body { flex: 1 1 auto; min-height: 0; }
+.side-accordion:not([data-accordion="chats"]) .side-accordion-body {
+  max-height: 280px; overflow-y: auto; padding: 0 10px 14px;
+}
+
+.sidebar-persona-grid { grid-template-columns: 1fr; gap: 6px; margin-bottom: 0; }
+.sidebar-model-list { max-height: none; }
+#sidebarMoreModelsBtn { width: 100%; margin-top: 8px; }
 
 /* ---- Right sidebar tabs (Artifacts / Outline / Compare / Reminders) ---- */
 
@@ -291,6 +348,8 @@ body::before {
 .icon-btn:hover { color: var(--text); background: var(--raised); border-color: var(--border-2); }
 .icon-btn.accent { color: var(--brass); border-color: var(--brass-dk); }
 .icon-btn.accent:hover { background: rgba(201,150,62,.12); }
+.icon-btn.interrupt-btn { color: var(--danger); border-color: rgba(196,82,59,.4); }
+.icon-btn.interrupt-btn:hover { background: var(--danger-soft); border-color: var(--danger); }
 
 .text-btn {
   padding: 9px 16px;
@@ -321,6 +380,10 @@ body::before {
   background: linear-gradient(180deg, rgba(28,20,15,.94), rgba(28,20,15,.75));
   backdrop-filter: blur(14px);
   flex: 0 0 auto;
+  /* Above .backdrop (z-index 30) so its own toggle buttons stay clickable
+     while a sidebar is open — otherwise taps land on the backdrop instead
+     and just close everything. */
+  position: relative; z-index: 40;
 }
 
 .persona-chip {
@@ -603,6 +666,16 @@ body::before {
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 
+/* Sidebar-only: a persona card plus its voice picker as a sibling below it
+   (a <select> can't nest inside the card's own <button>). */
+.persona-card-wrap { display: flex; flex-direction: column; gap: 4px; }
+.pc-voice-select {
+  width: 100%; padding: 6px 8px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-sm);
+  color: var(--muted); font-family: var(--mono); font-size: 11px;
+}
+.pc-voice-select:focus { outline: none; border-color: var(--id-line); }
+
 .module-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; }
 .module-card {
   position: relative;
@@ -773,11 +846,33 @@ select { appearance: none; }
 
 .artifact-view { background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--r); padding: 14px; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; overflow-x: auto; max-height: 60vh; }
 
-/* ---- Right sidebar on mobile: dropdown/bottom-sheet instead of a side
-   drawer. `.collapsed` has no effect anywhere else — it's pure bookkeeping
-   until this query gives it something to do, so this doesn't touch the
-   desktop grid-column behavior at all. ---- */
+/* ---- Both sidebars on mobile: fixed overlays, not grid columns.
+   `.collapsed` has no effect anywhere else — it's pure bookkeeping until
+   this query gives it something to do, so this doesn't touch the desktop
+   grid-column behavior at all.
+
+   Left used to keep the desktop grid-push (280px 1fr 0) even on mobile,
+   which squeezed #main down to a sliver — confirmed down to 0px wide with
+   both sidebars open at once, since the fixed-position right sidebar
+   ignored the grid track anyway and just overlaid on top of it. Pinning
+   the grid to 0 1fr 0 here and making the left sidebar a fixed overlay too
+   (same pattern as the right) means neither one steals space from #main,
+   and both can be open together without the layout breaking. ---- */
 @media (max-width: 900px) {
+  #app, #app.chats-open, #app.artifacts-open, #app.chats-open.artifacts-open {
+    grid-template-columns: 0 1fr 0;
+  }
+
+  #chatsSidebar.sidebar.left {
+    position: fixed; left: 0; top: 0; bottom: 0; right: auto;
+    width: 280px; max-width: 85vw;
+    transform: translateX(-101%);
+    transition: transform .32s var(--ease);
+    z-index: 40;
+  }
+  #chatsSidebar.sidebar.left::after { display: none; }
+  #chatsSidebar.sidebar.left:not(.collapsed) { transform: translateX(0); }
+
   #artifactsSidebar.sidebar.right {
     position: fixed; left: 0; right: 0; bottom: 0; top: auto;
     width: auto; max-height: 82dvh;
@@ -789,6 +884,11 @@ select { appearance: none; }
   }
   #artifactsSidebar.sidebar.right::before { display: none; }
   #artifactsSidebar.sidebar.right:not(.collapsed) { transform: translateY(0); }
+
+  /* Half-screen state: single-click from closed, or single-click from full.
+     Chat stays visible + independently scrollable in the remaining top half. */
+  #artifactsSidebar.sidebar.right.half-screen { max-height: 50vh; }
+  #app.artifacts-half-screen #chat { padding-bottom: 50vh; }
 }
 
 @media (prefers-reduced-motion: reduce) { *, *::before { transition: none !important; } }

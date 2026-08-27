@@ -54,20 +54,50 @@
       </svg>
       <span class="brand-word">JIVE</span>
     </div>
-    <div class="sidebar-header">
-      <span class="sidebar-title">Chats</span>
-      <div class="sidebar-header-actions">
-        <button id="newChatBtn" class="icon-btn" title="New chat">+</button>
-        <button id="closeChats" class="icon-btn" title="Hide">×</button>
+    <div class="side-accordion open" data-accordion="chats">
+      <div class="side-accordion-header">
+        <button class="side-accordion-toggle" type="button" data-accordion-toggle="chats">
+          <span class="side-accordion-title">Chats</span>
+          <span class="side-accordion-caret">▾</span>
+        </button>
+        <div class="side-accordion-header-actions">
+          <button id="newChatBtn" class="icon-btn" title="New chat">+</button>
+          <button id="closeChats" class="icon-btn" title="Hide">×</button>
+        </div>
+      </div>
+      <div class="side-accordion-body">
+        <ul id="chatList" class="chat-list"></ul>
+        <div class="sidebar-footer">
+          <button id="exportBtn" class="text-btn" title="Export all data as JSON">Export</button>
+          <button id="importBtn" class="text-btn" title="Import data from JSON">Import</button>
+          <input id="importFile" type="file" accept="application/json" hidden />
+          <button id="clearChatsBtn" class="text-btn danger" title="Delete chat history only — personas &amp; settings stay">Clear chats</button>
+          <button id="clearAllBtn" class="text-btn" title="Reset local settings too (personas are server-side and stay)">Reset settings</button>
+        </div>
       </div>
     </div>
-    <ul id="chatList" class="chat-list"></ul>
-    <div class="sidebar-footer">
-      <button id="exportBtn" class="text-btn" title="Export all data as JSON">Export</button>
-      <button id="importBtn" class="text-btn" title="Import data from JSON">Import</button>
-      <input id="importFile" type="file" accept="application/json" hidden />
-      <button id="clearChatsBtn" class="text-btn danger" title="Delete chat history only — personas &amp; settings stay">Clear chats</button>
-      <button id="clearAllBtn" class="text-btn" title="Reset local settings too (personas are server-side and stay)">Reset settings</button>
+
+    <div class="side-accordion" data-accordion="persona">
+      <button class="side-accordion-toggle" type="button" data-accordion-toggle="persona">
+        <span class="side-accordion-title">Persona</span>
+        <span id="sidebarPersonaSummary" class="side-accordion-summary"></span>
+        <span class="side-accordion-caret">▾</span>
+      </button>
+      <div class="side-accordion-body">
+        <div id="sidebarPersonaGrid" class="persona-grid sidebar-persona-grid"></div>
+      </div>
+    </div>
+
+    <div class="side-accordion" data-accordion="llm">
+      <button class="side-accordion-toggle" type="button" data-accordion-toggle="llm">
+        <span class="side-accordion-title">LLM</span>
+        <span id="sidebarModelSummary" class="side-accordion-summary"></span>
+        <span class="side-accordion-caret">▾</span>
+      </button>
+      <div class="side-accordion-body">
+        <ul id="sidebarModelList" class="model-picker-list sidebar-model-list"></ul>
+        <button id="sidebarMoreModelsBtn" class="text-btn" type="button">More models…</button>
+      </div>
     </div>
   </aside>
 
@@ -191,6 +221,7 @@
         <input id="attachInput" type="file" multiple accept="image/*,.txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.css,.html,.yml,.yaml,.csv" hidden />
         <button id="attachBtn" type="button" class="icon-btn" title="Upload photo or file">📎</button>
         <button id="micBtn" type="button" class="icon-btn" title="Mic: dictation, or voice chat when 🔊 is on (Chrome/Safari)">🎤</button>
+        <button id="interruptBtn" type="button" class="icon-btn interrupt-btn hidden" title="Interrupt: stop the reply and speech right now">✋</button>
         <button id="speakBtn" type="button" class="icon-btn" title="Speak replies with neural voice" aria-pressed="false">🔊</button>
         <textarea id="input" rows="1" placeholder="Plan or ask… (code builds in Workspace)" autofocus></textarea>
         <button id="stopBtn" type="button" class="text-btn danger hidden" title="Stop reply + voice (Esc or Enter also stops)">Stop</button>

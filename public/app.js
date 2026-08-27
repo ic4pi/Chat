@@ -282,6 +282,7 @@ function freshState() {
     chatsCollapsedExplicit: false,
     artifactsCollapsed: true,
     artifactsActiveTab: 'artifacts',
+    artifactsHalfScreen: false,
   };
 }
 
@@ -516,7 +517,13 @@ const els = {
   attachInput: $('attachInput'),
   attachPreview: $('attachPreview'),
   micBtn: $('micBtn'),
+  interruptBtn: $('interruptBtn'),
   speakBtn: $('speakBtn'),
+  sidebarPersonaGrid: $('sidebarPersonaGrid'),
+  sidebarPersonaSummary: $('sidebarPersonaSummary'),
+  sidebarModelList: $('sidebarModelList'),
+  sidebarModelSummary: $('sidebarModelSummary'),
+  sidebarMoreModelsBtn: $('sidebarMoreModelsBtn'),
   artifactList: $('artifactList'),
   sidebarTabs: $('sidebarTabs'),
   artifactsPanel: $('artifactsPanel'),
@@ -574,6 +581,11 @@ function applySidebarState() {
   els.app.classList.toggle('artifacts-open', !artifactsCollapsed);
   els.chatsSidebar.classList.toggle('collapsed', chatsCollapsed);
   els.artifactsSidebar.classList.toggle('collapsed', artifactsCollapsed);
+  // Half-screen is a mobile-only third state (closed/half/full) driven by the
+  // click/double-click handler on #toggleArtifacts — meaningless on desktop.
+  const halfScreen = isMobileViewport() && !artifactsCollapsed && !!state.artifactsHalfScreen;
+  els.artifactsSidebar.classList.toggle('half-screen', halfScreen);
+  els.app.classList.toggle('artifacts-half-screen', halfScreen);
   const anySidebarOpen = !chatsCollapsed || !artifactsCollapsed;
   // .backdrop starts with the .hidden utility class (display:none !important)
   // — toggle that directly rather than a separate "visible" class, which had
@@ -636,6 +648,33 @@ els.sidebarTabs?.addEventListener('click', (e) => {
   const btn = e.target.closest('.sidebar-tab');
   if (btn) setArtifactsTab(btn.dataset.tab);
 });
+
+// Swipe left/right across the sidebar to move between tabs — additive to
+// clicking the tab strip, not a replacement. Ignores swipes starting on
+// interactive controls (inputs/buttons/links) so it doesn't fight with them,
+// and only fires on a mostly-horizontal drag so normal vertical scrolling
+// inside a panel is untouched.
+(function attachSidebarSwipe() {
+  const el = els.artifactsSidebar;
+  if (!el) return;
+  let startX = 0, startY = 0, tracking = false;
+
+  el.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('input, textarea, button, a, select')) { tracking = false; return; }
+    startX = e.clientX; startY = e.clientY; tracking = true;
+  });
+  el.addEventListener('pointerup', (e) => {
+    if (!tracking) return;
+    tracking = false;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    const i = SIDEBAR_TABS.indexOf(state.artifactsActiveTab);
+    if (i === -1) return;
+    const next = dx < 0 ? i + 1 : i - 1; // swipe left -> next tab, right -> previous
+    if (next >= 0 && next < SIDEBAR_TABS.length) setArtifactsTab(SIDEBAR_TABS[next]);
+  });
+})();
 
 /** "2m ago" / "3h ago" / falls back to a short date past a day. */
 function formatRelativeTime(ts) {
@@ -1245,6 +1284,7 @@ async function fetchPersonas() {
   ensurePersonaVoices(personas);
   ensurePersonaModels(personas);
   renderPersonaSelect();
+  renderPersonaCards();
 }
 
 function activePersona() {
@@ -1560,6 +1600,7 @@ function updateModelPickerLabel() {
   if (els.modelUnlockBtn) {
     els.modelUnlockBtn.textContent = paidUnlocked() ? 'Paid unlocked' : 'Unlock paid';
   }
+  renderSidebarSummaries();
 }
 
 async function renderModelSelect() {
@@ -1710,7 +1751,55 @@ function selectModelFromPicker(provider, modelId) {
   saveState();
   updateModelPickerLabel();
   closeModelPicker();
+  renderSidebarModelList();
 }
+
+/**
+ * Compact free-model list for the left sidebar's LLM accordion — free only
+ * (paid needs the unlock flow anyway), reusing the same catalog data and
+ * selection logic as the full picker rather than a second implementation.
+ * Lazy: only loads the catalog the first time the accordion is opened.
+ */
+async function renderSidebarModelList() {
+  if (!els.sidebarModelList) return;
+  await loadAllModelsCatalog();
+  const free = allModelsCatalog
+    .filter((m) => m.free)
+    .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+  els.sidebarModelList.innerHTML = '';
+  for (const m of free) {
+    const li = document.createElement('li');
+    li.className = 'model-picker-item' +
+      (m.provider === state.activeProvider && m.id === state.activeModel ? ' active' : '');
+    li.setAttribute('role', 'option');
+    const name = document.createElement('div');
+    name.className = 'model-picker-item-name';
+    name.textContent = m.name || m.id;
+    const meta = document.createElement('div');
+    meta.className = 'model-picker-item-meta';
+    const prov = document.createElement('span');
+    prov.textContent = PROVIDER_LABELS[m.provider] || m.provider;
+    meta.appendChild(prov);
+    li.append(name, meta);
+    li.addEventListener('click', () => selectModelFromPicker(m.provider, m.id));
+    els.sidebarModelList.appendChild(li);
+  }
+  renderSidebarSummaries();
+}
+els.sidebarMoreModelsBtn?.addEventListener('click', () => void openModelPicker());
+
+// Left sidebar's Chats/Persona/LLM collapsible sections — plain expand/
+// collapse, not persisted (Chats starts open, the other two closed, on
+// every fresh load, matching their "not needed every turn" role).
+els.chatsSidebar?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-accordion-toggle]');
+  if (!btn) return;
+  const section = btn.closest('.side-accordion');
+  if (!section) return;
+  const opening = !section.classList.contains('open');
+  section.classList.toggle('open', opening);
+  if (opening && section.dataset.accordion === 'llm') void renderSidebarModelList();
+});
 
 async function openModelPicker() {
   if (!els.modelPickerModal) return;
@@ -1916,6 +2005,14 @@ let activeChatUserStopped = false;
 /** True while a sendMessage / group round is in flight (blocks accidental re-send). */
 let chatBusy = false;
 
+/** Resolved once chatBusy flips back to false — lets other code (voice chat's
+ * hold-and-send) await "the assistant is done generating" without polling. */
+let chatIdleResolvers = [];
+function waitForChatIdle() {
+  if (!chatBusy) return Promise.resolve();
+  return new Promise((resolve) => { chatIdleResolvers.push(resolve); });
+}
+
 function setGeneratingUi(on) {
   chatBusy = !!on;
   if (els.sendBtn) els.sendBtn.classList.toggle('hidden', !!on);
@@ -1927,6 +2024,20 @@ function setGeneratingUi(on) {
       ? 'Generating — press Esc or Enter to Stop, or tap Stop'
       : '';
   }
+  if (!chatBusy && chatIdleResolvers.length) {
+    const resolvers = chatIdleResolvers;
+    chatIdleResolvers = [];
+    resolvers.forEach((resolve) => resolve());
+  }
+  syncInterruptBtn();
+}
+
+/** Interrupt button is the only way to cut the assistant off now — visible
+ * whenever there's actually something to interrupt (generating and/or
+ * speaking), whether or not that speech is still mid-generation. */
+function syncInterruptBtn() {
+  if (!els.interruptBtn) return;
+  els.interruptBtn.classList.toggle('hidden', !(chatBusy || isSpeaking()));
 }
 
 function stopActiveChat(reason = 'Stopped.') {
@@ -2174,6 +2285,24 @@ function shouldFallback(attempt) {
   return false;
 }
 
+/**
+ * Finds the next complete sentence in `text` starting at `from`, so a long
+ * reply can be spoken sentence-by-sentence as it streams in instead of
+ * waiting for the whole thing to finish generating — that wait, plus a full
+ * network TTS round-trip on top of it, was the actual cause of "the voice
+ * is slow": speech never started until well after the reply was fully done.
+ * Returns null if no sentence boundary has arrived yet.
+ */
+function nextSpeakableSentence(text, from) {
+  const rest = text.slice(from);
+  const m = rest.match(/^[\s\S]*?[.!?](?:["')\]]*)(?:\s|$)/);
+  if (!m) return null;
+  const chunk = stripContinueMarkers(m[0]).trim();
+  const nextFrom = from + m[0].length;
+  if (!chunk) return { chunk: '', nextFrom }; // advance past it even if nothing speakable remains
+  return { chunk, nextFrom };
+}
+
 /** Markers the model uses so the client can auto-continue when a reply was cut short. */
 const CONTINUE_MARKER_RE = /⟦\s*(MORE|DONE)\s*⟧/gi;
 const WANTS_MORE_RE = /⟦\s*MORE\s*⟧/i;
@@ -2287,6 +2416,7 @@ async function sendMessage(text) {
       if (firstAssistantTs == null) firstAssistantTs = assistantTs;
       let pinnedToStart = false;
       let streamBuf = '';
+      let spokenUpTo = 0;
       chat.messages.push({
         role: 'assistant',
         content: '',
@@ -2314,6 +2444,18 @@ async function sendMessage(text) {
         }
       };
 
+      // Speak each sentence as soon as it's complete, instead of waiting for
+      // the whole reply to finish generating before the first TTS call even
+      // starts — that wait was the real source of "the voice is slow."
+      const speakNewSentences = () => {
+        for (;;) {
+          const next = nextSpeakableSentence(streamBuf, spokenUpTo);
+          if (!next) break;
+          spokenUpTo = next.nextFrom;
+          if (next.chunk) void speakReply(next.chunk);
+        }
+      };
+
       updateStatusClock(autoRound > 0 ? `Continuing (${autoRound + 1})` : 'Waiting for model');
       let attempt = await callChatStream(
         state.activeProvider,
@@ -2330,6 +2472,7 @@ async function sendMessage(text) {
             streamBuf += evt.text || '';
             updateStatusClock(autoRound > 0 ? `Writing (${autoRound + 1})` : 'Writing');
             refreshStreamingBubble();
+            speakNewSentences();
             if (!pinnedToStart) {
               renderMessages({ scroll: 'assistant-start', pinMsgTs: assistantTs });
               pinnedToStart = true;
@@ -2343,7 +2486,11 @@ async function sendMessage(text) {
         const fb = MODEL_FALLBACKS?.[state.activeProvider]?.[state.activeModel];
         if (fb) {
           updateStatusClock('Retrying on backup model');
+          // Starting over on a different model — anything already spoken
+          // belongs to the discarded attempt, same as the bubble reset below.
+          stopNeuralSpeech();
           streamBuf = '';
+          spokenUpTo = 0;
           refreshStreamingBubble();
           const retry = await callChatStream(
             fb.provider,
@@ -2357,6 +2504,7 @@ async function sendMessage(text) {
                 streamBuf += evt.text || '';
                 updateStatusClock('Writing');
                 refreshStreamingBubble();
+                speakNewSentences();
               }
             },
           );
@@ -2500,7 +2648,15 @@ async function sendMessage(text) {
         pinMsgTs: firstAssistantTs,
       });
       renderArtifacts();
-      speakReply(displayReply);
+      // Sentences already spoken incrementally while streaming (speakNewSentences
+      // above) shouldn't be spoken again — only the unspoken tail. If nothing
+      // was streamed (e.g. a non-streaming fallback reply with no token
+      // events), spokenUpTo stays 0 and this just speaks the whole reply,
+      // same as before.
+      const unspokenTail = spokenUpTo > 0
+        ? stripContinueMarkers(streamBuf.slice(spokenUpTo)).trim()
+        : displayReply;
+      if (unspokenTail) speakReply(unspokenTail);
 
       if (wantsMore && autoRound + 1 < AUTO_CONTINUE_MAX) {
         autoRound += 1;
@@ -3146,10 +3302,46 @@ if (typeof window !== 'undefined' && window.matchMedia) {
   if (mql.addEventListener) mql.addEventListener('change', onChange);
   else if (mql.addListener) mql.addListener(onChange);
 }
-els.toggleArtifacts.addEventListener('click', () => {
-  state.artifactsCollapsed = !state.artifactsCollapsed;
+// Mobile: #toggleArtifacts cycles closed/half/full via click vs double-click
+// (desktop keeps the plain toggle — see the isMobileViewport() branch below).
+//   closed  -> single: half   | double: full
+//   half    -> single: closed | double: full
+//   full    -> single: half   | double: closed
+const ARTIFACTS_SINGLE_CLICK_TARGET = { closed: 'half', half: 'closed', full: 'half' };
+const ARTIFACTS_DOUBLE_CLICK_TARGET = { closed: 'full', half: 'full', full: 'closed' };
+const ARTIFACTS_DBLCLICK_MS = 300;
+let artifactsClickTimer = null;
+
+function artifactsMobileState() {
+  if (state.artifactsCollapsed) return 'closed';
+  return state.artifactsHalfScreen ? 'half' : 'full';
+}
+function setArtifactsMobileState(next) {
+  state.artifactsCollapsed = next === 'closed';
+  if (next !== 'closed') state.artifactsHalfScreen = next === 'half';
   saveState();
   applySidebarState();
+}
+
+els.toggleArtifacts.addEventListener('click', () => {
+  if (!isMobileViewport()) {
+    state.artifactsCollapsed = !state.artifactsCollapsed;
+    saveState();
+    applySidebarState();
+    return;
+  }
+  if (artifactsClickTimer) {
+    // Second click landed inside the window — treat the pair as a double-click.
+    clearTimeout(artifactsClickTimer);
+    artifactsClickTimer = null;
+    setArtifactsMobileState(ARTIFACTS_DOUBLE_CLICK_TARGET[artifactsMobileState()]);
+    return;
+  }
+  // Wait briefly to see if a second click follows before committing to single-click.
+  artifactsClickTimer = setTimeout(() => {
+    artifactsClickTimer = null;
+    setArtifactsMobileState(ARTIFACTS_SINGLE_CLICK_TARGET[artifactsMobileState()]);
+  }, ARTIFACTS_DBLCLICK_MS);
 });
 els.closeArtifacts.addEventListener('click', closeArtifactsSidebar);
 els.closeChats.addEventListener('click', closeChatsSidebar);
@@ -3620,46 +3812,92 @@ function renderPersonaChip() {
   }
 }
 
+/**
+ * Renders persona cards into every grid that shows them — the menu sheet's
+ * grid and the left sidebar's Persona accordion — so there's one source of
+ * truth for the card markup and both stay in sync automatically.
+ */
 function renderPersonaCards() {
-  const grid = sheetEls.grid;
-  if (!grid) return;
-  grid.innerHTML = '';
-  for (const p of personas) {
-    const hue = personaHue(p.id);
-    const card = document.createElement('button');
-    card.type = 'button';
-    card.className = 'persona-card' + (p.id === state.activePersonaId ? ' active' : '');
-    card.style.setProperty('--pc-h', String(hue));
-    card.style.setProperty('--pc', `hsl(${hue} 78% 68%)`);
-    card.style.setProperty('--pc-soft', `hsl(${hue} 78% 68% / .12)`);
-    card.style.setProperty('--pc-line', `hsl(${hue} 78% 68% / .45)`);
+  const grids = [sheetEls.grid, els.sidebarPersonaGrid].filter(Boolean);
+  if (!grids.length) return;
+  for (const grid of grids) {
+    grid.innerHTML = '';
+    for (const p of personas) {
+      const hue = personaHue(p.id);
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'persona-card' + (p.id === state.activePersonaId ? ' active' : '');
+      card.style.setProperty('--pc-h', String(hue));
+      card.style.setProperty('--pc', `hsl(${hue} 78% 68%)`);
+      card.style.setProperty('--pc-soft', `hsl(${hue} 78% 68% / .12)`);
+      card.style.setProperty('--pc-line', `hsl(${hue} 78% 68% / .45)`);
 
-    const av = document.createElement('span');
-    av.className = 'persona-avatar';
-    av.textContent = personaInitials(p.name);
+      const av = document.createElement('span');
+      av.className = 'persona-avatar';
+      av.textContent = personaInitials(p.name);
 
-    const nm = document.createElement('span');
-    nm.className = 'pc-name';
-    nm.textContent = p.name;
-    if (p.id === state.activePersonaId) {
-      const dot = document.createElement('span');
-      dot.className = 'pc-dot';
-      dot.textContent = '●';
-      nm.appendChild(dot);
+      const nm = document.createElement('span');
+      nm.className = 'pc-name';
+      nm.textContent = p.name;
+      if (p.id === state.activePersonaId) {
+        const dot = document.createElement('span');
+        dot.className = 'pc-dot';
+        dot.textContent = '●';
+        nm.appendChild(dot);
+      }
+
+      const ds = document.createElement('span');
+      ds.className = 'pc-desc';
+      ds.textContent = p.description || 'No description yet.';
+
+      card.append(av, nm, ds);
+      card.addEventListener('click', () => {
+        applyPersona(p.id);
+        renderPersonaChip();
+        renderPersonaCards();
+        setTimeout(closeAppMenu, 160);
+      });
+
+      // Voice picker: sidebar only — this is the Settings surface. The menu
+      // sheet stays a quick persona-switcher, not a place to also configure
+      // things, so it doesn't get this control. A <select> can't be nested
+      // inside the card <button> itself (invalid HTML — buttons can't
+      // contain other interactive controls), so it's a sibling in a wrapper.
+      if (grid === els.sidebarPersonaGrid && els.voiceSelect) {
+        const wrap = document.createElement('div');
+        wrap.className = 'persona-card-wrap';
+        wrap.appendChild(card);
+
+        const voiceSelect = els.voiceSelect.cloneNode(true);
+        voiceSelect.removeAttribute('id');
+        voiceSelect.className = 'pc-voice-select';
+        voiceSelect.removeAttribute('aria-hidden');
+        voiceSelect.removeAttribute('tabindex');
+        voiceSelect.value = voiceForPersona(p.id);
+        voiceSelect.addEventListener('click', (e) => e.stopPropagation());
+        voiceSelect.addEventListener('change', (e) => {
+          e.stopPropagation();
+          setVoiceForPersona(p.id, voiceSelect.value);
+        });
+        wrap.appendChild(voiceSelect);
+
+        grid.appendChild(wrap);
+      } else {
+        grid.appendChild(card);
+      }
     }
+  }
+  renderSidebarSummaries();
+}
 
-    const ds = document.createElement('span');
-    ds.className = 'pc-desc';
-    ds.textContent = p.description || 'No description yet.';
-
-    card.append(av, nm, ds);
-    card.addEventListener('click', () => {
-      applyPersona(p.id);
-      renderPersonaChip();
-      renderPersonaCards();
-      setTimeout(closeAppMenu, 160);
-    });
-    grid.appendChild(card);
+/** Keeps the left sidebar's Persona/LLM accordion headers showing the current pick. */
+function renderSidebarSummaries() {
+  if (els.sidebarPersonaSummary) {
+    const p = activePersona();
+    els.sidebarPersonaSummary.textContent = p?.name || '';
+  }
+  if (els.sidebarModelSummary) {
+    els.sidebarModelSummary.textContent = state.activeModel || '';
   }
 }
 
@@ -3752,6 +3990,10 @@ let ttsUnlocked = false;
 let activeAudio = null;
 let speakQueue = Promise.resolve();
 let speakGeneration = 0;
+/** Count of speakReply() chunk-loops currently mid-flight — lets other code
+ * (voice chat's hold-and-send) know whether the assistant is still talking. */
+let activeSpeechCount = 0;
+function isSpeaking() { return activeSpeechCount > 0; }
 
 /** Tiny silent MP3 (no network) — unlocks HTMLAudioElement playback in a user gesture. */
 const SILENT_MP3_DATA_URI =
@@ -3921,17 +4163,27 @@ async function speakReply(text, { force = false, personaId = null } = {}) {
   const gen = speakGeneration;
   speakQueue = speakQueue.then(async () => {
     if (gen !== speakGeneration) return;
+    activeSpeechCount += 1;
+    syncInterruptBtn();
     try {
+      // Kick off the next chunk's synthesis while the current one plays,
+      // instead of fetching them one at a time — dead air between chunks
+      // was otherwise as long as a full TTS network round-trip, every time.
+      let nextBlobPromise = fetchNeuralAudio(chunks[0], voice);
       for (let i = 0; i < chunks.length; i++) {
         if (gen !== speakGeneration) return;
-        const blob = await fetchNeuralAudio(chunks[i], voice);
+        const blob = await nextBlobPromise;
         if (gen !== speakGeneration) return;
+        nextBlobPromise = i + 1 < chunks.length ? fetchNeuralAudio(chunks[i + 1], voice) : null;
         await playBlob(blob, { interrupt: i === 0 });
       }
       ttsUnlocked = true;
     } catch (err) {
       console.warn('Neural TTS failed, falling back:', err);
       if (gen === speakGeneration) speakBrowserFallback(chunks.join(' '));
+    } finally {
+      activeSpeechCount -= 1;
+      syncInterruptBtn();
     }
   }).catch(() => { /* queue continues */ });
 
@@ -4112,17 +4364,39 @@ function stopListening() {
   try { recognition?.stop(); } catch { /* ignore */ }
 }
 
+/** Bare acknowledgments/backchannel words ("yeah", "mhm", "ok"...) — heard
+ * while the assistant is mid-reply, these aren't a real response and should
+ * be discarded rather than treated as a barge-in. Matched against the whole
+ * utterance, not as a substring, so "yeah that's right, add a button" still
+ * goes through as substantive. */
+const FILLER_UTTERANCES = new Set([
+  'yeah', 'yep', 'yup', 'ya', 'yes', 'no', 'nope', 'nah',
+  'ok', 'okay', 'k', 'kk', 'sure', 'right', 'mhm', 'mm', 'mmhm', 'mm-hmm',
+  'uh huh', 'uh-huh', 'hmm', 'hm', 'huh', 'got it', 'i see', 'cool', 'nice',
+  'great', 'alright', 'all right', 'thanks', 'thank you', 'fine', 'good',
+]);
+const FILLER_PROFANITY_RE = /^(damn|shit|fuck|jesus|christ|god)$/;
+
+function isFillerUtterance(text) {
+  const t = String(text || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[.!?,]+$/g, '')
+    .replace(/\s+/g, ' ');
+  if (!t) return true;
+  if (FILLER_UTTERANCES.has(t)) return true;
+  if (FILLER_PROFANITY_RE.test(t)) return true;
+  return false;
+}
+
 els.micBtn?.addEventListener('click', () => {
   if (listening) {
     stopListening();
     return;
   }
-  if (chatBusy) {
-    // Mic during a reply = stop first, then listen.
-    stopActiveChat('Stopped by user');
-  }
-  // Cut any playing TTS before listening (real voice-chat turn-taking).
-  try { stopNeuralSpeech(); } catch { /* ignore */ }
+  // Pressing mic only starts listening — it must never cut off whatever the
+  // assistant is currently saying or generating. Explicit interruption is
+  // now the dedicated #interruptBtn's job.
 
   const rec = getSpeechRecognition();
   if (!rec) {
@@ -4142,20 +4416,42 @@ els.micBtn?.addEventListener('click', () => {
   rec.onend = () => {
     listening = false;
     els.micBtn?.classList.remove('listening');
-    setTypingActive(false);
     const said = finalText.trim();
-    if (!said) return;
-    // Voice chat mode: 🔊 on → send immediately and speak the reply.
-    // Dictation mode: 🔊 off → just put text in the box.
-    if (speakReplies && !chatBusy) {
-      els.input.value = '';
-      els.input.style.height = 'auto';
-      void sendMessage(said);
-    } else {
+    if (!said) { setTypingActive(false); return; }
+
+    // Dictation mode: 🔊 off → just put the recognized text in the box,
+    // verbatim, same as before.
+    if (!speakReplies) {
+      setTypingActive(false);
       els.input.value = (els.input.value ? els.input.value + ' ' : '') + said;
       els.input.dispatchEvent(new Event('input'));
       els.input.focus();
+      return;
     }
+
+    // Voice chat mode: a bare acknowledgment isn't a real reply — drop it
+    // silently instead of sending or holding it.
+    if (isFillerUtterance(said)) {
+      setTypingActive(false);
+      return;
+    }
+
+    // Never interrupt by voice — if the assistant is still generating (or
+    // mid multi-round auto-continue) and/or still speaking, hold this
+    // utterance and auto-send it once both are fully done.
+    if (chatBusy || isSpeaking()) {
+      setTypingActive(true, 'Got it — sending once the reply finishes…');
+      waitForChatIdle().then(() => speakQueue).then(() => {
+        setTypingActive(false);
+        void sendMessage(said);
+      });
+      return;
+    }
+
+    setTypingActive(false);
+    els.input.value = '';
+    els.input.style.height = 'auto';
+    void sendMessage(said);
   };
   rec.onresult = (event) => {
     let interim = '';
@@ -4177,6 +4473,15 @@ els.micBtn?.addEventListener('click', () => {
     setTypingActive(false);
     alert('Could not start mic: ' + (err.message || err));
   }
+});
+
+// The only explicit way to cut the assistant off — stops active generation
+// (if any) and any playing/queued speech, immediately.
+els.interruptBtn?.addEventListener('click', () => {
+  if (chatBusy) stopActiveChat('Stopped by user');
+  try { stopNeuralSpeech(); } catch { /* ignore */ }
+  setTypingActive(false);
+  syncInterruptBtn();
 });
 
 const WORKSPACE_HANDOFF_KEY = 'chat_to_workspace_v1';
