@@ -517,6 +517,7 @@ const els = {
   attachInput: $('attachInput'),
   attachPreview: $('attachPreview'),
   micBtn: $('micBtn'),
+  interruptBtn: $('interruptBtn'),
   speakBtn: $('speakBtn'),
   sidebarPersonaGrid: $('sidebarPersonaGrid'),
   sidebarPersonaSummary: $('sidebarPersonaSummary'),
@@ -2004,6 +2005,14 @@ let activeChatUserStopped = false;
 /** True while a sendMessage / group round is in flight (blocks accidental re-send). */
 let chatBusy = false;
 
+/** Resolved once chatBusy flips back to false — lets other code (voice chat's
+ * hold-and-send) await "the assistant is done generating" without polling. */
+let chatIdleResolvers = [];
+function waitForChatIdle() {
+  if (!chatBusy) return Promise.resolve();
+  return new Promise((resolve) => { chatIdleResolvers.push(resolve); });
+}
+
 function setGeneratingUi(on) {
   chatBusy = !!on;
   if (els.sendBtn) els.sendBtn.classList.toggle('hidden', !!on);
@@ -2015,6 +2024,20 @@ function setGeneratingUi(on) {
       ? 'Generating — press Esc or Enter to Stop, or tap Stop'
       : '';
   }
+  if (!chatBusy && chatIdleResolvers.length) {
+    const resolvers = chatIdleResolvers;
+    chatIdleResolvers = [];
+    resolvers.forEach((resolve) => resolve());
+  }
+  syncInterruptBtn();
+}
+
+/** Interrupt button is the only way to cut the assistant off now — visible
+ * whenever there's actually something to interrupt (generating and/or
+ * speaking), whether or not that speech is still mid-generation. */
+function syncInterruptBtn() {
+  if (!els.interruptBtn) return;
+  els.interruptBtn.classList.toggle('hidden', !(chatBusy || isSpeaking()));
 }
 
 function stopActiveChat(reason = 'Stopped.') {
@@ -3967,6 +3990,10 @@ let ttsUnlocked = false;
 let activeAudio = null;
 let speakQueue = Promise.resolve();
 let speakGeneration = 0;
+/** Count of speakReply() chunk-loops currently mid-flight — lets other code
+ * (voice chat's hold-and-send) know whether the assistant is still talking. */
+let activeSpeechCount = 0;
+function isSpeaking() { return activeSpeechCount > 0; }
 
 /** Tiny silent MP3 (no network) — unlocks HTMLAudioElement playback in a user gesture. */
 const SILENT_MP3_DATA_URI =
@@ -4136,6 +4163,8 @@ async function speakReply(text, { force = false, personaId = null } = {}) {
   const gen = speakGeneration;
   speakQueue = speakQueue.then(async () => {
     if (gen !== speakGeneration) return;
+    activeSpeechCount += 1;
+    syncInterruptBtn();
     try {
       // Kick off the next chunk's synthesis while the current one plays,
       // instead of fetching them one at a time — dead air between chunks
@@ -4152,6 +4181,9 @@ async function speakReply(text, { force = false, personaId = null } = {}) {
     } catch (err) {
       console.warn('Neural TTS failed, falling back:', err);
       if (gen === speakGeneration) speakBrowserFallback(chunks.join(' '));
+    } finally {
+      activeSpeechCount -= 1;
+      syncInterruptBtn();
     }
   }).catch(() => { /* queue continues */ });
 
@@ -4332,17 +4364,39 @@ function stopListening() {
   try { recognition?.stop(); } catch { /* ignore */ }
 }
 
+/** Bare acknowledgments/backchannel words ("yeah", "mhm", "ok"...) — heard
+ * while the assistant is mid-reply, these aren't a real response and should
+ * be discarded rather than treated as a barge-in. Matched against the whole
+ * utterance, not as a substring, so "yeah that's right, add a button" still
+ * goes through as substantive. */
+const FILLER_UTTERANCES = new Set([
+  'yeah', 'yep', 'yup', 'ya', 'yes', 'no', 'nope', 'nah',
+  'ok', 'okay', 'k', 'kk', 'sure', 'right', 'mhm', 'mm', 'mmhm', 'mm-hmm',
+  'uh huh', 'uh-huh', 'hmm', 'hm', 'huh', 'got it', 'i see', 'cool', 'nice',
+  'great', 'alright', 'all right', 'thanks', 'thank you', 'fine', 'good',
+]);
+const FILLER_PROFANITY_RE = /^(damn|shit|fuck|jesus|christ|god)$/;
+
+function isFillerUtterance(text) {
+  const t = String(text || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[.!?,]+$/g, '')
+    .replace(/\s+/g, ' ');
+  if (!t) return true;
+  if (FILLER_UTTERANCES.has(t)) return true;
+  if (FILLER_PROFANITY_RE.test(t)) return true;
+  return false;
+}
+
 els.micBtn?.addEventListener('click', () => {
   if (listening) {
     stopListening();
     return;
   }
-  if (chatBusy) {
-    // Mic during a reply = stop first, then listen.
-    stopActiveChat('Stopped by user');
-  }
-  // Cut any playing TTS before listening (real voice-chat turn-taking).
-  try { stopNeuralSpeech(); } catch { /* ignore */ }
+  // Pressing mic only starts listening — it must never cut off whatever the
+  // assistant is currently saying or generating. Explicit interruption is
+  // now the dedicated #interruptBtn's job.
 
   const rec = getSpeechRecognition();
   if (!rec) {
@@ -4362,20 +4416,42 @@ els.micBtn?.addEventListener('click', () => {
   rec.onend = () => {
     listening = false;
     els.micBtn?.classList.remove('listening');
-    setTypingActive(false);
     const said = finalText.trim();
-    if (!said) return;
-    // Voice chat mode: 🔊 on → send immediately and speak the reply.
-    // Dictation mode: 🔊 off → just put text in the box.
-    if (speakReplies && !chatBusy) {
-      els.input.value = '';
-      els.input.style.height = 'auto';
-      void sendMessage(said);
-    } else {
+    if (!said) { setTypingActive(false); return; }
+
+    // Dictation mode: 🔊 off → just put the recognized text in the box,
+    // verbatim, same as before.
+    if (!speakReplies) {
+      setTypingActive(false);
       els.input.value = (els.input.value ? els.input.value + ' ' : '') + said;
       els.input.dispatchEvent(new Event('input'));
       els.input.focus();
+      return;
     }
+
+    // Voice chat mode: a bare acknowledgment isn't a real reply — drop it
+    // silently instead of sending or holding it.
+    if (isFillerUtterance(said)) {
+      setTypingActive(false);
+      return;
+    }
+
+    // Never interrupt by voice — if the assistant is still generating (or
+    // mid multi-round auto-continue) and/or still speaking, hold this
+    // utterance and auto-send it once both are fully done.
+    if (chatBusy || isSpeaking()) {
+      setTypingActive(true, 'Got it — sending once the reply finishes…');
+      waitForChatIdle().then(() => speakQueue).then(() => {
+        setTypingActive(false);
+        void sendMessage(said);
+      });
+      return;
+    }
+
+    setTypingActive(false);
+    els.input.value = '';
+    els.input.style.height = 'auto';
+    void sendMessage(said);
   };
   rec.onresult = (event) => {
     let interim = '';
@@ -4397,6 +4473,15 @@ els.micBtn?.addEventListener('click', () => {
     setTypingActive(false);
     alert('Could not start mic: ' + (err.message || err));
   }
+});
+
+// The only explicit way to cut the assistant off — stops active generation
+// (if any) and any playing/queued speech, immediately.
+els.interruptBtn?.addEventListener('click', () => {
+  if (chatBusy) stopActiveChat('Stopped by user');
+  try { stopNeuralSpeech(); } catch { /* ignore */ }
+  setTypingActive(false);
+  syncInterruptBtn();
 });
 
 const WORKSPACE_HANDOFF_KEY = 'chat_to_workspace_v1';

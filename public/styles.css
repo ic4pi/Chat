@@ -348,6 +348,8 @@ body::before {
 .icon-btn:hover { color: var(--text); background: var(--raised); border-color: var(--border-2); }
 .icon-btn.accent { color: var(--brass); border-color: var(--brass-dk); }
 .icon-btn.accent:hover { background: rgba(201,150,62,.12); }
+.icon-btn.interrupt-btn { color: var(--danger); border-color: rgba(196,82,59,.4); }
+.icon-btn.interrupt-btn:hover { background: var(--danger-soft); border-color: var(--danger); }
 
 .text-btn {
   padding: 9px 16px;
