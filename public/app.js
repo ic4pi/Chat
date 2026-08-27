@@ -2262,6 +2262,24 @@ function shouldFallback(attempt) {
   return false;
 }
 
+/**
+ * Finds the next complete sentence in `text` starting at `from`, so a long
+ * reply can be spoken sentence-by-sentence as it streams in instead of
+ * waiting for the whole thing to finish generating — that wait, plus a full
+ * network TTS round-trip on top of it, was the actual cause of "the voice
+ * is slow": speech never started until well after the reply was fully done.
+ * Returns null if no sentence boundary has arrived yet.
+ */
+function nextSpeakableSentence(text, from) {
+  const rest = text.slice(from);
+  const m = rest.match(/^[\s\S]*?[.!?](?:["')\]]*)(?:\s|$)/);
+  if (!m) return null;
+  const chunk = stripContinueMarkers(m[0]).trim();
+  const nextFrom = from + m[0].length;
+  if (!chunk) return { chunk: '', nextFrom }; // advance past it even if nothing speakable remains
+  return { chunk, nextFrom };
+}
+
 /** Markers the model uses so the client can auto-continue when a reply was cut short. */
 const CONTINUE_MARKER_RE = /⟦\s*(MORE|DONE)\s*⟧/gi;
 const WANTS_MORE_RE = /⟦\s*MORE\s*⟧/i;
@@ -2375,6 +2393,7 @@ async function sendMessage(text) {
       if (firstAssistantTs == null) firstAssistantTs = assistantTs;
       let pinnedToStart = false;
       let streamBuf = '';
+      let spokenUpTo = 0;
       chat.messages.push({
         role: 'assistant',
         content: '',
@@ -2402,6 +2421,18 @@ async function sendMessage(text) {
         }
       };
 
+      // Speak each sentence as soon as it's complete, instead of waiting for
+      // the whole reply to finish generating before the first TTS call even
+      // starts — that wait was the real source of "the voice is slow."
+      const speakNewSentences = () => {
+        for (;;) {
+          const next = nextSpeakableSentence(streamBuf, spokenUpTo);
+          if (!next) break;
+          spokenUpTo = next.nextFrom;
+          if (next.chunk) void speakReply(next.chunk);
+        }
+      };
+
       updateStatusClock(autoRound > 0 ? `Continuing (${autoRound + 1})` : 'Waiting for model');
       let attempt = await callChatStream(
         state.activeProvider,
@@ -2418,6 +2449,7 @@ async function sendMessage(text) {
             streamBuf += evt.text || '';
             updateStatusClock(autoRound > 0 ? `Writing (${autoRound + 1})` : 'Writing');
             refreshStreamingBubble();
+            speakNewSentences();
             if (!pinnedToStart) {
               renderMessages({ scroll: 'assistant-start', pinMsgTs: assistantTs });
               pinnedToStart = true;
@@ -2431,7 +2463,11 @@ async function sendMessage(text) {
         const fb = MODEL_FALLBACKS?.[state.activeProvider]?.[state.activeModel];
         if (fb) {
           updateStatusClock('Retrying on backup model');
+          // Starting over on a different model — anything already spoken
+          // belongs to the discarded attempt, same as the bubble reset below.
+          stopNeuralSpeech();
           streamBuf = '';
+          spokenUpTo = 0;
           refreshStreamingBubble();
           const retry = await callChatStream(
             fb.provider,
@@ -2445,6 +2481,7 @@ async function sendMessage(text) {
                 streamBuf += evt.text || '';
                 updateStatusClock('Writing');
                 refreshStreamingBubble();
+                speakNewSentences();
               }
             },
           );
@@ -2588,7 +2625,15 @@ async function sendMessage(text) {
         pinMsgTs: firstAssistantTs,
       });
       renderArtifacts();
-      speakReply(displayReply);
+      // Sentences already spoken incrementally while streaming (speakNewSentences
+      // above) shouldn't be spoken again — only the unspoken tail. If nothing
+      // was streamed (e.g. a non-streaming fallback reply with no token
+      // events), spokenUpTo stays 0 and this just speaks the whole reply,
+      // same as before.
+      const unspokenTail = spokenUpTo > 0
+        ? stripContinueMarkers(streamBuf.slice(spokenUpTo)).trim()
+        : displayReply;
+      if (unspokenTail) speakReply(unspokenTail);
 
       if (wantsMore && autoRound + 1 < AUTO_CONTINUE_MAX) {
         autoRound += 1;
@@ -4092,10 +4137,15 @@ async function speakReply(text, { force = false, personaId = null } = {}) {
   speakQueue = speakQueue.then(async () => {
     if (gen !== speakGeneration) return;
     try {
+      // Kick off the next chunk's synthesis while the current one plays,
+      // instead of fetching them one at a time — dead air between chunks
+      // was otherwise as long as a full TTS network round-trip, every time.
+      let nextBlobPromise = fetchNeuralAudio(chunks[0], voice);
       for (let i = 0; i < chunks.length; i++) {
         if (gen !== speakGeneration) return;
-        const blob = await fetchNeuralAudio(chunks[i], voice);
+        const blob = await nextBlobPromise;
         if (gen !== speakGeneration) return;
+        nextBlobPromise = i + 1 < chunks.length ? fetchNeuralAudio(chunks[i + 1], voice) : null;
         await playBlob(blob, { interrupt: i === 0 });
       }
       ttsUnlocked = true;
