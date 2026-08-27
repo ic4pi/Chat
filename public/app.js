@@ -282,6 +282,7 @@ function freshState() {
     chatsCollapsedExplicit: false,
     artifactsCollapsed: true,
     artifactsActiveTab: 'artifacts',
+    artifactsHalfScreen: false,
   };
 }
 
@@ -574,6 +575,11 @@ function applySidebarState() {
   els.app.classList.toggle('artifacts-open', !artifactsCollapsed);
   els.chatsSidebar.classList.toggle('collapsed', chatsCollapsed);
   els.artifactsSidebar.classList.toggle('collapsed', artifactsCollapsed);
+  // Half-screen is a mobile-only third state (closed/half/full) driven by the
+  // click/double-click handler on #toggleArtifacts — meaningless on desktop.
+  const halfScreen = isMobileViewport() && !artifactsCollapsed && !!state.artifactsHalfScreen;
+  els.artifactsSidebar.classList.toggle('half-screen', halfScreen);
+  els.app.classList.toggle('artifacts-half-screen', halfScreen);
   const anySidebarOpen = !chatsCollapsed || !artifactsCollapsed;
   // .backdrop starts with the .hidden utility class (display:none !important)
   // — toggle that directly rather than a separate "visible" class, which had
@@ -636,6 +642,33 @@ els.sidebarTabs?.addEventListener('click', (e) => {
   const btn = e.target.closest('.sidebar-tab');
   if (btn) setArtifactsTab(btn.dataset.tab);
 });
+
+// Swipe left/right across the sidebar to move between tabs — additive to
+// clicking the tab strip, not a replacement. Ignores swipes starting on
+// interactive controls (inputs/buttons/links) so it doesn't fight with them,
+// and only fires on a mostly-horizontal drag so normal vertical scrolling
+// inside a panel is untouched.
+(function attachSidebarSwipe() {
+  const el = els.artifactsSidebar;
+  if (!el) return;
+  let startX = 0, startY = 0, tracking = false;
+
+  el.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('input, textarea, button, a, select')) { tracking = false; return; }
+    startX = e.clientX; startY = e.clientY; tracking = true;
+  });
+  el.addEventListener('pointerup', (e) => {
+    if (!tracking) return;
+    tracking = false;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    const i = SIDEBAR_TABS.indexOf(state.artifactsActiveTab);
+    if (i === -1) return;
+    const next = dx < 0 ? i + 1 : i - 1; // swipe left -> next tab, right -> previous
+    if (next >= 0 && next < SIDEBAR_TABS.length) setArtifactsTab(SIDEBAR_TABS[next]);
+  });
+})();
 
 /** "2m ago" / "3h ago" / falls back to a short date past a day. */
 function formatRelativeTime(ts) {
@@ -3146,10 +3179,46 @@ if (typeof window !== 'undefined' && window.matchMedia) {
   if (mql.addEventListener) mql.addEventListener('change', onChange);
   else if (mql.addListener) mql.addListener(onChange);
 }
-els.toggleArtifacts.addEventListener('click', () => {
-  state.artifactsCollapsed = !state.artifactsCollapsed;
+// Mobile: #toggleArtifacts cycles closed/half/full via click vs double-click
+// (desktop keeps the plain toggle — see the isMobileViewport() branch below).
+//   closed  -> single: half   | double: full
+//   half    -> single: closed | double: full
+//   full    -> single: half   | double: closed
+const ARTIFACTS_SINGLE_CLICK_TARGET = { closed: 'half', half: 'closed', full: 'half' };
+const ARTIFACTS_DOUBLE_CLICK_TARGET = { closed: 'full', half: 'full', full: 'closed' };
+const ARTIFACTS_DBLCLICK_MS = 300;
+let artifactsClickTimer = null;
+
+function artifactsMobileState() {
+  if (state.artifactsCollapsed) return 'closed';
+  return state.artifactsHalfScreen ? 'half' : 'full';
+}
+function setArtifactsMobileState(next) {
+  state.artifactsCollapsed = next === 'closed';
+  if (next !== 'closed') state.artifactsHalfScreen = next === 'half';
   saveState();
   applySidebarState();
+}
+
+els.toggleArtifacts.addEventListener('click', () => {
+  if (!isMobileViewport()) {
+    state.artifactsCollapsed = !state.artifactsCollapsed;
+    saveState();
+    applySidebarState();
+    return;
+  }
+  if (artifactsClickTimer) {
+    // Second click landed inside the window — treat the pair as a double-click.
+    clearTimeout(artifactsClickTimer);
+    artifactsClickTimer = null;
+    setArtifactsMobileState(ARTIFACTS_DOUBLE_CLICK_TARGET[artifactsMobileState()]);
+    return;
+  }
+  // Wait briefly to see if a second click follows before committing to single-click.
+  artifactsClickTimer = setTimeout(() => {
+    artifactsClickTimer = null;
+    setArtifactsMobileState(ARTIFACTS_SINGLE_CLICK_TARGET[artifactsMobileState()]);
+  }, ARTIFACTS_DBLCLICK_MS);
 });
 els.closeArtifacts.addEventListener('click', closeArtifactsSidebar);
 els.closeChats.addEventListener('click', closeChatsSidebar);

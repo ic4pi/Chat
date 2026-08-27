@@ -142,7 +142,7 @@ body::before {
 
 /* ---- Sidebars --------------------------------------------------------- */
 
-.sidebar { overflow: hidden; background: var(--panel); display: flex; flex-direction: column; min-width: 0; }
+.sidebar { position: relative; z-index: 40; overflow: hidden; background: var(--panel); display: flex; flex-direction: column; min-width: 0; }
 
 .brand-row {
   display: flex; align-items: center; gap: 8px;
@@ -321,6 +321,10 @@ body::before {
   background: linear-gradient(180deg, rgba(28,20,15,.94), rgba(28,20,15,.75));
   backdrop-filter: blur(14px);
   flex: 0 0 auto;
+  /* Above .backdrop (z-index 30) so its own toggle buttons stay clickable
+     while a sidebar is open — otherwise taps land on the backdrop instead
+     and just close everything. */
+  position: relative; z-index: 40;
 }
 
 .persona-chip {
@@ -789,6 +793,11 @@ select { appearance: none; }
   }
   #artifactsSidebar.sidebar.right::before { display: none; }
   #artifactsSidebar.sidebar.right:not(.collapsed) { transform: translateY(0); }
+
+  /* Half-screen state: single-click from closed, or single-click from full.
+     Chat stays visible + independently scrollable in the remaining top half. */
+  #artifactsSidebar.sidebar.right.half-screen { max-height: 50vh; }
+  #app.artifacts-half-screen #chat { padding-bottom: 50vh; }
 }
 
 @media (prefers-reduced-motion: reduce) { *, *::before { transition: none !important; } }
