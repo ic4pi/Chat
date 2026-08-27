@@ -3789,7 +3789,34 @@ function renderPersonaCards() {
         renderPersonaCards();
         setTimeout(closeAppMenu, 160);
       });
-      grid.appendChild(card);
+
+      // Voice picker: sidebar only — this is the Settings surface. The menu
+      // sheet stays a quick persona-switcher, not a place to also configure
+      // things, so it doesn't get this control. A <select> can't be nested
+      // inside the card <button> itself (invalid HTML — buttons can't
+      // contain other interactive controls), so it's a sibling in a wrapper.
+      if (grid === els.sidebarPersonaGrid && els.voiceSelect) {
+        const wrap = document.createElement('div');
+        wrap.className = 'persona-card-wrap';
+        wrap.appendChild(card);
+
+        const voiceSelect = els.voiceSelect.cloneNode(true);
+        voiceSelect.removeAttribute('id');
+        voiceSelect.className = 'pc-voice-select';
+        voiceSelect.removeAttribute('aria-hidden');
+        voiceSelect.removeAttribute('tabindex');
+        voiceSelect.value = voiceForPersona(p.id);
+        voiceSelect.addEventListener('click', (e) => e.stopPropagation());
+        voiceSelect.addEventListener('change', (e) => {
+          e.stopPropagation();
+          setVoiceForPersona(p.id, voiceSelect.value);
+        });
+        wrap.appendChild(voiceSelect);
+
+        grid.appendChild(wrap);
+      } else {
+        grid.appendChild(card);
+      }
     }
   }
   renderSidebarSummaries();
