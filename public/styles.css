@@ -118,6 +118,10 @@ body::before {
    min-height: auto, which lets content grow past the row instead of
    scrolling internally — min-height: 0 is what makes the clip take effect. */
 #main {
+  /* Pinned explicitly rather than relying on DOM-order auto-placement:
+     once a sidebar becomes position:fixed (mobile), it's removed from grid
+     layout entirely, which would otherwise shift #main into column 1. */
+  grid-column: 2;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -830,11 +834,33 @@ select { appearance: none; }
 
 .artifact-view { background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--r); padding: 14px; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; overflow-x: auto; max-height: 60vh; }
 
-/* ---- Right sidebar on mobile: dropdown/bottom-sheet instead of a side
-   drawer. `.collapsed` has no effect anywhere else — it's pure bookkeeping
-   until this query gives it something to do, so this doesn't touch the
-   desktop grid-column behavior at all. ---- */
+/* ---- Both sidebars on mobile: fixed overlays, not grid columns.
+   `.collapsed` has no effect anywhere else — it's pure bookkeeping until
+   this query gives it something to do, so this doesn't touch the desktop
+   grid-column behavior at all.
+
+   Left used to keep the desktop grid-push (280px 1fr 0) even on mobile,
+   which squeezed #main down to a sliver — confirmed down to 0px wide with
+   both sidebars open at once, since the fixed-position right sidebar
+   ignored the grid track anyway and just overlaid on top of it. Pinning
+   the grid to 0 1fr 0 here and making the left sidebar a fixed overlay too
+   (same pattern as the right) means neither one steals space from #main,
+   and both can be open together without the layout breaking. ---- */
 @media (max-width: 900px) {
+  #app, #app.chats-open, #app.artifacts-open, #app.chats-open.artifacts-open {
+    grid-template-columns: 0 1fr 0;
+  }
+
+  #chatsSidebar.sidebar.left {
+    position: fixed; left: 0; top: 0; bottom: 0; right: auto;
+    width: 280px; max-width: 85vw;
+    transform: translateX(-101%);
+    transition: transform .32s var(--ease);
+    z-index: 40;
+  }
+  #chatsSidebar.sidebar.left::after { display: none; }
+  #chatsSidebar.sidebar.left:not(.collapsed) { transform: translateX(0); }
+
   #artifactsSidebar.sidebar.right {
     position: fixed; left: 0; right: 0; bottom: 0; top: auto;
     width: auto; max-height: 82dvh;
