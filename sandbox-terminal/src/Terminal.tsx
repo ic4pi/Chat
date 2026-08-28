@@ -92,11 +92,18 @@ async function* parseSse(
 interface Props {
   /** From Open repo (/api/init-repo). Required for /api/run and /api/run-code. */
   sandboxId?: string | null;
+  /** Fires with the port number the first time streamed stdout looks like a
+   *  dev server's ready banner (`localhost:5173`, `127.0.0.1:3000`, ...).
+   *  A hint for the Preview panel, not a hard requirement — manual port
+   *  entry always works too. */
+  onDevServerPort?: (port: number) => void;
 }
+
+const DEV_SERVER_PORT_RE = /(?:localhost|127\.0\.0\.1):(\d{2,5})/;
 
 // ── component ────────────────────────────────────────────────────────────────
 export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function SandboxTerminal(
-  { sandboxId = null },
+  { sandboxId = null, onDevServerPort },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -106,6 +113,13 @@ export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function Sandbo
   // Keep latest session id for fetches started from stale callbacks.
   const sandboxIdRef = useRef<string | null>(sandboxId);
   sandboxIdRef.current = sandboxId;
+  const onDevServerPortRef = useRef(onDevServerPort);
+  onDevServerPortRef.current = onDevServerPort;
+
+  const scanForDevServerPort = useCallback((chunk: string) => {
+    const m = DEV_SERVER_PORT_RE.exec(chunk);
+    if (m) onDevServerPortRef.current?.(Number(m[1]));
+  }, []);
 
   const [command,   setCommand]   = useState('');
   const [status,    setStatus]    = useState<RunStatus>('idle');
@@ -192,7 +206,7 @@ export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function Sandbo
       for await (const { type, text } of parseSse(res.body)) {
         switch (type) {
           case 'status': term.writeln(`\x1b[2;36m[${text}]\x1b[0m`); break;
-          case 'stdout': term.write(text); break;
+          case 'stdout': term.write(text); scanForDevServerPort(text); break;
           case 'stderr': term.write(`\x1b[91m${text}\x1b[0m`); break;
           case 'exit': {
             const code = Number(text);
@@ -225,7 +239,7 @@ export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function Sandbo
     } finally {
       setStatus(s => (s === 'streaming' || s === 'connecting') ? 'done' : s);
     }
-  }, [sessionHeaders]);
+  }, [sessionHeaders, scanForDevServerPort]);
 
   // ── run shell command (manual input bar) ──────────────────────────────────
   const runShellInput = useCallback(async () => {
@@ -280,6 +294,7 @@ export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function Sandbo
               case 'stdout':
                 term.write(text);
                 captured.push(text);
+                scanForDevServerPort(text);
                 break;
               case 'stderr':
                 term.write(`\x1b[91m${text}\x1b[0m`);
@@ -323,7 +338,7 @@ export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function Sandbo
         }
       })();
     });
-  }, [sessionHeaders]);
+  }, [sessionHeaders, scanForDevServerPort]);
 
   // ── run code snippet (called by parent via ref) ────────────────────────────
   const runCode = useCallback((code: string, language: string) => {

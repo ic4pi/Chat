@@ -19,6 +19,8 @@ import writeFiles from '../../lib/sandbox-api/write-files.js';
 import search from '../../lib/sandbox-api/search.js';
 import detectTestCommand from '../../lib/sandbox-api/detect-test-command.js';
 import gitPush from '../../lib/sandbox-api/git-push.js';
+import previewStart from '../../lib/sandbox-api/preview-start.js';
+import keepalive from '../../lib/sandbox-api/keepalive.js';
 
 const OPS = {
   run,
@@ -31,6 +33,8 @@ const OPS = {
   search,
   'detect-test-command': detectTestCommand,
   'git-push': gitPush,
+  'preview-start': previewStart,
+  keepalive,
 };
 
 export default async function handler(req, res) {
@@ -40,7 +44,7 @@ export default async function handler(req, res) {
   if (!fn) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     return res.status(404).json({
-      error: `Unknown sandbox op "${op || '(empty)'}". Expected run|run-code|init-repo|init-blank|files|file|write-files|search|detect-test-command|git-push`,
+      error: `Unknown sandbox op "${op || '(empty)'}". Expected run|run-code|init-repo|init-blank|files|file|write-files|search|detect-test-command|git-push|preview-start|keepalive`,
     });
   }
   return fn(req, res);

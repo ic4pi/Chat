@@ -72,6 +72,14 @@
       "destination": "/api/sandbox/git-push"
     },
     {
+      "source": "/api/preview-start",
+      "destination": "/api/sandbox/preview-start"
+    },
+    {
+      "source": "/api/keepalive",
+      "destination": "/api/sandbox/keepalive"
+    },
+    {
       "source": "/api/hub/initiate",
       "destination": "/api/hub/[route]?route=initiate"
     },

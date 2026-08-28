@@ -77,6 +77,7 @@ const HANDLER_IMPORTS = [
   'api/generate.js',
   'api/admin-config.js',
   'api/hub/[route].js',
+  'api/assist.js',
 ];
 for (const rel of HANDLER_IMPORTS) {
   const abs = path.join(root, rel);

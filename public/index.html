@@ -217,6 +217,7 @@
 
     <form id="inputForm">
       <div id="attachPreview" class="attach-preview hidden"></div>
+      <div id="smartReplyChips" class="smart-reply-chips hidden"></div>
       <div class="input-row">
         <input id="attachInput" type="file" multiple accept="image/*,.txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.css,.html,.yml,.yaml,.csv" hidden />
         <button id="attachBtn" type="button" class="icon-btn" title="Upload photo or file">📎</button>
@@ -224,10 +225,10 @@
         <button id="interruptBtn" type="button" class="icon-btn interrupt-btn hidden" title="Interrupt: stop the reply and speech right now">✋</button>
         <button id="speakBtn" type="button" class="icon-btn" title="Speak replies with neural voice" aria-pressed="false">🔊</button>
         <textarea id="input" rows="1" placeholder="Plan or ask… (code builds in Workspace)" autofocus></textarea>
-        <button id="stopBtn" type="button" class="text-btn danger hidden" title="Stop reply + voice (Esc or Enter also stops)">Stop</button>
+        <button id="stopBtn" type="button" class="text-btn danger hidden" title="Stop reply + voice (Esc also stops)">Stop</button>
         <button id="sendBtn" type="submit">Send</button>
       </div>
-      <div id="voiceHint" class="voice-hint"><b>Stop</b> / <b>Esc</b> / <b>Enter</b> while generating cancels the reply and speech. <b>🔊</b> on + <b>🎤</b> = voice chat (auto-send). <b>🔊</b> off + mic = dictation only. Code builds in <b>Workspace</b>.</div>
+      <div id="voiceHint" class="voice-hint"><b>Enter</b> starts a new line — tap <b>Send</b> to send. <b>Stop</b> / <b>Esc</b> while generating cancels the reply and speech. <b>🔊</b> on + <b>🎤</b> = voice chat (auto-send). <b>🔊</b> off + mic = dictation only. Code builds in <b>Workspace</b>.</div>
     </form>
   </main>
 
@@ -244,6 +245,7 @@
       <button class="sidebar-tab" data-tab="reminders" role="tab" aria-selected="false" type="button">
         Reminders<span id="remindersTabBadge" class="tab-badge hidden"></span>
       </button>
+      <button class="sidebar-tab" data-tab="summary" role="tab" aria-selected="false" type="button">Summary</button>
     </div>
 
     <div id="artifactsPanel" class="tab-panel">
@@ -280,6 +282,26 @@
       <ul id="reminderList" class="nudge-list"></ul>
       <div id="reminderEmpty" class="artifact-empty">
         Nothing has gone quiet yet.
+      </div>
+    </div>
+
+    <div id="summaryPanel" class="tab-panel hidden">
+      <div class="summary-head">
+        <button id="summaryRefreshBtn" class="text-btn" type="button">Refresh</button>
+      </div>
+      <div id="summaryBody" class="summary-body">
+        <p id="summaryTldr" class="summary-tldr"></p>
+        <div id="summaryDecisionsBlock" class="summary-block hidden">
+          <p class="sheet-label">Decisions</p>
+          <ul id="summaryDecisions" class="artifact-list"></ul>
+        </div>
+        <div id="summaryQuestionsBlock" class="summary-block hidden">
+          <p class="sheet-label">Open questions</p>
+          <ul id="summaryQuestions" class="artifact-list"></ul>
+        </div>
+      </div>
+      <div id="summaryEmpty" class="artifact-empty">
+        A running TL;DR, decisions, and open questions for this chat will show up here.
       </div>
     </div>
   </aside>
@@ -452,6 +474,20 @@
   </div>
 </div>
 
+<!-- Resume-last-chat prompt, shown on open after a couple hours idle -->
+<div id="resumeModal" class="modal-overlay hidden" role="dialog" aria-modal="true">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Welcome back</h2>
+    </div>
+    <p id="resumeModalText" class="resume-text"></p>
+    <div class="tone-actions">
+      <button id="resumeStartNewBtn" class="text-btn" type="button">Start new</button>
+      <button id="resumeContinueBtn" class="text-btn primary" type="button">Resume</button>
+    </div>
+  </div>
+</div>
+
 <!-- BYOK keys panel -->
 <div id="keysModal" class="modal-overlay hidden" role="dialog" aria-modal="true">
   <div class="modal keys-modal">
@@ -470,12 +506,14 @@
     <div class="modal-header">
       <h2 id="artifactModalTitle">Artifact</h2>
       <div class="modal-header-actions">
+        <button id="artifactPreviewToggle" class="text-btn hidden" type="button">Preview</button>
         <button id="artifactCopyBtn" class="text-btn">Copy</button>
         <button id="artifactDownloadBtn" class="text-btn">Download</button>
         <button id="closeArtifactModal" class="icon-btn" title="Close (Esc)">×</button>
       </div>
     </div>
     <pre id="artifactModalContent" class="artifact-view"></pre>
+    <iframe id="artifactPreviewFrame" class="artifact-preview hidden" sandbox="allow-scripts" title="Artifact preview"></iframe>
   </div>
 </div>
 

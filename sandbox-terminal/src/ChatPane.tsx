@@ -77,8 +77,18 @@ const API_URL =
 const BEFORE_SEND_TIMEOUT_MS = 8_000;
 /** Above Pro agent-chat abort (~280s) so the API's clear error wins. */
 const CHAT_TIMEOUT_MS = 300_000;
+/** Outer ceiling a reasoning model can earn by staying visibly active
+ *  (see extendDeadlineOnThinking) — a firm stop against a truly runaway
+ *  stream, not a target every request is expected to use. */
+const MAX_CHAT_TIMEOUT_MS = 900_000;
 /** Skip corrective nudge only when the whole Pro window is nearly spent. */
 const NUDGE_BUDGET_MS = 240_000;
+/** Retry caps for callAgentWithContinue — higher for a reasoning model that
+ *  burned its whole window thinking with no answer yet (give it more shots
+ *  at actually answering); the lower cap is enough for finishing an
+ *  already-mostly-written reply that just got cut off mid-output. */
+const EMPTY_THINK_MAX_CONTINUES = 5;
+const MID_OUTPUT_MAX_CONTINUES = 2;
 
 // ---------------------------------------------------------------------------
 // System prompt
@@ -741,7 +751,20 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       if (paidPw) chatHeaders['X-Paid-Password'] = paidPw;
 
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+      // Only reasoning models earn more time, and only while there's live
+      // evidence they're still working: the deadline starts at the normal
+      // CHAT_TIMEOUT_MS and only gets pushed out — up to MAX_CHAT_TIMEOUT_MS
+      // total — each time a 'thinking' delta actually arrives. A model that
+      // goes silent (stuck, or just not a reasoning model) still gets cut at
+      // the original 300s; nothing changes for it.
+      const requestStartedAt = Date.now();
+      let timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+      const extendDeadlineOnThinking = () => {
+        if (Date.now() - requestStartedAt >= MAX_CHAT_TIMEOUT_MS) return;
+        clearTimeout(timer);
+        const remaining = MAX_CHAT_TIMEOUT_MS - (Date.now() - requestStartedAt);
+        timer = setTimeout(() => controller.abort(), Math.min(CHAT_TIMEOUT_MS, remaining));
+      };
       try {
         const res = await fetch(chatEndpoint, {
           method: 'POST',
@@ -768,6 +791,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         return await readAgentReply(res, (ev) => {
           if (ev.type === 'thinking' && typeof ev.text === 'string' && ev.text) {
             setLiveThoughts((prev) => prev + ev.text);
+            extendDeadlineOnThinking();
           }
         });
       } finally {
@@ -788,19 +812,29 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       let result = await callAgent(history, systemPrompt, sid, prov, mod, key);
       let reply = result.reply;
       let continues = 0;
+      let emptyThink = result.timedOut && (!reply.trim() || reply === '(empty response)');
+      // The higher retry budget is only for a *genuine* reasoning timeout —
+      // gated on actually having seen reasoning content, not just "timed out
+      // with nothing to show" (that can happen to any model for unrelated
+      // reasons — a slow provider, a network hiccup — and giving those 5
+      // retries instead of 2 just makes a stuck request take 4x longer to
+      // give up, for a model that was never "thinking" at all).
+      let hadReasoningEvidence = !!result.reasoning?.trim();
       // Continue when max_tokens / timeout cut mid File: block, or when the
-      // model burned the window on thinking with no answer text yet.
+      // model burned the window on thinking with no answer text yet. The cap
+      // depends on which of those is currently happening — recomputed below
+      // after every continuation, since a request can shift from one to the
+      // other (e.g. finally producing text, then getting cut off mid-output).
       while (
-        continues < 2
+        continues < (emptyThink && hadReasoningEvidence ? EMPTY_THINK_MAX_CONTINUES : MID_OUTPUT_MAX_CONTINUES)
         && (
           result.incomplete
           || looksTruncatedReply(reply)
-          || (result.timedOut && (!reply.trim() || reply === '(empty response)'))
+          || emptyThink
         )
         && (Date.now() - sendStartedAt) < NUDGE_BUDGET_MS * 2
       ) {
         continues += 1;
-        const emptyThink = result.timedOut && (!reply.trim() || reply === '(empty response)');
         const contPrompt = emptyThink
           ? 'Previous attempt timed out during thinking before any answer text. '
             + 'Answer now with complete File: / fenced blocks. Spend less time thinking.'
@@ -819,6 +853,8 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         reply = emptyThink
           ? result.reply
           : mergeContinuation(reply, result.reply);
+        emptyThink = result.timedOut && (!reply.trim() || reply === '(empty response)');
+        hadReasoningEvidence = !!result.reasoning?.trim();
         if (!result.incomplete && !looksTruncatedReply(result.reply) && result.reply.trim() && result.reply !== '(empty response)') {
           break;
         }
@@ -1333,9 +1369,6 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           value={input}
           rows={2}
           onChange={e => setInput(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); }
-          }}
           placeholder={loading ? 'Waiting for reply…'
             : listening ? (speakOn ? 'Listening — will send…' : 'Listening…')
             : 'What should change?'}
