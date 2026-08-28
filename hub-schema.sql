@@ -247,3 +247,19 @@ create or replace function match_facts(
   order by f.embedding <=> p_embedding
   limit p_limit;
 $$ language sql stable;
+
+-- ---------------------------------------------------------------
+-- PROJECTS support (additive) — client-side chat folders backed by:
+--  1) idempotent thread registration, so continuous sync can call
+--     register on every chat without creating duplicate threads
+--  2) typed nudges, so the sweep can suggest grouping related chats
+--     into a project without any new server-side "project" concept —
+--     projects stay client-only, same as chats themselves.
+-- ---------------------------------------------------------------
+
+alter table threads add column if not exists local_id text;
+create unique index if not exists threads_local_id_idx
+  on threads (local_id) where local_id is not null;
+
+alter table nudges add column if not exists nudge_type text not null default 'stale_topic';
+alter table nudges add column if not exists payload jsonb not null default '{}'::jsonb;

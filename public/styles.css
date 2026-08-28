@@ -254,6 +254,54 @@ body::before {
 .sidebar-model-list { max-height: none; }
 #sidebarMoreModelsBtn { width: 100%; margin-top: 8px; }
 
+/* ---- Project folders inside the Chats list ---------------------------- */
+/* .project-group is itself an <li> in .chat-list — undo the plain chat-row
+   styling (.chat-list li) that would otherwise apply to the wrapper too. */
+.chat-list li.project-group {
+  padding: 0; margin-bottom: 6px; cursor: default;
+  white-space: normal; overflow: visible; text-overflow: clip;
+  background: transparent;
+}
+.chat-list li.project-group:hover { background: transparent; color: inherit; }
+
+.project-group-header { display: flex; align-items: center; gap: 4px; padding: 6px 4px; }
+.project-group-toggle {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: center; gap: 6px;
+  text-align: left; padding: 2px 4px;
+  font-family: var(--display); font-weight: 600; font-size: 11.5px;
+  letter-spacing: .04em; text-transform: uppercase; color: var(--muted);
+}
+.project-group-toggle:hover { color: var(--brass-lt); }
+.project-group-caret {
+  flex: 0 0 auto; font-size: 9px; color: var(--muted-2);
+  transition: transform .15s var(--ease);
+}
+.project-group.collapsed .project-group-caret { transform: rotate(-90deg); }
+.project-group-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-group-delete { flex: 0 0 auto; color: var(--muted-2); font-size: 13px; padding: 2px 6px; }
+.project-group-delete:hover { color: var(--text); }
+
+/* Nested chat <li>s inside here still match the generic ".chat-list li"
+   rule above (a plain descendant selector, not depth-limited) — no need to
+   restyle them here. */
+.project-group-body { list-style: none; margin: 0; padding: 0 0 0 10px; }
+.project-group.collapsed .project-group-body { display: none; }
+
+/* "Move to project" popup */
+.project-picker-menu {
+  position: fixed; z-index: 60; min-width: 160px; max-width: 240px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-sm);
+  box-shadow: 0 8px 24px rgba(0,0,0,.35);
+  display: flex; flex-direction: column; padding: 4px; gap: 1px;
+}
+.project-picker-item {
+  text-align: left; padding: 8px 10px; border-radius: var(--r-sm);
+  font-size: 13px; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.project-picker-item:hover { background: var(--panel-2); }
+
 /* ---- Right sidebar tabs (Artifacts / Outline / Compare / Reminders) ---- */
 
 .sidebar-tabs {
@@ -747,6 +795,8 @@ body::before {
 .nudge-row span { flex: 1; }
 .nudge-dismiss { flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%; color: var(--muted-2); font-size: 15px; line-height: 1; }
 .nudge-dismiss:hover { color: var(--text); background: var(--raised); }
+.nudge-row-actionable { cursor: pointer; border-color: var(--brass); }
+.nudge-row-actionable:hover { background: var(--id-soft); }
 
 .topic-list { display: flex; flex-wrap: wrap; gap: 7px; }
 .topic-chip {
