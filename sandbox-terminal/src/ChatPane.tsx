@@ -751,15 +751,18 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       if (paidPw) chatHeaders['X-Paid-Password'] = paidPw;
 
       const controller = new AbortController();
-      // Only reasoning models earn more time, and only while there's live
-      // evidence they're still working: the deadline starts at the normal
-      // CHAT_TIMEOUT_MS and only gets pushed out — up to MAX_CHAT_TIMEOUT_MS
-      // total — each time a 'thinking' delta actually arrives. A model that
-      // goes silent (stuck, or just not a reasoning model) still gets cut at
-      // the original 300s; nothing changes for it.
+      // Only a model that's actually still working earns more time — the
+      // deadline starts at the normal CHAT_TIMEOUT_MS and only gets pushed
+      // out, up to MAX_CHAT_TIMEOUT_MS total, each time real data actually
+      // arrives: either reasoning ('thinking') deltas OR ordinary output
+      // tokens. A long file takes a long time to stream out even with no
+      // reasoning phase at all — that's still visible, active progress, not
+      // a stuck request, and deserves the same credit. A model that goes
+      // truly silent (stuck, or a dead connection) still gets cut at the
+      // original 300s; nothing changes for that case.
       const requestStartedAt = Date.now();
       let timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
-      const extendDeadlineOnThinking = () => {
+      const extendDeadlineOnActivity = () => {
         if (Date.now() - requestStartedAt >= MAX_CHAT_TIMEOUT_MS) return;
         clearTimeout(timer);
         const remaining = MAX_CHAT_TIMEOUT_MS - (Date.now() - requestStartedAt);
@@ -791,7 +794,9 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         return await readAgentReply(res, (ev) => {
           if (ev.type === 'thinking' && typeof ev.text === 'string' && ev.text) {
             setLiveThoughts((prev) => prev + ev.text);
-            extendDeadlineOnThinking();
+            extendDeadlineOnActivity();
+          } else if (ev.type === 'token' && typeof ev.text === 'string' && ev.text) {
+            extendDeadlineOnActivity();
           }
         });
       } finally {
