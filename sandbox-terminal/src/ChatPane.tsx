@@ -813,13 +813,20 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       let reply = result.reply;
       let continues = 0;
       let emptyThink = result.timedOut && (!reply.trim() || reply === '(empty response)');
+      // The higher retry budget is only for a *genuine* reasoning timeout —
+      // gated on actually having seen reasoning content, not just "timed out
+      // with nothing to show" (that can happen to any model for unrelated
+      // reasons — a slow provider, a network hiccup — and giving those 5
+      // retries instead of 2 just makes a stuck request take 4x longer to
+      // give up, for a model that was never "thinking" at all).
+      let hadReasoningEvidence = !!result.reasoning?.trim();
       // Continue when max_tokens / timeout cut mid File: block, or when the
       // model burned the window on thinking with no answer text yet. The cap
       // depends on which of those is currently happening — recomputed below
       // after every continuation, since a request can shift from one to the
       // other (e.g. finally producing text, then getting cut off mid-output).
       while (
-        continues < (emptyThink ? EMPTY_THINK_MAX_CONTINUES : MID_OUTPUT_MAX_CONTINUES)
+        continues < (emptyThink && hadReasoningEvidence ? EMPTY_THINK_MAX_CONTINUES : MID_OUTPUT_MAX_CONTINUES)
         && (
           result.incomplete
           || looksTruncatedReply(reply)
@@ -847,6 +854,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           ? result.reply
           : mergeContinuation(reply, result.reply);
         emptyThink = result.timedOut && (!reply.trim() || reply === '(empty response)');
+        hadReasoningEvidence = !!result.reasoning?.trim();
         if (!result.incomplete && !looksTruncatedReply(result.reply) && result.reply.trim() && result.reply !== '(empty response)') {
           break;
         }
