@@ -283,6 +283,7 @@ function freshState() {
     artifactsCollapsed: true,
     artifactsActiveTab: 'artifacts',
     artifactsHalfScreen: false,
+    lastSeenAt: 0,
   };
 }
 
@@ -365,6 +366,12 @@ function saveState() {
 }
 
 const state = loadState();
+// Snapshot before boot mutates anything (ensureActiveChat() below
+// auto-creates a chat if none exists) — the resume prompt needs to know
+// whether there was really something to resume, not what's true after boot
+// already created a fresh empty chat.
+const bootHadChats = state.chats.length > 0;
+const bootLastSeenAt = state.lastSeenAt || 0;
 
 function uid() {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -556,6 +563,10 @@ const els = {
   nudgeBannerText: $('nudgeBannerText'),
   nudgeBannerView: $('nudgeBannerView'),
   nudgeBannerDismiss: $('nudgeBannerDismiss'),
+  resumeModal: $('resumeModal'),
+  resumeModalText: $('resumeModalText'),
+  resumeStartNewBtn: $('resumeStartNewBtn'),
+  resumeContinueBtn: $('resumeContinueBtn'),
   artifactModal: $('artifactModal'),
   artifactModalTitle: $('artifactModalTitle'),
   artifactModalContent: $('artifactModalContent'),
@@ -2161,7 +2172,7 @@ function setGeneratingUi(on) {
   if (els.input) {
     els.input.setAttribute('aria-busy', on ? 'true' : 'false');
     els.input.title = on
-      ? 'Generating — press Esc or Enter to Stop, or tap Stop'
+      ? 'Generating — press Esc or tap Stop'
       : '';
   }
   if (!chatBusy && chatIdleResolvers.length) {
@@ -3464,18 +3475,8 @@ els.input.addEventListener('keydown', (e) => {
       stopActiveChat('Stopped by user');
       setTypingActive(true, 'Stopping…');
     }
-    return;
   }
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    // While generating, Enter = Stop (not another send).
-    if (chatBusy) {
-      stopActiveChat('Stopped by user');
-      setTypingActive(true, 'Stopping…');
-      return;
-    }
-    els.inputForm.requestSubmit();
-  }
+  // Enter is just a newline now — there's already a Send button for sending.
 });
 
 function handleNewChat() {
@@ -5176,11 +5177,58 @@ function showBootError(msg) {
   el.textContent = 'Boot error: ' + msg + '\n\nTry a hard refresh, or open Chats → Clear chats / Reset settings.';
 }
 
+// "Welcome back" prompt — only when there's something to resume AND it's
+// been a while (2 hours) since this device last had the app open. Not shown
+// on every load; `lastSeenAt` is stamped once the decision is made either way.
+const RESUME_IDLE_MS = 2 * 60 * 60 * 1000;
+
+function mostRecentChat() {
+  if (!state.chats.length) return null;
+  return state.chats.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
+}
+
+function maybeShowResumePrompt() {
+  const idleFor = Date.now() - bootLastSeenAt;
+  if (!bootHadChats || idleFor <= RESUME_IDLE_MS) {
+    state.lastSeenAt = Date.now();
+    saveState();
+    return;
+  }
+  const last = mostRecentChat();
+  if (!last) {
+    state.lastSeenAt = Date.now();
+    saveState();
+    return;
+  }
+  if (els.resumeModalText) {
+    els.resumeModalText.textContent =
+      `Pick up "${last.name || 'Untitled'}" where you left off, or start something new?`;
+  }
+  els.resumeModal?.classList.remove('hidden');
+}
+
+els.resumeContinueBtn?.addEventListener('click', () => {
+  const last = mostRecentChat();
+  if (last) state.activeChatId = last.id;
+  state.lastSeenAt = Date.now();
+  saveState();
+  els.resumeModal?.classList.add('hidden');
+  renderAll().catch((err) => console.error(err));
+});
+
+els.resumeStartNewBtn?.addEventListener('click', () => {
+  state.lastSeenAt = Date.now();
+  saveState();
+  els.resumeModal?.classList.add('hidden');
+  handleNewChat();
+});
+
 setArtifactsTab(state.artifactsActiveTab || 'artifacts');
 renderAll().catch((err) => {
   console.error('renderAll failed:', err);
   showBootError(err?.stack || err?.message || String(err));
 });
+maybeShowResumePrompt();
 
 // ===========================================================================
 // Hub wiring — module handoff

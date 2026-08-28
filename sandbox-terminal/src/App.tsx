@@ -5,6 +5,7 @@ import type { ChatHandle, Message }  from './ChatPane.js';
 import { DiffPanel }        from './DiffPanel.js';
 import { SandboxTerminal }  from './Terminal.js';
 import type { TerminalHandle } from './Terminal.js';
+import { PreviewPanel }     from './PreviewPanel.js';
 import { useRepoContext }   from './useRepoContext.js';
 import { useAutoVerify }    from './useAutoVerify.js';
 import type { PendingChange } from './useRepoContext.js';
@@ -154,7 +155,7 @@ async function fetchFileContent(
   }
 }
 
-type MobileTab = 'files' | 'chat' | 'terminal';
+type MobileTab = 'files' | 'chat' | 'terminal' | 'preview';
 
 // ---------------------------------------------------------------------------
 // VerifyBanner
@@ -233,6 +234,22 @@ export function App() {
   const termRef = useRef<TerminalHandle>(null);
   const chatRef = useRef<ChatHandle>(null);
   const repo    = useRepoContext();
+
+  // Keep the sandbox alive purely from the tab being open — even backgrounded
+  // (switched away from, not closed) — instead of only extending on actual
+  // activity. Browsers throttle background-tab timers but still run them at
+  // least every minute or so, well inside this interval's margin.
+  useEffect(() => {
+    if (!repo.sandboxId) return;
+    const sid = repo.sandboxId;
+    const ping = () => {
+      fetch(`${API_URL}/keepalive`, { headers: { 'X-Sandbox-Session': sid } }).catch(() => {
+        // Best-effort — a missed ping just means one less timeout extension.
+      });
+    };
+    const id = setInterval(ping, 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [repo.sandboxId]);
   /** Prevents Auto-apply from starting a second verify while one is running. */
   const verifyingRef = useRef(false);
   const roleModelsRef = useRef(loadRoleModels());
@@ -308,6 +325,17 @@ export function App() {
   const [autoCtxFiles, setAutoCtxFiles] = useState<string[]>([]);
   const [searchHits,   setSearchHits]   = useState<SearchHit[]>([]);
   const [mobileTab,    setMobileTab]    = useState<MobileTab>('chat');
+  const [desktopRightTab, setDesktopRightTab] = useState<'terminal' | 'preview'>('terminal');
+  const [previewPort, setPreviewPort] = useState<number | null>(null);
+  const autoSwitchedToPreview = useRef(false);
+  const handleDevServerPort = useCallback((port: number) => {
+    setPreviewPort(port);
+    if (!autoSwitchedToPreview.current) {
+      autoSwitchedToPreview.current = true;
+      setDesktopRightTab('preview');
+      setMobileTab('preview');
+    }
+  }, []);
   const [pushing,      setPushing]      = useState(false);
   const [pushError,    setPushError]    = useState<string | null>(null);
   const [pushOk,       setPushOk]       = useState<string | null>(null);
@@ -1174,8 +1202,29 @@ export function App() {
             display: 'flex', flexDirection: 'column' }}>
             {chatColumn}
           </div>
-          <div style={{ overflow: 'hidden', minHeight: 0 }}>
-            <SandboxTerminal ref={termRef} sandboxId={repo.sandboxId} />
+          <div style={{ overflow: 'hidden', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', borderBottom: '1px solid #191D27', flexShrink: 0 }}>
+              {(['terminal', 'preview'] as const).map(t => (
+                <button key={t} type="button" onClick={() => setDesktopRightTab(t)}
+                  style={{ flex: 1, padding: '8px 0', background: desktopRightTab === t ? '#12151D' : 'transparent',
+                    color: desktopRightTab === t ? '#FF3D8E' : '#9198AA', border: 'none',
+                    borderBottom: desktopRightTab === t ? '2px solid #FF3D8E' : '2px solid transparent',
+                    fontFamily: 'inherit', fontSize: 11, fontWeight: desktopRightTab === t ? 700 : 500,
+                    cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  {t === 'terminal' ? 'Terminal' : 'Preview'}
+                </button>
+              ))}
+            </div>
+            <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+              <div style={{ position: 'absolute', inset: 0, overflow: 'hidden',
+                display: desktopRightTab === 'terminal' ? 'flex' : 'none', flexDirection: 'column' }}>
+                <SandboxTerminal ref={termRef} sandboxId={repo.sandboxId} onDevServerPort={handleDevServerPort} />
+              </div>
+              <div style={{ position: 'absolute', inset: 0, overflow: 'hidden',
+                display: desktopRightTab === 'preview' ? 'flex' : 'none', flexDirection: 'column' }}>
+                <PreviewPanel sandboxId={repo.sandboxId} detectedPort={previewPort} />
+              </div>
+            </div>
           </div>
         </div>
       ) : (
@@ -1193,7 +1242,11 @@ export function App() {
             </div>
             <div style={{ position: 'absolute', inset: 0, overflow: 'hidden',
               display: mobileTab === 'terminal' ? 'flex' : 'none', flexDirection: 'column' }}>
-              <SandboxTerminal ref={termRef} sandboxId={repo.sandboxId} />
+              <SandboxTerminal ref={termRef} sandboxId={repo.sandboxId} onDevServerPort={handleDevServerPort} />
+            </div>
+            <div style={{ position: 'absolute', inset: 0, overflow: 'hidden',
+              display: mobileTab === 'preview' ? 'flex' : 'none', flexDirection: 'column' }}>
+              <PreviewPanel sandboxId={repo.sandboxId} detectedPort={previewPort} />
             </div>
           </div>
           <div style={{ display: 'flex', flexShrink: 0, borderTop: '1px solid #191D27',
@@ -1204,6 +1257,7 @@ export function App() {
               { id: 'files' as const, label: `Files${repo.tree.length ? ` (${repo.totalFiles})` : ''}` },
               { id: 'chat' as const, label: 'Chat' },
               { id: 'terminal' as const, label: 'Terminal' },
+              { id: 'preview' as const, label: 'Preview' },
             ]).map(t => (
               <button key={t.id} type="button" onClick={() => setMobileTab(t.id)}
                 aria-current={mobileTab === t.id ? 'page' : undefined}

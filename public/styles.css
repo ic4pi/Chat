@@ -817,6 +817,7 @@ select { appearance: none; }
 
 .tone-form, .keys-form, .group-form { display: flex; flex-direction: column; }
 .persona-desc { font-size: 12px; color: var(--muted); line-height: 1.5; margin: -6px 0 12px; padding: 10px 12px; background: var(--panel-2); border-radius: var(--r-sm); font-style: italic; }
+.resume-text { font-size: 13.5px; line-height: 1.55; color: var(--text); margin: 10px 0 16px; }
 .tone-actions, .group-modal-footer { display: flex; gap: 8px; margin-top: 8px; }
 .tone-actions > *, .group-modal-footer > * { flex: 1; }
 

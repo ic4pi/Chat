@@ -225,10 +225,10 @@
         <button id="interruptBtn" type="button" class="icon-btn interrupt-btn hidden" title="Interrupt: stop the reply and speech right now">✋</button>
         <button id="speakBtn" type="button" class="icon-btn" title="Speak replies with neural voice" aria-pressed="false">🔊</button>
         <textarea id="input" rows="1" placeholder="Plan or ask… (code builds in Workspace)" autofocus></textarea>
-        <button id="stopBtn" type="button" class="text-btn danger hidden" title="Stop reply + voice (Esc or Enter also stops)">Stop</button>
+        <button id="stopBtn" type="button" class="text-btn danger hidden" title="Stop reply + voice (Esc also stops)">Stop</button>
         <button id="sendBtn" type="submit">Send</button>
       </div>
-      <div id="voiceHint" class="voice-hint"><b>Stop</b> / <b>Esc</b> / <b>Enter</b> while generating cancels the reply and speech. <b>🔊</b> on + <b>🎤</b> = voice chat (auto-send). <b>🔊</b> off + mic = dictation only. Code builds in <b>Workspace</b>.</div>
+      <div id="voiceHint" class="voice-hint"><b>Enter</b> starts a new line — tap <b>Send</b> to send. <b>Stop</b> / <b>Esc</b> while generating cancels the reply and speech. <b>🔊</b> on + <b>🎤</b> = voice chat (auto-send). <b>🔊</b> off + mic = dictation only. Code builds in <b>Workspace</b>.</div>
     </form>
   </main>
 
@@ -471,6 +471,20 @@
         <button id="unlockPaidSubmit" class="text-btn primary" type="submit">Unlock</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- Resume-last-chat prompt, shown on open after a couple hours idle -->
+<div id="resumeModal" class="modal-overlay hidden" role="dialog" aria-modal="true">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Welcome back</h2>
+    </div>
+    <p id="resumeModalText" class="resume-text"></p>
+    <div class="tone-actions">
+      <button id="resumeStartNewBtn" class="text-btn" type="button">Start new</button>
+      <button id="resumeContinueBtn" class="text-btn primary" type="button">Resume</button>
+    </div>
   </div>
 </div>
 
