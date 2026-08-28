@@ -112,7 +112,7 @@
       "maxDuration": 60
     },
     "api/agent-chat.js": {
-      "maxDuration": 300
+      "maxDuration": 800
     },
     "api/group-chat.js": {
       "maxDuration": 300

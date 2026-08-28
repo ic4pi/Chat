@@ -75,14 +75,22 @@ const API_URL =
 
 // Auto-context must NEVER block the user bubble from appearing.
 const BEFORE_SEND_TIMEOUT_MS = 8_000;
-/** Above Pro agent-chat abort (~280s) so the API's clear error wins. */
+/** Starting deadline before any activity has been seen; extended from here
+ *  by extendDeadlineOnActivity() while real data keeps arriving. */
 const CHAT_TIMEOUT_MS = 300_000;
 /** Outer ceiling a reasoning model can earn by staying visibly active
- *  (see extendDeadlineOnThinking) — a firm stop against a truly runaway
- *  stream, not a target every request is expected to use. */
+ *  (see extendDeadlineOnActivity) — above agent-chat's own ~770s upstream
+ *  budget (Fluid Compute, Pro plan) so the API's own graceful timeout wins
+ *  instead of the client cutting the connection first. */
 const MAX_CHAT_TIMEOUT_MS = 900_000;
 /** Skip corrective nudge only when the whole Pro window is nearly spent. */
 const NUDGE_BUDGET_MS = 240_000;
+/** Overall wall-clock ceiling for callAgentWithContinue's retry loop — not
+ *  a per-call timeout (callAgent already has its own), just a backstop so a
+ *  request that genuinely needs several continuations can't hang forever.
+ *  Must comfortably exceed one full agent-chat call (~770s) plus at least
+ *  one continuation. */
+const CONTINUE_LOOP_BUDGET_MS = 1_800_000;
 /** Retry caps for callAgentWithContinue — higher for a reasoning model that
  *  burned its whole window thinking with no answer yet (give it more shots
  *  at actually answering); the lower cap is enough for finishing an
@@ -339,9 +347,17 @@ function parseSegments(text: string): Segment[] {
   return out;
 }
 
+/** Raw network-level drop (bad wifi/cellular, brief DNS/connection blip) —
+ *  distinct from our own deliberate AbortController timeout. Worth one
+ *  quiet automatic retry before bothering the user with it. */
+function isTransientNetworkError(raw: string): boolean {
+  const lower = raw.toLowerCase();
+  return lower === 'load failed' || lower === 'failed to fetch' || lower.includes('networkerror');
+}
+
 function friendlyError(raw: string): string {
   const lower = raw.toLowerCase();
-  if (lower === 'load failed' || lower === 'failed to fetch' || lower.includes('networkerror')) {
+  if (isTransientNetworkError(raw)) {
     return 'Connection dropped before the model replied (often a timeout). Try again or a faster model.';
   }
   if (lower.includes('abort')) {
@@ -735,7 +751,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
     setLiveThoughts('');
     setError(null);
 
-    const callAgent = async (
+    const callAgentOnce = async (
       history: Array<{ role: string; content: string | unknown }>,
       systemPrompt: string,
       sid: string | null,
@@ -804,6 +820,31 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       }
     };
 
+    // A raw network-level drop (bad wifi/cellular, a brief DNS/connection
+    // blip) never even reaches the model — it's not a "this model is too
+    // slow" situation, it's the request never landing. One quiet automatic
+    // retry absorbs a transient blip instead of dumping the user straight
+    // into a dead-end "try a faster model" message for something a faster
+    // model wouldn't have fixed either.
+    const callAgent = async (
+      history: Array<{ role: string; content: string | unknown }>,
+      systemPrompt: string,
+      sid: string | null,
+      prov: string,
+      mod: string,
+      key?: string,
+    ): Promise<AgentReply> => {
+      try {
+        return await callAgentOnce(history, systemPrompt, sid, prov, mod, key);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!isTransientNetworkError(msg)) throw err;
+        setLiveThoughts('');
+        await new Promise((r) => setTimeout(r, 1200));
+        return callAgentOnce(history, systemPrompt, sid, prov, mod, key);
+      }
+    };
+
     const sendStartedAt = Date.now();
 
     const callAgentWithContinue = async (
@@ -837,7 +878,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           || looksTruncatedReply(reply)
           || emptyThink
         )
-        && (Date.now() - sendStartedAt) < NUDGE_BUDGET_MS * 2
+        && (Date.now() - sendStartedAt) < CONTINUE_LOOP_BUDGET_MS
       ) {
         continues += 1;
         const contPrompt = emptyThink
