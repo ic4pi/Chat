@@ -251,6 +251,9 @@ export function needsCodeContext(text: string): boolean {
 /** Only used when the user explicitly asked to apply/write. */
 export const NUDGE_PROMPT =
   'STOP. You did not output any usable File: or Edit: blocks, so nothing was written.\n' +
+  'If your last reply explained that you cannot write code directly, are "just a text-based AI", or offered a ' +
+  'design/blueprint instead of code — that is incorrect in this environment. You DO write real files here via ' +
+  'File:/Edit: blocks below; they save directly into the project. Do not repeat that explanation. Write the code now.\n' +
   'NEVER use vague stubs or "… existing …" comments in either format.\n' +
   'For an EXISTING file, prefer a targeted edit — copy the exact text to replace:\n\n' +
   'Edit: <relative-path>\n' +

@@ -87,15 +87,21 @@ const MAX_CHAT_TIMEOUT_MS = 900_000;
 const NUDGE_BUDGET_MS = 240_000;
 /** Overall wall-clock ceiling for callAgentWithContinue's retry loop — not
  *  a per-call timeout (callAgent already has its own), just a backstop so a
- *  request that genuinely needs several continuations can't hang forever.
- *  Must comfortably exceed one full agent-chat call (~770s) plus at least
- *  one continuation. */
-const CONTINUE_LOOP_BUDGET_MS = 1_800_000;
+ *  request that genuinely needs a continuation can't hang forever. Sized
+ *  for one full agent-chat call (~770s) plus one real continuation, not for
+ *  every retry to individually run the full window. */
+const CONTINUE_LOOP_BUDGET_MS = 900_000;
 /** Retry caps for callAgentWithContinue — higher for a reasoning model that
  *  burned its whole window thinking with no answer yet (give it more shots
  *  at actually answering); the lower cap is enough for finishing an
- *  already-mostly-written reply that just got cut off mid-output. */
-const EMPTY_THINK_MAX_CONTINUES = 5;
+ *  already-mostly-written reply that just got cut off mid-output.
+ *  Deliberately modest even for the "genuine reasoning timeout" case: each
+ *  round can legitimately take up to agent-chat's own ~770s ceiling, so 5
+ *  rounds could mean a 60+ minute silent ordeal before giving up — a model
+ *  that's still empty after 3 real attempts at the full window isn't going
+ *  to get there on a 4th; better to fail loud and fast than retry quietly
+ *  for the better part of an hour. */
+const EMPTY_THINK_MAX_CONTINUES = 3;
 const MID_OUTPUT_MAX_CONTINUES = 2;
 
 // ---------------------------------------------------------------------------
@@ -704,6 +710,8 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   const [input,    setInput]    = useState('');
   const [loading,  setLoading]  = useState(false);
   const [liveThoughts, setLiveThoughts] = useState('');
+  const [elapsedSecs, setElapsedSecs] = useState(0);
+  const loadingStartedAtRef = useRef(0);
   const [error,    setError]    = useState<string | null>(null);
   const [uploads,  setUploads]  = useState<PendingUpload[]>([]);
   const [speakOn,  setSpeakOn]  = useState(() => loadSpeakPref());
@@ -731,6 +739,19 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading, liveThoughts]);
+
+  // A static "thinking…" label reads as frozen once a slow reasoning model
+  // is several minutes in — a running clock at least shows it's still alive
+  // rather than stuck, even when there's nothing else new to show yet.
+  useEffect(() => {
+    if (!loading) { setElapsedSecs(0); return; }
+    loadingStartedAtRef.current = Date.now();
+    setElapsedSecs(0);
+    const id = setInterval(() => {
+      setElapsedSecs(Math.floor((Date.now() - loadingStartedAtRef.current) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [loading]);
 
   useEffect(() => {
     onMessagesChange?.(messages);
@@ -776,6 +797,15 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       // a stuck request, and deserves the same credit. A model that goes
       // truly silent (stuck, or a dead connection) still gets cut at the
       // original 300s; nothing changes for that case.
+      //
+      // Deliberately NOT tightened for "reasoning but no answer yet": the
+      // client's ceiling must stay ABOVE agent-chat's own ~770s upstream
+      // budget so the SERVER's graceful timeout (returns partial reasoning
+      // + timedOut:true, which callAgentWithContinue's emptyThink retry
+      // reads directly) always wins the race. A shorter client-side cutoff
+      // would abort the fetch itself first, throwing a raw error that skips
+      // that whole retry path — the exact "Connection dropped" dead-end
+      // this session already fixed once by extending this deadline.
       const requestStartedAt = Date.now();
       let timer = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
       const extendDeadlineOnActivity = () => {
@@ -994,7 +1024,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           '\n\nSUGGEST-ONLY this turn: plain advice, real paths, no File: blocks, no placeholders.';
       } else if (applyTurn) {
         systemPrompt +=
-          '\n\nAPPLY this turn: output complete File: blocks only (FULL files). Stubs are rejected and will not save.';
+          '\n\nAPPLY this turn: output complete File: blocks only (FULL files). Stubs are rejected and will not save. '
+          + 'You DO have the ability to write real, runnable source code via File:/Edit: blocks — it saves directly '
+          + 'into the user\'s actual project in this sandbox, it is not a hypothetical or a described interface. '
+          + 'Do not say you are "just a text-based AI" or that you cannot provide code/an interface "directly" — '
+          + 'that is false here. Do not hand back a design blueprint, description, or plan instead of code. Write '
+          + 'the File:/Edit: blocks now.';
       }
 
       // Always hit agent-chat — it accepts systemPrompt. /api/chat ignores it
@@ -1336,7 +1371,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         {loading && (
           <div data-testid="thinking" style={{ alignSelf: 'flex-start', maxWidth: '92%' }}>
             <div style={{ fontSize: 12, color: '#656C7E', marginBottom: liveThoughts ? 6 : 0 }}>
-              thinking…
+              thinking… · {elapsedSecs}s
             </div>
             {liveThoughts ? (
               <pre data-testid="thinking-stream" style={{
