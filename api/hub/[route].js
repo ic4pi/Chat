@@ -373,6 +373,14 @@ Options with tradeoffs, Recommendation, Risks, Next Steps. Lead with the recomme
 
   newsletter: `Build a newsletter issue. Sections: Subject Line (5 options), Opening Hook,
 2-4 Segments, One Thing Worth Clicking, Sign-off. Segments short and independently readable.`,
+
+  joke_bank: `Build a running joke bank — a flat editable LIST, not an essay. One
+section only, heading "Jokes". Body is every joke verbatim, one per line, newest
+first, exactly as the user said it — never paraphrase, never rewrite, never punch
+one up. If a joke has an obvious short label (subject, first few words), prefix
+the line with it in brackets so the list is scannable, then the joke itself.
+Do not group, categorize, or add commentary — this is a list they'll keep adding
+to and read straight down.`,
 };
 
 async function handle_document(req, res) {
@@ -384,6 +392,19 @@ async function handle_document(req, res) {
     return fail(res, 400, 'type and topicIds[] required');
   if (!TEMPLATES[type]) return fail(res, 400, `unknown type: ${type}`, Object.keys(TEMPLATES));
 
+  const result = await buildDocumentInternal({ type, title, topicIds, documentId });
+  if (result.error) return fail(res, result.status || 500, result.error, result.details);
+  return res.json(result);
+}
+
+/**
+ * Shared by the HTTP endpoint and internal callers (the joke-bank auto-sync
+ * after sweep). Returns a plain result object instead of writing to `res`,
+ * so it works the same either way.
+ */
+async function buildDocumentInternal({ type, title, topicIds, documentId }) {
+  if (!TEMPLATES[type]) return { error: `unknown type: ${type}`, status: 400 };
+
   let watermark = '1970-01-01T00:00:00Z';
   let existing = null;
   if (documentId) {
@@ -392,7 +413,7 @@ async function handle_document(req, res) {
       .select('id, sections, outline, built_from_at')
       .eq('id', documentId)
       .single();
-    if (!data) return fail(res, 404, 'documentId not found');
+    if (!data) return { error: 'documentId not found', status: 404 };
     existing = data;
     watermark = data.built_from_at || watermark;
   }
@@ -427,9 +448,9 @@ async function handle_document(req, res) {
     .limit(20);
 
   if (!notes?.length && !existing)
-    return fail(res, 400, 'no material filed under these topics yet');
+    return { error: 'no material filed under these topics yet', status: 400 };
   if (!notes?.length && existing)
-    return res.json({ ok: true, documentId, unchanged: true, newNotesUsed: 0 });
+    return { ok: true, documentId, unchanged: true, newNotesUsed: 0 };
 
   const material = [
     `TOPICS: ${(topics || []).map((t) => t.name).join(', ')}`,
@@ -468,11 +489,11 @@ Return JSON: {"title":"...","outline":{},"sections":[{"heading":"...","body":"..
       maxTokens: 8000,
     });
   } catch (e) {
-    return fail(res, 502, 'document generation failed', e.message);
+    return { error: 'document generation failed', status: 502, details: e.message };
   }
 
   if (!Array.isArray(built?.sections) || !built.sections.length)
-    return fail(res, 502, 'model returned no sections');
+    return { error: 'model returned no sections', status: 502 };
 
   const row = {
     type,
@@ -487,7 +508,7 @@ Return JSON: {"title":"...","outline":{},"sections":[{"heading":"...","body":"..
     ? await db.from('documents').update(row).eq('id', documentId).select('id').single()
     : await db.from('documents').insert(row).select('id').single();
 
-  if (error) return fail(res, 500, 'failed to save document', error.message);
+  if (error) return { error: 'failed to save document', status: 500, details: error.message };
 
   if (!documentId) {
     await db
@@ -495,14 +516,14 @@ Return JSON: {"title":"...","outline":{},"sections":[{"heading":"...","body":"..
       .insert(topicIds.map((t) => ({ document_id: doc.id, topic_id: t })));
   }
 
-  return res.json({
+  return {
     ok: true,
     documentId: doc.id,
     title: row.title,
     sectionCount: built.sections.length,
     newNotesUsed: notes?.length || 0,
     regenerated: !!documentId,
-  });
+  };
 }
 
 
@@ -670,7 +691,30 @@ async function handle_state(req, res) {
       return res.json({ notes: data || [] });
     }
 
-    return fail(res, 400, 'unknown action', ['nudges', 'topics', 'inbox']);
+    if (action === 'joke-bank-raw') {
+      // Plain markdown, not JSON — this is what the Workspace file-open link
+      // hits, so it reads and edits like a real file instead of app UI.
+      const { data: doc } = await db
+        .from('documents')
+        .select('title, sections, updated_at')
+        .eq('type', 'joke_bank')
+        .limit(1)
+        .maybeSingle();
+
+      res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+
+      if (!doc) {
+        return res.end('# Joke Bank\n\nNothing filed yet — tell one in chat and it lands here after the next sweep.\n');
+      }
+
+      const body = (doc.sections || [])
+        .map((s) => `## ${s.heading}\n\n${s.body}`)
+        .join('\n\n');
+      const md = `# ${doc.title}\n\n_Last updated: ${doc.updated_at}_\n\n${body}\n`;
+      return res.end(md);
+    }
+
+    return fail(res, 400, 'unknown action', ['nudges', 'topics', 'inbox', 'joke-bank-raw']);
   }
 
   if (req.method === 'POST') {
@@ -776,20 +820,33 @@ const STALE_DAYS = 21;
 const MIN_MESSAGES = 4;
 const MAX_THREADS_PER_RUN = 100;
 
+// Fixed name, not fuzzy-matched like other topics — every joke lands in the
+// same bucket regardless of what it's about, instead of splitting across
+// whatever topic the embedding happens to land nearest.
+const JOKE_BANK_TOPIC = 'Joke Bank';
+
 const EXTRACT_PROMPT = `You read a conversation and pull out what would otherwise be lost.
 
-Return JSON: { "notes": [...], "facts": [...] }
+Return JSON: { "notes": [...], "facts": [...], "jokes": [...] }
 
 NOTES = side thoughts, tangents and asides that are NOT the main subject but have
-standalone value later: app ideas mentioned in passing, story beats, bits worth
-keeping, plans, names, things the user said they should do. Each note must stand
-on its own and be understandable months from now with no surrounding context.
-Do NOT capture the main topic itself, small talk, or things the user only asked
-a question about. Shape: {"content": "...", "confidence": 0.0-1.0}
+standalone value later: app ideas mentioned in passing, story beats, plans, names,
+things the user said they should do. Each note must stand on its own and be
+understandable months from now with no surrounding context. Do NOT capture the
+main topic itself, small talk, or things the user only asked a question about.
+Shape: {"content": "...", "confidence": 0.0-1.0}
 
 FACTS = durable things about the user: how they write, what they find funny,
 working preferences, ongoing projects, people in their life. Only things still
 true in six months. Shape: {"category": "style|preference|project|person", "content": "..."}
+
+JOKES = something the user said that IS a joke or bit — a punchline, a one-liner,
+a bit they're working out, or anything they call "a joke" or "a bit" while saying
+it, even mid-conversation and not set up as a formal joke. This is their own
+material to keep, word for word — the actual joke text, not your paraphrase of it.
+Do NOT include jokes the user is merely quoting, reacting to, or asking about
+(someone else's joke, a meme, "is this joke funny") — only their own material.
+Shape: {"text": "...", "confidence": 0.0-1.0}
 
 If nothing is worth keeping, return empty arrays. Empty is a correct answer.`;
 
@@ -809,11 +866,14 @@ async function handle_sweep(req, res) {
   if (error) return fail(res, 500, 'thread query failed', error.message);
 
   let notesFiled = 0;
+  let jokesFiled = 0;
   const errors = [];
 
   for (const thread of threads || []) {
     try {
-      notesFiled += await sweepThread(thread);
+      const result = await sweepThread(thread);
+      notesFiled += result.notes;
+      jokesFiled += result.jokes;
     } catch (e) {
       errors.push(`${thread.id}: ${e.message}`);
     }
@@ -821,9 +881,23 @@ async function handle_sweep(req, res) {
 
   const nudged = await raiseNudges();
 
+  // Keep the running joke-bank document in sync whenever new jokes landed —
+  // no manual "build document" step. Regeneration only pulls what's new
+  // since the last build, so this stays cheap even with nothing to do.
+  let jokeBankDoc = null;
+  if (jokesFiled > 0) {
+    try {
+      jokeBankDoc = await syncJokeBankDocument();
+    } catch (e) {
+      errors.push(`joke-bank-doc: ${e.message}`);
+    }
+  }
+
   return res.json({
     threadsScanned: threads?.length || 0,
     notesFiled,
+    jokesFiled,
+    jokeBankDoc,
     nudgesRaised: nudged,
     errors,
   });
@@ -848,7 +922,7 @@ async function sweepThread(thread) {
 
   if (!msgs || msgs.length < MIN_MESSAGES) {
     await markSwept();
-    return 0;
+    return { notes: 0, jokes: 0 };
   }
 
   const transcript = msgs
@@ -910,8 +984,85 @@ async function sweepThread(thread) {
     }
   }
 
+  const jokesFiled = await fileJokes(thread, Array.isArray(out?.jokes) ? out.jokes : []);
+
   await markSwept();
+  return { notes: filed, jokes: jokesFiled };
+}
+
+/** Every joke goes into the same fixed topic — never fuzzy-matched, never split. */
+async function fileJokes(thread, jokes) {
+  const candidates = jokes.filter((j) => String(j?.text || '').trim());
+  if (!candidates.length) return 0;
+
+  const topicId = await getOrCreateJokeBankTopic();
+  const vectors = await embed(candidates.map((c) => c.text));
+
+  let filed = 0;
+  for (let i = 0; i < candidates.length; i++) {
+    const joke = candidates[i];
+    const vec = vectors[i];
+    if (!vec) continue;
+
+    const { data: dupes } = await db.rpc('match_notes', {
+      p_topic_id: topicId,
+      p_embedding: vec,
+      p_threshold: NOTE_DUPE_THRESHOLD,
+      p_limit: 1,
+    });
+    if (dupes?.length) continue; // already have this one, word for word
+
+    const { error: insErr } = await db.from('notes').insert({
+      topic_id: topicId,
+      content: joke.text,
+      source_thread_id: thread.id,
+      embedding: vec,
+      confidence: typeof joke.confidence === 'number' ? joke.confidence : 0.5,
+    });
+    if (!insErr) filed++;
+  }
   return filed;
+}
+
+async function getOrCreateJokeBankTopic() {
+  const { data: existing } = await db
+    .from('topics')
+    .select('id')
+    .eq('name', JOKE_BANK_TOPIC)
+    .limit(1)
+    .maybeSingle();
+  if (existing?.id) return existing.id;
+
+  const vec = await embedOne(JOKE_BANK_TOPIC);
+  const { data, error } = await db
+    .from('topics')
+    .insert({ name: JOKE_BANK_TOPIC, embedding: vec, summary: "The user's own jokes and bits, kept word for word." })
+    .select('id')
+    .single();
+  if (error) throw error;
+  return data.id;
+}
+
+/**
+ * Regenerates the running joke-bank document from whatever is new. Finds
+ * the existing doc (there's only ever one) or creates it on first run.
+ */
+async function syncJokeBankDocument() {
+  const topicId = await getOrCreateJokeBankTopic();
+
+  const { data: existingDoc } = await db
+    .from('documents')
+    .select('id')
+    .eq('type', 'joke_bank')
+    .limit(1)
+    .maybeSingle();
+
+  return buildDocumentInternal({
+    type: 'joke_bank',
+    title: 'Joke Bank',
+    topicIds: [topicId],
+    documentId: existingDoc?.id || null,
+  });
 }
 
 async function createTopic(seed, vec) {
