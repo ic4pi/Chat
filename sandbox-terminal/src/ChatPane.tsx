@@ -339,9 +339,17 @@ function parseSegments(text: string): Segment[] {
   return out;
 }
 
+/** Raw network-level drop (bad wifi/cellular, brief DNS/connection blip) —
+ *  distinct from our own deliberate AbortController timeout. Worth one
+ *  quiet automatic retry before bothering the user with it. */
+function isTransientNetworkError(raw: string): boolean {
+  const lower = raw.toLowerCase();
+  return lower === 'load failed' || lower === 'failed to fetch' || lower.includes('networkerror');
+}
+
 function friendlyError(raw: string): string {
   const lower = raw.toLowerCase();
-  if (lower === 'load failed' || lower === 'failed to fetch' || lower.includes('networkerror')) {
+  if (isTransientNetworkError(raw)) {
     return 'Connection dropped before the model replied (often a timeout). Try again or a faster model.';
   }
   if (lower.includes('abort')) {
@@ -735,7 +743,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
     setLiveThoughts('');
     setError(null);
 
-    const callAgent = async (
+    const callAgentOnce = async (
       history: Array<{ role: string; content: string | unknown }>,
       systemPrompt: string,
       sid: string | null,
@@ -801,6 +809,31 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         });
       } finally {
         clearTimeout(timer);
+      }
+    };
+
+    // A raw network-level drop (bad wifi/cellular, a brief DNS/connection
+    // blip) never even reaches the model — it's not a "this model is too
+    // slow" situation, it's the request never landing. One quiet automatic
+    // retry absorbs a transient blip instead of dumping the user straight
+    // into a dead-end "try a faster model" message for something a faster
+    // model wouldn't have fixed either.
+    const callAgent = async (
+      history: Array<{ role: string; content: string | unknown }>,
+      systemPrompt: string,
+      sid: string | null,
+      prov: string,
+      mod: string,
+      key?: string,
+    ): Promise<AgentReply> => {
+      try {
+        return await callAgentOnce(history, systemPrompt, sid, prov, mod, key);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!isTransientNetworkError(msg)) throw err;
+        setLiveThoughts('');
+        await new Promise((r) => setTimeout(r, 1200));
+        return callAgentOnce(history, systemPrompt, sid, prov, mod, key);
       }
     };
 
