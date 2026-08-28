@@ -8,7 +8,9 @@
  * Default is SSE streaming so tokens reach the browser before Vercel's
  * function kill. Non-stream JSON remains available via stream:false.
  *
- * IMPORTANT: keep UPSTREAM_TIMEOUT_MS under vercel.json maxDuration (300).
+ * IMPORTANT: keep UPSTREAM_TIMEOUT_MS under vercel.json maxDuration (800,
+ * this route only — Fluid Compute on Pro allows up to 800s/invocation,
+ * well above the plain-Node 300s ceiling the rest of the API stays under).
  * A longer abort timer never fires — Vercel returns opaque 504.
  */
 
@@ -22,14 +24,16 @@ const MAX_SYSTEM_TOKENS = 70_000;
 const MAX_HISTORY_TOKENS = 25_000;
 
 /**
- * Headroom under vercel.json maxDuration 300. Reasoning models (Qwen,
- * GLM Flash Heretic, etc.) often spend 1–2+ minutes on thinking tokens
- * before any content — the old Hobby 55s default killed those mid-thought.
- * Override with AGENT_CHAT_TIMEOUT_MS if needed.
+ * Headroom under vercel.json maxDuration 800 (Fluid Compute, Pro plan).
+ * Reasoning models (Qwen, GLM Flash Heretic, etc.) routinely spend several
+ * minutes on thinking tokens before any content — a flat 280s cap was
+ * killing the upstream connection right as reasoning finished and writing
+ * was about to start, regardless of how much real, visible work was still
+ * happening. Override with AGENT_CHAT_TIMEOUT_MS if needed.
  */
 const UPSTREAM_TIMEOUT_MS = Math.max(
   10_000,
-  Math.min(Number(process.env.AGENT_CHAT_TIMEOUT_MS) || 280_000, 280_000),
+  Math.min(Number(process.env.AGENT_CHAT_TIMEOUT_MS) || 770_000, 770_000),
 );
 
 /**
