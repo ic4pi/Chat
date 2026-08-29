@@ -52,10 +52,20 @@ import {
   paidUnlocked,
   savePaidPassword,
 } from './providerPrefs.js';
+import {
+  loadCoderModels,
+  pickDefaultCoder,
+  flattenCoderModels,
+  coderKey,
+  parseCoderKey,
+  type ResolvedCoderBrand,
+} from './coderModels.js';
 import { ChunkModelPanel, type GenerateChunkResult } from './ChunkModelPanel.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
+
+const MODEL_SCOPE_KEY = 'workspace_model_scope_v1';
 
 const MOBILE_QUERY = '(max-width: 900px)';
 
@@ -310,6 +320,12 @@ export function App() {
     () => FALLBACK_MODELS[provider] || FALLBACK_MODELS.venice,
   );
   const [modelsLoading, setModelsLoading] = useState(false);
+  // The Workspace writes code, so it opens on the Coders package rather than a
+  // raw provider catalog. 'provider' is the escape hatch to the full list.
+  const [modelScope,   setModelScope]   = useState<'coders' | 'provider'>(
+    () => (localStorage.getItem(MODEL_SCOPE_KEY) === 'provider' ? 'provider' : 'coders'),
+  );
+  const [coderBrands,  setCoderBrands]  = useState<ResolvedCoderBrand[]>([]);
   const [keys,         setKeys]         = useState(() => loadProviderKeys());
   const [showKeys,     setShowKeys]     = useState(false);
   const [showRoles,    setShowRoles]    = useState(false);
@@ -370,6 +386,9 @@ export function App() {
       .then(list => {
         if (cancelled) return;
         setModels(list);
+        // Coders scope owns the bounce-off-a-locked-model logic below; leave
+        // the selection alone here or the two effects fight over it.
+        if (modelScope === 'coders') return;
         const unlocked = paidUnlocked();
         const current = list.find(m => m.id === model);
         const locked = current && current.free === false && !unlocked;
@@ -388,6 +407,38 @@ export function App() {
       .finally(() => { if (!cancelled) setModelsLoading(false); });
     return () => { cancelled = true; };
   }, [provider, activeApiKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The Coders package spans three providers, so it needs its own multi-catalog
+  // load rather than riding on the single-provider fetch above.
+  useEffect(() => {
+    if (modelScope !== 'coders') return;
+    let cancelled = false;
+    setModelsLoading(true);
+    loadCoderModels(keys)
+      .then(brands => {
+        if (cancelled) return;
+        setCoderBrands(brands);
+        const all = flattenCoderModels(brands);
+        const current = all.find(m => m.provider === provider && m.id === model);
+        const locked = current && !current.free && !paidUnlocked();
+        // Land on something runnable: keep the current pick if it is a coder
+        // the user can actually use, else take the package's default.
+        if (!current || locked) {
+          const pick = pickDefaultCoder(brands, paidUnlocked());
+          if (pick) {
+            setProvider(pick.provider);
+            setModel(pick.id);
+            setRoleModels(prev => {
+              const next = { ...prev, [role]: { provider: pick.provider, model: pick.id } };
+              saveRoleModels(next);
+              return next;
+            });
+          }
+        }
+      })
+      .finally(() => { if (!cancelled) setModelsLoading(false); });
+    return () => { cancelled = true; };
+  }, [modelScope, keys]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-open last GitHub repo + restore pending file drafts once on mount.
   useEffect(() => {
@@ -489,6 +540,24 @@ export function App() {
       saveRoleModels(next);
       return next;
     });
+  };
+
+  /** Coders scope: one option can move the provider too, since the package spans them. */
+  const handleCoderChange = (key: string) => {
+    const { provider: p, id } = parseCoderKey(key);
+    if (!p || !id) return;
+    setProvider(p);
+    setModel(id);
+    setRoleModels(prev => {
+      const next = { ...prev, [role]: { provider: p, model: id } };
+      saveRoleModels(next);
+      return next;
+    });
+  };
+
+  const handleScopeChange = (scope: 'coders' | 'provider') => {
+    setModelScope(scope);
+    try { localStorage.setItem(MODEL_SCOPE_KEY, scope); } catch { /* ignore */ }
   };
 
   const handleRoleChange = (r: RoleId) => {
@@ -860,30 +929,70 @@ export function App() {
             borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11, cursor: 'pointer' }}>
           {ROLE_LIST.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
         </select>
-        <select value={provider} onChange={e => handleProviderChange(e.target.value)}
+        <select value={modelScope} onChange={e => handleScopeChange(e.target.value as 'coders' | 'provider')}
+          title="Coders shows the coding models across every provider; All models shows one provider's full catalog"
           style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
             borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11, cursor: 'pointer' }}>
-          {PROVIDER_LIST.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+          <option value="coders">Coders</option>
+          <option value="provider">All models</option>
         </select>
-        <select value={model} onChange={e => handleModelChange(e.target.value)}
-          disabled={modelsLoading}
-          style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
-            borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11,
-            cursor: 'pointer', maxWidth: 220, flex: 1, minWidth: 0 }}>
-          {models.map(m => {
-            const locked = m.free === false && !paidUnlocked();
-            return (
-              <option key={m.id} value={m.id} disabled={locked}>
-                {m.name}{m.free ? ' · free' : ' · paid'}{locked ? ' 🔒' : ''}
-              </option>
-            );
-          })}
-        </select>
+        {modelScope === 'provider' && (
+          <select value={provider} onChange={e => handleProviderChange(e.target.value)}
+            style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+              borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11, cursor: 'pointer' }}>
+            {PROVIDER_LIST.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+          </select>
+        )}
+        {modelScope === 'coders' ? (
+          <select value={coderKey(provider, model)} onChange={e => handleCoderChange(e.target.value)}
+            disabled={modelsLoading}
+            title="Coding models — free ones run without a password, paid ones need the unlock"
+            style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+              borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11,
+              cursor: 'pointer', maxWidth: 260, flex: 1, minWidth: 0 }}>
+            {coderBrands.map(brand => (
+              <optgroup key={brand.id} label={brand.paidOnly ? `${brand.label} · unlock to use` : brand.label}>
+                {brand.models.map(m => {
+                  const locked = !m.free && !paidUnlocked();
+                  return (
+                    <option key={coderKey(m.provider, m.id)} value={coderKey(m.provider, m.id)} disabled={locked}>
+                      {m.name}{m.free ? ` · free ${m.limit}` : ' · paid'}{locked ? ' 🔒' : ''}
+                    </option>
+                  );
+                })}
+              </optgroup>
+            ))}
+            {/* A handoff from chat can arrive on a non-coder model; keep it
+                selectable so the dropdown never shows a blank value. */}
+            {!flattenCoderModels(coderBrands).some(m => m.provider === provider && m.id === model) && (
+              <optgroup label="From chat">
+                <option value={coderKey(provider, model)}>{model}</option>
+              </optgroup>
+            )}
+          </select>
+        ) : (
+          <select value={model} onChange={e => handleModelChange(e.target.value)}
+            disabled={modelsLoading}
+            style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+              borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11,
+              cursor: 'pointer', maxWidth: 220, flex: 1, minWidth: 0 }}>
+            {models.map(m => {
+              const locked = m.free === false && !paidUnlocked();
+              return (
+                <option key={m.id} value={m.id} disabled={locked}>
+                  {m.name}{m.free ? ' · free' : ' · paid'}{locked ? ' 🔒' : ''}
+                </option>
+              );
+            })}
+          </select>
+        )}
         <button type="button"
           onClick={() => {
             if (paidUnlocked()) {
               savePaidPassword('');
+              // Both lists carry 🔒 state, so both need the nudge.
               setModels(ms => [...ms]); // re-render disabled state
+              setCoderBrands(bs => [...bs]);
               return;
             }
             const pw = window.prompt('Paid models password');
@@ -898,6 +1007,7 @@ export function App() {
                 if (!res.ok) throw new Error(data.error || 'Wrong password');
                 savePaidPassword(pw);
                 setModels(ms => [...ms]);
+                setCoderBrands(bs => [...bs]);
               })
               .catch((err: Error) => window.alert(err.message || 'Unlock failed'));
           }}
