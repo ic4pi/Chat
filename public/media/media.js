@@ -1,29 +1,42 @@
+// `best: true` models are the curated default set shown until "Show all
+// models" is turned on. Order matters — the first best-flagged entry per
+// kind becomes the pre-selected option, so lead with a plain text-to-X model
+// (not one that requires a reference image) for a friction-free default.
 const IMAGE_MODELS = [
-  { value: 'venice:qwen-edit', label: 'Venice · Edit / Image→Image (uncensored)', kind: 'image', provider: 'venice', model: 'qwen-edit', usesRef: true },
-  { value: 'venice:z-image-turbo', label: 'Venice · Z-Image Turbo (uncensored)', kind: 'image', provider: 'venice', model: 'z-image-turbo', usesRef: false },
-  { value: 'venice:lustify-sdxl', label: 'Venice · Lustify SDXL (uncensored)', kind: 'image', provider: 'venice', model: 'lustify-sdxl', usesRef: false },
-  { value: 'venice:lustify-v8', label: 'Venice · Lustify v8 (uncensored)', kind: 'image', provider: 'venice', model: 'lustify-v8', usesRef: false },
-  { value: 'venice:wai-Illustrious', label: 'Venice · Anime WAI (uncensored)', kind: 'image', provider: 'venice', model: 'wai-Illustrious', usesRef: false },
-  { value: 'venice:chroma', label: 'Venice · Chroma (uncensored)', kind: 'image', provider: 'venice', model: 'chroma', usesRef: false },
-  { value: 'venice:venice-sd35', label: 'Venice · SD3.5 (uncensored)', kind: 'image', provider: 'venice', model: 'venice-sd35', usesRef: false },
-  { value: 'venice:flux-2-pro', label: 'Venice · Flux 2 Pro (uncensored)', kind: 'image', provider: 'venice', model: 'flux-2-pro', usesRef: false },
-  { value: 'venice:qwen-image', label: 'Venice · Qwen Image (uncensored)', kind: 'image', provider: 'venice', model: 'qwen-image', usesRef: false },
-  { value: 'cloudflare:flux-schnell', label: 'Cloudflare · FLUX.1 Schnell (filtered)', kind: 'image', provider: 'cloudflare', model: 'flux-schnell', usesRef: false },
-  { value: 'cloudflare:sdxl-lightning', label: 'Cloudflare · SDXL Lightning (filtered)', kind: 'image', provider: 'cloudflare', model: 'sdxl-lightning', usesRef: false },
-  { value: 'cloudflare:sdxl', label: 'Cloudflare · SDXL Base (filtered)', kind: 'image', provider: 'cloudflare', model: 'sdxl', usesRef: false },
-  { value: 'nvidia:flux-schnell', label: 'NVIDIA · FLUX.1 Schnell (filtered)', kind: 'image', provider: 'nvidia', model: 'flux-schnell', usesRef: false },
-  { value: 'nvidia:sdxl', label: 'NVIDIA · SDXL (filtered)', kind: 'image', provider: 'nvidia', model: 'sdxl', usesRef: false },
-  { value: 'nvidia:qwen-image', label: 'NVIDIA · Qwen Image (filtered)', kind: 'image', provider: 'nvidia', model: 'qwen-image', usesRef: false },
+  { value: 'venice:z-image-turbo', label: 'Venice · Z-Image Turbo (uncensored)', kind: 'image', provider: 'venice', model: 'z-image-turbo', usesRef: false, best: true, note: 'Fast, high quality, uncensored — the default for most prompts.' },
+  { value: 'venice:flux-2-pro', label: 'Venice · Flux 2 Pro (uncensored)', kind: 'image', provider: 'venice', model: 'flux-2-pro', usesRef: false, best: true, note: 'Best overall image quality (uncensored); slower than Z-Image Turbo.' },
+  { value: 'venice:qwen-edit', label: 'Venice · Edit / Image→Image (uncensored)', kind: 'image', provider: 'venice', model: 'qwen-edit', usesRef: true, best: true, note: 'Required for editing an uploaded reference image.' },
+  { value: 'cloudflare:flux-schnell', label: 'Cloudflare · FLUX.1 Schnell (filtered)', kind: 'image', provider: 'cloudflare', model: 'flux-schnell', usesRef: false, best: true, note: 'Free-tier fallback if you don’t have a Venice key (safety-filtered).' },
+  { value: 'venice:lustify-sdxl', label: 'Venice · Lustify SDXL (uncensored)', kind: 'image', provider: 'venice', model: 'lustify-sdxl', usesRef: false, note: 'NSFW-leaning fine-tune.' },
+  { value: 'venice:lustify-v8', label: 'Venice · Lustify v8 (uncensored)', kind: 'image', provider: 'venice', model: 'lustify-v8', usesRef: false, note: 'Newer Lustify fine-tune.' },
+  { value: 'venice:wai-Illustrious', label: 'Venice · Anime WAI (uncensored)', kind: 'image', provider: 'venice', model: 'wai-Illustrious', usesRef: false, note: 'Anime / illustration style.' },
+  { value: 'venice:chroma', label: 'Venice · Chroma (uncensored)', kind: 'image', provider: 'venice', model: 'chroma', usesRef: false, note: 'Stylized, high-contrast look.' },
+  { value: 'venice:venice-sd35', label: 'Venice · SD3.5 (uncensored)', kind: 'image', provider: 'venice', model: 'venice-sd35', usesRef: false, note: 'Stable Diffusion 3.5.' },
+  { value: 'venice:qwen-image', label: 'Venice · Qwen Image (uncensored)', kind: 'image', provider: 'venice', model: 'qwen-image', usesRef: false, note: 'Qwen’s text-to-image model.' },
+  { value: 'cloudflare:sdxl-lightning', label: 'Cloudflare · SDXL Lightning (filtered)', kind: 'image', provider: 'cloudflare', model: 'sdxl-lightning', usesRef: false, note: '4-step fast SDXL, safety-filtered.' },
+  { value: 'cloudflare:sdxl', label: 'Cloudflare · SDXL Base (filtered)', kind: 'image', provider: 'cloudflare', model: 'sdxl', usesRef: false, note: 'Standard SDXL, safety-filtered.' },
+  { value: 'nvidia:flux-schnell', label: 'NVIDIA · FLUX.1 Schnell (filtered)', kind: 'image', provider: 'nvidia', model: 'flux-schnell', usesRef: false, note: 'Hosted FLUX Schnell, safety-filtered.' },
+  { value: 'nvidia:sdxl', label: 'NVIDIA · SDXL (filtered)', kind: 'image', provider: 'nvidia', model: 'sdxl', usesRef: false, note: 'Hosted SDXL, safety-filtered.' },
+  { value: 'nvidia:qwen-image', label: 'NVIDIA · Qwen Image (filtered)', kind: 'image', provider: 'nvidia', model: 'qwen-image', usesRef: false, note: 'Hosted Qwen Image, safety-filtered.' },
 ];
 
 const VIDEO_MODELS = [
-  { value: 'fal:wan2.2-t2v', label: 'Wan 2.2 · Text → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-t2v', usesRef: false },
-  { value: 'fal:wan2.2-i2v', label: 'Wan 2.2 · Image → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-i2v', usesRef: true },
-  { value: 'nvidia:wan2.2-t2v', label: 'NVIDIA · Wan 2.2 · Text → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-t2v', usesRef: false },
-  { value: 'nvidia:wan2.2-i2v', label: 'NVIDIA · Wan 2.2 · Image → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-i2v', usesRef: true },
-  { value: 'cloudflare:seedance-mini', label: 'Cloudflare · Seedance 2.0 Mini', kind: 'video', provider: 'cloudflare', model: 'seedance-mini', usesRef: false },
-  { value: 'cloudflare:seedance-fast', label: 'Cloudflare · Seedance 2.0 Fast', kind: 'video', provider: 'cloudflare', model: 'seedance-fast', usesRef: false },
+  { value: 'fal:wan2.2-t2v', label: 'Wan 2.2 · Text → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-t2v', usesRef: false, best: true, note: 'Best default for text-to-video.' },
+  { value: 'fal:wan2.2-i2v', label: 'Wan 2.2 · Image → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-i2v', usesRef: true, best: true, note: 'Required for animating an uploaded image.' },
+  { value: 'cloudflare:seedance-fast', label: 'Cloudflare · Seedance 2.0 Fast', kind: 'video', provider: 'cloudflare', model: 'seedance-fast', usesRef: false, best: true, note: 'Fast alternative if you don’t have a fal.ai key.' },
+  { value: 'cloudflare:seedance-mini', label: 'Cloudflare · Seedance 2.0 Mini', kind: 'video', provider: 'cloudflare', model: 'seedance-mini', usesRef: false, note: 'Smaller/cheaper Seedance variant.' },
+  { value: 'nvidia:wan2.2-t2v', label: 'NVIDIA · Wan 2.2 · Text → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-t2v', usesRef: false, note: 'Needs a self-hosted Wan NIM (NVIDIA_MEDIA_BASE_URL).' },
+  { value: 'nvidia:wan2.2-i2v', label: 'NVIDIA · Wan 2.2 · Image → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-i2v', usesRef: true, note: 'Needs a self-hosted Wan NIM (NVIDIA_MEDIA_BASE_URL).' },
 ];
+
+const MEDIA_SHOW_ALL_STORAGE = 'uncensored_media_show_all_v1';
+function loadShowAllModels() {
+  try { return localStorage.getItem(MEDIA_SHOW_ALL_STORAGE) === '1'; } catch { return false; }
+}
+function saveShowAllModels(v) {
+  try { localStorage.setItem(MEDIA_SHOW_ALL_STORAGE, v ? '1' : '0'); } catch { /* ignore */ }
+}
+let showAllModels = loadShowAllModels();
 
 const IMAGE_SIZES = [
   { value: '1024x1024', label: '1024 × 1024' },
@@ -43,6 +56,8 @@ const REF_MAX_BYTES = 1_200_000;
 const els = {
   tabs: [...document.querySelectorAll('.media-tab')],
   model: document.getElementById('mediaModel'),
+  modelNote: document.getElementById('mediaModelNote'),
+  showAll: document.getElementById('mediaShowAll'),
   prompt: document.getElementById('mediaPrompt'),
   negative: document.getElementById('mediaNegative'),
   negativeWrap: document.getElementById('negativeWrap'),
@@ -60,12 +75,21 @@ const els = {
 let kind = 'image';
 let refData = null; // { base64, mimeType }
 
-function currentModels() {
+function allModelsForKind() {
   return kind === 'video' ? VIDEO_MODELS : IMAGE_MODELS;
+}
+
+/** The curated set unless "Show all models" is on. */
+function currentModels() {
+  const all = allModelsForKind();
+  if (showAllModels) return all;
+  const best = all.filter((m) => m.best);
+  return best.length ? best : all;
 }
 
 function fillModels() {
   const list = currentModels();
+  const prevValue = els.model.value;
   els.model.innerHTML = '';
   for (const m of list) {
     const opt = document.createElement('option');
@@ -73,6 +97,15 @@ function fillModels() {
     opt.textContent = m.label;
     els.model.appendChild(opt);
   }
+  // Keep the current pick if it's still in the (possibly narrowed) list.
+  if (prevValue && list.some((m) => m.value === prevValue)) els.model.value = prevValue;
+  updateModelNote();
+}
+
+function updateModelNote() {
+  if (!els.modelNote) return;
+  const spec = selectedSpec();
+  els.modelNote.textContent = spec?.note || '';
 }
 
 function fillSizes() {
@@ -98,6 +131,7 @@ function modelUsesRef(spec) {
 }
 
 function syncFields() {
+  updateModelNote();
   const spec = selectedSpec();
   // Always show negative prompt for images — never hide controls based on provider.
   els.negativeWrap.style.display = kind === 'image' ? '' : 'none';
@@ -178,6 +212,16 @@ els.tabs.forEach((tab) => {
 });
 
 els.model.addEventListener('change', syncFields);
+
+if (els.showAll) {
+  els.showAll.checked = showAllModels;
+  els.showAll.addEventListener('change', () => {
+    showAllModels = !!els.showAll.checked;
+    saveShowAllModels(showAllModels);
+    fillModels();
+    syncFields();
+  });
+}
 
 els.ref.addEventListener('change', async () => {
   const file = els.ref.files?.[0];
