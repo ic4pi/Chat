@@ -284,6 +284,7 @@ function freshState() {
     artifactsActiveTab: 'artifacts',
     artifactsHalfScreen: false,
     lastSeenAt: 0,
+    projects: [],
   };
 }
 
@@ -324,6 +325,7 @@ function migrate(s) {
   delete merged.personas;
   delete merged.masterPrompt;
   merged.version = 3;
+  merged.projects = Array.isArray(s.projects) ? s.projects : [];
   merged.chats = Array.isArray(s.chats) ? s.chats : [];
   merged.chats = merged.chats.map((c) => ({
     id: c.id,
@@ -343,6 +345,12 @@ function migrate(s) {
     artifacts: Array.isArray(c.artifacts) ? c.artifacts : [],
     createdAt: c.createdAt || Date.now(),
     updatedAt: c.updatedAt || Date.now(),
+    projectId: c.projectId || null,
+    // Hub sync cursor — must survive reload or every load re-appends the
+    // whole history (register is idempotent server-side, but append has no
+    // dedup, so the client's own cursor is what prevents duplicate inserts).
+    hubThreadId: c.hubThreadId || null,
+    hubSyncedCount: typeof c.hubSyncedCount === 'number' ? c.hubSyncedCount : 0,
   }));
   // One-time: older builds marked mobile drawer auto-close as an explicit
   // preference, which left desktop with chats stuck collapsed (and, before
@@ -408,6 +416,9 @@ function createChat(opts = {}) {
     artifacts: [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    projectId: opts.projectId || null,
+    hubThreadId: null,
+    hubSyncedCount: 0,
   };
   state.chats.unshift(chat);
   state.activeChatId = chat.id;
@@ -459,6 +470,7 @@ const els = {
   backdrop: $('backdrop'),
   chatList: $('chatList'),
   newChatBtn: $('newChatBtn'),
+  newProjectBtn: $('newProjectBtn'),
   newChatTopBtn: $('newChatTopBtn'),
   toggleChats: $('toggleChats'),
   toggleArtifacts: $('toggleArtifacts'),
@@ -835,80 +847,211 @@ async function renderSummary(force = false) {
 
 els.summaryRefreshBtn?.addEventListener('click', () => void renderSummary(true));
 
-function renderChatList() {
-  els.chatList.innerHTML = '';
-  for (const c of state.chats) {
-    const li = document.createElement('li');
-    if (c.id === state.activeChatId) li.classList.add('active');
+function buildChatListItem(c) {
+  const li = document.createElement('li');
+  if (c.id === state.activeChatId) li.classList.add('active');
 
-    const nameEl = document.createElement('span');
-    nameEl.className = 'name';
-    nameEl.textContent = c.name || 'Untitled';
-    nameEl.title = c.name || 'Untitled';
-    nameEl.addEventListener('click', () => {
-      abortCompareRun(); // Compare is scratch space scoped to one chat — don't leak into the next
-      state.activeChatId = c.id;
-      state.activeProvider = c.provider;
-      state.activeModel = c.model;
-      state.activePersonaId = c.personaId;
-      // Auto-close the drawer on mobile only — do NOT mark explicit, or a
-      // later desktop session keeps chats collapsed forever via localStorage.
-      if (isMobileViewport()) state.chatsCollapsed = true;
-      saveState();
-      renderAll();
-    });
+  const nameEl = document.createElement('span');
+  nameEl.className = 'name';
+  nameEl.textContent = c.name || 'Untitled';
+  nameEl.title = c.name || 'Untitled';
+  nameEl.addEventListener('click', () => {
+    abortCompareRun(); // Compare is scratch space scoped to one chat — don't leak into the next
+    state.activeChatId = c.id;
+    state.activeProvider = c.provider;
+    state.activeModel = c.model;
+    state.activePersonaId = c.personaId;
+    // Auto-close the drawer on mobile only — do NOT mark explicit, or a
+    // later desktop session keeps chats collapsed forever via localStorage.
+    if (isMobileViewport()) state.chatsCollapsed = true;
+    saveState();
+    renderAll();
+  });
 
-    if (c.kind === 'group') {
-      const tag = document.createElement('span');
-      tag.className = 'group-tag';
-      tag.textContent = GROUP_MODE_LABELS[c.groupMode] || 'Group';
-      li.appendChild(tag);
-    }
+  if (c.kind === 'group') {
+    const tag = document.createElement('span');
+    tag.className = 'group-tag';
+    tag.textContent = GROUP_MODE_LABELS[c.groupMode] || 'Group';
+    li.appendChild(tag);
+  }
 
-    const save = document.createElement('button');
-    save.className = 'chat-action save-chat';
-    save.textContent = '⤓';
-    save.title = 'Save chat to file (JSON)';
-    save.addEventListener('click', (e) => {
+  const save = document.createElement('button');
+  save.className = 'chat-action save-chat';
+  save.textContent = '⤓';
+  save.title = 'Save chat to file (JSON)';
+  save.addEventListener('click', (e) => {
+    e.stopPropagation();
+    downloadChat(c);
+  });
+
+  if (c.kind === 'group') {
+    const mp3 = document.createElement('button');
+    mp3.className = 'chat-action save-mp3';
+    mp3.textContent = '♫';
+    mp3.title = 'Save group session as MP3';
+    mp3.addEventListener('click', (e) => {
       e.stopPropagation();
-      downloadChat(c);
+      void downloadGroupSessionMp3(c, mp3, { useKeywords: true });
     });
+    li.appendChild(mp3);
+  }
 
-    if (c.kind === 'group') {
-      const mp3 = document.createElement('button');
-      mp3.className = 'chat-action save-mp3';
-      mp3.textContent = '♫';
-      mp3.title = 'Save group session as MP3';
-      mp3.addEventListener('click', (e) => {
-        e.stopPropagation();
-        void downloadGroupSessionMp3(c, mp3, { useKeywords: true });
-      });
-      li.appendChild(mp3);
+  const move = document.createElement('button');
+  move.className = 'chat-action move-chat';
+  move.textContent = '📁';
+  move.title = 'Move to project';
+  move.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openMoveToProjectMenu(c, move);
+  });
+
+  const del = document.createElement('button');
+  del.className = 'chat-action delete-chat';
+  del.textContent = '×';
+  del.title = 'Delete chat';
+  del.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (confirm(`Delete "${c.name}"?`)) {
+      deleteChat(c.id);
+      renderAll();
     }
+  });
 
+  li.appendChild(nameEl);
+  li.appendChild(move);
+  li.appendChild(save);
+  li.appendChild(del);
+  return li;
+}
+
+/** One collapsible cluster of chats — a real project, or the "Ungrouped" bucket (project === null). */
+function buildProjectGroup(project, chats) {
+  const wrap = document.createElement('li');
+  wrap.className = 'project-group';
+
+  const header = document.createElement('div');
+  header.className = 'project-group-header';
+
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'project-group-toggle';
+  toggle.dataset.projectToggle = project ? project.id : '__ungrouped__';
+  const caret = document.createElement('span');
+  caret.className = 'project-group-caret';
+  caret.textContent = '▾';
+  const title = document.createElement('span');
+  title.className = 'project-group-title';
+  title.textContent = project ? project.name : 'Ungrouped';
+  toggle.append(caret, title);
+  header.appendChild(toggle);
+
+  if (project) {
     const del = document.createElement('button');
-    del.className = 'chat-action delete-chat';
+    del.type = 'button';
+    del.className = 'project-group-delete';
     del.textContent = '×';
-    del.title = 'Delete chat';
+    del.title = 'Delete project (chats stay, just ungrouped)';
     del.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (confirm(`Delete "${c.name}"?`)) {
-        deleteChat(c.id);
-        renderAll();
-      }
+      if (!confirm(`Delete project "${project.name}"? Chats inside it are kept, just ungrouped.`)) return;
+      state.projects = state.projects.filter((x) => x.id !== project.id);
+      for (const c of state.chats) if (c.projectId === project.id) c.projectId = null;
+      saveState();
+      renderChatList();
     });
-
-    li.appendChild(nameEl);
-    li.appendChild(save);
-    li.appendChild(del);
-    els.chatList.appendChild(li);
+    header.appendChild(del);
   }
+
+  wrap.appendChild(header);
+
+  const body = document.createElement('ul');
+  body.className = 'project-group-body';
+  for (const c of chats) body.appendChild(buildChatListItem(c));
+  wrap.appendChild(body);
+
+  return wrap;
+}
+
+function renderChatList() {
+  els.chatList.innerHTML = '';
+
+  if (state.projects.length === 0) {
+    // No projects exist yet — identical flat list to before this feature.
+    for (const c of state.chats) els.chatList.appendChild(buildChatListItem(c));
+  } else {
+    for (const p of state.projects) {
+      const chats = state.chats.filter((c) => c.projectId === p.id);
+      els.chatList.appendChild(buildProjectGroup(p, chats));
+    }
+    const ungrouped = state.chats.filter((c) => !c.projectId);
+    if (ungrouped.length) els.chatList.appendChild(buildProjectGroup(null, ungrouped));
+  }
+
   if (state.chats.length === 0) {
     const hint = document.createElement('li');
     hint.className = 'chat-hint';
     hint.textContent = 'Chats you start will appear here. They\'re saved to this browser automatically.';
     els.chatList.appendChild(hint);
   }
+}
+
+function closeProjectPickerMenu() {
+  document.getElementById('projectPickerMenu')?.remove();
+  document.removeEventListener('click', closeProjectPickerMenuOnOutsideClick, true);
+}
+function closeProjectPickerMenuOnOutsideClick(e) {
+  const menu = document.getElementById('projectPickerMenu');
+  if (menu && !menu.contains(e.target)) closeProjectPickerMenu();
+}
+
+function createProject(name) {
+  const project = { id: uid(), name, createdAt: Date.now() };
+  state.projects.push(project);
+  return project;
+}
+
+function openMoveToProjectMenu(chat, anchorBtn) {
+  closeProjectPickerMenu();
+  const menu = document.createElement('div');
+  menu.id = 'projectPickerMenu';
+  menu.className = 'project-picker-menu';
+
+  const addItem = (label, onClick) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'project-picker-item';
+    item.textContent = label;
+    item.addEventListener('click', () => {
+      onClick();
+      saveState();
+      renderChatList();
+      closeProjectPickerMenu();
+    });
+    menu.appendChild(item);
+  };
+
+  for (const p of state.projects) {
+    addItem(p.id === chat.projectId ? `✓ ${p.name}` : p.name, () => { chat.projectId = p.id; });
+  }
+  if (chat.projectId) {
+    addItem('Remove from project', () => { chat.projectId = null; });
+  }
+  addItem('+ New project…', () => {
+    const name = (prompt('New project name:') || '').trim();
+    if (!name) return;
+    chat.projectId = createProject(name).id;
+  });
+
+  document.body.appendChild(menu);
+  const rect = anchorBtn.getBoundingClientRect();
+  menu.style.top = `${rect.bottom + 4}px`;
+  menu.style.left = `${Math.max(8, rect.right - 180)}px`;
+  requestAnimationFrame(() => {
+    const w = menu.offsetWidth || 180;
+    menu.style.left = `${Math.max(8, Math.min(rect.right - w, window.innerWidth - w - 8))}px`;
+  });
+
+  setTimeout(() => document.addEventListener('click', closeProjectPickerMenuOnOutsideClick, true), 0);
 }
 
 function downloadChat(chat) {
@@ -1952,6 +2095,18 @@ els.chatsSidebar?.addEventListener('click', (e) => {
   if (opening && section.dataset.accordion === 'llm') void renderSidebarModelList();
 });
 
+// Per-project collapsible clusters inside the Chats list — separate class
+// namespace from .side-accordion (deliberately not reused: a descendant
+// selector like ".side-accordion.open .side-accordion-body" would leak
+// through a closed nested section since it doesn't check for the *nearest*
+// open ancestor), same delegated-click idea though.
+els.chatsSidebar?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-project-toggle]');
+  if (!btn) return;
+  const group = btn.closest('.project-group');
+  if (group) group.classList.toggle('collapsed');
+});
+
 async function openModelPicker() {
   if (!els.modelPickerModal) return;
   initModelFilterChips();
@@ -2936,6 +3091,9 @@ async function sendMessage(text) {
     activeChatUserStopped = false;
     setTypingActive(false);
     els.input.focus();
+    // Best-effort background sync so the 3-day sweep can see this chat too —
+    // never blocks or errors the UI (syncChat swallows its own failures).
+    void window.hub?.syncChat?.(chat);
   }
 }
 
@@ -3354,6 +3512,7 @@ async function sendGroupMessage(text) {
     activeChatUserStopped = false;
     setTypingActive(false);
     els.input?.focus();
+    void window.hub?.syncChat?.(chat);
   }
 }
 
@@ -3491,6 +3650,14 @@ function handleNewChat() {
 }
 els.newChatBtn.addEventListener('click', handleNewChat);
 els.newChatTopBtn.addEventListener('click', handleNewChat);
+
+els.newProjectBtn?.addEventListener('click', () => {
+  const name = (prompt('New project name:') || '').trim();
+  if (!name) return;
+  createProject(name);
+  saveState();
+  renderChatList();
+});
 
 els.toggleChats.addEventListener('click', () => {
   state.chatsCollapsed = !effectiveChatsCollapsed();
@@ -5353,8 +5520,46 @@ document.querySelectorAll('[data-handoff]').forEach((btn) => {
  * `onDismissed()` fires after a successful server-side dismiss (both
  * callers use it to refresh their own badge/tab state).
  */
+/** True when every locally-findable chat named in a group-suggestion nudge
+ *  already shares one project — nothing left to suggest, don't show it. */
+function groupSuggestionAlreadySatisfied(n) {
+  const localIds = n.payload?.localIds || [];
+  if (localIds.length < 2) return false;
+  const chats = localIds.map((id) => state.chats.find((c) => c.id === id)).filter(Boolean);
+  if (chats.length < 2) return false; // can't confirm locally — show it, let the user decide
+  const firstProject = chats[0].projectId;
+  return !!firstProject && chats.every((c) => c.projectId === firstProject);
+}
+
+/** Applies a group-suggestion nudge: create/reuse the project, assign matching chats. */
+function acceptGroupSuggestion(n) {
+  const topicName = n.payload?.topicName || 'Project';
+  const localIds = new Set(n.payload?.localIds || []);
+  if (!localIds.size) return;
+
+  let project = state.projects.find((p) => p.name === topicName);
+  if (!project) project = createProject(topicName);
+
+  let changed = false;
+  for (const c of state.chats) {
+    if (localIds.has(c.id) && c.projectId !== project.id) {
+      c.projectId = project.id;
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveState();
+    renderChatList();
+  }
+}
+
 function renderNudgeRows(container, nudges, onDismissed) {
   for (const n of nudges) {
+    if (n.nudge_type === 'group_suggestion' && groupSuggestionAlreadySatisfied(n)) {
+      void window.hub.dismissNudge(n.id); // already grouped — nothing left to suggest
+      continue;
+    }
+
     const row = document.createElement('div');
     row.className = 'nudge-row';
     const txt = document.createElement('span');
@@ -5364,11 +5569,24 @@ function renderNudgeRows(container, nudges, onDismissed) {
     x.className = 'nudge-dismiss';
     x.title = 'Dismiss this reminder';
     x.textContent = '×';
-    x.addEventListener('click', async () => {
+    x.addEventListener('click', async (e) => {
+      e.stopPropagation();
       await window.hub.dismissNudge(n.id);
       row.remove();
       onDismissed?.();
     });
+
+    if (n.nudge_type === 'group_suggestion' && n.payload?.localIds?.length) {
+      row.classList.add('nudge-row-actionable');
+      row.title = 'Click to group these chats into a project';
+      row.addEventListener('click', async () => {
+        acceptGroupSuggestion(n);
+        await window.hub.dismissNudge(n.id);
+        row.remove();
+        onDismissed?.();
+      });
+    }
+
     row.append(txt, x);
     container.appendChild(row);
   }

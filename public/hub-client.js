@@ -1,10 +1,13 @@
 /**
  * Hub client — the bridge between the UI and the context hub.
  *
- * Chats live in localStorage, so nothing exists server-side for a thought to
- * be promoted *from*. Threads are therefore registered lazily: the first time
- * a chat hands something off, it is created in the hub and the returned id is
- * cached on the local chat object. Nothing is registered until it needs to be.
+ * Chats live in localStorage as the source of truth; the hub is a synced
+ * copy, not the other way around. `syncChat()` registers a chat's thread on
+ * first send and keeps appending new messages every turn after that, so the
+ * 3-day sweep (jokes, notes, project-grouping suggestions) can see ordinary
+ * chatting, not just chats explicitly promoted to Workspace/Media/a group
+ * discussion — that handoff path (`ensureThread`/`promote`) is unchanged and
+ * still registers lazily for those other thread types.
  *
  * Every call degrades quietly. If the hub is not configured the buttons stay
  * hidden and the app behaves exactly as it did before.
@@ -57,6 +60,48 @@ export async function ensureThread(chat) {
 
   chat.hubThreadId = threadId;
   return threadId;
+}
+
+/**
+ * Continuous background sync: registers the chat if it hasn't been (now
+ * idempotent server-side, so this is safe to call every turn) and appends
+ * only the messages sent since the last successful sync — never the whole
+ * history. Best-effort: failures are swallowed so a sync hiccup never
+ * blocks or errors the chat UI, same as promote()/ensureThread() today.
+ */
+export async function syncChat(chat) {
+  if (!chat || chat._hubSyncBusy) return;
+  chat._hubSyncBusy = true;
+  try {
+    if (!chat.hubThreadId) {
+      chat.hubThreadId = await ensureThread(chat);
+      // ensureThread's own register call already backfilled everything up
+      // to this point — nothing left to append for this call.
+      chat.hubSyncedCount = (chat.messages || []).length;
+      return;
+    }
+
+    const from = chat.hubSyncedCount || 0;
+    const pending = (chat.messages || []).slice(from);
+    if (!pending.length) return;
+
+    await hubFetch('/api/hub/state?route=state&action=append', {
+      method: 'POST',
+      body: JSON.stringify({
+        threadId: chat.hubThreadId,
+        messages: pending.map((m) => ({
+          role: m.role,
+          content: typeof m.content === 'string' ? m.content : String(m.content ?? ''),
+        })),
+      }),
+    });
+    chat.hubSyncedCount = (chat.messages || []).length;
+  } catch {
+    // Best-effort — next successful sync picks up from wherever hubSyncedCount
+    // was last left, so nothing is lost, just delayed.
+  } finally {
+    chat._hubSyncBusy = false;
+  }
 }
 
 /** Chat message -> workspace, media, or a group discussion. */

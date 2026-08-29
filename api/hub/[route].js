@@ -5,7 +5,7 @@
  *   /api/hub/moderate
  *   /api/hub/document
  *   /api/hub/media
- *   /api/hub/state?action=nudges|topics|inbox|dismiss|register|turn
+ *   /api/hub/state?action=nudges|topics|inbox|dismiss|register|append|turn
  *   /api/hub/sweep          (cron, every 3 days)
  *
  * These were six separate files. Each serverless file counts against the
@@ -641,12 +641,16 @@ async function handle_media(req, res) {
  *   GET  /api/hub/state?action=topics     -> all topics with note counts
  *   GET  /api/hub/state?action=inbox      -> notes that matched no topic
  *   POST /api/hub/state?action=dismiss    { nudgeId }
- *   POST /api/hub/state?action=register   { localId?, type, title } -> threadId
+ *   POST /api/hub/state?action=register   { localId?, type, title, messages? } -> threadId
+ *   POST /api/hub/state?action=append     { threadId, messages } -> inserted count
  *
  * `register` exists because the app stores chats in localStorage. A thread has
  * to exist in the hub before anything can be promoted out of it, or the links
- * foreign key rejects the insert. Call it lazily the first time a chat is
- * promoted, and cache the returned id on the local chat object.
+ * foreign key rejects the insert. It's idempotent on `localId` (looked up via
+ * `threads.local_id`), so continuous per-chat sync can call it on every turn
+ * without creating a new thread each time — cache the returned id on the
+ * local chat object. `append` then does the actual incremental sync: only
+ * the messages sent since the caller's own last-synced cursor.
  */
 
 
@@ -659,7 +663,7 @@ async function handle_state(req, res) {
       const [{ data: nudges }, { data: facts }] = await Promise.all([
         db
           .from('nudges')
-          .select('id, topic_id, message, created_at')
+          .select('id, topic_id, message, nudge_type, payload, created_at')
           .eq('dismissed', false)
           .order('created_at', { ascending: false })
           .limit(10),
@@ -769,9 +773,27 @@ async function handle_state(req, res) {
 
     if (action === 'register') {
       const { type = 'chat', title, localId, messages } = req.body || {};
+
+      // Idempotent: continuous sync calls this on every chat, every turn, so
+      // a repeat call for the same local chat must reuse the existing thread
+      // instead of creating a duplicate every time.
+      if (localId) {
+        const { data: found } = await db
+          .from('threads')
+          .select('id')
+          .eq('local_id', localId)
+          .maybeSingle();
+        if (found) return res.json({ ok: true, threadId: found.id });
+      }
+
       const { data: thread, error } = await db
         .from('threads')
-        .insert({ type, title: title || 'Untitled', metadata: localId ? { localId } : {} })
+        .insert({
+          type,
+          title: title || 'Untitled',
+          local_id: localId || null,
+          metadata: localId ? { localId } : {},
+        })
         .select('id')
         .single();
       if (error) return fail(res, 500, 'register failed', error.message);
@@ -793,7 +815,30 @@ async function handle_state(req, res) {
       return res.json({ ok: true, threadId: thread.id });
     }
 
-    return fail(res, 400, 'unknown action', ['dismiss', 'register', 'turn']);
+    if (action === 'append') {
+      // Incremental sync: only the messages the client hasn't sent yet, not
+      // a re-send of the whole thread. Distinct from `turn` (one live
+      // group-discussion turn) and `register`'s one-time backfill.
+      const { threadId, messages } = req.body || {};
+      if (!threadId) return fail(res, 400, 'threadId required');
+      if (!Array.isArray(messages) || !messages.length) return res.json({ ok: true, inserted: 0 });
+
+      const rows = messages
+        .filter((m) => m?.content)
+        .slice(-200)
+        .map((m) => ({
+          thread_id: threadId,
+          role: m.role === 'user' ? 'user' : 'assistant',
+          content: String(m.content).slice(0, 20000),
+        }));
+      if (!rows.length) return res.json({ ok: true, inserted: 0 });
+
+      const { error } = await db.from('messages').insert(rows);
+      if (error) return fail(res, 500, 'append failed', error.message);
+      return res.json({ ok: true, inserted: rows.length });
+    }
+
+    return fail(res, 400, 'unknown action', ['dismiss', 'register', 'append', 'turn']);
   }
 
   return fail(res, 405, 'GET or POST only');
@@ -867,6 +912,7 @@ async function handle_sweep(req, res) {
 
   let notesFiled = 0;
   let jokesFiled = 0;
+  const touchedTopicIds = new Set();
   const errors = [];
 
   for (const thread of threads || []) {
@@ -874,12 +920,14 @@ async function handle_sweep(req, res) {
       const result = await sweepThread(thread);
       notesFiled += result.notes;
       jokesFiled += result.jokes;
+      for (const id of result.topicIds || []) touchedTopicIds.add(id);
     } catch (e) {
       errors.push(`${thread.id}: ${e.message}`);
     }
   }
 
   const nudged = await raiseNudges();
+  const groupSuggestionsRaised = await raiseGroupSuggestions([...touchedTopicIds]);
 
   // Keep the running joke-bank document in sync whenever new jokes landed —
   // no manual "build document" step. Regeneration only pulls what's new
@@ -899,6 +947,7 @@ async function handle_sweep(req, res) {
     jokesFiled,
     jokeBankDoc,
     nudgesRaised: nudged,
+    groupSuggestionsRaised,
     errors,
   });
 }
@@ -944,6 +993,7 @@ async function sweepThread(thread) {
   );
 
   let filed = 0;
+  const touchedTopicIds = new Set();
   if (candidates.length) {
     const vectors = await embed(candidates.map((c) => c.content));
 
@@ -980,14 +1030,17 @@ async function sweepThread(thread) {
         embedding: vec,
         confidence: typeof note.confidence === 'number' ? note.confidence : 0.5,
       });
-      if (!insErr) filed++;
+      if (!insErr) {
+        filed++;
+        touchedTopicIds.add(topicId);
+      }
     }
   }
 
   const jokesFiled = await fileJokes(thread, Array.isArray(out?.jokes) ? out.jokes : []);
 
   await markSwept();
-  return { notes: filed, jokes: jokesFiled };
+  return { notes: filed, jokes: jokesFiled, topicIds: [...touchedTopicIds] };
 }
 
 /** Every joke goes into the same fixed topic — never fuzzy-matched, never split. */
@@ -1152,6 +1205,62 @@ async function raiseNudges() {
     const { error } = await db.from('nudges').insert({
       topic_id: t.id,
       message: `${t.note_count} thoughts filed under "${t.name}" — nothing new in ${days} days.`,
+    });
+    if (!error) raised++;
+  }
+  return raised;
+}
+
+/**
+ * Suggests grouping chats into a project when this sweep just filed notes
+ * from two or more distinct threads under the same topic. Never applies the
+ * grouping itself — the server has no "project" concept and no visibility
+ * into localStorage, so it only proposes; the client decides whether to
+ * create/assign the project when the user accepts the nudge (or to skip
+ * silently if those chats already share one). Excludes the fixed Joke Bank
+ * topic — every joke lands there regardless of subject, so sharing it says
+ * nothing about the threads actually being related.
+ */
+async function raiseGroupSuggestions(topicIds) {
+  let raised = 0;
+  for (const topicId of topicIds) {
+    const { data: topic } = await db
+      .from('topics')
+      .select('id, name')
+      .eq('id', topicId)
+      .maybeSingle();
+    if (!topic || topic.name === JOKE_BANK_TOPIC) continue;
+
+    const { data: notes } = await db
+      .from('notes')
+      .select('source_thread_id')
+      .eq('topic_id', topicId)
+      .not('source_thread_id', 'is', null);
+    const threadIds = [...new Set((notes || []).map((n) => n.source_thread_id))];
+    if (threadIds.length < 2) continue;
+
+    const { data: threads } = await db
+      .from('threads')
+      .select('local_id')
+      .in('id', threadIds)
+      .not('local_id', 'is', null);
+    const localIds = [...new Set((threads || []).map((t) => t.local_id))];
+    if (localIds.length < 2) continue; // need 2+ chats the client can actually locate and group
+
+    const { data: open } = await db
+      .from('nudges')
+      .select('id')
+      .eq('topic_id', topicId)
+      .eq('nudge_type', 'group_suggestion')
+      .eq('dismissed', false)
+      .limit(1);
+    if (open?.length) continue; // don't nag twice
+
+    const { error } = await db.from('nudges').insert({
+      topic_id: topicId,
+      nudge_type: 'group_suggestion',
+      message: `${localIds.length} chats look related to "${topic.name}" — group them into a project?`,
+      payload: { topicName: topic.name, localIds },
     });
     if (!error) raised++;
   }
