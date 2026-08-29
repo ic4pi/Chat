@@ -179,8 +179,15 @@ function buildSystemPrompt(
     '     ```',
     '',
     '     That whole reply — nothing else needed — creates a real, working file at api/health.js in the',
-    '     project. That is the entire mechanism: write the block, the host saves it. Do the same for',
-    '     whatever the user actually asked for.',
+    '     project. That is the entire mechanism: write the block, the host saves it.',
+    '',
+    '  This mechanism existing does not mean every reply should use it. When the user is asking you to',
+    '  write or change something, use it — that is what it is for. When they are asking a QUESTION —',
+    '  "why did this error happen", "what does this function do", "is X possible" — answer the question in',
+    '  plain text. Reporting an error back to you (e.g. "sandbox says there is an error") is, by itself, a',
+    '  request to understand it, not an instruction to immediately rewrite the file — explain what the error',
+    '  means and what you think caused it first; only include a File:/Edit: block if the fix is obvious AND',
+    '  say so, rather than silently dropping another full file with no explanation of what changed or why.',
     '',
     '- The host writes accepted blocks to the sandbox. After accepted writes, the HOST runs Auto-test /',
     '  static smoke and may inject failures back to you.',
@@ -580,6 +587,12 @@ function CodeBlock({ lang, content, onRun }: {
   lang: string; content: string; onRun: () => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  // HTML was never runnable as a script — the sandbox's /run-code has no
+  // interpreter for it and silently fell through to `bash _snippet.sh`,
+  // which just executes "<!DOCTYPE html>" as a shell command and fails
+  // with a nonsense syntax error. Markup needs to be rendered, not run.
+  const isHtml = /^(html|htm)$/i.test((lang || '').trim());
   return (
     <div style={{ margin: '8px 0', background: '#0B0D12',
       border: '1px solid #232838', borderRadius: 6, overflow: 'hidden' }}>
@@ -598,14 +611,32 @@ function CodeBlock({ lang, content, onRun }: {
               cursor: 'pointer', fontFamily: 'inherit', fontSize: 11 }}>
             {copied ? 'Copied' : 'Copy'}
           </button>
-          <button onClick={onRun} data-testid="run-code-btn"
-            style={{ background: 'rgba(52,211,153,.16)', color: '#34D399', border: '1px solid rgba(52,211,153,.16)',
-              borderRadius: 4, padding: '2px 10px', cursor: 'pointer',
-              fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
-            ▶ Run in Sandbox
-          </button>
+          {isHtml ? (
+            <button type="button" data-testid="preview-html-btn"
+              onClick={() => setPreviewing(p => !p)}
+              style={{ background: 'rgba(52,211,153,.16)', color: '#34D399', border: '1px solid rgba(52,211,153,.16)',
+                borderRadius: 4, padding: '2px 10px', cursor: 'pointer',
+                fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
+              {previewing ? 'Hide preview' : '▶ Preview'}
+            </button>
+          ) : (
+            <button onClick={onRun} data-testid="run-code-btn"
+              style={{ background: 'rgba(52,211,153,.16)', color: '#34D399', border: '1px solid rgba(52,211,153,.16)',
+                borderRadius: 4, padding: '2px 10px', cursor: 'pointer',
+                fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
+              ▶ Run in Sandbox
+            </button>
+          )}
         </div>
       </div>
+      {isHtml && previewing && (
+        <iframe
+          title="HTML preview"
+          srcDoc={content}
+          sandbox="allow-scripts allow-forms allow-popups"
+          style={{ width: '100%', height: 320, border: 'none', borderBottom: '1px solid #191D27', background: '#fff' }}
+        />
+      )}
       <pre style={{ margin: 0, padding: '8px 12px', overflowX: 'auto',
         fontSize: 12, lineHeight: 1.5, color: '#ECEEF3',
         maxHeight: 300, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
