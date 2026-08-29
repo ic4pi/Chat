@@ -11,6 +11,17 @@
 //     shown verbatim.
 // ============================================================================
 
+import {
+  MODEL_PACKAGES,
+  DEFAULT_PACKAGE_IDS,
+  DEFAULT_PACKAGE_MODEL,
+  PACKAGE_IDS,
+  resolvePackages,
+  packageModels,
+  rateLimitLabel,
+  OPENROUTER_FREE_LIMITS,
+} from './model-packages.js';
+
 const STORAGE_KEY = 'uncensored_chat_state_v3';
 
 // Personas now live on the server (see /api/public-config). This is only a
@@ -52,6 +63,16 @@ const PROVIDER_FALLBACKS = {
     { id: 'openai/gpt-4.1', name: 'GPT-4.1' },
     { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
     { id: 'deepseek/deepseek-chat-v3.1', name: 'DeepSeek Chat V3.1' },
+    // Mirrors lib/providers.js — the General package's brands, so the shipped
+    // default still resolves when the live catalog is down.
+    { id: 'deepseek/deepseek-chat-v3.1:free', name: 'DeepSeek Chat V3.1 (free)' },
+    { id: 'moonshotai/kimi-k2:free', name: 'Kimi K2 (free)' },
+    { id: 'moonshotai/kimi-k2', name: 'Kimi K2' },
+    { id: 'anthropic/claude-haiku-4.5', name: 'Claude Haiku 4.5' },
+    { id: 'openai/gpt-4o', name: 'GPT-4o' },
+    { id: 'openai/gpt-4o-mini', name: 'GPT-4o mini' },
+    { id: 'x-ai/grok-4-fast', name: 'Grok 4 Fast' },
+    { id: 'x-ai/grok-4', name: 'Grok 4' },
   ],
   cerebras: [
     { id: 'gpt-oss-120b', name: 'OpenAI GPT OSS 120B' },
@@ -122,6 +143,7 @@ const PROVIDER_LABELS = {
 const KEYS_STORAGE = 'uncensored_provider_keys_v1';
 const ROLES_STORAGE = 'uncensored_role_models_v1';
 const PAID_PASS_STORAGE = 'uncensored_paid_password_v1';
+const PACKAGES_STORAGE = 'uncensored_model_packages_v1';
 
 const MODEL_CATEGORIES = [
   { id: 'general', label: 'General' },
@@ -130,6 +152,34 @@ const MODEL_CATEGORIES = [
   { id: 'reasoning', label: 'Reasoning' },
   { id: 'uncensored', label: 'Uncensored' },
 ];
+
+/**
+ * Which model packages this browser has switched on, plus whether it has
+ * opted out of the curated view entirely. A fresh install gets General only —
+ * five brand names, not three hundred slugs.
+ */
+function loadModelPackagePrefs() {
+  const fallback = { packages: DEFAULT_PACKAGE_IDS.slice(), showAll: false };
+  try {
+    const raw = localStorage.getItem(PACKAGES_STORAGE);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) || {};
+    const picked = Array.isArray(parsed.packages)
+      ? parsed.packages.filter((id) => PACKAGE_IDS.includes(id))
+      : [];
+    return {
+      // Never let the list empty out — an empty picker looks broken.
+      packages: picked.length ? picked : DEFAULT_PACKAGE_IDS.slice(),
+      showAll: !!parsed.showAll,
+    };
+  } catch {
+    return fallback;
+  }
+}
+function saveModelPackagePrefs(prefs) {
+  try { localStorage.setItem(PACKAGES_STORAGE, JSON.stringify(prefs)); } catch { /* ignore */ }
+}
+let modelPackagePrefs = loadModelPackagePrefs();
 
 /**
  * Persist paid unlock in localStorage (same as BYOK keys) so leaving the page
@@ -274,10 +324,10 @@ function freshState() {
     activeChatId: null,
     activePersonaId: 'nexus',
     activeRole: 'plan',
-    // OpenRouter free router by default — Venice and other paid catalogs
-    // need the paid-models unlock password.
-    activeProvider: 'openrouter',
-    activeModel: 'qwen/qwen3-coder:free',
+    // First free model of the shipped General package. Venice and the other
+    // paid catalogs need the paid-models unlock password.
+    activeProvider: DEFAULT_PACKAGE_MODEL.provider,
+    activeModel: DEFAULT_PACKAGE_MODEL.id,
     chatsCollapsed: false,
     chatsCollapsedExplicit: false,
     artifactsCollapsed: true,
@@ -486,9 +536,11 @@ const els = {
   modelSearchInput: $('modelSearchInput'),
   modelFilterBtn: $('modelFilterBtn'),
   modelFilterPanel: $('modelFilterPanel'),
-  modelFilterProviders: $('modelFilterProviders'),
+  modelFilterPackages: $('modelFilterPackages'),
   modelFilterCategories: $('modelFilterCategories'),
   modelFilterAccess: $('modelFilterAccess'),
+  modelFilterAccessSection: $('modelFilterAccessSection'),
+  modelShowAllToggle: $('modelShowAllToggle'),
   modelFilterClear: $('modelFilterClear'),
   modelFilterDone: $('modelFilterDone'),
   modelPickerStatus: $('modelPickerStatus'),
@@ -1671,11 +1723,17 @@ function sortModelsForProvider(provider, models) {
 let allModelsCatalog = [];
 let allModelsLoading = null;
 
-/** Exclusive filters: null = All. Pick one value → show only that. */
+/**
+ * Exclusive filters: null = All. Pick one value → show only that.
+ *
+ * Provider is deliberately not a filter any more: "which of five API vendors
+ * is behind this" is billing trivia to a novice, and the packaged view groups
+ * by brand instead. Access (free/paid) only applies in show-all mode — inside
+ * a package the free/paid split is already the shape of every brand group.
+ */
 const modelPickerFilters = {
-  provider: null,   // 'venice' | 'openrouter' | …
   category: null,   // 'coder' | 'general' | …
-  access: null,     // 'free' | 'paid'
+  access: null,     // 'free' | 'paid' — show-all mode only
 };
 
 async function loadAllModelsCatalog({ force = false } = {}) {
@@ -1712,7 +1770,6 @@ function filterCatalogModels(models, { query = '', filters = modelPickerFilters 
   const q = String(query || '').trim();
   return models.filter((m) => {
     if (!modelSearchPrefixMatch(m, q)) return false;
-    if (filters.provider && m.provider !== filters.provider) return false;
     if (filters.access === 'free' && !m.free) return false;
     if (filters.access === 'paid' && m.free) return false;
     if (filters.category) {
@@ -1725,21 +1782,29 @@ function filterCatalogModels(models, { query = '', filters = modelPickerFilters 
 
 function activeFilterCount() {
   let n = 0;
-  if (modelPickerFilters.provider) n += 1;
   if (modelPickerFilters.category) n += 1;
   if (modelPickerFilters.access) n += 1;
   return n;
 }
 
+/** True when the picker is showing raw provider catalogs instead of packages. */
+function showingAllModels() {
+  return !!modelPackagePrefs.showAll;
+}
+
 function syncFilterChipUI() {
-  els.modelFilterProviders?.querySelectorAll('.filter-chip').forEach((btn) => {
-    const id = btn.dataset.provider || null;
-    const isAll = btn.dataset.all === '1';
-    btn.classList.toggle(
-      'active',
-      isAll ? !modelPickerFilters.provider : modelPickerFilters.provider === id,
-    );
+  els.modelFilterPackages?.querySelectorAll('.filter-chip').forEach((btn) => {
+    const id = btn.dataset.package;
+    const on = modelPackagePrefs.packages.includes(id);
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    // Packages do nothing while the raw catalog is on screen.
+    btn.disabled = showingAllModels();
   });
+  if (els.modelShowAllToggle) els.modelShowAllToggle.checked = showingAllModels();
+  // Access is a raw-catalog tool only — inside a package the free/paid split
+  // is already the group layout, so a second control for it just confuses.
+  els.modelFilterAccessSection?.classList.toggle('hidden', !showingAllModels());
   els.modelFilterCategories?.querySelectorAll('.filter-chip').forEach((btn) => {
     const id = btn.dataset.category || null;
     const isAll = btn.dataset.all === '1';
@@ -1758,7 +1823,7 @@ function syncFilterChipUI() {
   });
   if (els.modelFilterBtn) {
     const n = activeFilterCount();
-    els.modelFilterBtn.textContent = n ? `Filter (${n})` : 'Filter';
+    els.modelFilterBtn.textContent = n ? `Settings (${n})` : 'Settings';
   }
 }
 
@@ -1777,21 +1842,39 @@ function makeFilterChip(label, { active = false, onPick } = {}) {
   return btn;
 }
 
+/**
+ * Packages are multi-select, unlike every other chip row here — clicking one
+ * toggles it rather than replacing the selection, so `makeFilterChip`'s
+ * exclusive semantics don't fit.
+ */
+function makePackageChip(pkg) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'filter-chip';
+  btn.dataset.package = pkg.id;
+  btn.textContent = pkg.label;
+  btn.title = pkg.blurb;
+  btn.setAttribute('aria-pressed', 'false');
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const on = modelPackagePrefs.packages.includes(pkg.id);
+    // Refuse to switch off the last one — an empty picker reads as broken.
+    if (on && modelPackagePrefs.packages.length === 1) return;
+    modelPackagePrefs.packages = on
+      ? modelPackagePrefs.packages.filter((id) => id !== pkg.id)
+      : [...modelPackagePrefs.packages, pkg.id];
+    saveModelPackagePrefs(modelPackagePrefs);
+    syncFilterChipUI();
+    renderModelPickerList();
+    void renderSidebarModelList();
+  });
+  return btn;
+}
+
 function initModelFilterChips() {
-  if (els.modelFilterProviders && !els.modelFilterProviders.childElementCount) {
-    const allBtn = makeFilterChip('All', {
-      active: !modelPickerFilters.provider,
-      onPick: () => { modelPickerFilters.provider = null; },
-    });
-    allBtn.dataset.all = '1';
-    els.modelFilterProviders.appendChild(allBtn);
-    for (const id of PROVIDER_IDS) {
-      const btn = makeFilterChip(PROVIDER_LABELS[id] || id, {
-        onPick: () => { modelPickerFilters.provider = id; },
-      });
-      btn.dataset.provider = id;
-      els.modelFilterProviders.appendChild(btn);
-    }
+  if (els.modelFilterPackages && !els.modelFilterPackages.childElementCount) {
+    for (const pkg of MODEL_PACKAGES) els.modelFilterPackages.appendChild(makePackageChip(pkg));
   }
   if (els.modelFilterCategories && !els.modelFilterCategories.childElementCount) {
     const allBtn = makeFilterChip('All', {
@@ -1828,12 +1911,15 @@ function initModelFilterChips() {
   syncFilterChipUI();
 }
 
+/** Reset means "back to how the app ships": General only, no filters, no raw catalog. */
 function clearModelFilters() {
-  modelPickerFilters.provider = null;
   modelPickerFilters.category = null;
   modelPickerFilters.access = null;
+  modelPackagePrefs = { packages: DEFAULT_PACKAGE_IDS.slice(), showAll: false };
+  saveModelPackagePrefs(modelPackagePrefs);
   syncFilterChipUI();
   renderModelPickerList();
+  void renderSidebarModelList();
 }
 
 function syncHiddenModelSelects(catalog) {
@@ -1933,19 +2019,150 @@ function makeModelOption(m, { showId = true } = {}) {
 let comparePickerMode = false;
 let compareSelection = []; // [{ provider, id, name }], max 3
 
-function renderModelPickerList() {
-  const host = els.modelPickerList;
-  if (!host) return;
-  host.innerHTML = '';
-  const query = els.modelSearchInput?.value || '';
-  const filtered = filterCatalogModels(allModelsCatalog, { query });
-  // Sort: free first, then name — one complete list with section headers.
-  const free = filtered.filter((m) => m.free).sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
-  const paid = filtered.filter((m) => !m.free).sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
-  const unlocked = paidUnlocked();
+/**
+ * One row in the picker. Shared by both modes so a model looks identical
+ * whether it arrived via a package or the raw catalog.
+ */
+function makeModelPickerRow(m, { unlocked, showId = false }) {
+  const locked = !m.free && !unlocked;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  const isActive = comparePickerMode
+    ? compareSelection.some((c) => c.provider === m.provider && c.id === m.id)
+    : (m.provider === state.activeProvider && m.id === state.activeModel);
+  btn.className = 'model-picker-item' + (locked ? ' locked' : '') + (isActive ? ' active' : '');
+  // Not `disabled`: a disabled button swallows its own click, which is why the
+  // old locked rows silently did nothing instead of opening the unlock modal.
+  // aria-disabled tells assistive tech it is unselectable while keeping the
+  // row clickable as a route to the password prompt.
+  btn.setAttribute('aria-disabled', locked ? 'true' : 'false');
+  btn.setAttribute('role', 'option');
+  btn.dataset.provider = m.provider;
+  btn.dataset.model = m.id;
+
+  const name = document.createElement('div');
+  name.className = 'model-picker-item-name';
+  name.textContent = m.name || m.id;
+  if (m.blurb) {
+    const sub = document.createElement('span');
+    sub.className = 'model-picker-item-blurb';
+    sub.textContent = m.blurb;
+    name.appendChild(sub);
+  }
+  btn.appendChild(name);
+
+  const meta = document.createElement('div');
+  meta.className = 'model-picker-item-meta';
+  const tier = document.createElement('span');
+  tier.className = 'model-tag ' + (m.free ? 'free' : 'paid');
+  tier.textContent = m.free ? 'free' : 'paid';
+  meta.appendChild(tier);
+  // Free is not unlimited — say the rate limit up front rather than letting
+  // someone discover it as a 429 halfway through a conversation.
+  const limit = rateLimitLabel(m);
+  if (limit) {
+    const rl = document.createElement('span');
+    rl.className = 'model-tag limit-tag';
+    rl.textContent = limit;
+    rl.title = (m.limits || OPENROUTER_FREE_LIMITS).long;
+    meta.appendChild(rl);
+  }
+  if (locked) {
+    const lock = document.createElement('span');
+    lock.className = 'model-tag locked-tag';
+    lock.textContent = 'locked';
+    meta.appendChild(lock);
+  }
+  if (showId) {
+    const prov = document.createElement('span');
+    prov.textContent = PROVIDER_LABELS[m.provider] || m.provider;
+    meta.appendChild(prov);
+    for (const c of (m.categories || []).slice(0, 3)) {
+      const tag = document.createElement('span');
+      tag.className = 'model-tag';
+      tag.textContent = c;
+      meta.appendChild(tag);
+    }
+    if (m.name && m.name !== m.id) {
+      const idTag = document.createElement('span');
+      idTag.textContent = m.id;
+      meta.appendChild(idTag);
+    }
+  }
+  btn.appendChild(meta);
+
+  btn.addEventListener('click', () => {
+    if (locked) { openUnlockPaidModal(); return; }
+    if (comparePickerMode) toggleCompareModelSelection(m.provider, m.id, m.name || m.id);
+    else selectModelFromPicker(m.provider, m.id);
+  });
+  return btn;
+}
+
+function appendPickerHeading(host, title, className = 'model-picker-group') {
+  const h = document.createElement('div');
+  h.className = className;
+  h.textContent = title;
+  host.appendChild(h);
+  return h;
+}
+
+/**
+ * Packaged view: package → brand group → free model first, then that brand's
+ * paid models. A brand with no free option at all (Claude, Grok) still gets
+ * its heading, greyed, when paid is locked — hiding it would leave a novice
+ * wondering why Claude isn't in a list that claims to have Claude.
+ */
+function renderPackagedPickerList(host, query, unlocked) {
+  const packages = resolvePackages(allModelsCatalog, modelPackagePrefs.packages);
+  let shown = 0;
+  let lockedBrands = 0;
+
+  for (const pkg of packages) {
+    const brands = pkg.brands
+      .map((brand) => ({
+        brand,
+        models: filterCatalogModels(brand.models, { query }),
+      }))
+      .filter((b) => b.models.length);
+    if (!brands.length) continue;
+
+    appendPickerHeading(host, pkg.label);
+    for (const { brand, models } of brands) {
+      const unusable = brand.paidOnly && !unlocked;
+      if (unusable) lockedBrands += 1;
+      const head = appendPickerHeading(
+        host,
+        unusable ? `${brand.label} · unlock to use` : brand.label,
+        'model-picker-brand' + (unusable ? ' paid-only' : ''),
+      );
+      head.title = brand.blurb || '';
+      for (const m of models) {
+        shown += 1;
+        host.appendChild(makeModelPickerRow(m, { unlocked }));
+      }
+    }
+  }
 
   if (els.modelPickerStatus) {
-    const bits = [`${filtered.length} model${filtered.length === 1 ? '' : 's'}`];
+    const bits = [`${shown} model${shown === 1 ? '' : 's'}`];
+    bits.push(`${modelPackagePrefs.packages.length} package${modelPackagePrefs.packages.length === 1 ? '' : 's'}`);
+    if (query) bits.push(`starting with “${query.trim()}”`);
+    if (lockedBrands) bits.push(`${lockedBrands} paid-only`);
+    els.modelPickerStatus.textContent = bits.join(' · ');
+  }
+  return shown;
+}
+
+/** Raw catalog view: every model the app can reach, free block then paid block. */
+function renderAllModelsPickerList(host, query, unlocked) {
+  const filtered = filterCatalogModels(allModelsCatalog, { query });
+  const byName = (a, b) => (a.name || a.id).localeCompare(b.name || b.id);
+  const free = filtered.filter((m) => m.free).sort(byName);
+  const paid = filtered.filter((m) => !m.free).sort(byName);
+
+  if (els.modelPickerStatus) {
+    const bits = [`${filtered.length} model${filtered.length === 1 ? '' : 's'}`, 'all catalogs'];
     if (query) bits.push(`starting with “${query.trim()}”`);
     const n = activeFilterCount();
     if (n) bits.push(`${n} filter${n === 1 ? '' : 's'} on`);
@@ -1955,81 +2172,36 @@ function renderModelPickerList() {
 
   const appendGroup = (title, items) => {
     if (!items.length) return;
-    const h = document.createElement('div');
-    h.className = 'model-picker-group';
-    h.textContent = title;
-    host.appendChild(h);
-    for (const m of items) {
-      const locked = !m.free && !unlocked;
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      const isActive = comparePickerMode
-        ? compareSelection.some((c) => c.provider === m.provider && c.id === m.id)
-        : (m.provider === state.activeProvider && m.id === state.activeModel);
-      btn.className = 'model-picker-item' + (locked ? ' locked' : '') + (isActive ? ' active' : '');
-      btn.disabled = locked;
-      btn.setAttribute('role', 'option');
-      btn.dataset.provider = m.provider;
-      btn.dataset.model = m.id;
-
-      const name = document.createElement('div');
-      name.className = 'model-picker-item-name';
-      name.textContent = m.name || m.id;
-      btn.appendChild(name);
-
-      const meta = document.createElement('div');
-      meta.className = 'model-picker-item-meta';
-      const prov = document.createElement('span');
-      prov.textContent = PROVIDER_LABELS[m.provider] || m.provider;
-      meta.appendChild(prov);
-      const tier = document.createElement('span');
-      tier.className = 'model-tag ' + (m.free ? 'free' : 'paid');
-      tier.textContent = m.free ? 'free' : 'paid';
-      meta.appendChild(tier);
-      if (locked) {
-        const lock = document.createElement('span');
-        lock.className = 'model-tag locked-tag';
-        lock.textContent = 'locked';
-        meta.appendChild(lock);
-      }
-      for (const c of (m.categories || []).slice(0, 3)) {
-        const tag = document.createElement('span');
-        tag.className = 'model-tag';
-        tag.textContent = c;
-        meta.appendChild(tag);
-      }
-      if (m.provider === 'openrouter' && m.name && m.name !== m.id) {
-        const idTag = document.createElement('span');
-        idTag.textContent = m.id;
-        meta.appendChild(idTag);
-      }
-      btn.appendChild(meta);
-
-      if (!locked) {
-        btn.addEventListener('click', () => {
-          if (comparePickerMode) toggleCompareModelSelection(m.provider, m.id, m.name || m.id);
-          else selectModelFromPicker(m.provider, m.id);
-        });
-      } else {
-        btn.addEventListener('click', () => openUnlockPaidModal());
-      }
-      host.appendChild(btn);
-    }
+    appendPickerHeading(host, title);
+    for (const m of items) host.appendChild(makeModelPickerRow(m, { unlocked, showId: true }));
   };
+  appendGroup(`Free · ${free.length}`, free);
+  appendGroup(`Paid · ${paid.length}${unlocked ? '' : ' (unlock required)'}`, paid);
+  return filtered.length;
+}
 
-  if (!filtered.length) {
+function renderModelPickerList() {
+  const host = els.modelPickerList;
+  if (!host) return;
+  host.innerHTML = '';
+  const query = els.modelSearchInput?.value || '';
+  const unlocked = paidUnlocked();
+
+  const shown = showingAllModels()
+    ? renderAllModelsPickerList(host, query, unlocked)
+    : renderPackagedPickerList(host, query, unlocked);
+
+  if (!shown) {
     const empty = document.createElement('div');
     empty.className = 'model-picker-status';
     empty.style.padding = '16px';
     empty.textContent = query
       ? `No models begin with “${query.trim()}”.`
-      : 'No models match these filters.';
+      : showingAllModels()
+        ? 'No models match these filters.'
+        : 'Nothing in the packages you picked. Add a package in Settings.';
     host.appendChild(empty);
-    return;
   }
-
-  appendGroup(`Free · ${free.length}`, free);
-  appendGroup(`Paid · ${paid.length}${unlocked ? '' : ' (unlock required)'}`, paid);
 }
 
 function selectModelFromPicker(provider, modelId) {
@@ -2057,7 +2229,12 @@ function selectModelFromPicker(provider, modelId) {
 async function renderSidebarModelList() {
   if (!els.sidebarModelList) return;
   await loadAllModelsCatalog();
-  const free = allModelsCatalog
+  // Scoped to the enabled packages so the shortcut list matches the picker —
+  // except in show-all mode, where the whole free catalog is the point.
+  const pool = showingAllModels()
+    ? allModelsCatalog
+    : packageModels(allModelsCatalog, modelPackagePrefs.packages);
+  const free = pool
     .filter((m) => m.free)
     .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
   els.sidebarModelList.innerHTML = '';
@@ -2071,8 +2248,9 @@ async function renderSidebarModelList() {
     name.textContent = m.name || m.id;
     const meta = document.createElement('div');
     meta.className = 'model-picker-item-meta';
+    const limit = rateLimitLabel(m);
     const prov = document.createElement('span');
-    prov.textContent = PROVIDER_LABELS[m.provider] || m.provider;
+    prov.textContent = limit ? `${PROVIDER_LABELS[m.provider] || m.provider} · ${limit}` : (PROVIDER_LABELS[m.provider] || m.provider);
     meta.appendChild(prov);
     li.append(name, meta);
     li.addEventListener('click', () => selectModelFromPicker(m.provider, m.id));
@@ -3787,6 +3965,16 @@ els.modelFilterClear?.addEventListener('click', (e) => {
   e.preventDefault();
   e.stopPropagation();
   clearModelFilters();
+});
+els.modelShowAllToggle?.addEventListener('change', () => {
+  modelPackagePrefs.showAll = !!els.modelShowAllToggle.checked;
+  // Access only exists in show-all mode, so a leftover selection would keep
+  // filtering the packaged view invisibly.
+  if (!modelPackagePrefs.showAll) modelPickerFilters.access = null;
+  saveModelPackagePrefs(modelPackagePrefs);
+  syncFilterChipUI();
+  renderModelPickerList();
+  void renderSidebarModelList();
 });
 els.modelFilterPanel?.addEventListener('click', (e) => {
   // Keep clicks inside the filter popup from closing anything else.

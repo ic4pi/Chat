@@ -908,14 +908,30 @@ select { appearance: none; }
 .filter-chip.active { border-color: var(--brass-dk); background: var(--id-soft); color: var(--text); }
 .model-filter-actions { display: flex; gap: 8px; }
 .model-filter-actions > * { flex: 1; }
+.model-filter-note { font-size: 11px; color: var(--muted-2); margin: 0 0 8px; line-height: 1.45; }
+.model-filter-toggle { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); cursor: pointer; }
+.model-filter-toggle input { width: auto; margin: 0; }
+.filter-chip[disabled] { opacity: .4; cursor: not-allowed; }
 .model-picker-status { font-size: 11.5px; color: var(--muted-2); margin-bottom: 6px; }
 .model-picker-list { max-height: 340px; overflow-y: auto; }
 .model-picker-group { font-size: 10.5px; color: var(--muted-2); text-transform: uppercase; letter-spacing: .06em; padding: 10px 4px 4px; font-family: var(--display); }
 .model-picker-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; border-radius: var(--r-sm); cursor: pointer; transition: background .14s; }
 .model-picker-item:hover, .model-picker-item.active { background: var(--panel-2); }
 .model-picker-item-name { font-size: 13.5px; }
-.model-picker-item-meta { font-family: var(--mono); font-size: 10.5px; color: var(--muted-2); }
+.model-picker-item-blurb { display: block; font-size: 11px; color: var(--muted-2); margin-top: 2px; }
+.model-picker-item-meta { font-family: var(--mono); font-size: 10.5px; color: var(--muted-2); display: flex; flex-wrap: wrap; gap: 4px; align-items: center; justify-content: flex-end; }
 .model-tag { font-family: var(--mono); font-size: 9.5px; padding: 2px 6px; border-radius: 4px; background: var(--panel-2); color: var(--muted); }
+
+/* Brand heading inside a package — indented a step under the package name so
+   the two levels read as a hierarchy rather than two kinds of divider. */
+.model-picker-brand { font-size: 11.5px; color: var(--text); padding: 8px 4px 2px 14px; font-family: var(--display); }
+.model-picker-brand.paid-only { color: var(--muted-2); }
+/* A locked row is still readable — it is an advertisement for the unlock,
+   not a disabled control, so it keeps its pointer and opens the unlock modal. */
+.model-picker-item.locked { opacity: .45; }
+.model-picker-item.locked:hover { background: transparent; }
+.model-tag.locked-tag { color: var(--muted-2); }
+.model-tag.limit-tag { background: transparent; border: 1px solid var(--border); }
 
 .unlock-error { padding: 9px 12px; margin-bottom: 10px; border-radius: var(--r-sm); background: var(--danger-soft); border: 1px solid rgba(196,82,59,.4); color: var(--danger); font-size: 12px; }
 
