@@ -132,6 +132,69 @@ const MODEL_CATEGORIES = [
 ];
 
 /**
+ * Curated top-level "collections" — the primary lens on the model picker,
+ * shown as tabs above the (more granular, opt-in) provider/category/access
+ * filters. Each is a preset, not a hard wall: "All models" always clears it.
+ */
+const MODEL_COLLECTIONS = [
+  {
+    id: 'mainstream',
+    label: 'Mainstream',
+    blurb: 'The best known version of each major model — GPT, Claude, Grok, Gemini, Llama, and more. Not necessarily the newest release, just a solid one.',
+    match: (m) => (m.categories || []).includes('mainstream'),
+  },
+  {
+    id: 'creative',
+    label: 'Creative Writing',
+    blurb: 'Fiction, roleplay, and storytelling models, plus the mainstream flagships — every size counts as its own model.',
+    match: (m) => {
+      const cats = m.categories || [];
+      return cats.includes('creative') || cats.includes('mainstream');
+    },
+  },
+  {
+    id: 'coder',
+    label: 'Coding',
+    blurb: 'Models tuned for writing and reviewing code.',
+    match: (m) => (m.categories || []).includes('coder'),
+  },
+  {
+    id: 'reasoning',
+    label: 'Reasoning',
+    blurb: 'Chain-of-thought / reasoning-tuned models for harder problems.',
+    match: (m) => (m.categories || []).includes('reasoning'),
+  },
+  {
+    id: 'uncensored',
+    label: 'Uncensored',
+    blurb: 'No-filter models for unrestricted conversations.',
+    match: (m) => (m.categories || []).includes('uncensored'),
+  },
+  {
+    id: 'free',
+    label: 'Fast & Free',
+    blurb: 'Free-tier models — no unlock password needed, good for quick everyday use.',
+    match: (m) => !!m.free,
+  },
+];
+const MODEL_COLLECTIONS_BY_ID = Object.fromEntries(MODEL_COLLECTIONS.map((c) => [c.id, c]));
+const MODEL_COLLECTION_STORAGE = 'uncensored_model_collection_v1';
+const DEFAULT_MODEL_COLLECTION = 'mainstream';
+
+/** Last collection tab the user picked — defaults to Mainstream for new users. */
+function loadModelCollection() {
+  try {
+    const saved = localStorage.getItem(MODEL_COLLECTION_STORAGE);
+    if (saved === '') return null; // explicit "All models"
+    if (saved && MODEL_COLLECTIONS_BY_ID[saved]) return saved;
+  } catch { /* ignore */ }
+  return DEFAULT_MODEL_COLLECTION;
+}
+function saveModelCollection(id) {
+  try { localStorage.setItem(MODEL_COLLECTION_STORAGE, id || ''); } catch { /* ignore */ }
+}
+
+/**
  * Persist paid unlock in localStorage (same as BYOK keys) so leaving the page
  * does not force re-entry. Migrates any leftover sessionStorage value once.
  */
@@ -193,6 +256,10 @@ function inferCategoriesClient(providerId, model = {}) {
   if (/role.?play|mythomax|creative|story|novel|fiction|hermes|mytho/.test(hay)) cats.add('creative');
   if (/uncensored|dolphin|heretic|abliterated|venice-uncensored/.test(hay)) cats.add('uncensored');
   if (/reason|thinking|\br1\b|qwq|orchestrat/.test(hay)) cats.add('reasoning');
+  if (
+    !/uncensored|dolphin|heretic|abliterated|mytho|role.?play|hermes/.test(hay) &&
+    /claude|(^|\W)gpt-[3-9]|chatgpt|\bgrok\b|gemini|llama-3\.3|llama-4|llama-3\.1-(70b|405b)|deepseek|qwen3(?![\s-]*coder)|mistral-large|mixtral|kimi-k2|glm-[45]|nemotron.*(49b|70b|120b|253b|super)/.test(hay)
+  ) cats.add('mainstream');
   if (cats.size === 0 || /instruct|chat|general|assistant|versatile|turbo|flash|nano|scout/.test(hay)) cats.add('general');
   return [...cats];
 }
@@ -484,6 +551,8 @@ const els = {
   modelPickerTitle: $('modelPickerTitle'),
   closeModelPicker: $('closeModelPicker'),
   modelSearchInput: $('modelSearchInput'),
+  modelCollectionTabs: $('modelCollectionTabs'),
+  modelCollectionBlurb: $('modelCollectionBlurb'),
   modelFilterBtn: $('modelFilterBtn'),
   modelFilterPanel: $('modelFilterPanel'),
   modelFilterProviders: $('modelFilterProviders'),
@@ -1676,6 +1745,7 @@ const modelPickerFilters = {
   provider: null,   // 'venice' | 'openrouter' | …
   category: null,   // 'coder' | 'general' | …
   access: null,     // 'free' | 'paid'
+  collection: loadModelCollection(), // 'mainstream' | 'creative' | … | null = All models
 };
 
 async function loadAllModelsCatalog({ force = false } = {}) {
@@ -1712,6 +1782,10 @@ function filterCatalogModels(models, { query = '', filters = modelPickerFilters 
   const q = String(query || '').trim();
   return models.filter((m) => {
     if (!modelSearchPrefixMatch(m, q)) return false;
+    if (filters.collection) {
+      const collection = MODEL_COLLECTIONS_BY_ID[filters.collection];
+      if (collection && !collection.match(m)) return false;
+    }
     if (filters.provider && m.provider !== filters.provider) return false;
     if (filters.access === 'free' && !m.free) return false;
     if (filters.access === 'paid' && m.free) return false;
@@ -1836,6 +1910,55 @@ function clearModelFilters() {
   renderModelPickerList();
 }
 
+/** Primary "collection" tabs above the toolbar — Mainstream, Creative Writing, … + All models. */
+function syncModelCollectionUI() {
+  els.modelCollectionTabs?.querySelectorAll('.model-collection-tab').forEach((btn) => {
+    const id = btn.dataset.collection || null;
+    btn.classList.toggle('active', modelPickerFilters.collection === id);
+    btn.setAttribute('aria-selected', modelPickerFilters.collection === id ? 'true' : 'false');
+  });
+  if (els.modelCollectionBlurb) {
+    const active = modelPickerFilters.collection && MODEL_COLLECTIONS_BY_ID[modelPickerFilters.collection];
+    els.modelCollectionBlurb.textContent = active
+      ? active.blurb
+      : 'Every model across every provider you have configured.';
+  }
+}
+
+function selectModelCollection(id) {
+  modelPickerFilters.collection = id || null;
+  saveModelCollection(modelPickerFilters.collection);
+  syncModelCollectionUI();
+  renderModelPickerList();
+}
+
+function initModelCollectionTabs() {
+  if (!els.modelCollectionTabs || els.modelCollectionTabs.childElementCount) {
+    syncModelCollectionUI();
+    return;
+  }
+  for (const c of MODEL_COLLECTIONS) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'model-collection-tab';
+    btn.dataset.collection = c.id;
+    btn.setAttribute('role', 'tab');
+    btn.textContent = c.label;
+    btn.title = c.blurb;
+    btn.addEventListener('click', () => selectModelCollection(c.id));
+    els.modelCollectionTabs.appendChild(btn);
+  }
+  const allBtn = document.createElement('button');
+  allBtn.type = 'button';
+  allBtn.className = 'model-collection-tab model-collection-tab-all';
+  allBtn.setAttribute('role', 'tab');
+  allBtn.textContent = 'All models';
+  allBtn.title = 'Clear the collection and show everything you have configured.';
+  allBtn.addEventListener('click', () => selectModelCollection(null));
+  els.modelCollectionTabs.appendChild(allBtn);
+  syncModelCollectionUI();
+}
+
 function syncHiddenModelSelects(catalog) {
   if (!els.modelSelect || !els.providerSelect) return;
   const provider = state.activeProvider;
@@ -1946,6 +2069,8 @@ function renderModelPickerList() {
 
   if (els.modelPickerStatus) {
     const bits = [`${filtered.length} model${filtered.length === 1 ? '' : 's'}`];
+    const collection = modelPickerFilters.collection && MODEL_COLLECTIONS_BY_ID[modelPickerFilters.collection];
+    if (collection) bits.push(`in ${collection.label}`);
     if (query) bits.push(`starting with “${query.trim()}”`);
     const n = activeFilterCount();
     if (n) bits.push(`${n} filter${n === 1 ? '' : 's'} on`);
@@ -2021,9 +2146,13 @@ function renderModelPickerList() {
     const empty = document.createElement('div');
     empty.className = 'model-picker-status';
     empty.style.padding = '16px';
-    empty.textContent = query
-      ? `No models begin with “${query.trim()}”.`
-      : 'No models match these filters.';
+    if (query) {
+      empty.textContent = `No models begin with “${query.trim()}”.`;
+    } else if (modelPickerFilters.collection) {
+      empty.textContent = `Nothing configured in this collection yet — try “All models”.`;
+    } else {
+      empty.textContent = 'No models match these filters.';
+    }
     host.appendChild(empty);
     return;
   }
@@ -2109,6 +2238,7 @@ els.chatsSidebar?.addEventListener('click', (e) => {
 
 async function openModelPicker() {
   if (!els.modelPickerModal) return;
+  initModelCollectionTabs();
   initModelFilterChips();
   if (els.modelPickerTitle) els.modelPickerTitle.textContent = comparePickerMode ? 'Pick 2–3 models to compare' : 'Models';
   els.modelPickerModal.classList.remove('hidden');

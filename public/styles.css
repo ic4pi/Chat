@@ -899,6 +899,12 @@ select { appearance: none; }
 .group-btn:hover, .group-mp3-btn:hover { color: var(--text); border-color: var(--brass-dk); }
 
 .model-picker-modal { max-width: 560px; }
+.model-collection-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.model-collection-tab { padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border); font-size: 12px; color: var(--muted); background: transparent; }
+.model-collection-tab:hover { color: var(--text); border-color: var(--brass-dk); }
+.model-collection-tab.active { border-color: var(--brass-dk); background: var(--id-soft); color: var(--text); font-weight: 600; }
+.model-collection-tab-all { border-style: dashed; }
+.model-collection-blurb { font-size: 11.5px; color: var(--muted-2); margin-bottom: 10px; line-height: 1.4; }
 .model-picker-toolbar { display: flex; gap: 8px; margin-bottom: 10px; }
 .model-picker-toolbar input { margin-top: 0; }
 .model-filter-panel { display: flex; flex-direction: column; gap: 12px; padding: 12px; margin-bottom: 10px; background: var(--panel-2); border-radius: var(--r-sm); }
