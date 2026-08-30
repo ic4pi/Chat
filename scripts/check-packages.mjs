@@ -21,7 +21,15 @@ import { MODEL_PACKAGES, resolveBrand } from '../public/model-packages.js';
 
 const args = process.argv.slice(2);
 const asJson = args.includes('--json');
-const base = (args.find((a) => !a.startsWith('--')) || 'http://localhost:3000').replace(/\/$/, '');
+const target = args.find((a) => !a.startsWith('--')) || '';
+// Accept a bare hostname too — "my-app.vercel.app" is what someone copies out
+// of the Vercel dashboard, and making them prepend https:// is a pointless
+// speed bump right at the moment they are trying to check something.
+const scheme = (host) => (/^(localhost|127\.0\.0\.1|\[::1\])(:|$)/.test(host) ? 'http' : 'https');
+const base = (target
+  ? (/^https?:\/\//.test(target) ? target : `${scheme(target)}://${target}`)
+  : 'http://localhost:3000'
+).replace(/\/$/, '');
 
 const PROVIDERS = ['venice', 'openrouter', 'cerebras', 'groq', 'xai', 'nvidia'];
 
@@ -56,10 +64,15 @@ const catalog = results.flatMap((r) => r.models);
 const reachable = results.filter((r) => !r.error);
 
 if (!catalog.length) {
+  console.error(`No models came back from ${base}/api/models.\n`);
+  for (const r of results) console.error(`  ${r.providerId}: ${r.error || 'empty'}`);
   console.error(
-    `No models came back from ${base}/api/models.\n` +
-    results.map((r) => `  ${r.providerId}: ${r.error || 'empty'}`).join('\n') +
-    `\n\nIs the app running? Pass a deployment URL as the first argument.`,
+    target
+      ? `\nIs ${base} deployed and serving /api/models?`
+      : '\nNo URL was given, so this tried localhost:3000 — nothing is running there.\n' +
+        'Point it at your deployment instead (note the -- so npm passes the argument through):\n' +
+        '  npm run check:packages -- your-app.vercel.app\n' +
+        'Or start the app locally first with `npm run dev`.',
   );
   process.exit(2);
 }
