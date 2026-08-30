@@ -7,7 +7,9 @@ export const PROVIDER_LIST = [
   { id: 'venice', label: 'Venice' },
   { id: 'openrouter', label: 'OpenRouter' },
   { id: 'cerebras', label: 'Cerebras' },
-  { id: 'groq', label: 'Groq' },
+  { id: 'groq', label: 'Groq (Llama/Kimi host)' },
+  // xAI, i.e. Grok — a different company from Groq above, one letter apart.
+  { id: 'xai', label: 'xAI (Grok)' },
   { id: 'nvidia', label: 'NVIDIA' },
 ] as const;
 
@@ -117,6 +119,13 @@ export const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string }>
     { id: 'qwen/qwen3-32b', name: 'Qwen3 32B' },
     { id: 'moonshotai/kimi-k2-instruct', name: 'Kimi K2 Instruct' },
   ],
+  xai: [
+    { id: 'grok-4', name: 'Grok 4' },
+    { id: 'grok-4-fast-reasoning', name: 'Grok 4 Fast (reasoning)' },
+    { id: 'grok-3', name: 'Grok 3' },
+    { id: 'grok-3-mini', name: 'Grok 3 Mini' },
+    { id: 'grok-code-fast-1', name: 'Grok Code Fast' },
+  ],
   nvidia: [
     { id: 'meta/llama-3.3-70b-instruct', name: 'Llama 3.3 70B Instruct' },
     { id: 'meta/llama-3.1-70b-instruct', name: 'Llama 3.1 70B Instruct' },
@@ -132,6 +141,7 @@ export const DEFAULT_MODELS: Record<string, string> = {
   openrouter: 'qwen/qwen3-coder:free',
   cerebras: 'llama-3.3-70b',
   groq: 'llama-3.3-70b-versatile',
+  xai: 'grok-4',
   nvidia: 'meta/llama-3.3-70b-instruct',
 };
 

@@ -23,7 +23,7 @@ const args = process.argv.slice(2);
 const asJson = args.includes('--json');
 const base = (args.find((a) => !a.startsWith('--')) || 'http://localhost:3000').replace(/\/$/, '');
 
-const PROVIDERS = ['venice', 'openrouter', 'cerebras', 'groq', 'nvidia'];
+const PROVIDERS = ['venice', 'openrouter', 'cerebras', 'groq', 'xai', 'nvidia'];
 
 /** Mirrors inferFree() in lib/model-meta.js — only OpenRouter :free is free. */
 function inferFree(providerId, model) {

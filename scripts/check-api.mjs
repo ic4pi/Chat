@@ -98,7 +98,7 @@ const providers = await import(pathToFileURL(path.join(root, 'lib/providers.js')
 if (!providers.PROVIDERS || typeof providers.PROVIDERS !== 'object') {
   fail('lib/providers.js must export PROVIDERS');
 }
-for (const id of ['venice', 'openrouter', 'cerebras', 'groq', 'nvidia']) {
+for (const id of ['venice', 'openrouter', 'cerebras', 'groq', 'xai', 'nvidia']) {
   if (!providers.PROVIDERS[id]?.url || !providers.PROVIDERS[id]?.apiKeyEnv) {
     fail(`PROVIDERS.${id} missing url/apiKeyEnv`);
   }

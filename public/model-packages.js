@@ -124,14 +124,21 @@ export const MODEL_PACKAGES = [
         label: 'Grok',
         vendor: 'xAI',
         blurb: 'Blunt, current-events leaning.',
-        match: /^x-ai\/grok/i,
+        // Matches both shapes: xAI's own bare ids (grok-4) and OpenRouter's
+        // namespaced mirrors (x-ai/grok-4).
+        match: /grok/i,
         // xAI has run temporary free promos on `:free` Grok slugs; none of
         // them have stuck, so treat Grok as paid-only and let the resolver
         // surface a free one if OpenRouter happens to be running a promo.
         free: null,
+        // Direct-from-xAI first: someone with their own XAI_API_KEY should
+        // spend it there rather than paying OpenRouter's margin to proxy the
+        // same model. The OpenRouter rows stay as the no-xAI-key path.
         paid: [
-          paid('openrouter', ['x-ai/grok-4-fast', 'x-ai/grok-3-mini'], 'Grok Fast', 'The cheap, quick Grok.'),
-          paid('openrouter', ['x-ai/grok-4', 'x-ai/grok-3'], 'Grok', 'The full model.'),
+          paid('xai', ['grok-4', 'grok-4-latest', 'grok-3'], 'Grok', 'Direct from xAI.'),
+          paid('xai', ['grok-4-fast-reasoning', 'grok-3-mini'], 'Grok Fast', 'Cheaper and quicker, direct from xAI.'),
+          paid('openrouter', ['x-ai/grok-4', 'x-ai/grok-3'], 'Grok', 'Via OpenRouter.'),
+          paid('openrouter', ['x-ai/grok-4-fast', 'x-ai/grok-3-mini'], 'Grok Fast', 'Via OpenRouter.'),
         ],
       },
       {

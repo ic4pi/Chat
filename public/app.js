@@ -95,6 +95,13 @@ const PROVIDER_FALLBACKS = {
     { id: 'groq/compound-mini', name: 'Groq Compound Mini' },
     { id: 'minimaxai/minimax-m2.7', name: 'MiniMax M2.7' },
   ],
+  xai: [
+    { id: 'grok-4', name: 'Grok 4' },
+    { id: 'grok-4-fast-reasoning', name: 'Grok 4 Fast (reasoning)' },
+    { id: 'grok-3', name: 'Grok 3' },
+    { id: 'grok-3-mini', name: 'Grok 3 Mini' },
+    { id: 'grok-code-fast-1', name: 'Grok Code Fast' },
+  ],
   nvidia: [
     { id: 'meta/llama-3.3-70b-instruct', name: 'Llama 3.3 70B Instruct' },
     { id: 'meta/llama-3.1-70b-instruct', name: 'Llama 3.1 70B Instruct' },
@@ -118,6 +125,7 @@ const DEFAULT_MODELS = {
   openrouter: 'qwen/qwen3-coder:free',
   cerebras: 'gpt-oss-120b',
   groq: 'llama-3.3-70b-versatile',
+  xai: 'grok-4',
   nvidia: 'meta/llama-3.3-70b-instruct',
 };
 
@@ -135,9 +143,13 @@ const VENICE_UNCENSORED_CHEAP_FIRST = [
 ];
 const VENICE_UNCENSORED_SET = new Set(VENICE_UNCENSORED_CHEAP_FIRST);
 
-const PROVIDER_IDS = ['venice', 'openrouter', 'cerebras', 'groq', 'nvidia'];
+const PROVIDER_IDS = ['venice', 'openrouter', 'cerebras', 'groq', 'xai', 'nvidia'];
+// 'groq' and 'xai' are different companies whose names differ by one letter,
+// so the xAI label spells out Grok — a mis-pasted key is otherwise a baffling
+// 401 from a provider the user thinks they configured.
 const PROVIDER_LABELS = {
-  venice: 'Venice', openrouter: 'OpenRouter', cerebras: 'Cerebras', groq: 'Groq', nvidia: 'NVIDIA',
+  venice: 'Venice', openrouter: 'OpenRouter', cerebras: 'Cerebras',
+  groq: 'Groq (Llama/Kimi host)', xai: 'xAI (Grok)', nvidia: 'NVIDIA',
 };
 
 const KEYS_STORAGE = 'uncensored_provider_keys_v1';
