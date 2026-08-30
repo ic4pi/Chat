@@ -423,7 +423,7 @@
     <div class="modal-header">
       <h2 id="modelPickerTitle">Models</h2>
       <div class="modal-header-actions">
-        <button id="modelFilterBtn" class="text-btn" type="button" title="Filter by provider &amp; category">Filter</button>
+        <button id="modelFilterBtn" class="text-btn" type="button" title="Choose model packages and filter">Settings</button>
         <button id="closeModelPicker" class="icon-btn" title="Close">×</button>
       </div>
     </div>
@@ -431,21 +431,29 @@
       <input id="modelSearchInput" type="text" inputmode="search" autocomplete="off" spellcheck="false" placeholder="Type a letter — only names that start with it" />
       <button id="modelUnlockBtn" class="text-btn" type="button">Unlock paid</button>
     </div>
-    <div id="modelFilterPanel" class="model-filter-panel hidden" role="group" aria-label="Model filters">
+    <div id="modelFilterPanel" class="model-filter-panel hidden" role="group" aria-label="Model settings">
       <div class="model-filter-section">
-        <div class="model-filter-heading">Provider</div>
-        <div id="modelFilterProviders" class="model-filter-chips"></div>
+        <div class="model-filter-heading">Model packages</div>
+        <p class="model-filter-note">Pick as many as you like. General ships on its own — add more only when you want them.</p>
+        <div id="modelFilterPackages" class="model-filter-chips" role="group" aria-label="Model packages"></div>
       </div>
       <div class="model-filter-section">
         <div class="model-filter-heading">Category</div>
         <div id="modelFilterCategories" class="model-filter-chips"></div>
       </div>
       <div class="model-filter-section">
+        <label class="model-filter-toggle">
+          <input id="modelShowAllToggle" type="checkbox" />
+          <span>Show every model the app can reach</span>
+        </label>
+        <p class="model-filter-note">Turns off packages and lists the raw provider catalogs.</p>
+      </div>
+      <div id="modelFilterAccessSection" class="model-filter-section hidden">
         <div class="model-filter-heading">Access</div>
         <div id="modelFilterAccess" class="model-filter-chips"></div>
       </div>
       <div class="model-filter-actions">
-        <button id="modelFilterClear" class="text-btn" type="button">Clear filters</button>
+        <button id="modelFilterClear" class="text-btn" type="button">Reset</button>
         <button id="modelFilterDone" class="text-btn primary" type="button">Done</button>
       </div>
     </div>

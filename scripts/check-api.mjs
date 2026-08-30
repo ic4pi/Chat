@@ -98,7 +98,7 @@ const providers = await import(pathToFileURL(path.join(root, 'lib/providers.js')
 if (!providers.PROVIDERS || typeof providers.PROVIDERS !== 'object') {
   fail('lib/providers.js must export PROVIDERS');
 }
-for (const id of ['venice', 'openrouter', 'cerebras', 'groq', 'nvidia']) {
+for (const id of ['venice', 'openrouter', 'cerebras', 'groq', 'xai', 'nvidia']) {
   if (!providers.PROVIDERS[id]?.url || !providers.PROVIDERS[id]?.apiKeyEnv) {
     fail(`PROVIDERS.${id} missing url/apiKeyEnv`);
   }
@@ -318,5 +318,47 @@ if (!hasUnlockRewrite) {
   fail('vercel.json must rewrite /api/unlock-paid → /api/models?op=unlock-paid');
 }
 ok(`function cap (${apiJs.length}/${FUNCTION_CAP})`);
+
+// 9) Coder-package parity. The Workspace is a separate Vite bundle and cannot
+//    import public/model-packages.js, so sandbox-terminal/src/coderModels.ts
+//    keeps a typed copy of the `coder` package. Deliberate duplication, same
+//    as FALLBACK_MODELS ↔ PROVIDER_FALLBACKS — but duplication only stays
+//    honest if something checks it, so assert every model id in the Workspace
+//    copy still appears in the shared package.
+const sharedPkgSrc = readFileSync(path.join(root, 'public/model-packages.js'), 'utf8');
+const coderPkgStart = sharedPkgSrc.indexOf("id: 'coder'");
+if (coderPkgStart < 0) {
+  fail("public/model-packages.js must define a package with id: 'coder'");
+}
+// The `coder` package body runs to the start of the next package definition.
+const nextPkg = sharedPkgSrc.indexOf('\n  {\n    id:', coderPkgStart);
+const coderPkgSrc = sharedPkgSrc.slice(coderPkgStart, nextPkg < 0 ? undefined : nextPkg);
+const workspaceCoderSrc = readFileSync(
+  path.join(root, 'sandbox-terminal/src/coderModels.ts'),
+  'utf8',
+);
+// The shared file passes ids positionally through free()/paid() helpers while
+// the Workspace copy uses an `ids:` key, so read each side in its own shape:
+// every quoted string in the shared package block, versus the ids arrays here.
+const quotedIn = (src) => new Set([...src.matchAll(/['"]([^'"\n]+)['"]/g)].map((m) => m[1]));
+const idsIn = (src) => {
+  const out = new Set();
+  for (const m of src.matchAll(/ids:\s*\[([^\]]*)\]/g)) {
+    for (const q of m[1].matchAll(/['"]([^'"]+)['"]/g)) out.add(q[1]);
+  }
+  return out;
+};
+const sharedCoderIds = quotedIn(coderPkgSrc);
+const strayCoderIds = [...idsIn(workspaceCoderSrc)].filter((id) => !sharedCoderIds.has(id));
+if (strayCoderIds.length) {
+  fail(
+    'sandbox-terminal/src/coderModels.ts has ids absent from the shared coder ' +
+    `package in public/model-packages.js: ${strayCoderIds.join(', ')}`,
+  );
+}
+if (!sharedCoderIds.size) {
+  fail('Could not parse any model ids out of the shared coder package');
+}
+ok(`coder-package parity (${sharedCoderIds.size} shared ids)`);
 
 console.log('check-api: all checks passed');

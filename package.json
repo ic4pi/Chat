@@ -8,7 +8,8 @@
     "check": "node scripts/check-api.mjs",
     "test": "node scripts/check-api.mjs",
     "animate": "node scripts/animate-sequence.mjs",
-    "test:animate": "node scripts/test-animate-local.mjs"
+    "test:animate": "node scripts/test-animate-local.mjs",
+    "check:packages": "node scripts/check-packages.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",
