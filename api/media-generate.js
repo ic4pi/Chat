@@ -4,7 +4,7 @@
  * Body:
  *   {
  *     kind: 'image' | 'video',
- *     provider: 'cloudflare' | 'nvidia' | 'fal' | 'venice',
+ *     provider: 'cloudflare' | 'nvidia' | 'fal' | 'venice' | 'modal',
  *     model?: string,
  *     prompt: string,
  *     negativePrompt?: string,
@@ -21,6 +21,8 @@
  *   FAL_KEY                — Wan 2.2 video via fal.ai (recommended)
  *   NVIDIA_API_KEY         — hosted FLUX/SDXL image (optional; safety-filtered)
  *   NVIDIA_MEDIA_BASE_URL  — self-hosted Wan NIM only (OpenAI-compatible base URL)
+ *   MODAL_WAN_ENDPOINT     — self-hosted Wan 2.2 5B on Modal, scale-to-zero,
+ *                            no external content filter (provider: 'modal')
  *
  * Vercel Functions hard-limit request/response bodies at 4.5MB (HTTP 413).
  * Never attach reference images to text-to-image. Prefer webp for Venice.
@@ -1288,6 +1290,59 @@ async function generateNvidiaWanVideo({
   };
 }
 
+/**
+ * Self-hosted Wan 2.2 5B on Modal (scale-to-zero, no external content filter -
+ * unlike fal.ai's hosted Wan, nothing here moderates the prompt).
+ * Env: MODAL_WAN_ENDPOINT (defaults to the deployed endpoint below).
+ */
+const MODAL_WAN_ENDPOINT =
+  process.env.MODAL_WAN_ENDPOINT || 'https://ic4pi--wan-video-generate.modal.run';
+
+async function generateModalWanVideo({
+  prompt,
+  negativePrompt,
+  size,
+  seconds,
+}) {
+  const dims = String(size || '832x480').split(/[x*]/i).map(Number);
+  const width = dims[0] || 832;
+  const height = dims[1] || 480;
+  const fps = 16;
+  const num_frames = Math.min(161, Math.max(8, Math.round((Number(seconds) || 5) * fps) + 1));
+
+  const resp = await fetch(MODAL_WAN_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    // fetch follows 303 redirects automatically (and correctly switches to GET,
+    // unlike curl -X POST -L which forces POST on the redirect too).
+    body: JSON.stringify({
+      prompt,
+      negative_prompt: negativePrompt || undefined,
+      width,
+      height,
+      num_frames,
+      fps,
+    }),
+  });
+
+  const body = await resp.json().catch(() => ({}));
+  if (!resp.ok || !body.video_base64) {
+    const err = new Error(body.error || `Modal Wan HTTP ${resp.status}`);
+    err.status = resp.status || 502;
+    throw err;
+  }
+
+  return {
+    kind: 'video',
+    provider: 'modal',
+    model: 'wan2.2-5b',
+    videoUrl: `data:video/mp4;base64,${body.video_base64}`,
+    mime: 'video/mp4',
+    uncensored: true,
+    note: 'Self-hosted Wan 2.2 on Modal (scale-to-zero, no external content filter).',
+  };
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -1412,6 +1467,18 @@ export default async function handler(req, res) {
     }
 
     if (kind === 'video') {
+      // Explicit opt-in only - self-hosted, no external content filter (unlike
+      // fal.ai's hosted Wan, which applies its own, unverified moderation).
+      if (provider === 'modal') {
+        const out = await generateModalWanVideo({
+          prompt: prompt.trim(),
+          negativePrompt,
+          size: size || '832x480',
+          seconds,
+        });
+        return res.status(200).json(out);
+      }
+
       const isWan = provider === 'nvidia' || provider === 'fal' || /wan/i.test(String(model || ''));
 
       if (isWan) {
