@@ -71,7 +71,16 @@ export default async function handler(req, res) {
         pitch: pitchOpt,
         volume: '+0%',
       });
-      const result = await tts.synthesize();
+      // Edge TTS's websocket occasionally hangs instead of erroring. Without
+      // a timeout here, this attempt (and the retry loop) just sits until
+      // Vercel's own hard function timeout kills it with no clean error —
+      // that's why voice would play the first sentence then silently stop.
+      const result = await Promise.race([
+        tts.synthesize(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Edge TTS synthesis timed out after 10s')), 10000),
+        ),
+      ]);
       if (!result?.audio) {
         throw new Error('TTS returned no audio data');
       }

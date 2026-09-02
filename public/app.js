@@ -4554,11 +4554,26 @@ function stopNeuralSpeech() {
 }
 
 async function fetchNeuralAudio(text, voice) {
-  const res = await fetch('/api/tts', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, voice }),
-  });
+  // Edge TTS (unofficial, free) occasionally hangs instead of erroring. With
+  // no timeout, a hung request never rejects, so speakReply's catch/fallback
+  // never fires — the reply just stays silent forever. Abort after 15s so a
+  // hang surfaces as a failure the browser-voice fallback can catch instead.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  let res;
+  try {
+    res = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('TTS request timed out after 15s');
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     let msg = `TTS HTTP ${res.status}`;
     try {
