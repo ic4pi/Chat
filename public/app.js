@@ -2950,7 +2950,7 @@ async function sendMessage(text) {
       // sentence like "Yes." — turns that fixed overhead into audible dead
       // air between every single sentence. Batching several sentences per
       // request amortizes that cost across more actual speech.
-      const MIN_SPEAK_WORDS = 12;
+      const MIN_SPEAK_WORDS = 30;
       const speakNewSentences = () => {
         for (;;) {
           const next = nextSpeakableSentence(streamBuf, spokenUpTo);
