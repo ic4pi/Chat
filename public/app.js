@@ -2832,6 +2832,9 @@ async function sendMessage(text) {
   // Accidental Enter while a reply is streaming must NOT start another request.
   if (chatBusy) return;
   clearSmartReplyChips();
+  // Sending a new message should cut off whatever's still being spoken from
+  // the previous reply, not let it keep playing under/over the next one.
+  try { stopNeuralSpeech(); } catch { /* ignore */ }
 
   const chat = ensureActiveChat();
   if (chat.kind === 'group') {
