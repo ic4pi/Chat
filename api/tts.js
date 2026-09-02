@@ -22,6 +22,7 @@ const ALLOWED_VOICES = new Set([
   'en-GB-RyanNeural',
   'en-AU-NatashaNeural',
   'en-AU-WilliamNeural',
+  'en-US-AriaNeural',
 ]);
 
 const DEFAULT_VOICE = 'en-US-AvaNeural';

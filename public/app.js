@@ -4005,6 +4005,7 @@ const FEMALE_VOICES = [
   'en-US-JennyNeural',
   'en-GB-SoniaNeural',
   'en-AU-NatashaNeural',
+  'en-US-AriaNeural',
 ];
 const MALE_VOICES = [
   'en-US-AndrewNeural',
