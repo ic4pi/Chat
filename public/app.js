@@ -2915,6 +2915,7 @@ async function sendMessage(text) {
       let pinnedToStart = false;
       let streamBuf = '';
       let spokenUpTo = 0;
+      let pendingSpeak = '';
       chat.messages.push({
         role: 'assistant',
         content: '',
@@ -2942,15 +2943,24 @@ async function sendMessage(text) {
         }
       };
 
-      // Speak each sentence as soon as it's complete, instead of waiting for
-      // the whole reply to finish generating before the first TTS call even
-      // starts — that wait was the real source of "the voice is slow."
+      // Speak in batches of a dozen-plus words instead of one sentence at a
+      // time. Each TTS call carries significant fixed overhead (network +
+      // serverless cold start + Edge TTS handshake) no matter how short the
+      // text is, so firing one request per sentence — even a one-word
+      // sentence like "Yes." — turns that fixed overhead into audible dead
+      // air between every single sentence. Batching several sentences per
+      // request amortizes that cost across more actual speech.
+      const MIN_SPEAK_WORDS = 12;
       const speakNewSentences = () => {
         for (;;) {
           const next = nextSpeakableSentence(streamBuf, spokenUpTo);
           if (!next) break;
           spokenUpTo = next.nextFrom;
-          if (next.chunk) void speakReply(next.chunk);
+          if (next.chunk) pendingSpeak += (pendingSpeak ? ' ' : '') + next.chunk;
+        }
+        if (pendingSpeak && pendingSpeak.trim().split(/\s+/).length >= MIN_SPEAK_WORDS) {
+          void speakReply(pendingSpeak);
+          pendingSpeak = '';
         }
       };
 
@@ -2989,6 +2999,7 @@ async function sendMessage(text) {
           stopNeuralSpeech();
           streamBuf = '';
           spokenUpTo = 0;
+          pendingSpeak = '';
           refreshStreamingBubble();
           const retry = await callChatStream(
             fb.provider,
@@ -3147,14 +3158,20 @@ async function sendMessage(text) {
       });
       renderArtifacts();
       // Sentences already spoken incrementally while streaming (speakNewSentences
-      // above) shouldn't be spoken again — only the unspoken tail. If nothing
-      // was streamed (e.g. a non-streaming fallback reply with no token
-      // events), spokenUpTo stays 0 and this just speaks the whole reply,
-      // same as before.
+      // above) shouldn't be spoken again — only whatever's still batched up
+      // waiting for the word-count threshold (pendingSpeak) plus the true
+      // unspoken tail (a trailing partial sentence with no ending
+      // punctuation). If nothing was streamed (e.g. a non-streaming fallback
+      // reply with no token events), spokenUpTo stays 0 and this just speaks
+      // the whole reply, same as before.
       const unspokenTail = spokenUpTo > 0
         ? stripContinueMarkers(streamBuf.slice(spokenUpTo)).trim()
         : displayReply;
-      if (unspokenTail) speakReply(unspokenTail);
+      const finalSpeak = pendingSpeak
+        ? pendingSpeak + (unspokenTail ? ' ' + unspokenTail : '')
+        : unspokenTail;
+      pendingSpeak = '';
+      if (finalSpeak) speakReply(finalSpeak);
 
       if (wantsMore && autoRound + 1 < AUTO_CONTINUE_MAX) {
         autoRound += 1;
