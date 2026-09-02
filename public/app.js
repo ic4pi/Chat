@@ -2953,7 +2953,12 @@ async function sendMessage(text) {
       // sentence like "Yes." — turns that fixed overhead into audible dead
       // air between every single sentence. Batching several sentences per
       // request amortizes that cost across more actual speech.
-      const MIN_SPEAK_WORDS = 30;
+      // Edge TTS (unofficial, free) has a documented bug where longer text
+      // strings come back as truncated audio — cut off partway through, with
+      // no error, at an arbitrary point (github.com/rany2/edge-tts issue
+      // #190). Keeping requests short avoids triggering it; the previous 30
+      // was too high and produced replies that silently lost their back half.
+      const MIN_SPEAK_WORDS = 8;
       const speakNewSentences = () => {
         for (;;) {
           const next = nextSpeakableSentence(streamBuf, spokenUpTo);
