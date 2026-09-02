@@ -4563,6 +4563,12 @@ function chunkSpeech(text, max = 1800) {
 
 function stopNeuralSpeech() {
   speakGeneration += 1;
+  // Pausing <audio> never fires onended/onerror, so whatever chunk was mid-
+  // playback leaves its playBlob() promise unresolved forever. Without
+  // resetting the queue here too, every future speakReply() call chains onto
+  // that permanently-stuck promise and never runs — voice would work once,
+  // then silently stop dead after the first interruption.
+  speakQueue = Promise.resolve();
   try {
     if (activeAudio) {
       activeAudio.pause();
