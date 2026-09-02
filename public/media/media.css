@@ -221,6 +221,7 @@
   background: var(--bg);
 }
 .ref-preview.hidden { display: none; }
+.media-field.hidden { display: none; }
 
 .media-gallery {
   display: grid;

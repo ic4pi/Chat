@@ -11,8 +11,15 @@
  *     size?: string,          // image: 1024x1024 | video: 832x480 / 480x832
  *     seconds?: number,       // video length
  *     imageBase64?: string,   // Venice Edit / Wan i2v only (do NOT send on text-to-image)
- *     mimeType?: string
+ *     mimeType?: string,
+ *     accessKey?: string,     // required for provider:'modal' only if VIDEO_ACCESS_KEYS is set
  *   }
+ *
+ * GET/POST /api/media-generate?op=credit  — admin-only (Basic auth), manage
+ * per-person prepaid balances for provider:'modal'. See lib/video-billing.js.
+ *   GET  -> { people: [{ name, key, markupPct, balanceUsd }, ...] }
+ *   POST { key, usd } -> add usd dollars of credit to that access key
+ *                        (usd may be negative to correct a mistake)
  *
  * Env (Vercel → Settings → Environment Variables):
  *   VENICE_API_KEY         — uncensored images + Edit (safe_mode:false)
@@ -23,10 +30,29 @@
  *   NVIDIA_MEDIA_BASE_URL  — self-hosted Wan NIM only (OpenAI-compatible base URL)
  *   MODAL_WAN_ENDPOINT     — self-hosted Wan 2.2 5B on Modal, scale-to-zero,
  *                            no external content filter (provider: 'modal')
+ *   VIDEO_ACCESS_KEYS      — JSON array turning on per-person billing for the
+ *                            Modal provider: [{"key","name","markupPct"}, ...]
+ *                            Unset = Modal video stays open/unmetered.
+ *   MODAL_L4_RATE_PER_HOUR — override the assumed Modal L4 $/hr used to
+ *                            compute cost (default 0.80; check modal.com/pricing)
+ *   ADMIN_USERNAME / ADMIN_PASSWORD — gates ?op=credit (see lib/auth.js)
+ *   Also requires a Vercel KV / Upstash Redis store attached (lib/kv.js) to
+ *   persist balances — without it, everyone reads as $0 balance and gets
+ *   rejected (fails closed, not open).
  *
  * Vercel Functions hard-limit request/response bodies at 4.5MB (HTTP 413).
  * Never attach reference images to text-to-image. Prefer webp for Venice.
  */
+
+import { requireAdminAuth } from '../lib/auth.js';
+import {
+  billingEnabled,
+  findPerson,
+  assertHasCredit,
+  chargeForGeneration,
+  addCreditUsd,
+  listAllBalances,
+} from '../lib/video-billing.js';
 
 /** Stay under Vercel’s 4.5MB JSON body limit (request + response). */
 const SAFE_JSON_BYTES = 3_200_000;
@@ -1339,15 +1365,39 @@ async function generateModalWanVideo({
     videoUrl: `data:video/mp4;base64,${body.video_base64}`,
     mime: 'video/mp4',
     uncensored: true,
+    elapsedSeconds: body.elapsed_seconds,
     note: 'Self-hosted Wan 2.2 on Modal (scale-to-zero, no external content filter).',
   };
 }
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(204).end();
+
+  // Admin-only balance management for the Modal video access keys:
+  //   GET  /api/media-generate?op=credit             -> list everyone's balance
+  //   POST /api/media-generate?op=credit {key, usd}   -> add (or subtract) credit
+  // Basic-auth protected, same ADMIN_USERNAME/ADMIN_PASSWORD as /admin.
+  if (String(req.query?.op || '') === 'credit') {
+    if (!requireAdminAuth(req, res)) return;
+    if (req.method === 'GET') {
+      return res.status(200).json({ people: await listAllBalances() });
+    }
+    if (req.method === 'POST') {
+      const { key, usd } = req.body || {};
+      if (!key || !Number.isFinite(Number(usd))) {
+        return res.status(400).json({ error: 'Body must be { key, usd }' });
+      }
+      const person = findPerson(key);
+      if (!person) return res.status(404).json({ error: 'No access key matches that key.' });
+      const balanceUsd = await addCreditUsd(key, Number(usd));
+      return res.status(200).json({ ok: true, name: person.name, balanceUsd });
+    }
+    return res.status(405).json({ error: 'GET or POST only' });
+  }
+
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
 
   const {
@@ -1360,6 +1410,7 @@ export default async function handler(req, res) {
     seconds,
     imageBase64,
     mimeType,
+    accessKey,
   } = req.body || {};
 
   if (typeof prompt !== 'string' || !prompt.trim()) {
@@ -1470,12 +1521,36 @@ export default async function handler(req, res) {
       // Explicit opt-in only - self-hosted, no external content filter (unlike
       // fal.ai's hosted Wan, which applies its own, unverified moderation).
       if (provider === 'modal') {
+        // Billing only kicks in once VIDEO_ACCESS_KEYS is set in Vercel env.
+        // Until then this stays open/unmetered (single-owner use).
+        let person = null;
+        if (billingEnabled()) {
+          person = findPerson(accessKey);
+          if (!person) {
+            return res.status(401).json({ error: 'Invalid or missing access key for video generation.' });
+          }
+          try {
+            await assertHasCredit(person);
+          } catch (creditErr) {
+            return res.status(creditErr.status || 402).json({ error: creditErr.message });
+          }
+        }
+
         const out = await generateModalWanVideo({
           prompt: prompt.trim(),
           negativePrompt,
           size: size || '832x480',
           seconds,
         });
+
+        if (person) {
+          const billing = await chargeForGeneration(person, {
+            elapsedSeconds: out.elapsedSeconds,
+            prompt: prompt.trim(),
+          });
+          out.billing = { name: person.name, markupPct: person.markupPct, ...billing };
+        }
+
         return res.status(200).json(out);
       }
 

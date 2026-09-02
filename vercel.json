@@ -124,7 +124,7 @@
       "maxDuration": 60
     },
     "api/media-generate.js": {
-      "maxDuration": 60
+      "maxDuration": 300
     },
     "api/animate-sequence.js": {
       "maxDuration": 60

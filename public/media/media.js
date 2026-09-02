@@ -23,6 +23,7 @@ const VIDEO_MODELS = [
   { value: 'nvidia:wan2.2-i2v', label: 'NVIDIA · Wan 2.2 · Image → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-i2v', usesRef: true },
   { value: 'cloudflare:seedance-mini', label: 'Cloudflare · Seedance 2.0 Mini', kind: 'video', provider: 'cloudflare', model: 'seedance-mini', usesRef: false },
   { value: 'cloudflare:seedance-fast', label: 'Cloudflare · Seedance 2.0 Fast', kind: 'video', provider: 'cloudflare', model: 'seedance-fast', usesRef: false },
+  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, uncensored)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', usesRef: false },
 ];
 
 const IMAGE_SIZES = [
@@ -51,6 +52,8 @@ const els = {
   ref: document.getElementById('mediaRef'),
   refWrap: document.getElementById('refWrap'),
   refPreview: document.getElementById('refPreview'),
+  accessKey: document.getElementById('mediaAccessKey'),
+  accessKeyWrap: document.getElementById('accessKeyWrap'),
   generate: document.getElementById('mediaGenerate'),
   status: document.getElementById('mediaStatus'),
   gallery: document.getElementById('mediaGallery'),
@@ -109,6 +112,7 @@ function syncFields() {
     else if (usesRef) opt.textContent = '(required for image→video)';
     else opt.textContent = '(optional · image→video)';
   }
+  els.accessKeyWrap.classList.toggle('hidden', spec?.provider !== 'modal');
 }
 
 function setStatus(msg) {
@@ -178,6 +182,17 @@ els.tabs.forEach((tab) => {
 });
 
 els.model.addEventListener('change', syncFields);
+
+// Remember the access key locally so friends don't retype it every visit.
+try {
+  const savedKey = localStorage.getItem('mediaAccessKey');
+  if (savedKey) els.accessKey.value = savedKey;
+} catch {}
+els.accessKey.addEventListener('change', () => {
+  try {
+    localStorage.setItem('mediaAccessKey', els.accessKey.value.trim());
+  } catch {}
+});
 
 els.ref.addEventListener('change', async () => {
   const file = els.ref.files?.[0];
@@ -277,6 +292,9 @@ els.generate.addEventListener('click', async () => {
     if (neg && kind === 'image') {
       body.negativePrompt = neg;
     }
+    if (spec.provider === 'modal') {
+      body.accessKey = (els.accessKey.value || '').trim();
+    }
     // ONLY attach the upload when the selected model actually uses it.
     // Sending it on text-to-image is what caused HTTP 413.
     if (refData && usesRef) {
@@ -344,7 +362,11 @@ els.generate.addEventListener('click', async () => {
       vid.playsInline = true;
       card.insertBefore(vid, card.firstChild);
       prependCard(card);
-      if (!data.fallbackNote) setStatus('Done.');
+      if (data.billing) {
+        setStatus(`Done. Charged $${data.billing.chargedUsd.toFixed(2)} · balance $${data.billing.balanceUsd.toFixed(2)}`);
+      } else if (!data.fallbackNote) {
+        setStatus('Done.');
+      }
     } else {
       setStatus('Unexpected response.');
     }
