@@ -4663,20 +4663,24 @@ async function speakReply(text, { force = false, personaId = null } = {}) {
   }
 
   const gen = speakGeneration;
+  // Start every chunk's synthesis now, in parallel, instead of waiting for
+  // this call's turn in the playback queue. During live voice chat each
+  // streamed sentence is its own speakReply() call — gating the fetch behind
+  // the queue meant sentence N+1's TTS request didn't even start until
+  // sentence N finished playing, turning every sentence boundary into a full
+  // network round-trip of dead air. Fetching up front overlaps that round
+  // trip with whatever's still playing ahead of it in the queue.
+  const blobPromises = chunks.map((chunk) => fetchNeuralAudio(chunk, voice));
+
   speakQueue = speakQueue.then(async () => {
     if (gen !== speakGeneration) return;
     activeSpeechCount += 1;
     syncInterruptBtn();
     try {
-      // Kick off the next chunk's synthesis while the current one plays,
-      // instead of fetching them one at a time — dead air between chunks
-      // was otherwise as long as a full TTS network round-trip, every time.
-      let nextBlobPromise = fetchNeuralAudio(chunks[0], voice);
       for (let i = 0; i < chunks.length; i++) {
         if (gen !== speakGeneration) return;
-        const blob = await nextBlobPromise;
+        const blob = await blobPromises[i];
         if (gen !== speakGeneration) return;
-        nextBlobPromise = i + 1 < chunks.length ? fetchNeuralAudio(chunks[i + 1], voice) : null;
         await playBlob(blob, { interrupt: i === 0 });
       }
       ttsUnlocked = true;
