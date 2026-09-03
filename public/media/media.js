@@ -1,19 +1,9 @@
 const IMAGE_MODELS = [
-  { value: 'venice:qwen-edit', label: 'Venice · Edit / Image→Image (uncensored)', kind: 'image', provider: 'venice', model: 'qwen-edit', usesRef: true },
-  { value: 'venice:z-image-turbo', label: 'Venice · Z-Image Turbo (uncensored)', kind: 'image', provider: 'venice', model: 'z-image-turbo', usesRef: false },
-  { value: 'venice:lustify-sdxl', label: 'Venice · Lustify SDXL (uncensored)', kind: 'image', provider: 'venice', model: 'lustify-sdxl', usesRef: false },
-  { value: 'venice:lustify-v8', label: 'Venice · Lustify v8 (uncensored)', kind: 'image', provider: 'venice', model: 'lustify-v8', usesRef: false },
-  { value: 'venice:wai-Illustrious', label: 'Venice · Anime WAI (uncensored)', kind: 'image', provider: 'venice', model: 'wai-Illustrious', usesRef: false },
-  { value: 'venice:chroma', label: 'Venice · Chroma (uncensored)', kind: 'image', provider: 'venice', model: 'chroma', usesRef: false },
-  { value: 'venice:venice-sd35', label: 'Venice · SD3.5 (uncensored)', kind: 'image', provider: 'venice', model: 'venice-sd35', usesRef: false },
-  { value: 'venice:flux-2-pro', label: 'Venice · Flux 2 Pro (uncensored)', kind: 'image', provider: 'venice', model: 'flux-2-pro', usesRef: false },
-  { value: 'venice:qwen-image', label: 'Venice · Qwen Image (uncensored)', kind: 'image', provider: 'venice', model: 'qwen-image', usesRef: false },
-  { value: 'cloudflare:flux-schnell', label: 'Cloudflare · FLUX.1 Schnell (filtered)', kind: 'image', provider: 'cloudflare', model: 'flux-schnell', usesRef: false },
-  { value: 'cloudflare:sdxl-lightning', label: 'Cloudflare · SDXL Lightning (filtered)', kind: 'image', provider: 'cloudflare', model: 'sdxl-lightning', usesRef: false },
-  { value: 'cloudflare:sdxl', label: 'Cloudflare · SDXL Base (filtered)', kind: 'image', provider: 'cloudflare', model: 'sdxl', usesRef: false },
-  { value: 'nvidia:flux-schnell', label: 'NVIDIA · FLUX.1 Schnell (filtered)', kind: 'image', provider: 'nvidia', model: 'flux-schnell', usesRef: false },
-  { value: 'nvidia:sdxl', label: 'NVIDIA · SDXL (filtered)', kind: 'image', provider: 'nvidia', model: 'sdxl', usesRef: false },
-  { value: 'nvidia:qwen-image', label: 'NVIDIA · Qwen Image (filtered)', kind: 'image', provider: 'nvidia', model: 'qwen-image', usesRef: false },
+  { value: 'modal:lustify', label: 'Realistic · Text → Image (self-hosted)', kind: 'image', provider: 'modal', model: 'lustify', usesRef: false },
+  { value: 'modal:wai-illustrious', label: 'Anime · Text → Image (self-hosted)', kind: 'image', provider: 'modal', model: 'wai-illustrious', usesRef: false },
+  { value: 'cloudflare:flux-schnell', label: 'Cloudflare · FLUX.1 Schnell (free, filtered)', kind: 'image', provider: 'cloudflare', model: 'flux-schnell', usesRef: false },
+  { value: 'cloudflare:sdxl-lightning', label: 'Cloudflare · SDXL Lightning (free, filtered)', kind: 'image', provider: 'cloudflare', model: 'sdxl-lightning', usesRef: false },
+  { value: 'cloudflare:sdxl', label: 'Cloudflare · SDXL Base (free, filtered)', kind: 'image', provider: 'cloudflare', model: 'sdxl', usesRef: false },
 ];
 
 const VIDEO_MODELS = [
@@ -127,12 +117,11 @@ function syncFields() {
   // Always show negative prompt for images — never hide controls based on provider.
   els.negativeWrap.style.display = kind === 'image' ? '' : 'none';
   const usesRef = modelUsesRef(spec);
+  // Only shown when the selected model actually consumes a reference image.
+  els.refWrap.classList.toggle('hidden', !usesRef);
   const opt = els.refWrap.querySelector('.opt');
   if (opt) {
-    if (kind === 'image' && usesRef) opt.textContent = '(required for Edit / image→image)';
-    else if (kind === 'image') opt.textContent = '(only for Venice · Edit — ignored otherwise)';
-    else if (usesRef) opt.textContent = '(required for image→video)';
-    else opt.textContent = '(optional · image→video)';
+    opt.textContent = kind === 'image' ? '(required for image→image)' : '(required for image→video)';
   }
   els.accessKeyWrap.classList.toggle('hidden', spec?.provider !== 'modal');
   els.lengthWrap.classList.toggle('hidden', kind !== 'video');

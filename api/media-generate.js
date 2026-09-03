@@ -28,11 +28,13 @@
  *   FAL_KEY                — Wan 2.2 video via fal.ai (recommended)
  *   NVIDIA_API_KEY         — hosted FLUX/SDXL image (optional; safety-filtered)
  *   NVIDIA_MEDIA_BASE_URL  — self-hosted Wan NIM only (OpenAI-compatible base URL)
- *   MODAL_WAN_ENDPOINT     — self-hosted Wan 2.2 5B on Modal, scale-to-zero,
- *                            no external content filter (provider: 'modal')
- *   VIDEO_ACCESS_KEYS      — JSON array turning on per-person billing for the
- *                            Modal provider: [{"key","name","markupPct"}, ...]
- *                            Unset = Modal video stays open/unmetered.
+ *   MODAL_WAN_ENDPOINT     — self-hosted Wan 2.2 5B video on Modal, scale-to-zero,
+ *                            no external content filter (kind:'video', provider:'modal')
+ *   MODAL_SDXL_ENDPOINT    — self-hosted SDXL images on Modal (lustify / wai-illustrious),
+ *                            same deal (kind:'image', provider:'modal')
+ *   VIDEO_ACCESS_KEYS      — JSON array turning on per-person billing for both
+ *                            Modal providers: [{"key","name","markupPct"}, ...]
+ *                            Unset = Modal image/video stays open/unmetered.
  *   MODAL_L4_RATE_PER_HOUR — override the assumed Modal L4 $/hr used to
  *                            compute cost (default 0.80; check modal.com/pricing)
  *   ADMIN_USERNAME / ADMIN_PASSWORD — gates ?op=credit (see lib/auth.js)
@@ -1317,6 +1319,56 @@ async function generateNvidiaWanVideo({
 }
 
 /**
+ * Self-hosted SDXL images on Modal (scale-to-zero, no external content filter).
+ * Two checkpoints: lustify (realistic) and wai-illustrious (anime/illustration).
+ * Env: MODAL_SDXL_ENDPOINT (defaults to the deployed endpoint below).
+ */
+const MODAL_SDXL_ENDPOINT =
+  process.env.MODAL_SDXL_ENDPOINT || 'https://ic4pi--sdxl-nsfw-generate.modal.run';
+
+const MODAL_IMAGE_MODELS = {
+  lustify: 'lustify',
+  'wai-illustrious': 'wai-illustrious',
+  'wai-Illustrious': 'wai-illustrious',
+};
+
+async function generateModalSdxlImage({ prompt, negativePrompt, model, size }) {
+  const dims = String(size || '1024x1024').split(/[x*]/i).map(Number);
+  const width = dims[0] || 1024;
+  const height = dims[1] || 1024;
+  const modalModel = MODAL_IMAGE_MODELS[model] || 'lustify';
+
+  const resp = await fetch(MODAL_SDXL_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      prompt,
+      negative_prompt: negativePrompt || undefined,
+      model: modalModel,
+      width,
+      height,
+    }),
+  });
+
+  const body = await resp.json().catch(() => ({}));
+  if (!resp.ok || !body.image_base64) {
+    const err = new Error(body.error || `Modal SDXL HTTP ${resp.status}`);
+    err.status = resp.status || 502;
+    throw err;
+  }
+
+  return {
+    kind: 'image',
+    provider: 'modal',
+    model: modalModel,
+    images: [{ base64: body.image_base64, mimeType: 'image/png' }],
+    uncensored: true,
+    elapsedSeconds: body.elapsed_seconds,
+    note: 'Self-hosted SDXL on Modal (scale-to-zero, no external content filter).',
+  };
+}
+
+/**
  * Self-hosted Wan 2.2 5B on Modal (scale-to-zero, no external content filter -
  * unlike fal.ai's hosted Wan, nothing here moderates the prompt).
  * Env: MODAL_WAN_ENDPOINT (defaults to the deployed endpoint below).
@@ -1458,6 +1510,41 @@ export default async function handler(req, res) {
 
   try {
     if (kind === 'image') {
+      // Self-hosted, explicit opt-in only - shares the same prepaid billing
+      // ledger as Modal video (lib/video-billing.js), keyed by the same
+      // access keys.
+      if (provider === 'modal') {
+        let person = null;
+        if (billingEnabled()) {
+          person = findPerson(accessKey);
+          if (!person) {
+            return res.status(401).json({ error: 'Invalid or missing access key for image generation.' });
+          }
+          try {
+            await assertHasCredit(person);
+          } catch (creditErr) {
+            return res.status(creditErr.status || 402).json({ error: creditErr.message });
+          }
+        }
+
+        const out = await generateModalSdxlImage({
+          prompt: prompt.trim(),
+          negativePrompt,
+          model,
+          size,
+        });
+
+        if (person) {
+          const billing = await chargeForGeneration(person, {
+            elapsedSeconds: out.elapsedSeconds,
+            prompt: prompt.trim(),
+          });
+          out.billing = { name: person.name, markupPct: person.markupPct, ...billing };
+        }
+
+        return respondImage(out);
+      }
+
       // Venice Edit = image→image. Only path that consumes imageBase64 for images.
       const isEdit =
         provider === 'venice' &&
