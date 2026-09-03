@@ -35,6 +35,18 @@ const VIDEO_SIZES = [
   { value: '480x832', label: 'Portrait · 9:16' },
 ];
 
+// Capped at 20s (4 chained clips) in the UI - each clip is a full diffusion
+// run (~1-2 min at default quality), and going further risks the request
+// getting cut off by Vercel's function timeout with the GPU time already
+// spent and nothing delivered. The Modal endpoint itself accepts up to 6
+// clips (30s) for direct API use if you want to accept that risk.
+const VIDEO_LENGTHS = [
+  { value: '5', label: '5s' },
+  { value: '10', label: '10s' },
+  { value: '15', label: '15s' },
+  { value: '20', label: '20s (max)' },
+];
+
 /** Vercel Functions reject bodies over 4.5MB (HTTP 413). Keep refs well under. */
 const REF_MAX_EDGE = 1024;
 const REF_MAX_BYTES = 1_200_000;
@@ -47,6 +59,8 @@ const els = {
   negativeWrap: document.getElementById('negativeWrap'),
   size: document.getElementById('mediaSize'),
   sizeWrap: document.getElementById('sizeWrap'),
+  length: document.getElementById('mediaLength'),
+  lengthWrap: document.getElementById('lengthWrap'),
   ref: document.getElementById('mediaRef'),
   refWrap: document.getElementById('refWrap'),
   refPreview: document.getElementById('refPreview'),
@@ -87,6 +101,16 @@ function fillSizes() {
   }
 }
 
+function fillLengths() {
+  els.length.innerHTML = '';
+  for (const l of VIDEO_LENGTHS) {
+    const opt = document.createElement('option');
+    opt.value = l.value;
+    opt.textContent = l.label;
+    els.length.appendChild(opt);
+  }
+}
+
 function selectedSpec() {
   const value = els.model.value;
   return currentModels().find((m) => m.value === value) || currentModels()[0];
@@ -111,6 +135,7 @@ function syncFields() {
     else opt.textContent = '(optional · image→video)';
   }
   els.accessKeyWrap.classList.toggle('hidden', spec?.provider !== 'modal');
+  els.lengthWrap.classList.toggle('hidden', kind !== 'video');
 }
 
 function setStatus(msg) {
@@ -175,6 +200,7 @@ els.tabs.forEach((tab) => {
     els.tabs.forEach((t) => t.classList.toggle('active', t === tab));
     fillModels();
     fillSizes();
+    fillLengths();
     syncFields();
   });
 });
@@ -290,6 +316,9 @@ els.generate.addEventListener('click', async () => {
     if (neg && kind === 'image') {
       body.negativePrompt = neg;
     }
+    if (kind === 'video') {
+      body.seconds = Number(els.length.value) || 5;
+    }
     if (spec.provider === 'modal') {
       body.accessKey = (els.accessKey.value || '').trim();
     }
@@ -380,4 +409,5 @@ els.generate.addEventListener('click', async () => {
 
 fillModels();
 fillSizes();
+fillLengths();
 syncFields();

@@ -1334,7 +1334,14 @@ async function generateModalWanVideo({
   const width = dims[0] || 832;
   const height = dims[1] || 480;
   const fps = 16;
-  const num_frames = Math.min(161, Math.max(8, Math.round((Number(seconds) || 5) * fps) + 1));
+  const num_frames = 81; // ~5s per clip at 16fps
+
+  // Longer requests chain multiple 5s clips inside Modal (last frame of each
+  // clip feeds the next as its starting frame) instead of one giant single
+  // generation - keeps quality/speed per clip consistent. Server-side cap of
+  // 6 clips (~30s) is enforced again inside wan_app.py regardless of what's
+  // sent here.
+  const num_clips = Math.min(6, Math.max(1, Math.round((Number(seconds) || 5) / 5)));
 
   const resp = await fetch(MODAL_WAN_ENDPOINT, {
     method: 'POST',
@@ -1348,6 +1355,7 @@ async function generateModalWanVideo({
       height,
       num_frames,
       fps,
+      num_clips,
     }),
   });
 
@@ -1366,6 +1374,7 @@ async function generateModalWanVideo({
     mime: 'video/mp4',
     uncensored: true,
     elapsedSeconds: body.elapsed_seconds,
+    numClips: body.num_clips,
     note: 'Self-hosted Wan 2.2 on Modal (scale-to-zero, no external content filter).',
   };
 }
