@@ -386,6 +386,18 @@ els.generate.addEventListener('click', async () => {
       vid.src = data.videoUrl;
       vid.controls = true;
       vid.playsInline = true;
+      vid.addEventListener('error', () => {
+        const code = vid.error?.code;
+        const codeName = { 1: 'ABORTED', 2: 'NETWORK', 3: 'DECODE', 4: 'SRC_NOT_SUPPORTED' }[code] || code;
+        console.error('Video failed to load:', {
+          codeName,
+          message: vid.error?.message,
+          provider: data.provider,
+          model: data.model,
+          urlPrefix: String(data.videoUrl || '').slice(0, 80),
+        });
+        setStatus(`Video failed to load (${codeName}) — the ${data.provider} URL may be broken or expired. Check console for details.`);
+      });
       card.insertBefore(vid, card.firstChild);
       prependCard(card);
       if (!data.fallbackNote) setStatus('Done.');

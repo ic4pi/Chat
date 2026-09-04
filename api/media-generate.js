@@ -1133,21 +1133,14 @@ async function generateFalWanVideo({
     throw err;
   }
 
-  // Sync-ish: some endpoints return the result immediately
-  let videoUrl =
-    submitted?.video?.url ||
-    submitted?.data?.video?.url ||
-    submitted?.output?.video?.url;
-  if (videoUrl) {
-    return {
-      kind: 'video',
-      provider: 'fal',
-      model: modelId,
-      videoUrl,
-      mime: 'video/mp4',
-    };
-  }
-
+  // fal.ai's queue API for video models is always async — the submit call
+  // only ever returns { request_id, status_url, response_url }, never the
+  // finished video. A previous "sync-ish" shortcut here checked for a
+  // video.url on the submit response and returned early if found; that
+  // could misfire on an unrelated field and hand back a broken URL instead
+  // of the real result, which is consistent with "generates, then the
+  // player says load failed." Always go through the poll loop instead.
+  let videoUrl;
   const requestId = submitted.request_id || submitted.requestId;
   const statusUrl = submitted.status_url || (requestId ? `https://queue.fal.run/${modelId}/requests/${requestId}/status` : null);
   const resultUrl = submitted.response_url || (requestId ? `https://queue.fal.run/${modelId}/requests/${requestId}` : null);
