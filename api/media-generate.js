@@ -29,7 +29,9 @@
  *   NVIDIA_API_KEY         — hosted FLUX/SDXL image (optional; safety-filtered)
  *   NVIDIA_MEDIA_BASE_URL  — self-hosted Wan NIM only (OpenAI-compatible base URL)
  *   MODAL_WAN_ENDPOINT     — self-hosted Wan 2.2 5B video on Modal, scale-to-zero,
- *                            no external content filter (kind:'video', provider:'modal')
+ *                            no external content filter (kind:'video', provider:'modal', model:'wan2.2-5b')
+ *   MODAL_LTX_ENDPOINT     — self-hosted LTX-Video on Modal, same deal
+ *                            (kind:'video', provider:'modal', model:'ltx-video')
  *   MODAL_SDXL_ENDPOINT    — self-hosted SDXL images on Modal (lustify / wai-illustrious),
  *                            same deal (kind:'image', provider:'modal')
  *   VIDEO_ACCESS_KEYS      — JSON array turning on per-person billing for both
@@ -1431,6 +1433,58 @@ async function generateModalWanVideo({
   };
 }
 
+/**
+ * Self-hosted LTX-Video on Modal (scale-to-zero, no external content filter).
+ * Second video model alongside Wan - faster/lighter, different look. Same
+ * request/response shape and clip-chaining approach as generateModalWanVideo.
+ * Env: MODAL_LTX_ENDPOINT (defaults to the deployed endpoint below).
+ */
+const MODAL_LTX_ENDPOINT =
+  process.env.MODAL_LTX_ENDPOINT || 'https://ic4pi--ltx-video-generate.modal.run';
+
+async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds }) {
+  const dims = String(size || '704x480').split(/[x*]/i).map(Number);
+  const width = dims[0] || 704;
+  const height = dims[1] || 480;
+  const fps = 24;
+  const num_frames = 121; // ~5s per clip at 24fps
+
+  const num_clips = Math.min(6, Math.max(1, Math.round((Number(seconds) || 5) / 5)));
+
+  const resp = await fetch(MODAL_LTX_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      prompt,
+      negative_prompt: negativePrompt || undefined,
+      width,
+      height,
+      num_frames,
+      fps,
+      num_clips,
+    }),
+  });
+
+  const body = await resp.json().catch(() => ({}));
+  if (!resp.ok || !body.video_base64) {
+    const err = new Error(body.error || `Modal LTX HTTP ${resp.status}`);
+    err.status = resp.status || 502;
+    throw err;
+  }
+
+  return {
+    kind: 'video',
+    provider: 'modal',
+    model: 'ltx-video',
+    videoUrl: `data:video/mp4;base64,${body.video_base64}`,
+    mime: 'video/mp4',
+    uncensored: true,
+    elapsedSeconds: body.elapsed_seconds,
+    numClips: body.num_clips,
+    note: 'Self-hosted LTX-Video on Modal (scale-to-zero, no external content filter).',
+  };
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -1632,12 +1686,20 @@ export default async function handler(req, res) {
           }
         }
 
-        const out = await generateModalWanVideo({
-          prompt: prompt.trim(),
-          negativePrompt,
-          size: size || '832x480',
-          seconds,
-        });
+        const isLtx = /ltx/i.test(String(model || ''));
+        const out = isLtx
+          ? await generateModalLtxVideo({
+              prompt: prompt.trim(),
+              negativePrompt,
+              size: size || '704x480',
+              seconds,
+            })
+          : await generateModalWanVideo({
+              prompt: prompt.trim(),
+              negativePrompt,
+              size: size || '832x480',
+              seconds,
+            });
 
         if (person) {
           const billing = await chargeForGeneration(person, {

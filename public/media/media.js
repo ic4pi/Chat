@@ -8,6 +8,7 @@ const IMAGE_MODELS = [
 
 const VIDEO_MODELS = [
   { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', usesRef: false },
+  { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted)', kind: 'video', provider: 'modal', model: 'ltx-video', usesRef: false },
   // fal.ai / NVIDIA / Cloudflare video removed - fal and NVIDIA both bill per
   // generation, and Cloudflare's Seedance models are a third-party pass-through
   // (not covered by the Workers AI free Neurons tier, not on Cloudflare's own
