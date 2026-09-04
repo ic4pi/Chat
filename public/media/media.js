@@ -21,12 +21,10 @@ const IMAGE_MODELS = [
 ];
 
 const VIDEO_MODELS = [
-  { value: 'fal:wan2.2-t2v', label: 'Wan 2.2 · Text → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-t2v', usesRef: false, best: true, note: 'Best default for text-to-video.' },
-  { value: 'fal:wan2.2-i2v', label: 'Wan 2.2 · Image → Video (fal.ai)', kind: 'video', provider: 'fal', model: 'wan2.2-i2v', usesRef: true, best: true, note: 'Required for animating an uploaded image.' },
-  { value: 'cloudflare:seedance-fast', label: 'Cloudflare · Seedance 2.0 Fast', kind: 'video', provider: 'cloudflare', model: 'seedance-fast', usesRef: false, best: true, note: 'Fast alternative if you don’t have a fal.ai key.' },
+  { value: 'cloudflare:seedance-fast', label: 'Cloudflare · Seedance 2.0 Fast', kind: 'video', provider: 'cloudflare', model: 'seedance-fast', usesRef: false, best: true, note: 'Fast, hosted — the default for video.' },
   { value: 'cloudflare:seedance-mini', label: 'Cloudflare · Seedance 2.0 Mini', kind: 'video', provider: 'cloudflare', model: 'seedance-mini', usesRef: false, note: 'Smaller/cheaper Seedance variant.' },
-  { value: 'nvidia:wan2.2-t2v', label: 'NVIDIA · Wan 2.2 · Text → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-t2v', usesRef: false, note: 'Needs a self-hosted Wan NIM (NVIDIA_MEDIA_BASE_URL).' },
-  { value: 'nvidia:wan2.2-i2v', label: 'NVIDIA · Wan 2.2 · Image → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-i2v', usesRef: true, note: 'Needs a self-hosted Wan NIM (NVIDIA_MEDIA_BASE_URL).' },
+  { value: 'nvidia:wan2.2-t2v', label: 'NVIDIA · Wan 2.2 · Text → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-t2v', usesRef: false, best: true, note: 'Self-hosted Wan NIM (NVIDIA_MEDIA_BASE_URL) — no third-party hosting.' },
+  { value: 'nvidia:wan2.2-i2v', label: 'NVIDIA · Wan 2.2 · Image → Video', kind: 'video', provider: 'nvidia', model: 'wan2.2-i2v', usesRef: true, best: true, note: 'Self-hosted Wan NIM (NVIDIA_MEDIA_BASE_URL) — no third-party hosting.' },
 ];
 
 const MEDIA_SHOW_ALL_STORAGE = 'uncensored_media_show_all_v1';

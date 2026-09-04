@@ -41,9 +41,8 @@ Add these in **Vercel → Project → Settings → Environment Variables** (Prod
 |---------|----------|
 | `CLOUDFLARE_ACCOUNT_ID` | Image · FLUX/SDXL (optional video · Seedance if enabled on the account) |
 | `CLOUDFLARE_API_TOKEN` | Workers AI permission |
-| `FAL_KEY` | **Video · Wan 2.2** via fal.ai (NVIDIA free hosted API 404s for Wan) |
 | `NVIDIA_API_KEY` | Optional image · hosted FLUX/SDXL |
-| `NVIDIA_MEDIA_BASE_URL` | Optional self-hosted Wan NIM only |
+| `NVIDIA_MEDIA_BASE_URL` | **Video · Wan 2.2** — self-hosted NIM only (NVIDIA's free hosted API 404s for Wan) |
 
 Open **`/media`** (Media link in the chat topbar). Missing keys return a clear 503 for that provider only.
 
