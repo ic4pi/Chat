@@ -6,9 +6,16 @@ const IMAGE_MODELS = [
   { value: 'cloudflare:sdxl', label: 'Cloudflare · SDXL Base (free, filtered)', kind: 'image', provider: 'cloudflare', model: 'sdxl', usesRef: false },
 ];
 
+// maxSeconds is a per-model safety cap on the Length picker, not a stylistic
+// choice - measured live against the deployed site (not just Modal directly):
+// a single 5s Wan clip at real settings (40 steps, 832x480) took 6m20s end to
+// end, so 4 chained clips would run ~25min, way past Vercel's 800s function
+// timeout - the request would die with the GPU time already spent and nothing
+// delivered. LTX at 30 steps did the same job in ~2min, so it can safely go
+// up to the Modal endpoint's own 6-clip/30s cap.
 const VIDEO_MODELS = [
-  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', usesRef: false },
-  { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted)', kind: 'video', provider: 'modal', model: 'ltx-video', usesRef: false },
+  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, slow)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', usesRef: false, maxSeconds: 5 },
+  { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', usesRef: false, maxSeconds: 30 },
   // fal.ai / NVIDIA / Cloudflare video removed - fal and NVIDIA both bill per
   // generation, and Cloudflare's Seedance models are a third-party pass-through
   // (not covered by the Workers AI free Neurons tier, not on Cloudflare's own
@@ -26,16 +33,14 @@ const VIDEO_SIZES = [
   { value: '480x832', label: 'Portrait · 9:16' },
 ];
 
-// Capped at 20s (4 chained clips) in the UI - each clip is a full diffusion
-// run (~1-2 min at default quality), and going further risks the request
-// getting cut off by Vercel's function timeout with the GPU time already
-// spent and nothing delivered. The Modal endpoint itself accepts up to 6
-// clips (30s) for direct API use if you want to accept that risk.
+// Filtered per-model by maxSeconds (see VIDEO_MODELS) in fillLengths().
 const VIDEO_LENGTHS = [
   { value: '5', label: '5s' },
   { value: '10', label: '10s' },
   { value: '15', label: '15s' },
-  { value: '20', label: '20s (max)' },
+  { value: '20', label: '20s' },
+  { value: '25', label: '25s' },
+  { value: '30', label: '30s' },
 ];
 
 /** Vercel Functions reject bodies over 4.5MB (HTTP 413). Keep refs well under. */
@@ -93,13 +98,20 @@ function fillSizes() {
 }
 
 function fillLengths() {
+  const spec = selectedSpec();
+  const maxSeconds = (kind === 'video' && spec?.maxSeconds) || 30;
+  const prevValue = els.length.value;
   els.length.innerHTML = '';
-  for (const l of VIDEO_LENGTHS) {
+  const list = VIDEO_LENGTHS.filter((l) => Number(l.value) <= maxSeconds);
+  for (const l of list) {
     const opt = document.createElement('option');
     opt.value = l.value;
-    opt.textContent = l.label;
+    opt.textContent = Number(l.value) === maxSeconds ? `${l.label} (max)` : l.label;
     els.length.appendChild(opt);
   }
+  // Keep the previous choice if it's still valid for this model, else fall
+  // back to the new max instead of silently resetting to 5s.
+  if (list.some((l) => l.value === prevValue)) els.length.value = prevValue;
 }
 
 function selectedSpec() {
@@ -195,7 +207,10 @@ els.tabs.forEach((tab) => {
   });
 });
 
-els.model.addEventListener('change', syncFields);
+els.model.addEventListener('change', () => {
+  fillLengths();
+  syncFields();
+});
 
 // Remember the access key locally so friends don't retype it every visit.
 try {
