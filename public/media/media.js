@@ -749,7 +749,16 @@ els.generate.addEventListener('click', async () => {
         setStatus('Done.');
       }
     } else {
-      setStatus('Unexpected response.');
+      // "Unexpected response" alone gives nothing to act on. The keys say
+      // whether this is an error body, a stale API shape, or a cached client
+      // talking to a newer server.
+      const keys = Object.keys(data || {}).join(', ') || '(empty body)';
+      setStatus(
+        `Unexpected response — kind=${data?.kind ?? 'missing'}; keys: ${keys}` +
+          (data?.error ? ` — ${data.error}` : ''),
+        true,
+      );
+      console.error('media-generate returned:', data);
     }
   } catch (err) {
     console.error(err);
