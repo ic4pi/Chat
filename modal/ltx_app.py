@@ -55,7 +55,11 @@ image = (
     )
 )
 
-app = modal.App("ltx-video")
+# Deploy alongside the existing app instead of over it:
+#   MODAL_APP_NAME=ltx-video-v2 modal deploy modal/ltx_app.py
+# The site picks the target with MODAL_*_ENDPOINT, so switching back is
+# deleting an env var rather than redeploying.
+app = modal.App(os.environ.get("MODAL_APP_NAME", "ltx-video"))
 cache = modal.Volume.from_name("ltx-model-cache", create_if_missing=True)
 
 

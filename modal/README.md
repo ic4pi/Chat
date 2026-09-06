@@ -178,3 +178,32 @@ browsers cannot practically re-encode video, so Media Studio rejects anything
 larger up front with the actual size rather than letting it fail as a 413. A
 few seconds at 480p fits. Lifting this needs the browser to upload straight to
 storage and hand the app a URL.
+
+## Deploying side by side
+
+`MODAL_APP_NAME` overrides the app name at deploy time, so these can go up
+next to the existing apps rather than over them:
+
+```bash
+pip install modal && modal setup
+
+MODAL_APP_NAME=sdxl-nsfw-v2 modal deploy modal/sdxl_app.py
+MODAL_APP_NAME=ltx-video-v2 modal deploy modal/ltx_app.py
+MODAL_APP_NAME=wan-video-v2 modal deploy modal/wan_app.py
+```
+
+Then point the site at them — Vercel → project → Settings → Environment
+Variables, Production:
+
+```
+MODAL_SDXL_ENDPOINT = https://ic4pi--sdxl-nsfw-v2-generate.modal.run
+MODAL_LTX_ENDPOINT  = https://ic4pi--ltx-video-v2-generate.modal.run
+MODAL_WAN_ENDPOINT  = https://ic4pi--wan-video-v2-generate.modal.run
+```
+
+Redeploy, then test. **Deleting those three variables reverts to the original
+apps** — the defaults are compiled in — so a bad deploy costs one env-var
+change, not a working generator.
+
+Verify with `npm run check:modal -- --all` from a machine that can reach
+`*.modal.run`.

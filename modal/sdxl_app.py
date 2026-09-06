@@ -65,7 +65,11 @@ image = (
     )
 )
 
-app = modal.App("sdxl-nsfw")
+# Deploy alongside the existing app instead of over it:
+#   MODAL_APP_NAME=sdxl-nsfw-v2 modal deploy modal/sdxl_app.py
+# The site picks the target with MODAL_*_ENDPOINT, so switching back is
+# deleting an env var rather than redeploying.
+app = modal.App(os.environ.get("MODAL_APP_NAME", "sdxl-nsfw"))
 cache = modal.Volume.from_name("sdxl-model-cache", create_if_missing=True)
 
 

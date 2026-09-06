@@ -70,7 +70,11 @@ image = (
     )
 )
 
-app = modal.App("wan-video")
+# Deploy alongside the existing app instead of over it:
+#   MODAL_APP_NAME=wan-video-v2 modal deploy modal/wan_app.py
+# The site picks the target with MODAL_*_ENDPOINT, so switching back is
+# deleting an env var rather than redeploying.
+app = modal.App(os.environ.get("MODAL_APP_NAME", "wan-video"))
 cache = modal.Volume.from_name("wan-model-cache", create_if_missing=True)
 
 
