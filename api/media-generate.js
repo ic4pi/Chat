@@ -14,6 +14,7 @@
  *     seconds?: number,       // video length
  *     imageBase64?: string,   // Venice Edit / Wan i2v only (do NOT send on text-to-image)
  *     mimeType?: string,
+ *     count?: number,         // image: how many to generate in one batch (modal, max 4)
  *     accessKey?: string,     // required for provider:'modal' only if VIDEO_ACCESS_KEYS is set
  *   }
  *
@@ -141,6 +142,32 @@ function oversizeError(kind = 'image') {
   err.status = 413;
   err.code = 'PAYLOAD_TOO_LARGE';
   return err;
+}
+
+/**
+ * Upload each generated image and swap its bytes for a URL.
+ *
+ * Batching makes this necessary rather than merely tidy: one 1024px image
+ * survives the response body, four do not. Images that already carry a URL,
+ * and every image if storage is unconfigured, are left exactly as they were —
+ * the existing oversize guard still catches those.
+ */
+async function persistImageResult(out) {
+  if (out?.kind !== 'image' || !Array.isArray(out.images) || !out.images.length) return out;
+  if (!out.images.some((img) => img?.base64)) return out; // already hosted
+
+  const uploaded = await Promise.all(
+    out.images.map(async (img) => {
+      if (!img?.base64) return img;
+      const mimeType = img.mimeType || 'image/webp';
+      const bytes = decodeDataUrl(img.base64)?.bytes || Buffer.from(img.base64, 'base64');
+      const url = await storeMediaAsset(bytes, mimeType, 'image');
+      return url ? { url, mimeType } : img;
+    }),
+  );
+
+  const stored = uploaded.every((img) => img.url);
+  return { ...out, images: uploaded, stored };
 }
 
 /**
@@ -574,7 +601,7 @@ function warmEndpointFor(model) {
   return base.replace(/-generate(\.modal\.run)$/, '-warm$1');
 }
 
-async function generateModalSdxlImage({ prompt, negativePrompt, model, size }) {
+async function generateModalSdxlImage({ prompt, negativePrompt, model, size, count }) {
   const dims = String(size || '1024x1024').split(/[x*]/i).map(Number);
   const width = dims[0] || 1024;
   const height = dims[1] || 1024;
@@ -589,24 +616,30 @@ async function generateModalSdxlImage({ prompt, negativePrompt, model, size }) {
       model: modalModel,
       width,
       height,
+      n: Math.max(1, Math.min(4, Number(count) || 1)),
     }),
   });
 
   const body = await resp.json().catch(() => ({}));
-  if (!resp.ok || !body.image_base64) {
+  if (!resp.ok || !(body.images_base64?.length || body.image_base64)) {
     const err = new Error(body.error || `Modal SDXL HTTP ${resp.status}`);
     err.status = resp.status || 502;
     throw err;
   }
 
+  // images_base64 is the batch shape; image_base64 is the older singular key,
+  // still sent so a stale app version keeps working.
+  const batch = body.images_base64?.length ? body.images_base64 : [body.image_base64];
+  const mimeType = body.mime_type || 'image/webp';
+
   return {
     kind: 'image',
     provider: 'modal',
     model: modalModel,
-    images: [{ base64: body.image_base64, mimeType: 'image/png' }],
+    images: batch.map((base64) => ({ base64, mimeType })),
     uncensored: true,
     elapsedSeconds: body.elapsed_seconds,
-    note: 'Self-hosted SDXL on Modal (scale-to-zero, no external content filter).',
+    note: `Self-hosted SDXL on Modal${batch.length > 1 ? ` · ${batch.length} images` : ''} (scale-to-zero, no external content filter).`,
   };
 }
 
@@ -790,6 +823,7 @@ export default async function handler(req, res) {
     negativePrompt,
     size,
     seconds,
+    count,
     imageBase64,
     mimeType,
     accessKey,
@@ -809,7 +843,10 @@ export default async function handler(req, res) {
     });
   }
 
-  const respondImage = async (out) => {
+  const respondImage = async (rawOut) => {
+    // Storage first: with it, size stops being a constraint at all and the
+    // fallbacks below never run.
+    const out = await persistImageResult(rawOut);
     if (imageResultTooLarge(out)) {
       if (veniceImageKey() && out.provider !== 'venice') {
         console.warn('image payload too large for Vercel; falling back to Venice webp');
@@ -853,6 +890,7 @@ export default async function handler(req, res) {
           negativePrompt,
           model,
           size,
+          count,
         });
 
         if (person) {
@@ -989,4 +1027,4 @@ export default async function handler(req, res) {
 
 // Exposed for scripts/check-video-persist.mjs — same convention as
 // lib/animate/providers.js. Not part of the HTTP surface.
-export const __test = { persistVideoResult, payloadTooLarge, SAFE_JSON_BYTES, warmEndpointFor };
+export const __test = { persistVideoResult, persistImageResult, payloadTooLarge, SAFE_JSON_BYTES, warmEndpointFor };

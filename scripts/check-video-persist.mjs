@@ -15,7 +15,7 @@
  */
 import { __test } from '../api/media-generate.js';
 
-const { persistVideoResult, SAFE_JSON_BYTES, warmEndpointFor } = __test;
+const { persistVideoResult, persistImageResult, SAFE_JSON_BYTES, warmEndpointFor } = __test;
 
 const dataUrl = (bytes) =>
   `data:video/mp4;base64,${Buffer.alloc(bytes, 0x61).toString('base64')}`;
@@ -79,6 +79,25 @@ for (const [model, want] of [
 // The swap must not fire on a URL that is not a generate endpoint.
 check('non-generate endpoint left alone',
       warmEndpointFor('wan') !== '' && !warmEndpointFor('wan').includes('-generate-'));
+
+// Batched images. With storage unconfigured these must survive untouched —
+// the oversize guard downstream is what catches a batch too big to return.
+{
+  const four = { kind: 'image', images: Array.from({ length: 4 }, () => (
+    { base64: Buffer.alloc(1000, 0x61).toString('base64'), mimeType: 'image/webp' })) };
+  const got = await persistImageResult(four);
+  check('batch of 4 passes through without storage',
+        got.images.length === 4 && got.images.every((i) => i.base64));
+  check('batch reports it is not stored', got.stored === false);
+}
+{
+  const hosted = { kind: 'image', images: [{ url: 'https://cdn/x.webp', mimeType: 'image/webp' }] };
+  check('already-hosted images are left alone', (await persistImageResult(hosted)) === hosted);
+}
+{
+  const vid = { kind: 'video', videoUrl: 'https://cdn/v.mp4' };
+  check('video is not touched by the image path', (await persistImageResult(vid)) === vid);
+}
 
 console.log(failed ? `\n${failed} failing` : '\nall passing');
 process.exit(failed ? 1 : 0);

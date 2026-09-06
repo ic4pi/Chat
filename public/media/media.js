@@ -62,6 +62,8 @@ const els = {
   size: document.getElementById('mediaSize'),
   sizeWrap: document.getElementById('sizeWrap'),
   length: document.getElementById('mediaLength'),
+  count: document.getElementById('mediaCount'),
+  countWrap: document.getElementById('countWrap'),
   lengthWrap: document.getElementById('lengthWrap'),
   ref: document.getElementById('mediaRef'),
   refWrap: document.getElementById('refWrap'),
@@ -144,6 +146,13 @@ function syncFields() {
   }
   els.accessKeyWrap.classList.toggle('hidden', spec?.provider !== 'modal');
   els.lengthWrap.classList.toggle('hidden', kind !== 'video');
+  // Batching is a self-hosted feature: it works by filling one GPU call, which
+  // only applies to the Modal app. Hosted providers bill per image, so asking
+  // for four there costs four times as much for no speed gain.
+  els.countWrap.classList.toggle(
+    'hidden',
+    !(kind === 'image' && spec?.provider === 'modal'),
+  );
 }
 
 function setStatus(msg) {
@@ -359,6 +368,9 @@ els.generate.addEventListener('click', async () => {
     const neg = (els.negative.value || '').trim();
     if (neg && kind === 'image') {
       body.negativePrompt = neg;
+    }
+    if (kind === 'image' && spec.provider === 'modal') {
+      body.count = Number(els.count.value) || 1;
     }
     if (kind === 'video') {
       body.seconds = Number(els.length.value) || 5;

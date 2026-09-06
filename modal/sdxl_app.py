@@ -39,6 +39,10 @@ CHECKPOINTS = {
 }
 DEFAULT_MODEL = "lustify"
 
+# Batch ceiling. Four 1024px images fit an L4 comfortably alongside a resident
+# SDXL; past that the activations start competing with the weights.
+MAX_BATCH = 4
+
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
@@ -131,6 +135,8 @@ class SDXL:
         seed: int = 42,
         steps: int = 22,  # DPM++ 2M Karras; 30 was for the default scheduler
         guidance_scale: float = 6.0,
+        n: int = 1,
+        fmt: str = "webp",
     ) -> dict:
         started = time.time()
         name = model if model in CHECKPOINTS else DEFAULT_MODEL
@@ -139,9 +145,16 @@ class SDXL:
         # SDXL is trained at multiples of 64; off-grid sizes produce seams.
         width = max(512, int(round(width / 64)) * 64)
         height = max(512, int(round(height / 64)) * 64)
+        n = max(1, min(MAX_BATCH, int(n)))
 
-        generator = self._torch.Generator("cpu").manual_seed(seed)
-        result = pipe(
+        # One call with num_images_per_prompt beats N calls: the prompt is
+        # encoded once and the UNet runs the batch together, so four images
+        # cost far less than four times one. Batch size is what fills the
+        # L4 now that the model sits resident instead of being offloaded.
+        generator = [
+            self._torch.Generator("cpu").manual_seed(seed + i) for i in range(n)
+        ]
+        images = pipe(
             prompt=prompt,
             negative_prompt=negative_prompt or None,
             width=width,
@@ -149,17 +162,32 @@ class SDXL:
             num_inference_steps=steps,
             guidance_scale=guidance_scale,
             generator=generator,
-        ).images[0]
+            num_images_per_prompt=n,
+        ).images
 
-        buf = io.BytesIO()
-        result.save(buf, format="PNG")
+        # WebP by default: a 1024px PNG is ~1.5MB, and a handful of those
+        # base64-encoded blows the caller's response budget. WebP at q92 is
+        # visually equivalent at a fraction of the size.
+        encoded = []
+        for img in images:
+            buf = io.BytesIO()
+            if fmt == "png":
+                img.save(buf, format="PNG")
+            else:
+                img.save(buf, format="WEBP", quality=92, method=4)
+            encoded.append(base64.b64encode(buf.getvalue()).decode())
 
         return {
-            "image_base64": base64.b64encode(buf.getvalue()).decode(),
+            # Singular key kept so an older caller keeps working.
+            "image_base64": encoded[0],
+            "images_base64": encoded,
+            "mime_type": "image/png" if fmt == "png" else "image/webp",
+            "count": len(encoded),
             "elapsed_seconds": round(time.time() - started, 2),
             "model": name,
             "width": width,
             "height": height,
+            "seed": seed,
         }
 
 
@@ -178,6 +206,8 @@ def generate(payload: dict) -> dict:
             width=int(payload.get("width") or 1024),
             height=int(payload.get("height") or 1024),
             seed=int(payload.get("seed") or 42),
+            n=int(payload.get("n") or 1),
+            fmt=str(payload.get("format") or "webp"),
         )
     except Exception as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}
