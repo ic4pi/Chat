@@ -683,7 +683,12 @@ async function generateModalSdxlImage({
 
   const body = await resp.json().catch(() => ({}));
   if (!resp.ok || !(body.images_base64?.length || body.image_base64)) {
-    const err = new Error(body.error || `Modal SDXL HTTP ${resp.status}`);
+    // Naming the URL matters more than it looks: a 404 here means the site is
+    // pointed at an app that does not exist, and the only way to tell which is
+    // to say which one was called. Endpoints are public URLs, not secrets.
+    const err = new Error(
+      body.error || `Modal SDXL HTTP ${resp.status} calling ${MODAL_SDXL_ENDPOINT}`,
+    );
     err.status = resp.status || 502;
     throw err;
   }
@@ -750,7 +755,9 @@ async function generateModalWanVideo({
 
   const body = await resp.json().catch(() => ({}));
   if (!resp.ok || !body.video_base64) {
-    const err = new Error(body.error || `Modal Wan HTTP ${resp.status}`);
+    const err = new Error(
+      body.error || `Modal Wan HTTP ${resp.status} calling ${MODAL_WAN_ENDPOINT}`,
+    );
     err.status = resp.status || 502;
     throw err;
   }
@@ -802,7 +809,9 @@ async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds }) 
 
   const body = await resp.json().catch(() => ({}));
   if (!resp.ok || !body.video_base64) {
-    const err = new Error(body.error || `Modal LTX HTTP ${resp.status}`);
+    const err = new Error(
+      body.error || `Modal LTX HTTP ${resp.status} calling ${MODAL_LTX_ENDPOINT}`,
+    );
     err.status = resp.status || 502;
     throw err;
   }
@@ -917,7 +926,10 @@ export default async function handler(req, res) {
     if (!upstream.ok || sub.error || !sub.job_id) {
       return res
         .status(upstream.ok ? 502 : upstream.status)
-        .json({ error: sub.error || `Modal submit HTTP ${upstream.status}` });
+        .json({
+          error:
+            sub.error || `Modal submit HTTP ${upstream.status} calling ${modalEndpoint(jm, 'submit')}`,
+        });
     }
     return res.status(202).json({ jobId: sub.job_id, model: jm, status: 'running' });
   }
