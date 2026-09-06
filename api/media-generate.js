@@ -900,6 +900,20 @@ export default async function handler(req, res) {
       }),
     });
     const sub = await upstream.json().catch(() => ({}));
+
+    // A 404 means this Modal app predates the submit/result endpoints — the
+    // deployed apps only expose `generate`. That is the expected state until
+    // modal/ is deployed, and it must not read as a broken generator: the
+    // caller falls back to the synchronous route, which those apps do serve.
+    if (upstream.status === 404) {
+      return res.status(501).json({
+        code: 'ASYNC_UNAVAILABLE',
+        error:
+          'This Modal app has no submit endpoint yet — deploy modal/ to enable ' +
+          'long video. Falling back to a single blocking request.',
+      });
+    }
+
     if (!upstream.ok || sub.error || !sub.job_id) {
       return res
         .status(upstream.ok ? 502 : upstream.status)

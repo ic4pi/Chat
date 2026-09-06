@@ -18,6 +18,11 @@ const IMAGE_MODELS = [
 // Six Wan clips at the old 40-step speed would be ~38min — inside Modal's
 // timeout, but a long wait. The Lightning LoRA in modal/wan_app.py should cut
 // that sharply; re-measure once it is deployed.
+//
+// These caps assume the job API. A Modal app deployed before modal/ existed
+// has no submit endpoint, and the client falls back to one blocking request
+// bounded by the 800s function timeout — where anything past ~10s of Wan will
+// die. The fallback warns rather than silently letting it happen.
 const VIDEO_MODELS = [
   { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, slow)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', usesRef: false, maxSeconds: 30, modes: ['text', 'restyle'] },
   { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', usesRef: false, maxSeconds: 30, modes: ['text', 'keyframes'] },
@@ -525,18 +530,50 @@ async function runSync(body) {
   return data;
 }
 
+/** One blocking request, the way video worked before the job API existed.
+ *  Bounded by the API's 800s function timeout, so long clips can still die
+ *  here — which is exactly what the async route was built to fix. */
+async function runSyncVideoFallback(body) {
+  const seconds = Number(body.seconds) || 5;
+  setStatus(
+    `Generating… this Modal app has no job API yet, so it runs as one request ` +
+      `(deploy modal/ to lift the limit). Leave this open.`,
+  );
+  if (seconds > 10) {
+    setStatus(
+      `Generating ${seconds}s as a single request — over ~10s this can hit the ` +
+        `800s timeout. Deploy modal/ for long clips, or pick a shorter length.`,
+    );
+  }
+  return runSync(body);
+}
+
 const POLL_MS = 5000;
 // Ceiling matches the Modal apps' own 3600s timeout: past that the job is gone
 // and there is nothing left to wait for.
 const POLL_CEILING_MS = 3_600_000;
 
+// The submit/result endpoints only exist on Modal apps deployed from modal/.
+// Until those are deployed the apps expose `generate` alone, so the async
+// route 404s and this falls back to the blocking one, which they do serve.
+// Remembered per page load so the fallback costs one failed request, not one
+// per generation.
+let asyncVideoUnavailable = false;
+
 async function runVideoJob(body) {
+  if (asyncVideoUnavailable) return runSyncVideoFallback(body);
+
   const submitRes = await fetch('/api/media-generate?op=submit', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   const job = await submitRes.json().catch(() => ({}));
+
+  if (job.code === 'ASYNC_UNAVAILABLE') {
+    asyncVideoUnavailable = true;
+    return runSyncVideoFallback(body);
+  }
   if (!submitRes.ok || !job.jobId) throw new Error(friendlyHttpError(submitRes.status, job));
 
   const started = Date.now();
