@@ -1,0 +1,75 @@
+# Deploys the Modal apps from GitHub, so no local Python or Modal CLI is needed.
+#
+# One-time setup — repo Settings → Secrets and variables → Actions:
+#   MODAL_TOKEN_ID       from modal.com → Settings → API Tokens
+#   MODAL_TOKEN_SECRET   same screen
+#
+# Run it from the Actions tab → "Deploy Modal apps" → Run workflow.
+#
+# Deliberately manual: these apps hold GPU workloads, and deploying them on
+# every push to main would redeploy weights-loading containers for changes
+# that never touch them.
+name: Deploy Modal apps
+
+on:
+  workflow_dispatch:
+    inputs:
+      suffix:
+        description: 'App name suffix. "-v2" deploys beside the live apps; empty replaces them.'
+        required: false
+        default: '-v2'
+      apps:
+        description: 'Which apps to deploy'
+        required: true
+        default: 'all'
+        type: choice
+        options: [all, sdxl, ltx, wan]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Modal
+        run: pip install modal
+
+      - name: Deploy
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          SUFFIX: ${{ inputs.suffix }}
+          APPS: ${{ inputs.apps }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MODAL_TOKEN_ID:-}" ] || [ -z "${MODAL_TOKEN_SECRET:-}" ]; then
+            echo "::error::Set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET in repo secrets first."
+            exit 1
+          fi
+
+          deploy() {  # $1 = base app name, $2 = file
+            echo "::group::$1$SUFFIX"
+            MODAL_APP_NAME="$1$SUFFIX" modal deploy "$2"
+            echo "::endgroup::"
+            echo "  https://ic4pi--$1$SUFFIX-generate.modal.run" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          echo "### Deployed endpoints" >> "$GITHUB_STEP_SUMMARY"
+          case "$APPS" in
+            all)  deploy sdxl-nsfw modal/sdxl_app.py
+                  deploy ltx-video modal/ltx_app.py
+                  deploy wan-video modal/wan_app.py ;;
+            sdxl) deploy sdxl-nsfw modal/sdxl_app.py ;;
+            ltx)  deploy ltx-video modal/ltx_app.py ;;
+            wan)  deploy wan-video modal/wan_app.py ;;
+          esac
+
+          {
+            echo ""
+            echo "Point the site at these in Vercel → Settings → Environment Variables"
+            echo "(Production), then redeploy. Deleting them reverts to the originals."
+          } >> "$GITHUB_STEP_SUMMARY"
