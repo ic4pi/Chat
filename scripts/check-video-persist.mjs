@@ -15,7 +15,7 @@
  */
 import { __test } from '../api/media-generate.js';
 
-const { persistVideoResult, SAFE_JSON_BYTES } = __test;
+const { persistVideoResult, SAFE_JSON_BYTES, warmEndpointFor } = __test;
 
 const dataUrl = (bytes) =>
   `data:video/mp4;base64,${Buffer.alloc(bytes, 0x61).toString('base64')}`;
@@ -63,6 +63,22 @@ const check = (name, cond, detail = '') => {
 // Sanity: the threshold is under Vercel's real 4.5MB ceiling.
 check('size threshold leaves headroom under 4.5MB', SAFE_JSON_BYTES < 4.5 * 1_048_576,
       `SAFE_JSON_BYTES=${SAFE_JSON_BYTES}`);
+
+// Warm-endpoint derivation. Modal builds a web endpoint's URL from app name +
+// function name, so `warm` on app `wan-video` sits at ic4pi--wan-video-warm.
+// Getting this wrong fails silently, since warming is fire-and-forget.
+for (const [model, want] of [
+  ['wan2.2-5b',  'https://ic4pi--wan-video-warm.modal.run'],
+  ['ltx-video',  'https://ic4pi--ltx-video-warm.modal.run'],
+  ['lustify',    'https://ic4pi--sdxl-nsfw-warm.modal.run'],
+  ['',           'https://ic4pi--sdxl-nsfw-warm.modal.run'],  // default = image app
+]) {
+  const got = warmEndpointFor(model);
+  check(`warm endpoint for "${model || '(none)'}"`, got === want, `got ${got}`);
+}
+// The swap must not fire on a URL that is not a generate endpoint.
+check('non-generate endpoint left alone',
+      warmEndpointFor('wan') !== '' && !warmEndpointFor('wan').includes('-generate-'));
 
 console.log(failed ? `\n${failed} failing` : '\nall passing');
 process.exit(failed ? 1 : 0);

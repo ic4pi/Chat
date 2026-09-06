@@ -13,6 +13,12 @@ const IMAGE_MODELS = [
 // timeout - the request would die with the GPU time already spent and nothing
 // delivered. LTX at 30 steps did the same job in ~2min, so it can safely go
 // up to the Modal endpoint's own 6-clip/30s cap.
+//
+// NOTE: Wan's 5s cap assumes 40-step sampling. modal/wan_app.py now loads a
+// Lightning LoRA (4 steps, no CFG) which should cut a clip to roughly a
+// minute — once that is deployed and timed, re-measure and raise maxSeconds
+// here. Leaving it at 5 until then only costs length, where raising it early
+// costs a dead request with the GPU time already spent.
 const VIDEO_MODELS = [
   { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, slow)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', usesRef: false, maxSeconds: 5 },
   { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', usesRef: false, maxSeconds: 30 },
@@ -210,6 +216,39 @@ els.tabs.forEach((tab) => {
 els.model.addEventListener('change', () => {
   fillLengths();
   syncFields();
+});
+
+// ---- Cold-start warming --------------------------------------------------
+// A Modal app that has scaled to zero spends ~60s loading weights before it
+// generates anything. Firing that off when the prompt box is focused overlaps
+// the load with the time someone spends typing, so the wait mostly disappears
+// instead of landing on the Generate click.
+//
+// Fire-and-forget on purpose: the response is ignored, failures are silent,
+// and a warm that does not land just means the generation pays the cold start
+// it would have paid regardless. Only self-hosted models have a cold start,
+// so hosted providers are skipped.
+let warmedFor = null;
+
+function warmSelectedModel() {
+  const spec = selectedSpec();
+  if (!spec || spec.provider !== 'modal') return;
+  // Once per model per page load — refocusing the box must not re-ping.
+  if (warmedFor === spec.value) return;
+  warmedFor = spec.value;
+
+  fetch(`/api/media-generate?op=warm&model=${encodeURIComponent(spec.model)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+    keepalive: true,
+  }).catch(() => {});
+}
+
+els.prompt.addEventListener('focus', warmSelectedModel);
+// Switching model after focusing should warm the new one too.
+els.model.addEventListener('change', () => {
+  if (document.activeElement === els.prompt) warmSelectedModel();
 });
 
 // Remember the access key locally so friends don't retype it every visit.

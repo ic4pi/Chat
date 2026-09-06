@@ -79,8 +79,23 @@ class LTX:
             tokenizer=self.t2v.tokenizer,
             transformer=self.t2v.transformer,
         )
-        self.t2v.enable_model_cpu_offload()
-        self.i2v.enable_model_cpu_offload()
+        # LTX is ~15GB in bf16 (T5-XXL dominates) against the L4's 24GB, so it
+        # may well run resident like SDXL does — but 121-frame activations make
+        # that too close to call without measuring, and an OOM costs more than
+        # the offload does. Off by default; flip and time it.
+        if os.environ.get("LTX_CPU_OFFLOAD") == "0":
+            self.t2v.to("cuda")
+            self.i2v.to("cuda")
+        else:
+            self.t2v.enable_model_cpu_offload()
+            self.i2v.enable_model_cpu_offload()
+
+    @modal.method()
+    def ping(self) -> dict:
+        """Warm-up target. Does no work — @modal.enter() has already loaded the
+        weights by the time this runs, which is the entire point. Spawning
+        run() instead would generate (and bill for) a real clip."""
+        return {"ready": True}
 
     @modal.method()
     def run(
@@ -167,3 +182,19 @@ def generate(payload: dict) -> dict:
         )
     except Exception as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+@app.function(image=image, timeout=60)
+@modal.fastapi_endpoint(method="POST")
+def warm() -> dict:
+    """Kick a container into existence so @modal.enter() loads the weights.
+
+    The browser calls this the moment someone focuses the prompt box, which
+    buys ~60s of cold start back against time they were going to spend typing
+    anyway. spawn() rather than remote() so it returns immediately instead of
+    blocking the page for the whole load."""
+    try:
+        LTX().ping.spawn()
+        return {"warming": True}
+    except Exception as exc:
+        return {"warming": False, "error": f"{type(exc).__name__}: {exc}"}

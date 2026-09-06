@@ -32,6 +32,23 @@ MAX_CLIPS = 6
 FRAMES_PER_CLIP = 81  # ~5s at 16fps; Wan needs 4k+1
 DEFAULT_FPS = 16
 
+# Lightning is a step-distilled LoRA: it collapses the sampler from 40 steps to
+# ~4 AND removes the need for classifier-free guidance. Dropping CFG halves the
+# transformer evaluations again (no unconditional pass), so the two together cut
+# roughly an order of magnitude off a clip. guidance_scale MUST be 1.0 with it —
+# a distilled model given real CFG produces burnt, oversaturated frames.
+#
+# Set LIGHTNING_LORA_REPO="" to deploy without it and fall back to full steps.
+LIGHTNING_LORA_REPO = os.environ.get(
+    "WAN_LIGHTNING_LORA_REPO", "lightx2v/Wan2.2-Lightning"
+)
+LIGHTNING_LORA_WEIGHT = os.environ.get("WAN_LIGHTNING_LORA_WEIGHT", "")
+
+FAST_STEPS = 4
+FAST_GUIDANCE = 1.0
+FULL_STEPS = 40      # measured: 832x480, ~6m20s for one 5s clip
+FULL_GUIDANCE = 5.0
+
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg")
@@ -91,8 +108,30 @@ class Wan:
             scheduler=self.t2v.scheduler,
             transformer=self.t2v.transformer,
         )
+        # Loaded onto the shared transformer, so both pipelines get it.
+        # A failure here must not take generation down — it falls back to full
+        # steps, which is slow but correct, and says so in the response.
+        self.fast = False
+        if LIGHTNING_LORA_REPO:
+            try:
+                kwargs = {"cache_dir": "/cache/hf"}
+                if LIGHTNING_LORA_WEIGHT:
+                    kwargs["weight_name"] = LIGHTNING_LORA_WEIGHT
+                self.t2v.load_lora_weights(LIGHTNING_LORA_REPO, **kwargs)
+                self.t2v.fuse_lora()
+                self.fast = True
+            except Exception as exc:
+                print(f"Lightning LoRA unavailable ({exc!r}); using full steps.")
+
         self.t2v.enable_model_cpu_offload()
         self.i2v.enable_model_cpu_offload()
+
+    @modal.method()
+    def ping(self) -> dict:
+        """Warm-up target. Does no work — @modal.enter() has already loaded the
+        weights by the time this runs, which is the entire point. Spawning
+        run() instead would generate (and bill for) a real clip."""
+        return {"ready": True}
 
     @modal.method()
     def run(
@@ -105,8 +144,8 @@ class Wan:
         fps: int = DEFAULT_FPS,
         num_clips: int = 1,
         seed: int = 42,
-        steps: int = 40,  # measured: 40 steps, 832x480, ~6m20s for one 5s clip
-        guidance_scale: float = 5.0,
+        steps: int | None = None,
+        guidance_scale: float | None = None,
     ) -> dict:
         import torch
         from diffusers.utils import export_to_video
@@ -115,6 +154,13 @@ class Wan:
         # Re-clamped here, not just client-side: the endpoint is reachable
         # directly and a 20-clip request would run until the timeout.
         num_clips = max(1, min(MAX_CLIPS, int(num_clips)))
+
+        # Whether the LoRA loaded decides the sampler settings, not the caller —
+        # 4 steps without it is noise, and CFG with it is burnt frames.
+        if steps is None:
+            steps = FAST_STEPS if self.fast else FULL_STEPS
+        if guidance_scale is None:
+            guidance_scale = FAST_GUIDANCE if self.fast else FULL_GUIDANCE
 
         frames: list = []
         seed_frame = None
@@ -154,6 +200,8 @@ class Wan:
             "num_clips": num_clips,
             "num_frames": len(frames),
             "fps": fps,
+            "fast": self.fast,
+            "steps": steps,
         }
 
 
@@ -179,3 +227,19 @@ def generate(payload: dict) -> dict:
         )
     except Exception as exc:  # surfaced verbatim; the client reads body.error
         return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+@app.function(image=image, timeout=60)
+@modal.fastapi_endpoint(method="POST")
+def warm() -> dict:
+    """Kick a container into existence so @modal.enter() loads the weights.
+
+    The browser calls this the moment someone focuses the prompt box, which
+    buys ~60s of cold start back against time they were going to spend typing
+    anyway. spawn() rather than remote() so it returns immediately instead of
+    blocking the page for the whole load."""
+    try:
+        Wan().ping.spawn()
+        return {"warming": True}
+    except Exception as exc:
+        return {"warming": False, "error": f"{type(exc).__name__}: {exc}"}

@@ -68,11 +68,12 @@ class SDXL:
     @modal.enter()
     def load(self):
         import torch
-        from diffusers import StableDiffusionXLPipeline
+        from diffusers import DPMSolverMultistepScheduler, StableDiffusionXLPipeline
 
         os.environ["HF_HOME"] = "/cache/hf"
         self._torch = torch
         self._cls = StableDiffusionXLPipeline
+        self._sched = DPMSolverMultistepScheduler
         # Checkpoints load lazily and stay cached per container: holding both
         # in VRAM at once would not fit an L4 alongside generation.
         self._loaded: dict = {}
@@ -92,11 +93,32 @@ class SDXL:
             safety_checker=None,
             requires_safety_checker=False,
         )
-        pipe.enable_model_cpu_offload()
+        # DPM++ 2M Karras reaches the same quality in ~20-25 steps that the
+        # default scheduler needs 30+ for.
+        pipe.scheduler = self._sched.from_config(
+            pipe.scheduler.config, use_karras_sigmas=True, algorithm_type="dpmsolver++"
+        )
+
+        # Resident on the GPU, NOT offloaded. SDXL in fp16 is ~7GB against the
+        # L4's 24GB, so enable_model_cpu_offload() was shuttling weights across
+        # PCIe every step to solve a memory problem that does not exist here.
+        # Offloading is kept only as an escape hatch for a smaller card.
+        if os.environ.get("SDXL_CPU_OFFLOAD") == "1":
+            pipe.enable_model_cpu_offload()
+        else:
+            pipe.to("cuda")
+
         # Only one checkpoint stays resident; swapping is cheaper than OOM.
         self._loaded.clear()
         self._loaded[name] = pipe
         return pipe
+
+    @modal.method()
+    def ping(self) -> dict:
+        """Warm-up target. Does no work — @modal.enter() has already loaded the
+        weights by the time this runs, which is the entire point. Spawning
+        run() instead would generate (and bill for) a real clip."""
+        return {"ready": True}
 
     @modal.method()
     def run(
@@ -107,7 +129,7 @@ class SDXL:
         width: int = 1024,
         height: int = 1024,
         seed: int = 42,
-        steps: int = 30,
+        steps: int = 22,  # DPM++ 2M Karras; 30 was for the default scheduler
         guidance_scale: float = 6.0,
     ) -> dict:
         started = time.time()
@@ -159,3 +181,19 @@ def generate(payload: dict) -> dict:
         )
     except Exception as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+@app.function(image=image, timeout=60)
+@modal.fastapi_endpoint(method="POST")
+def warm() -> dict:
+    """Kick a container into existence so @modal.enter() loads the weights.
+
+    The browser calls this the moment someone focuses the prompt box, which
+    buys ~60s of cold start back against time they were going to spend typing
+    anyway. spawn() rather than remote() so it returns immediately instead of
+    blocking the page for the whole load."""
+    try:
+        SDXL().ping.spawn()
+        return {"warming": True}
+    except Exception as exc:
+        return {"warming": False, "error": f"{type(exc).__name__}: {exc}"}

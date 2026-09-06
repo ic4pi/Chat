@@ -556,6 +556,24 @@ const MODAL_IMAGE_MODELS = {
   'wai-Illustrious': 'wai-illustrious',
 };
 
+/**
+ * The warm endpoint for a given model.
+ *
+ * Modal derives a web endpoint's URL from the app name plus the function name,
+ * so the `warm` function on app `wan-video` is reachable at
+ * ic4pi--wan-video-warm.modal.run — the same URL as `generate` with the
+ * trailing function name swapped. Deriving it keeps one endpoint env var per
+ * app instead of two that can drift apart.
+ */
+function warmEndpointFor(model) {
+  const base = /ltx/i.test(model)
+    ? MODAL_LTX_ENDPOINT
+    : /wan/i.test(model)
+      ? MODAL_WAN_ENDPOINT
+      : MODAL_SDXL_ENDPOINT;
+  return base.replace(/-generate(\.modal\.run)$/, '-warm$1');
+}
+
 async function generateModalSdxlImage({ prompt, negativePrompt, model, size }) {
   const dims = String(size || '1024x1024').split(/[x*]/i).map(Number);
   const width = dims[0] || 1024;
@@ -712,6 +730,33 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(204).end();
+
+  // Cold-start warmup. The browser fires this when someone focuses the prompt
+  // box, so the ~60s of weight loading overlaps the time they spend typing
+  // instead of being tacked onto the generate click.
+  //
+  // Proxied rather than called from the browser because the Modal endpoints
+  // send no CORS headers. Deliberately fire-and-forget: the response is not
+  // awaited past dispatch, no error is surfaced, and a failed warm just means
+  // the generation pays the cold start it would have paid anyway.
+  if (String(req.query?.op || '') === 'warm') {
+    const target = String(req.query?.model || req.body?.model || '');
+    const endpoint = warmEndpointFor(target);
+
+    try {
+      // 5s ceiling: spawn() returns almost immediately, and nothing downstream
+      // needs the answer.
+      await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+        signal: AbortSignal.timeout(5000),
+      });
+    } catch {
+      // Warming is best-effort by design.
+    }
+    return res.status(202).json({ warming: true, target: target || 'sdxl' });
+  }
 
   // Admin-only balance management for the Modal video access keys:
   //   GET  /api/media-generate?op=credit             -> list everyone's balance
@@ -944,4 +989,4 @@ export default async function handler(req, res) {
 
 // Exposed for scripts/check-video-persist.mjs — same convention as
 // lib/animate/providers.js. Not part of the HTTP surface.
-export const __test = { persistVideoResult, payloadTooLarge, SAFE_JSON_BYTES };
+export const __test = { persistVideoResult, payloadTooLarge, SAFE_JSON_BYTES, warmEndpointFor };

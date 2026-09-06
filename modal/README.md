@@ -89,3 +89,45 @@ directly.
 (`MODAL_L4_RATE_PER_HOUR` to override). That figure is a local estimate for
 splitting cost between access keys — it is not read from Modal billing, so it
 drifts if Modal changes pricing. Check <https://modal.com/pricing>.
+
+## Speed work (Lightning, warming, offload)
+
+Three changes landed here after measuring the original setup:
+
+**Wan runs a Lightning LoRA.** Step-distilled: ~4 sampling steps instead of 40,
+and no classifier-free guidance, which removes the unconditional pass as well.
+Together that is roughly an order of magnitude fewer transformer evaluations.
+`guidance_scale` is forced to 1.0 whenever the LoRA is active — a distilled
+model given real CFG produces burnt, oversaturated frames.
+
+If the LoRA fails to load the app logs it and falls back to 40 steps at CFG 5.0,
+so a bad repo name degrades speed rather than breaking generation. The response
+carries `fast` and `steps` so you can tell which path ran. Override the source
+with `WAN_LIGHTNING_LORA_REPO` (empty string disables it) and
+`WAN_LIGHTNING_LORA_WEIGHT` for a specific file inside the repo.
+
+**After deploying this, re-time a clip and raise `maxSeconds` for Wan in
+`public/media/media.js`.** That cap is 5s because a 40-step clip took 6m20s;
+Lightning should make several chained clips fit inside the 800s function
+window. The cap is deliberately left low until someone measures.
+
+**SDXL is no longer offloaded.** It is ~7GB in fp16 against the L4's 24GB, so
+`enable_model_cpu_offload()` was moving weights across PCIe every step to solve
+a memory problem that does not exist. It now sits resident and uses DPM++ 2M
+Karras at 22 steps. Set `SDXL_CPU_OFFLOAD=1` to restore offloading on a
+smaller card.
+
+LTX keeps offloading by default — it carries a T5-XXL text encoder and
+121-frame activations, and whether that fits an L4 is too close to call without
+measuring. `LTX_CPU_OFFLOAD=0` turns it off if you want to time it.
+
+**Each app exposes a `warm` endpoint** alongside `generate`, at the same URL
+with the function name swapped (`ic4pi--wan-video-warm.modal.run`). It spawns
+a no-op `ping()` method; `@modal.enter()` has already loaded the weights by the
+time that runs, so the container comes up without generating anything. The
+Media Studio prompt box fires it on focus through `/api/media-generate?op=warm`,
+which overlaps the ~60s cold start with the time someone spends typing.
+
+Warming costs about one cent on an L4 and is fire-and-forget: failures are
+silent, and a warm that does not land just means the generation pays the cold
+start it would have paid anyway.
