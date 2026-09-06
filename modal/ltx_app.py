@@ -15,10 +15,22 @@ Deploy:  modal deploy modal/ltx_app.py
 """
 
 import base64
+import io
 import os
 import time
 
 import modal
+
+
+def _decode_image(data: str):
+    """Accept a bare base64 string or a full data: URL."""
+    from PIL import Image
+
+    if not data:
+        return None
+    if data.startswith("data:"):
+        data = data.split(",", 1)[-1]
+    return Image.open(io.BytesIO(base64.b64decode(data))).convert("RGB")
 
 MODEL_ID = "Lightricks/LTX-Video"
 
@@ -83,12 +95,25 @@ class LTX:
         # may well run resident like SDXL does — but 121-frame activations make
         # that too close to call without measuring, and an OOM costs more than
         # the offload does. Off by default; flip and time it.
+        # Conditioning at explicit frame indices — the timeline keyframe path.
+        from diffusers import LTXConditionPipeline
+
+        self.cond = LTXConditionPipeline(
+            scheduler=self.t2v.scheduler,
+            vae=self.t2v.vae,
+            text_encoder=self.t2v.text_encoder,
+            tokenizer=self.t2v.tokenizer,
+            transformer=self.t2v.transformer,
+        )
+
         if os.environ.get("LTX_CPU_OFFLOAD") == "0":
             self.t2v.to("cuda")
             self.i2v.to("cuda")
+            self.cond.to("cuda")
         else:
             self.t2v.enable_model_cpu_offload()
             self.i2v.enable_model_cpu_offload()
+            self.cond.enable_model_cpu_offload()
 
     @modal.method()
     def ping(self) -> dict:
@@ -110,6 +135,7 @@ class LTX:
         seed: int = 42,
         steps: int = 30,  # measured: 30 steps, ~2min for one 5s clip
         guidance_scale: float = 3.0,
+        keyframes: list | None = None,
     ) -> dict:
         import torch
         from diffusers.utils import export_to_video
@@ -121,6 +147,58 @@ class LTX:
         height = _round_to(height, 32, 256)
         # 8k+1 or the transformer's temporal patching rejects the request.
         num_frames = max(9, ((int(num_frames) - 1) // 8) * 8 + 1)
+
+        # Timeline keyframes: images pinned to frame indices, with LTX
+        # inventing the motion between them. This is a single pass rather
+        # than a chain — the keyframes already say where the subject is at
+        # each mark, which is exactly what chaining exists to guess.
+        if keyframes:
+            from diffusers.pipelines.ltx.pipeline_ltx_condition import LTXVideoCondition
+
+            conditions = []
+            for kf in keyframes[:8]:
+                img = _decode_image(kf.get("image"))
+                if img is None:
+                    continue
+                conditions.append(
+                    LTXVideoCondition(
+                        image=img.resize((width, height)),
+                        # Clamped into the clip: a mark past the end would be
+                        # silently dropped by the scheduler.
+                        frame_index=max(0, min(num_frames - 1, int(kf.get("frame", 0)))),
+                        strength=max(0.05, min(1.0, float(kf.get("strength", 1.0)))),
+                    )
+                )
+            if not conditions:
+                raise ValueError("keyframes were supplied but none carried an image.")
+
+            out = self.cond(
+                conditions=conditions,
+                prompt=prompt,
+                negative_prompt=negative_prompt or None,
+                width=width,
+                height=height,
+                num_frames=num_frames,
+                frame_rate=fps,
+                num_inference_steps=steps,
+                guidance_scale=guidance_scale,
+                generator=torch.Generator("cpu").manual_seed(seed),
+                output_type="pil",
+            ).frames[0]
+
+            path = "/tmp/out.mp4"
+            export_to_video(out, path, fps=fps)
+            with open(path, "rb") as fh:
+                video_b64 = base64.b64encode(fh.read()).decode()
+            return {
+                "video_base64": video_b64,
+                "elapsed_seconds": round(time.time() - started, 2),
+                "num_clips": 1,
+                "num_frames": len(out),
+                "fps": fps,
+                "mode": "keyframes",
+                "keyframe_count": len(conditions),
+            }
 
         frames: list = []
         seed_frame = None
@@ -179,6 +257,7 @@ def generate(payload: dict) -> dict:
             fps=int(payload.get("fps") or DEFAULT_FPS),
             num_clips=int(payload.get("num_clips") or 1),
             seed=int(payload.get("seed") or 42),
+            keyframes=payload.get("keyframes"),
         )
     except Exception as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}
@@ -228,6 +307,7 @@ def submit(payload: dict) -> dict:
             fps=int(payload.get("fps") or DEFAULT_FPS),
             num_clips=int(payload.get("num_clips") or 1),
             seed=int(payload.get("seed") or 42),
+            keyframes=payload.get("keyframes"),
         )
         return {"job_id": call.object_id, "status": "running"}
     except Exception as exc:

@@ -864,8 +864,10 @@ export default async function handler(req, res) {
   // path as the sync route, so the bytes still never reach the response.
   if (String(req.query?.op || '') === 'submit') {
     if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
-    const { model: jm, prompt: jp, negativePrompt: jn, size: js, seconds: jsec, accessKey: jk } =
-      req.body || {};
+    const {
+      model: jm, prompt: jp, negativePrompt: jn, size: js, seconds: jsec, accessKey: jk,
+      video: jv, strength: jstr, keyframes: jkf,
+    } = req.body || {};
     if (!jp || !String(jp).trim()) return res.status(400).json({ error: 'prompt is required' });
 
     // Billing is checked at submit: a job that cannot be paid for should never
@@ -890,6 +892,11 @@ export default async function handler(req, res) {
         negative_prompt: jn || undefined,
         ...geo,
         num_clips: clipsForSeconds(jsec),
+        // Restyling an existing clip (Wan) and pinning keyframes to timestamps
+        // (LTX) both replace the clip chain rather than adding to it, so
+        // num_clips is ignored downstream when either is present.
+        ...(jv ? { video: jv, strength: Number(jstr) || 0.6 } : {}),
+        ...(Array.isArray(jkf) && jkf.length ? { keyframes: jkf } : {}),
       }),
     });
     const sub = await upstream.json().catch(() => ({}));

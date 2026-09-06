@@ -266,3 +266,36 @@
   font-size: 13px;
 }
 .media-empty.hidden { display: none; }
+
+
+/* Timeline keyframes: an image plus the second it lands on. Laid out as one
+   repeating row so adding a fourth looks like the first three. */
+.media-mini {
+  align-self: flex-start;
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 10px;
+  cursor: pointer;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  opacity: .75;
+}
+.media-mini:hover { opacity: 1; }
+.keyframe-row {
+  display: grid;
+  grid-template-columns: 1fr 92px 32px;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.keyframe-row input[type="file"] { min-width: 0; }
+.keyframe-row .kf-drop { font-size: 13px; cursor: pointer; opacity: .7; }
+.keyframe-row .kf-drop:hover { opacity: 1; }
+
+/* A status line reporting a problem, not progress. */
+#mediaStatus.is-error { color: #c0392b; }
+@media (prefers-color-scheme: dark) {
+  #mediaStatus.is-error { color: #ff8b7a; }
+}

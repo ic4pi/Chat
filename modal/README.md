@@ -131,3 +131,50 @@ which overlaps the ~60s cold start with the time someone spends typing.
 Warming costs about one cent on an L4 and is fire-and-forget: failures are
 silent, and a warm that does not land just means the generation pays the cold
 start it would have paid anyway.
+
+## Modes
+
+Beyond plain text-to-X, each app exposes modes that reuse the same loaded
+weights. Every sibling pipeline is constructed from the base pipeline's
+`.components` rather than loaded again, so a mode costs no extra VRAM and no
+extra cold start — but it also means swapping the SDXL checkpoint has to
+discard the siblings built over the outgoing one.
+
+**Images** (`mode` in the request):
+
+| Mode | Needs | Notes |
+|---|---|---|
+| `text` | — | Default |
+| `img2img` | source image, `strength` | Low strength restyles, high strength uses the source as loose composition |
+| `expand` / `outpaint` | source image, `expand` px per side | Builds the canvas and mask server-side |
+| `pose` | photo or skeleton, `control_scale` | `detect_pose` converts a photo; a drawn stick figure is used as-is |
+
+Outpainting stretches and blurs the source across the enlarged canvas as a base
+coat before pasting the original back at full resolution, and feathers the mask
+edge. A flat fill under the mask bleeds its colour into the result and leaves a
+hard seam where new meets original.
+
+Pose control needs an OpenPose ControlNet — `SDXL_POSE_CONTROLNET`, defaulting
+to `xinsir/controlnet-openpose-sdxl-1.0`. Photo detection additionally pulls
+`lllyasviel/Annotators` through `controlnet_aux` on first use.
+
+**Video:**
+
+- **Wan `video` + `strength`** — restyles an existing clip through
+  `WanVideoToVideoPipeline`. Single pass, not a chain: the source already
+  carries the motion the chain exists to invent. Frames are sampled evenly
+  across the clip rather than truncated, so a long source is covered rather
+  than having its tail dropped.
+- **LTX `keyframes`** — a list of `{image, frame, strength}` handed to
+  `LTXConditionPipeline` as `LTXVideoCondition` objects. Images are pinned to
+  frame indices and LTX invents the motion between them. Also a single pass,
+  for the same reason.
+
+Both replace the clip chain rather than adding to it, so `num_clips` is ignored
+when either is present.
+
+**A source clip must fit in a 3MB request.** Vercel caps bodies at 4.5MB and
+browsers cannot practically re-encode video, so Media Studio rejects anything
+larger up front with the actual size rather than letting it fail as a 413. A
+few seconds at 480p fits. Lifting this needs the browser to upload straight to
+storage and hand the app a URL.

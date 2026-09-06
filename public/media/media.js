@@ -19,8 +19,8 @@ const IMAGE_MODELS = [
 // timeout, but a long wait. The Lightning LoRA in modal/wan_app.py should cut
 // that sharply; re-measure once it is deployed.
 const VIDEO_MODELS = [
-  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, slow)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', usesRef: false, maxSeconds: 30 },
-  { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', usesRef: false, maxSeconds: 30 },
+  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, slow)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', usesRef: false, maxSeconds: 30, modes: ['text', 'restyle'] },
+  { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', usesRef: false, maxSeconds: 30, modes: ['text', 'keyframes'] },
   // fal.ai / NVIDIA / Cloudflare video removed - fal and NVIDIA both bill per
   // generation, and Cloudflare's Seedance models are a third-party pass-through
   // (not covered by the Workers AI free Neurons tier, not on Cloudflare's own
@@ -71,6 +71,13 @@ const els = {
   expandWrap: document.getElementById('expandWrap'),
   poseSource: document.getElementById('mediaPoseSource'),
   poseWrap: document.getElementById('poseWrap'),
+  videoMode: document.getElementById('mediaVideoMode'),
+  videoModeWrap: document.getElementById('videoModeWrap'),
+  srcVideo: document.getElementById('mediaSrcVideo'),
+  srcVideoWrap: document.getElementById('srcVideoWrap'),
+  keyframesWrap: document.getElementById('keyframesWrap'),
+  keyframeRows: document.getElementById('keyframeRows'),
+  addKeyframe: document.getElementById('addKeyframe'),
   lengthWrap: document.getElementById('lengthWrap'),
   ref: document.getElementById('mediaRef'),
   refWrap: document.getElementById('refWrap'),
@@ -85,6 +92,18 @@ const els = {
 
 let kind = 'image';
 let refData = null; // { base64, mimeType }
+let srcVideoData = null; // base64 data URL of a clip to restyle
+
+const VIDEO_MODE_LABELS = {
+  text: 'Text → Video',
+  restyle: 'Restyle a video (keeps the motion)',
+  keyframes: 'Timeline keyframes (guide the motion)',
+};
+
+/** Vercel rejects request bodies over 4.5MB, and a source clip has to fit
+ *  inside one alongside everything else. Compressing video in the browser is
+ *  not practical, so this is a hard limit the user is told about up front. */
+const SRC_VIDEO_MAX_BYTES = 3_000_000;
 
 function currentModels() {
   return kind === 'video' ? VIDEO_MODELS : IMAGE_MODELS;
@@ -134,6 +153,29 @@ function selectedSpec() {
   return currentModels().find((m) => m.value === value) || currentModels()[0];
 }
 
+/** The self-hosted video app's mode, or 'text' when the picker doesn't apply. */
+function videoMode() {
+  const spec = selectedSpec();
+  if (kind !== 'video' || spec?.provider !== 'modal') return 'text';
+  return els.videoMode.value || 'text';
+}
+
+function fillVideoModes() {
+  const spec = selectedSpec();
+  const modes = (kind === 'video' && spec?.modes) || ['text'];
+  const prev = els.videoMode.value;
+  els.videoMode.innerHTML = '';
+  for (const m of modes) {
+    const opt = document.createElement('option');
+    opt.value = m;
+    opt.textContent = VIDEO_MODE_LABELS[m] || m;
+    els.videoMode.appendChild(opt);
+  }
+  // Restyle and keyframes belong to different models, so a mode carried over
+  // from the previous model is usually invalid — fall back rather than keep it.
+  if (modes.includes(prev)) els.videoMode.value = prev;
+}
+
 /** The self-hosted image app's mode, or 'text' when the picker doesn't apply. */
 function imageMode() {
   const spec = selectedSpec();
@@ -171,7 +213,6 @@ function syncFields() {
           }[imageMode()] || '(required for image→image)';
   }
   els.accessKeyWrap.classList.toggle('hidden', spec?.provider !== 'modal');
-  els.lengthWrap.classList.toggle('hidden', kind !== 'video');
   // Batching is a self-hosted feature: it works by filling one GPU call, which
   // only applies to the Modal app. Hosted providers bill per image, so asking
   // for four there costs four times as much for no speed gain.
@@ -181,13 +222,26 @@ function syncFields() {
 
   // Each mode reveals only the controls it actually reads.
   const m = imageMode();
-  els.strengthWrap.classList.toggle('hidden', m !== 'img2img');
+  const vm = videoMode();
+  const selfHostedVideo = kind === 'video' && spec?.provider === 'modal';
+  els.videoModeWrap.classList.toggle('hidden', !selfHostedVideo || (spec?.modes?.length || 1) < 2);
+  els.srcVideoWrap.classList.toggle('hidden', vm !== 'restyle');
+  els.keyframesWrap.classList.toggle('hidden', vm !== 'keyframes');
+  // Length is chosen by the source clip when restyling, and by the last
+  // keyframe when keyframing — neither reads the picker.
+  els.lengthWrap.classList.toggle('hidden', kind !== 'video' || vm !== 'text');
+
+  // Strength means "how far from the source" in both img2img and restyle.
+  els.strengthWrap.classList.toggle('hidden', m !== 'img2img' && vm !== 'restyle');
   els.expandWrap.classList.toggle('hidden', m !== 'expand');
   els.poseWrap.classList.toggle('hidden', m !== 'pose');
 }
 
-function setStatus(msg) {
+function setStatus(msg, isError = false) {
   els.status.textContent = msg || '';
+  // Validation messages ("that clip is too big") read as failures, not
+  // progress — they should not look like "Generating…".
+  els.status.classList.toggle('is-error', !!msg && isError);
 }
 
 function loadImageElement(fileOrUrl) {
@@ -249,17 +303,105 @@ els.tabs.forEach((tab) => {
     fillModels();
     fillSizes();
     fillLengths();
+    fillVideoModes();
     syncFields();
   });
 });
 
 els.model.addEventListener('change', () => {
   fillLengths();
+  fillVideoModes();
   syncFields();
 });
 
 // Switching mode changes which fields apply and whether a source is required.
 els.mode.addEventListener('change', syncFields);
+els.videoMode.addEventListener('change', syncFields);
+
+// ---- Source video for restyling -----------------------------------------
+els.srcVideo.addEventListener('change', async () => {
+  const file = els.srcVideo.files?.[0];
+  srcVideoData = null;
+  if (!file) return;
+
+  if (file.size > SRC_VIDEO_MAX_BYTES) {
+    els.srcVideo.value = '';
+    setStatus(
+      `That clip is ${(file.size / 1_048_576).toFixed(1)}MB. The upload has to fit in a ` +
+        `3MB request — try a few seconds at 480p.`,
+      true,
+    );
+    return;
+  }
+
+  srcVideoData = await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+  if (srcVideoData) setStatus(`Loaded ${file.name} — its motion is kept, the look is replaced.`);
+});
+
+// ---- Timeline keyframes --------------------------------------------------
+// Each row is one image pinned to a second in the clip. LTX invents the motion
+// between them, so the rows are the whole point of the feature — kept as plain
+// DOM rows rather than a canvas, since the data is just (image, time).
+const MAX_KEYFRAMES = 4;
+const keyframeState = [];
+
+function renderKeyframeRows() {
+  els.keyframeRows.innerHTML = '';
+  keyframeState.forEach((kf, i) => {
+    const row = document.createElement('div');
+    row.className = 'keyframe-row';
+
+    const file = document.createElement('input');
+    file.type = 'file';
+    file.accept = 'image/*';
+    file.addEventListener('change', async () => {
+      const f = file.files?.[0];
+      if (!f) return;
+      try {
+        kf.image = (await compressImageFile(f)).base64;
+      } catch (err) {
+        kf.image = null;
+        setStatus(err.message, true);
+      }
+    });
+
+    const at = document.createElement('input');
+    at.type = 'number';
+    at.min = '0';
+    at.step = '0.5';
+    at.value = String(kf.at);
+    at.title = 'Seconds into the clip';
+    at.addEventListener('change', () => { kf.at = Math.max(0, Number(at.value) || 0); });
+
+    const drop = document.createElement('button');
+    drop.type = 'button';
+    drop.className = 'kf-drop';
+    drop.textContent = '✕';
+    drop.title = 'Remove this keyframe';
+    drop.addEventListener('click', () => {
+      keyframeState.splice(i, 1);
+      renderKeyframeRows();
+    });
+
+    row.append(file, at, drop);
+    els.keyframeRows.appendChild(row);
+  });
+  els.addKeyframe.disabled = keyframeState.length >= MAX_KEYFRAMES;
+}
+
+els.addKeyframe.addEventListener('click', () => {
+  if (keyframeState.length >= MAX_KEYFRAMES) return;
+  // Space new marks out rather than stacking them all on second 0.
+  const last = keyframeState[keyframeState.length - 1];
+  keyframeState.push({ image: null, at: last ? last.at + 2 : 0 });
+  renderKeyframeRows();
+});
+renderKeyframeRows();
 
 // ---- Cold-start warming --------------------------------------------------
 // A Modal app that has scaled to zero spends ~60s loading weights before it
@@ -476,6 +618,22 @@ els.generate.addEventListener('click', async () => {
     }
     if (kind === 'video') {
       body.seconds = Number(els.length.value) || 5;
+      const vm = videoMode();
+      if (vm === 'restyle') {
+        if (!srcVideoData) throw new Error('Pick a source video to restyle.');
+        body.video = srcVideoData;
+        body.strength = (Number(els.strength.value) || 60) / 100;
+      } else if (vm === 'keyframes') {
+        // Frame index, not seconds: the app works in frames, and LTX runs at
+        // 24fps. Doing the conversion here keeps the app's contract numeric.
+        const ready = keyframeState.filter((kf) => kf.image);
+        if (!ready.length) throw new Error('Add at least one keyframe with an image.');
+        body.keyframes = ready.map((kf) => ({
+          image: kf.image,
+          frame: Math.round(kf.at * 24),
+          strength: 1.0,
+        }));
+      }
     }
     if (spec.provider === 'modal') {
       body.accessKey = (els.accessKey.value || '').trim();
@@ -569,4 +727,5 @@ els.generate.addEventListener('click', async () => {
 fillModels();
 fillSizes();
 fillLengths();
+fillVideoModes();
 syncFields();

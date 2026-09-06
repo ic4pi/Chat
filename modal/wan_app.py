@@ -19,6 +19,8 @@ Deploy:  modal deploy modal/wan_app.py
 import base64
 import io
 import os
+import subprocess
+import tempfile
 import time
 
 import modal
@@ -53,6 +55,7 @@ image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg")
     .pip_install(
+        "av",
         "torch==2.6.0",
         "diffusers==0.36.0",
         "transformers==4.51.3",
@@ -69,6 +72,34 @@ image = (
 
 app = modal.App("wan-video")
 cache = modal.Volume.from_name("wan-model-cache", create_if_missing=True)
+
+
+def _video_to_frames(data: str, width: int, height: int, max_frames: int):
+    """Decode a base64 mp4 into PIL frames at the model's own geometry.
+
+    Sampled evenly rather than truncated: restyling the first two seconds of a
+    ten-second clip and calling it done would silently drop most of the input.
+    """
+    import imageio.v3 as iio
+    from PIL import Image
+
+    if data.startswith("data:"):
+        data = data.split(",", 1)[-1]
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as fh:
+        fh.write(base64.b64decode(data))
+        path = fh.name
+
+    raw = [Image.fromarray(f) for f in iio.imiter(path, plugin="pyav")]
+    os.unlink(path)
+    if not raw:
+        raise ValueError("Could not read any frames from the uploaded video.")
+
+    if len(raw) > max_frames:
+        step = len(raw) / max_frames
+        raw = [raw[min(len(raw) - 1, int(i * step))] for i in range(max_frames)]
+
+    return [f.convert("RGB").resize((width, height), Image.LANCZOS) for f in raw]
 
 
 @app.cls(
@@ -123,8 +154,21 @@ class Wan:
             except Exception as exc:
                 print(f"Lightning LoRA unavailable ({exc!r}); using full steps.")
 
+        # Restyling an existing clip. Shares the loaded components, so it adds
+        # no VRAM and no cold start.
+        from diffusers import WanVideoToVideoPipeline
+
+        self.v2v = WanVideoToVideoPipeline(
+            tokenizer=self.t2v.tokenizer,
+            text_encoder=self.t2v.text_encoder,
+            vae=self.t2v.vae,
+            scheduler=self.t2v.scheduler,
+            transformer=self.t2v.transformer,
+        )
+
         self.t2v.enable_model_cpu_offload()
         self.i2v.enable_model_cpu_offload()
+        self.v2v.enable_model_cpu_offload()
 
     @modal.method()
     def ping(self) -> dict:
@@ -146,6 +190,8 @@ class Wan:
         seed: int = 42,
         steps: int | None = None,
         guidance_scale: float | None = None,
+        video: str = "",
+        strength: float = 0.6,
     ) -> dict:
         import torch
         from diffusers.utils import export_to_video
@@ -161,6 +207,41 @@ class Wan:
             steps = FAST_STEPS if self.fast else FULL_STEPS
         if guidance_scale is None:
             guidance_scale = FAST_GUIDANCE if self.fast else FULL_GUIDANCE
+
+        # Restyling a supplied clip is a single pass, not a chain: the source
+        # already carries the motion the chain exists to invent, and chaining
+        # would restyle a clip that is itself already a restyle.
+        if video:
+            source = _video_to_frames(video, width, height, num_frames)
+            styled = self.v2v(
+                video=source,
+                prompt=prompt,
+                negative_prompt=negative_prompt or None,
+                height=height,
+                width=width,
+                num_inference_steps=steps,
+                guidance_scale=guidance_scale,
+                # How far from the source. Low values only shift surface
+                # appearance; high values redraw and lose the original motion.
+                strength=max(0.05, min(1.0, float(strength))),
+                generator=torch.Generator("cpu").manual_seed(seed),
+                output_type="pil",
+            ).frames[0]
+
+            path = "/tmp/out.mp4"
+            export_to_video(styled, path, fps=fps)
+            with open(path, "rb") as fh:
+                video_b64 = base64.b64encode(fh.read()).decode()
+            return {
+                "video_base64": video_b64,
+                "elapsed_seconds": round(time.time() - started, 2),
+                "num_clips": 1,
+                "num_frames": len(styled),
+                "fps": fps,
+                "mode": "video2video",
+                "fast": self.fast,
+                "steps": steps,
+            }
 
         frames: list = []
         seed_frame = None
@@ -224,6 +305,8 @@ def generate(payload: dict) -> dict:
             fps=int(payload.get("fps") or DEFAULT_FPS),
             num_clips=int(payload.get("num_clips") or 1),
             seed=int(payload.get("seed") or 42),
+            video=payload.get("video") or "",
+            strength=float(payload.get("strength") or 0.6),
         )
     except Exception as exc:  # surfaced verbatim; the client reads body.error
         return {"error": f"{type(exc).__name__}: {exc}"}
@@ -273,6 +356,8 @@ def submit(payload: dict) -> dict:
             fps=int(payload.get("fps") or DEFAULT_FPS),
             num_clips=int(payload.get("num_clips") or 1),
             seed=int(payload.get("seed") or 42),
+            video=payload.get("video") or "",
+            strength=float(payload.get("strength") or 0.6),
         )
         return {"job_id": call.object_id, "status": "running"}
     except Exception as exc:

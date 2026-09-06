@@ -56,6 +56,24 @@
           <select id="mediaSize"></select>
         </label>
 
+        <label class="media-field hidden" id="videoModeWrap">
+          <span>Mode</span>
+          <select id="mediaVideoMode">
+            <option value="text">Text &rarr; Video</option>
+          </select>
+        </label>
+
+        <label class="media-field hidden" id="srcVideoWrap">
+          <span>Source video <em class="opt">(under 3MB &mdash; a few seconds at 480p)</em></span>
+          <input id="mediaSrcVideo" type="file" accept="video/mp4,video/webm" />
+        </label>
+
+        <div class="media-field hidden" id="keyframesWrap">
+          <span>Timeline keyframes <em class="opt">(an image, and when it happens)</em></span>
+          <div id="keyframeRows"></div>
+          <button type="button" id="addKeyframe" class="media-mini">+ Add keyframe</button>
+        </div>
+
         <label class="media-field hidden" id="modeWrap">
           <span>Mode</span>
           <select id="mediaMode">
