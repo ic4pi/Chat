@@ -37,6 +37,13 @@ CHECKPOINTS = {
         "single_file": None,
     },
 }
+# ControlNet for pose. Takes an OpenPose skeleton — a drawn stick figure works
+# as well as one detected from a photo, since the model only ever sees the
+# skeleton.
+POSE_CONTROLNET = os.environ.get(
+    "SDXL_POSE_CONTROLNET", "xinsir/controlnet-openpose-sdxl-1.0"
+)
+
 DEFAULT_MODEL = "lustify"
 
 # Batch ceiling. Four 1024px images fit an L4 comfortably alongside a resident
@@ -53,12 +60,52 @@ image = (
         "safetensors",
         "sentencepiece",
         "pillow",
+        "controlnet-aux==0.0.9",
         "fastapi[standard]",
     )
 )
 
 app = modal.App("sdxl-nsfw")
 cache = modal.Volume.from_name("sdxl-model-cache", create_if_missing=True)
+
+
+def _decode_image(data: str):
+    """Accept a bare base64 string or a full data: URL."""
+    from PIL import Image
+
+    if not data:
+        return None
+    if data.startswith("data:"):
+        data = data.split(",", 1)[-1]
+    return Image.open(io.BytesIO(base64.b64decode(data))).convert("RGB")
+
+
+def _expand_canvas(img, left: int, right: int, top: int, bottom: int):
+    """Place the source on a larger canvas and mask everything that is new.
+
+    Inpainting fills white. The source is copied onto the canvas rather than
+    left blank so the model has real pixels to match colour and lighting
+    against; edge-replicated padding under the mask beats flat grey, which
+    tends to bleed a grey halo into the fill.
+    """
+    from PIL import Image, ImageFilter
+
+    w, h = img.size
+    nw, nh = w + left + right, h + top + bottom
+
+    canvas = Image.new("RGB", (nw, nh))
+    # Stretch the border outward as a base coat, then paste the real image.
+    if left or right or top or bottom:
+        canvas.paste(img.resize((nw, nh), Image.LANCZOS), (0, 0))
+        canvas = canvas.filter(ImageFilter.GaussianBlur(24))
+    canvas.paste(img, (left, top))
+
+    mask = Image.new("L", (nw, nh), 255)
+    mask.paste(Image.new("L", (w, h), 0), (left, top))
+    # Softening the boundary stops a hard seam where new meets original.
+    mask = mask.filter(ImageFilter.GaussianBlur(8))
+
+    return canvas, mask
 
 
 @app.cls(
@@ -81,6 +128,62 @@ class SDXL:
         # Checkpoints load lazily and stay cached per container: holding both
         # in VRAM at once would not fit an L4 alongside generation.
         self._loaded: dict = {}
+        self._siblings: dict = {}
+        self._cnet = None
+        self._pose_det = None
+
+    def _sibling(self, name: str, kind: str):
+        """An img2img / inpaint / controlnet pipeline over the same weights.
+
+        Built from the base pipeline's `.components` rather than loaded again,
+        so a second mode costs no extra VRAM and no extra cold start.
+        """
+        key = f"{name}:{kind}"
+        if key in self._siblings:
+            return self._siblings[key]
+
+        base = self._pipe(name)
+        if kind == "img2img":
+            from diffusers import StableDiffusionXLImg2ImgPipeline
+
+            pipe = StableDiffusionXLImg2ImgPipeline(**base.components)
+        elif kind == "inpaint":
+            from diffusers import StableDiffusionXLInpaintPipeline
+
+            pipe = StableDiffusionXLInpaintPipeline(**base.components)
+        elif kind == "pose":
+            from diffusers import StableDiffusionXLControlNetPipeline
+
+            pipe = StableDiffusionXLControlNetPipeline(
+                **base.components, controlnet=self._controlnet()
+            )
+        else:
+            raise ValueError(f"unknown pipeline kind: {kind}")
+
+        # Siblings share the base's weights, which are already on the GPU.
+        self._siblings.clear()
+        self._siblings[key] = pipe
+        return pipe
+
+    def _controlnet(self):
+        if self._cnet is None:
+            from diffusers import ControlNetModel
+
+            self._cnet = ControlNetModel.from_pretrained(
+                POSE_CONTROLNET,
+                torch_dtype=self._torch.float16,
+                cache_dir="/cache/hf",
+            ).to("cuda")
+        return self._cnet
+
+    def _pose_from_photo(self, img):
+        """Extract an OpenPose skeleton. Only needed when the caller sends a
+        photo rather than a skeleton they drew themselves."""
+        if self._pose_det is None:
+            from controlnet_aux import OpenposeDetector
+
+            self._pose_det = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
+        return self._pose_det(img, hand_and_face=True)
 
     def _pipe(self, name: str):
         if name in self._loaded:
@@ -113,7 +216,9 @@ class SDXL:
             pipe.to("cuda")
 
         # Only one checkpoint stays resident; swapping is cheaper than OOM.
+        # Siblings wrap the outgoing weights, so they go too.
         self._loaded.clear()
+        self._siblings.clear()
         self._loaded[name] = pipe
         return pipe
 
@@ -137,6 +242,12 @@ class SDXL:
         guidance_scale: float = 6.0,
         n: int = 1,
         fmt: str = "webp",
+        mode: str = "text",
+        image: str = "",
+        strength: float = 0.35,
+        expand: dict | None = None,
+        control_scale: float = 0.8,
+        detect_pose: bool = True,
     ) -> dict:
         started = time.time()
         name = model if model in CHECKPOINTS else DEFAULT_MODEL
@@ -154,16 +265,61 @@ class SDXL:
         generator = [
             self._torch.Generator("cpu").manual_seed(seed + i) for i in range(n)
         ]
-        images = pipe(
+        common = dict(
             prompt=prompt,
             negative_prompt=negative_prompt or None,
-            width=width,
-            height=height,
             num_inference_steps=steps,
             guidance_scale=guidance_scale,
             generator=generator,
             num_images_per_prompt=n,
-        ).images
+        )
+        source = _decode_image(image)
+        if mode != "text" and source is None:
+            raise ValueError(f"mode '{mode}' needs an 'image'.")
+
+        if mode == "img2img":
+            # Low strength keeps the original and restyles it; high strength
+            # uses it as loose composition. The pipeline takes its size from
+            # the source, so width/height are not passed.
+            images = self._sibling(name, "img2img")(
+                image=source, strength=max(0.05, min(1.0, float(strength))), **common
+            ).images
+
+        elif mode in ("expand", "outpaint"):
+            e = expand or {}
+            canvas, mask = _expand_canvas(
+                source,
+                max(0, int(e.get("left", 0))),
+                max(0, int(e.get("right", 0))),
+                max(0, int(e.get("top", 0))),
+                max(0, int(e.get("bottom", 0))),
+            )
+            cw, ch = canvas.size
+            images = self._sibling(name, "inpaint")(
+                image=canvas,
+                mask_image=mask,
+                width=max(512, int(round(cw / 8)) * 8),
+                height=max(512, int(round(ch / 8)) * 8),
+                # Near-1.0: the masked region is new canvas, not something to
+                # preserve. Lower values leave the blurred base coat showing.
+                strength=0.99,
+                **common,
+            ).images
+
+        elif mode == "pose":
+            # A skeleton the user drew is used as-is; a photo is converted.
+            control = self._pose_from_photo(source) if detect_pose else source
+            control = control.resize((width, height))
+            images = self._sibling(name, "pose")(
+                image=control,
+                width=width,
+                height=height,
+                controlnet_conditioning_scale=max(0.0, min(2.0, float(control_scale))),
+                **common,
+            ).images
+
+        else:
+            images = pipe(width=width, height=height, **common).images
 
         # WebP by default: a 1024px PNG is ~1.5MB, and a handful of those
         # base64-encoded blows the caller's response budget. WebP at q92 is
@@ -185,8 +341,9 @@ class SDXL:
             "count": len(encoded),
             "elapsed_seconds": round(time.time() - started, 2),
             "model": name,
-            "width": width,
-            "height": height,
+            "mode": mode,
+            "width": images[0].width,
+            "height": images[0].height,
             "seed": seed,
         }
 
@@ -208,6 +365,12 @@ def generate(payload: dict) -> dict:
             seed=int(payload.get("seed") or 42),
             n=int(payload.get("n") or 1),
             fmt=str(payload.get("format") or "webp"),
+            mode=str(payload.get("mode") or "text"),
+            image=payload.get("image") or "",
+            strength=float(payload.get("strength") or 0.35),
+            expand=payload.get("expand"),
+            control_scale=float(payload.get("control_scale") or 0.8),
+            detect_pose=bool(payload.get("detect_pose", True)),
         )
     except Exception as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}

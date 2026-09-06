@@ -63,6 +63,14 @@ const els = {
   length: document.getElementById('mediaLength'),
   count: document.getElementById('mediaCount'),
   countWrap: document.getElementById('countWrap'),
+  mode: document.getElementById('mediaMode'),
+  modeWrap: document.getElementById('modeWrap'),
+  strength: document.getElementById('mediaStrength'),
+  strengthWrap: document.getElementById('strengthWrap'),
+  expand: document.getElementById('mediaExpand'),
+  expandWrap: document.getElementById('expandWrap'),
+  poseSource: document.getElementById('mediaPoseSource'),
+  poseWrap: document.getElementById('poseWrap'),
   lengthWrap: document.getElementById('lengthWrap'),
   ref: document.getElementById('mediaRef'),
   refWrap: document.getElementById('refWrap'),
@@ -126,9 +134,19 @@ function selectedSpec() {
   return currentModels().find((m) => m.value === value) || currentModels()[0];
 }
 
+/** The self-hosted image app's mode, or 'text' when the picker doesn't apply. */
+function imageMode() {
+  const spec = selectedSpec();
+  if (kind !== 'image' || spec?.provider !== 'modal') return 'text';
+  return els.mode.value || 'text';
+}
+
 function modelUsesRef(spec) {
   if (!spec) return false;
   if (spec.usesRef) return true;
+  // Every self-hosted image mode except plain text-to-image works from a
+  // source image the user supplies.
+  if (imageMode() !== 'text') return true;
   return kind === 'video' && /i2v/i.test(spec.model || '');
 }
 
@@ -141,17 +159,31 @@ function syncFields() {
   els.refWrap.classList.toggle('hidden', !usesRef);
   const opt = els.refWrap.querySelector('.opt');
   if (opt) {
-    opt.textContent = kind === 'image' ? '(required for image→image)' : '(required for image→video)';
+    // Name what the upload is actually for in this mode — "reference image"
+    // means something different when outpainting than when matching a pose.
+    opt.textContent =
+      kind === 'video'
+        ? '(required for image→video)'
+        : {
+            img2img: '(the image to restyle)',
+            expand: '(the image to expand outward from)',
+            pose: '(photo or stick figure to take the pose from)',
+          }[imageMode()] || '(required for image→image)';
   }
   els.accessKeyWrap.classList.toggle('hidden', spec?.provider !== 'modal');
   els.lengthWrap.classList.toggle('hidden', kind !== 'video');
   // Batching is a self-hosted feature: it works by filling one GPU call, which
   // only applies to the Modal app. Hosted providers bill per image, so asking
   // for four there costs four times as much for no speed gain.
-  els.countWrap.classList.toggle(
-    'hidden',
-    !(kind === 'image' && spec?.provider === 'modal'),
-  );
+  const selfHostedImage = kind === 'image' && spec?.provider === 'modal';
+  els.countWrap.classList.toggle('hidden', !selfHostedImage);
+  els.modeWrap.classList.toggle('hidden', !selfHostedImage);
+
+  // Each mode reveals only the controls it actually reads.
+  const m = imageMode();
+  els.strengthWrap.classList.toggle('hidden', m !== 'img2img');
+  els.expandWrap.classList.toggle('hidden', m !== 'expand');
+  els.poseWrap.classList.toggle('hidden', m !== 'pose');
 }
 
 function setStatus(msg) {
@@ -225,6 +257,9 @@ els.model.addEventListener('change', () => {
   fillLengths();
   syncFields();
 });
+
+// Switching mode changes which fields apply and whether a source is required.
+els.mode.addEventListener('change', syncFields);
 
 // ---- Cold-start warming --------------------------------------------------
 // A Modal app that has scaled to zero spends ~60s loading weights before it
@@ -421,6 +456,23 @@ els.generate.addEventListener('click', async () => {
     }
     if (kind === 'image' && spec.provider === 'modal') {
       body.count = Number(els.count.value) || 1;
+      const m = imageMode();
+      body.mode = m;
+      if (m === 'img2img') {
+        body.strength = (Number(els.strength.value) || 35) / 100;
+      } else if (m === 'expand') {
+        const [px, dir] = String(els.expand.value).split(':');
+        const n = Number(px) || 256;
+        body.expand = {
+          left: dir === 'tall' ? 0 : n,
+          right: dir === 'tall' ? 0 : n,
+          top: dir === 'wide' ? 0 : n,
+          bottom: dir === 'wide' ? 0 : n,
+        };
+      } else if (m === 'pose') {
+        body.detectPose = els.poseSource.value === 'detect';
+        body.controlScale = 0.8;
+      }
     }
     if (kind === 'video') {
       body.seconds = Number(els.length.value) || 5;

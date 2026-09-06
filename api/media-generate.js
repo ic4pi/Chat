@@ -15,6 +15,12 @@
  *     imageBase64?: string,   // Venice Edit / Wan i2v only (do NOT send on text-to-image)
  *     mimeType?: string,
  *     count?: number,         // image: how many to generate in one batch (modal, max 4)
+ *     mode?: string,          // image (modal): text | img2img | expand | pose
+ *     strength?: number,      // img2img: 0.05-1.0, how far from the source
+ *     expand?: object,        // expand: {left,right,top,bottom} in pixels
+ *     controlScale?: number,  // pose: how strictly to follow the skeleton
+ *     detectPose?: boolean,   // pose: extract a skeleton from a photo (else
+ *                             //       the image IS the skeleton)
  *     accessKey?: string,     // required for provider:'modal' only if VIDEO_ACCESS_KEYS is set
  *   }
  *
@@ -630,11 +636,27 @@ function videoGeometry(model, size) {
   };
 }
 
-async function generateModalSdxlImage({ prompt, negativePrompt, model, size, count }) {
+/**
+ * Modes the self-hosted image app supports beyond plain text-to-image.
+ * Each maps to a pipeline built over the same checkpoint, so switching mode
+ * costs no extra VRAM or load time.
+ */
+const MODAL_IMAGE_MODES = new Set(['text', 'img2img', 'expand', 'outpaint', 'pose']);
+
+async function generateModalSdxlImage({
+  prompt, negativePrompt, model, size, count,
+  mode, imageBase64, strength, expand, controlScale, detectPose,
+}) {
   const dims = String(size || '1024x1024').split(/[x*]/i).map(Number);
   const width = dims[0] || 1024;
   const height = dims[1] || 1024;
   const modalModel = MODAL_IMAGE_MODELS[model] || 'lustify';
+  const imageMode = MODAL_IMAGE_MODES.has(String(mode || '')) ? String(mode) : 'text';
+  if (imageMode !== 'text' && !imageBase64) {
+    const err = new Error(`Mode "${imageMode}" needs a source image.`);
+    err.status = 400;
+    throw err;
+  }
 
   const resp = await fetch(MODAL_SDXL_ENDPOINT, {
     method: 'POST',
@@ -646,6 +668,16 @@ async function generateModalSdxlImage({ prompt, negativePrompt, model, size, cou
       width,
       height,
       n: Math.max(1, Math.min(4, Number(count) || 1)),
+      ...(imageMode !== 'text'
+        ? {
+            mode: imageMode,
+            image: imageBase64,
+            ...(strength != null ? { strength: Number(strength) } : {}),
+            ...(expand ? { expand } : {}),
+            ...(controlScale != null ? { control_scale: Number(controlScale) } : {}),
+            ...(detectPose != null ? { detect_pose: !!detectPose } : {}),
+          }
+        : {}),
     }),
   });
 
@@ -668,7 +700,8 @@ async function generateModalSdxlImage({ prompt, negativePrompt, model, size, cou
     images: batch.map((base64) => ({ base64, mimeType })),
     uncensored: true,
     elapsedSeconds: body.elapsed_seconds,
-    note: `Self-hosted SDXL on Modal${batch.length > 1 ? ` · ${batch.length} images` : ''} (scale-to-zero, no external content filter).`,
+    mode: imageMode,
+    note: `Self-hosted SDXL on Modal${imageMode !== 'text' ? ` · ${imageMode}` : ''}${batch.length > 1 ? ` · ${batch.length} images` : ''} (scale-to-zero, no external content filter).`,
   };
 }
 
@@ -955,6 +988,11 @@ export default async function handler(req, res) {
     size,
     seconds,
     count,
+    mode,
+    strength,
+    expand,
+    controlScale,
+    detectPose,
     imageBase64,
     mimeType,
     accessKey,
@@ -1022,6 +1060,12 @@ export default async function handler(req, res) {
           model,
           size,
           count,
+          mode,
+          imageBase64,
+          strength,
+          expand,
+          controlScale,
+          detectPose,
         });
 
         if (person) {
