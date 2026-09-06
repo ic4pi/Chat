@@ -49,6 +49,7 @@
  */
 
 import { requireAdminAuth } from '../lib/auth.js';
+import { storeMediaAsset, decodeDataUrl } from '../lib/hub.js';
 import {
   billingEnabled,
   findPerson,
@@ -202,6 +203,50 @@ function oversizeError(kind = 'image') {
   err.status = 413;
   err.code = 'PAYLOAD_TOO_LARGE';
   return err;
+}
+
+/**
+ * Move a generated video out of the JSON response and into object storage.
+ *
+ * Vercel's 4.5MB cap applies to the response this function sends the browser,
+ * NOT to what it fetches from Modal — so a 20MB clip arrives here fine and
+ * then dies on the way out, as an opaque 413 with no error text. Any video
+ * beyond a few seconds crosses that line, which is why self-hosted video
+ * looked broken while images worked.
+ *
+ * Uploading here means the browser gets a URL and the bytes never transit
+ * Vercel's response path. Modal is unchanged — this works with the apps as
+ * they are already deployed.
+ *
+ * Falls back to leaving the data URL in place when storage is unconfigured
+ * AND the clip is small enough to survive, so a short generation still works
+ * on a bare install.
+ */
+async function persistVideoResult(out) {
+  const src = out?.videoUrl;
+  if (!src || !src.startsWith('data:')) return out; // already a hosted URL
+
+  const decoded = decodeDataUrl(src);
+  if (!decoded) return out;
+
+  const url = await storeMediaAsset(decoded.bytes, decoded.mimeType, 'video');
+  if (url) {
+    return { ...out, videoUrl: url, bytes: decoded.bytes.length, stored: true };
+  }
+
+  // No storage. Only inline what will actually fit through the response.
+  if (payloadTooLarge(out)) {
+    const mb = (decoded.bytes.length / 1_048_576).toFixed(1);
+    const err = new Error(
+      `Generated video is ${mb}MB — too large to return through Vercel (4.5MB limit / HTTP 413). ` +
+        `Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY so video can be stored and returned as a URL, ` +
+        `or request a shorter clip.`,
+    );
+    err.status = 413;
+    err.code = 'PAYLOAD_TOO_LARGE';
+    throw err;
+  }
+  return { ...out, stored: false };
 }
 
 function asDataUrl(mime, b64OrDataUrl) {
@@ -1701,15 +1746,20 @@ export default async function handler(req, res) {
               seconds,
             });
 
+        // Off to storage before billing. If this throws, storage is
+        // misconfigured — an owner problem, not the requester's, so they are
+        // not charged for a clip they cannot receive.
+        const stored = await persistVideoResult(out);
+
         if (person) {
           const billing = await chargeForGeneration(person, {
-            elapsedSeconds: out.elapsedSeconds,
+            elapsedSeconds: stored.elapsedSeconds,
             prompt: prompt.trim(),
           });
-          out.billing = { name: person.name, markupPct: person.markupPct, ...billing };
+          stored.billing = { name: person.name, markupPct: person.markupPct, ...billing };
         }
 
-        return res.status(200).json(out);
+        return res.status(200).json(stored);
       }
 
       const isWan = provider === 'nvidia' || provider === 'fal' || /wan/i.test(String(model || ''));
@@ -1725,7 +1775,7 @@ export default async function handler(req, res) {
             mimeType,
             negativePrompt,
           });
-          return res.status(200).json(out);
+          return res.status(200).json(await persistVideoResult(out));
         } catch (wanErr) {
           // Fall through to Cloudflare Seedance if configured
           console.warn('Wan video failed, trying Cloudflare Seedance:', wanErr.message);
@@ -1740,7 +1790,7 @@ export default async function handler(req, res) {
             });
             out.fallbackFrom = provider || 'nvidia';
             out.fallbackNote = wanErr.message || 'Wan unavailable; used Cloudflare · Seedance Mini.';
-            return res.status(200).json(out);
+            return res.status(200).json(await persistVideoResult(out));
           } catch (cfErr) {
             const err = new Error(
               `${wanErr.message} Also tried Cloudflare Seedance: ${cfErr.message}`
@@ -1760,7 +1810,7 @@ export default async function handler(req, res) {
           imageBase64,
           mimeType,
         });
-        return res.status(200).json(out);
+        return res.status(200).json(await persistVideoResult(out));
       } catch (cfErr) {
         // Seedance often needs dashboard enablement — fall back to fal Wan if key exists.
         if ((process.env.FAL_KEY || process.env.FAL_API_KEY || '').trim()) {
@@ -1775,7 +1825,7 @@ export default async function handler(req, res) {
             out.fallbackFrom = 'cloudflare';
             out.fallbackNote =
               cfErr.message || 'Cloudflare Seedance unavailable; used Wan 2.2 on fal.ai.';
-            return res.status(200).json(out);
+            return res.status(200).json(await persistVideoResult(out));
           } catch (falErr) {
             const err = new Error(
               `${cfErr.message} Also tried fal Wan: ${falErr.message}`
@@ -1799,3 +1849,7 @@ export default async function handler(req, res) {
     return res.status(status).json(payload);
   }
 }
+
+// Exposed for scripts/check-video-persist.mjs — same convention as
+// lib/animate/providers.js. Not part of the HTTP surface.
+export const __test = { persistVideoResult, payloadTooLarge, SAFE_JSON_BYTES };
