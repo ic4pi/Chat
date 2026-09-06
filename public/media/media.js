@@ -6,21 +6,20 @@ const IMAGE_MODELS = [
   { value: 'cloudflare:sdxl', label: 'Cloudflare · SDXL Base (free, filtered)', kind: 'image', provider: 'cloudflare', model: 'sdxl', usesRef: false },
 ];
 
-// maxSeconds is a per-model safety cap on the Length picker, not a stylistic
-// choice - measured live against the deployed site (not just Modal directly):
-// a single 5s Wan clip at real settings (40 steps, 832x480) took 6m20s end to
-// end, so 4 chained clips would run ~25min, way past Vercel's 800s function
-// timeout - the request would die with the GPU time already spent and nothing
-// delivered. LTX at 30 steps did the same job in ~2min, so it can safely go
-// up to the Modal endpoint's own 6-clip/30s cap.
+// maxSeconds is a per-model safety cap on the Length picker.
 //
-// NOTE: Wan's 5s cap assumes 40-step sampling. modal/wan_app.py now loads a
-// Lightning LoRA (4 steps, no CFG) which should cut a clip to roughly a
-// minute — once that is deployed and timed, re-measure and raise maxSeconds
-// here. Leaving it at 5 until then only costs length, where raising it early
-// costs a dead request with the GPU time already spent.
+// It used to be bounded by Vercel: a single 5s Wan clip at 40 steps took 6m20s
+// end to end, so four chained clips would have blown the 800s function timeout
+// and died with the GPU time already spent. Video now goes through the async
+// job API (?op=submit / ?op=result), so no single request has to outlive that
+// timeout, and the binding constraint is the Modal apps' own 6-clip ceiling
+// (~30s) and their 3600s function timeout.
+//
+// Six Wan clips at the old 40-step speed would be ~38min — inside Modal's
+// timeout, but a long wait. The Lightning LoRA in modal/wan_app.py should cut
+// that sharply; re-measure once it is deployed.
 const VIDEO_MODELS = [
-  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, slow)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', usesRef: false, maxSeconds: 5 },
+  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, slow)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', usesRef: false, maxSeconds: 30 },
   { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', usesRef: false, maxSeconds: 30 },
   // fal.ai / NVIDIA / Cloudflare video removed - fal and NVIDIA both bill per
   // generation, and Cloudflare's Seedance models are a third-party pass-through
@@ -338,6 +337,57 @@ function friendlyHttpError(status, data) {
   return data?.error || `HTTP ${status}`;
 }
 
+async function runSync(body) {
+  const res = await fetch('/api/media-generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(friendlyHttpError(res.status, data));
+  return data;
+}
+
+const POLL_MS = 5000;
+// Ceiling matches the Modal apps' own 3600s timeout: past that the job is gone
+// and there is nothing left to wait for.
+const POLL_CEILING_MS = 3_600_000;
+
+async function runVideoJob(body) {
+  const submitRes = await fetch('/api/media-generate?op=submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const job = await submitRes.json().catch(() => ({}));
+  if (!submitRes.ok || !job.jobId) throw new Error(friendlyHttpError(submitRes.status, job));
+
+  const started = Date.now();
+  for (;;) {
+    await new Promise((r) => setTimeout(r, POLL_MS));
+
+    const elapsed = Math.round((Date.now() - started) / 1000);
+    setStatus(`Generating… ${elapsed}s. Self-hosted video takes minutes; leave this open.`);
+
+    const pollRes = await fetch('/api/media-generate?op=result', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobId: job.jobId, model: body.model, accessKey: body.accessKey }),
+    });
+    const out = await pollRes.json().catch(() => ({}));
+
+    if (out.status === 'done') return out;
+    // A transient poll failure is not a failed job — the generation is still
+    // running on Modal. Only an explicit terminal status ends the wait.
+    if (out.status && out.status !== 'running') {
+      throw new Error(out.error || `Generation ${out.status}.`);
+    }
+    if (Date.now() - started > POLL_CEILING_MS) {
+      throw new Error('Gave up waiting after an hour — the job outlived its Modal timeout.');
+    }
+  }
+}
+
 els.generate.addEventListener('click', async () => {
   const prompt = (els.prompt.value || '').trim();
   if (!prompt) {
@@ -385,13 +435,14 @@ els.generate.addEventListener('click', async () => {
       body.mimeType = refData.mimeType;
     }
 
-    const res = await fetch('/api/media-generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(friendlyHttpError(res.status, data));
+    // Self-hosted video goes through the async job API. One blocking request
+    // would be bounded by the API's 800s function timeout, which is what caps
+    // clip length — polling moves the ceiling to the Modal app's own timeout
+    // and lets the UI show progress instead of hanging.
+    const data =
+      kind === 'video' && spec.provider === 'modal'
+        ? await runVideoJob(body)
+        : await runSync(body);
 
     if (data.kind === 'image') {
       if (data.note) setStatus(data.note);

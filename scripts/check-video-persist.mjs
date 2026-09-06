@@ -15,7 +15,8 @@
  */
 import { __test } from '../api/media-generate.js';
 
-const { persistVideoResult, persistImageResult, SAFE_JSON_BYTES, warmEndpointFor } = __test;
+const { persistVideoResult, persistImageResult, SAFE_JSON_BYTES, warmEndpointFor,
+        modalEndpoint, clipsForSeconds, videoGeometry } = __test;
 
 const dataUrl = (bytes) =>
   `data:video/mp4;base64,${Buffer.alloc(bytes, 0x61).toString('base64')}`;
@@ -97,6 +98,35 @@ check('non-generate endpoint left alone',
 {
   const vid = { kind: 'video', videoUrl: 'https://cdn/v.mp4' };
   check('video is not touched by the image path', (await persistImageResult(vid)) === vid);
+}
+
+// Async job endpoints. All four functions live on the same Modal app and
+// differ only in the last URL segment.
+for (const [fn, want] of [
+  ['generate', 'https://ic4pi--wan-video-generate.modal.run'],
+  ['warm',     'https://ic4pi--wan-video-warm.modal.run'],
+  ['submit',   'https://ic4pi--wan-video-submit.modal.run'],
+  ['result',   'https://ic4pi--wan-video-result.modal.run'],
+]) {
+  const got = modalEndpoint('wan2.2-5b', fn);
+  check(`${fn} endpoint`, got === want, `got ${got}`);
+}
+
+// Length maps to whole ~5s clips, clamped to what the apps accept.
+for (const [secs, want] of [[5,1],[10,2],[30,6],[60,6],[0,1],[undefined,1]]) {
+  check(`${secs}s -> ${want} clip(s)`, clipsForSeconds(secs) === want,
+        `got ${clipsForSeconds(secs)}`);
+}
+
+// Each model has its own native geometry; sending Wan's to LTX (or the
+// reverse) produces frame counts the transformer rejects.
+{
+  const wan = videoGeometry('wan2.2-5b');
+  check('wan geometry', wan.width === 832 && wan.fps === 16 && wan.num_frames === 81);
+  const ltx = videoGeometry('ltx-video');
+  check('ltx geometry', ltx.width === 704 && ltx.fps === 24 && ltx.num_frames === 121);
+  const custom = videoGeometry('wan2.2-5b', '480x832');
+  check('explicit size wins', custom.width === 480 && custom.height === 832);
 }
 
 console.log(failed ? `\n${failed} failing` : '\nall passing');

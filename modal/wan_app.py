@@ -243,3 +243,68 @@ def warm() -> dict:
         return {"warming": True}
     except Exception as exc:
         return {"warming": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+# ---- Async job API -------------------------------------------------------
+# The synchronous `generate` endpoint is bounded by the caller's own function
+# timeout — 800s on Vercel — which is what caps clip length, not the model.
+# Splitting submit from result makes every HTTP request short, so length is
+# bounded only by this app's own timeout instead.
+#
+# Modal keeps the spawned call's result server-side; from_id re-attaches to it
+# by id, so the polling request does not need the original handle.
+
+
+@app.function(image=image, timeout=60)
+@modal.fastapi_endpoint(method="POST")
+def submit(payload: dict) -> dict:
+    """Start a generation and return immediately with its job id."""
+    prompt = (payload.get("prompt") or "").strip()
+    if not prompt:
+        return {"error": "Missing 'prompt'."}
+
+    try:
+        call = Wan().run.spawn(
+            prompt=prompt,
+            negative_prompt=payload.get("negative_prompt") or "",
+            width=int(payload.get("width") or 832),
+            height=int(payload.get("height") or 480),
+            num_frames=int(payload.get("num_frames") or FRAMES_PER_CLIP),
+            fps=int(payload.get("fps") or DEFAULT_FPS),
+            num_clips=int(payload.get("num_clips") or 1),
+            seed=int(payload.get("seed") or 42),
+        )
+        return {"job_id": call.object_id, "status": "running"}
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+@app.function(image=image, timeout=60)
+@modal.fastapi_endpoint(method="POST")
+def result(payload: dict) -> dict:
+    """Poll a job. Returns status "running" until the clip is ready.
+
+    timeout=0 makes this a non-blocking check: Modal raises rather than
+    holding the connection open, which is the whole point — a polling request
+    that blocked would just move the timeout problem instead of solving it."""
+    job_id = (payload.get("job_id") or "").strip()
+    if not job_id:
+        return {"error": "Missing 'job_id'."}
+
+    try:
+        call = modal.FunctionCall.from_id(job_id)
+    except Exception as exc:
+        return {"status": "error", "error": f"Unknown job: {exc}"}
+
+    try:
+        out = call.get(timeout=0)
+    except modal.exception.OutputExpiredError:
+        # Modal drops results some time after completion. Nothing to recover.
+        return {"status": "expired",
+                "error": "Result expired on Modal before it was collected."}
+    except TimeoutError:
+        return {"status": "running"}
+    except Exception as exc:
+        return {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+
+    return {"status": "done", **out}

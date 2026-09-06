@@ -592,13 +592,42 @@ const MODAL_IMAGE_MODELS = {
  * trailing function name swapped. Deriving it keeps one endpoint env var per
  * app instead of two that can drift apart.
  */
-function warmEndpointFor(model) {
+/**
+ * Swap the function name on a Modal generate URL for another endpoint on the
+ * same app. Modal derives a web endpoint's URL from app name + function name,
+ * so `generate`, `warm`, `submit` and `result` differ only in that last
+ * segment. Deriving them keeps one env var per app rather than four that can
+ * drift apart.
+ */
+function modalEndpoint(model, fn) {
   const base = /ltx/i.test(model)
     ? MODAL_LTX_ENDPOINT
     : /wan/i.test(model)
       ? MODAL_WAN_ENDPOINT
       : MODAL_SDXL_ENDPOINT;
-  return base.replace(/-generate(\.modal\.run)$/, '-warm$1');
+  return base.replace(/-generate(\.modal\.run)$/, `-${fn}$1`);
+}
+
+function warmEndpointFor(model) {
+  return modalEndpoint(model, 'warm');
+}
+
+/** Clip count for a requested length. Each clip is ~5s; apps re-clamp at 6. */
+function clipsForSeconds(seconds) {
+  return Math.min(6, Math.max(1, Math.round((Number(seconds) || 5) / 5)));
+}
+
+/** Per-model video geometry, matching what each app is built around. */
+function videoGeometry(model, size) {
+  const isLtx = /ltx/i.test(String(model || ''));
+  const fallback = isLtx ? '704x480' : '832x480';
+  const dims = String(size || fallback).split(/[x*]/i).map(Number);
+  return {
+    width: dims[0] || (isLtx ? 704 : 832),
+    height: dims[1] || 480,
+    fps: isLtx ? 24 : 16,
+    num_frames: isLtx ? 121 : 81,
+  };
 }
 
 async function generateModalSdxlImage({ prompt, negativePrompt, model, size, count }) {
@@ -789,6 +818,108 @@ export default async function handler(req, res) {
       // Warming is best-effort by design.
     }
     return res.status(202).json({ warming: true, target: target || 'sdxl' });
+  }
+
+  // Async video jobs.
+  //   POST ?op=submit  {model, prompt, ...}  -> { jobId, model }
+  //   POST ?op=result  {jobId, model}        -> { status: running|done|... }
+  //
+  // The synchronous path is bounded by this function's own 800s timeout, which
+  // is what caps clip length — not the models. Splitting submit from result
+  // keeps every request short, so length is bounded by the Modal app's own
+  // hour-long timeout instead. A finished clip goes through the same storage
+  // path as the sync route, so the bytes still never reach the response.
+  if (String(req.query?.op || '') === 'submit') {
+    if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+    const { model: jm, prompt: jp, negativePrompt: jn, size: js, seconds: jsec, accessKey: jk } =
+      req.body || {};
+    if (!jp || !String(jp).trim()) return res.status(400).json({ error: 'prompt is required' });
+
+    // Billing is checked at submit: a job that cannot be paid for should never
+    // occupy a GPU. The charge itself lands at collection, when the real
+    // elapsed time is known.
+    if (billingEnabled()) {
+      const person = findPerson(jk);
+      if (!person) return res.status(401).json({ error: 'Invalid or missing access key.' });
+      try {
+        await assertHasCredit(person);
+      } catch (creditErr) {
+        return res.status(creditErr.status || 402).json({ error: creditErr.message });
+      }
+    }
+
+    const geo = videoGeometry(jm, js);
+    const upstream = await fetch(modalEndpoint(jm, 'submit'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: String(jp).trim(),
+        negative_prompt: jn || undefined,
+        ...geo,
+        num_clips: clipsForSeconds(jsec),
+      }),
+    });
+    const sub = await upstream.json().catch(() => ({}));
+    if (!upstream.ok || sub.error || !sub.job_id) {
+      return res
+        .status(upstream.ok ? 502 : upstream.status)
+        .json({ error: sub.error || `Modal submit HTTP ${upstream.status}` });
+    }
+    return res.status(202).json({ jobId: sub.job_id, model: jm, status: 'running' });
+  }
+
+  if (String(req.query?.op || '') === 'result') {
+    if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+    const { jobId, model: rm, accessKey: rk } = req.body || {};
+    if (!jobId) return res.status(400).json({ error: 'jobId is required' });
+
+    const upstream = await fetch(modalEndpoint(rm, 'result'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: jobId }),
+    });
+    const job = await upstream.json().catch(() => ({}));
+
+    if (job.status !== 'done') {
+      // running | expired | error — passed through as-is so the client can
+      // tell "still working" from "this will never finish".
+      return res.status(job.status === 'running' ? 200 : 502).json({
+        status: job.status || 'error',
+        ...(job.error ? { error: job.error } : {}),
+      });
+    }
+
+    let out = {
+      kind: 'video',
+      provider: 'modal',
+      model: rm,
+      videoUrl: `data:video/mp4;base64,${job.video_base64}`,
+      mime: 'video/mp4',
+      uncensored: true,
+      elapsedSeconds: job.elapsed_seconds,
+      numClips: job.num_clips,
+    };
+
+    try {
+      out = await persistVideoResult(out);
+    } catch (persistErr) {
+      return res
+        .status(persistErr.status || 502)
+        .json({ status: 'error', error: persistErr.message });
+    }
+
+    if (billingEnabled()) {
+      const person = findPerson(rk);
+      if (person) {
+        const billing = await chargeForGeneration(person, {
+          elapsedSeconds: out.elapsedSeconds,
+          prompt: 'async video job',
+        });
+        out.billing = { name: person.name, markupPct: person.markupPct, ...billing };
+      }
+    }
+
+    return res.status(200).json({ status: 'done', ...out });
   }
 
   // Admin-only balance management for the Modal video access keys:
@@ -1027,4 +1158,7 @@ export default async function handler(req, res) {
 
 // Exposed for scripts/check-video-persist.mjs — same convention as
 // lib/animate/providers.js. Not part of the HTTP surface.
-export const __test = { persistVideoResult, persistImageResult, payloadTooLarge, SAFE_JSON_BYTES, warmEndpointFor };
+export const __test = {
+  persistVideoResult, persistImageResult, payloadTooLarge, SAFE_JSON_BYTES,
+  warmEndpointFor, modalEndpoint, clipsForSeconds, videoGeometry,
+};
