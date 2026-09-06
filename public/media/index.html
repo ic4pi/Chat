@@ -56,6 +56,67 @@
           <select id="mediaSize"></select>
         </label>
 
+        <label class="media-field hidden" id="videoModeWrap">
+          <span>Mode</span>
+          <select id="mediaVideoMode">
+            <option value="text">Text &rarr; Video</option>
+          </select>
+        </label>
+
+        <label class="media-field hidden" id="srcVideoWrap">
+          <span>Source video <em class="opt">(under 3MB &mdash; a few seconds at 480p)</em></span>
+          <input id="mediaSrcVideo" type="file" accept="video/mp4,video/webm" />
+        </label>
+
+        <div class="media-field hidden" id="keyframesWrap">
+          <span>Timeline keyframes <em class="opt">(an image, and when it happens)</em></span>
+          <div id="keyframeRows"></div>
+          <button type="button" id="addKeyframe" class="media-mini">+ Add keyframe</button>
+        </div>
+
+        <label class="media-field hidden" id="modeWrap">
+          <span>Mode</span>
+          <select id="mediaMode">
+            <option value="text">Text &rarr; Image</option>
+            <option value="img2img">Image &rarr; Image (restyle)</option>
+            <option value="expand">Expand / outpaint</option>
+            <option value="pose">Match a pose</option>
+          </select>
+        </label>
+
+        <label class="media-field hidden" id="strengthWrap">
+          <span>Change amount <em class="opt">(low keeps the original)</em></span>
+          <input id="mediaStrength" type="range" min="5" max="100" step="5" value="35" />
+        </label>
+
+        <label class="media-field hidden" id="expandWrap">
+          <span>Expand by</span>
+          <select id="mediaExpand">
+            <option value="256:all">256px, all sides</option>
+            <option value="512:all">512px, all sides</option>
+            <option value="512:wide">512px wider (left + right)</option>
+            <option value="512:tall">512px taller (top + bottom)</option>
+          </select>
+        </label>
+
+        <label class="media-field hidden" id="poseWrap">
+          <span>Pose source</span>
+          <select id="mediaPoseSource">
+            <option value="detect">A photo &mdash; detect the pose from it</option>
+            <option value="skeleton">A stick figure / skeleton I drew</option>
+          </select>
+        </label>
+
+        <label class="media-field hidden" id="countWrap">
+          <span>How many</span>
+          <select id="mediaCount">
+            <option value="1">1 image</option>
+            <option value="2">2 images</option>
+            <option value="3">3 images</option>
+            <option value="4">4 images</option>
+          </select>
+        </label>
+
         <label class="media-field hidden" id="lengthWrap">
           <span>Length</span>
           <select id="mediaLength"></select>
@@ -84,12 +145,13 @@
           uses <code>VENICE_API_KEY</code> with <code>safe_mode: false</code>.
           <strong>Image→image:</strong> pick <em>Venice · Edit</em> and upload a reference
           (uploads are JPEG-compressed so Vercel does not 413).
-          Cloudflare / NVIDIA / fal stay safety-filtered.
-          Video: Wan 2.2 (fal.ai or NVIDIA) or Cloudflare Seedance.
+          Cloudflare stays safety-filtered.
+          <strong>Video:</strong> self-hosted only &mdash; LTX-Video or Wan 2.2 5B on Modal.
+          Clips are uploaded to storage and returned as a URL, so length is not
+          capped by Vercel's 4.5MB response limit.
           Vercel env: <code>VENICE_API_KEY</code>,
           <code>CLOUDFLARE_ACCOUNT_ID</code> + <code>CLOUDFLARE_API_TOKEN</code>,
-          <code>NVIDIA_API_KEY</code>,
-          <code>FAL_KEY</code> for Wan on fal.ai.
+          <code>SUPABASE_URL</code> + <code>SUPABASE_SERVICE_ROLE_KEY</code> (required for video).
         </p>
       </div>
     </section>

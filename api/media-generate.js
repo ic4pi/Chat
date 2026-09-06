@@ -4,7 +4,9 @@
  * Body:
  *   {
  *     kind: 'image' | 'video',
- *     provider: 'cloudflare' | 'nvidia' | 'fal' | 'venice' | 'modal',
+ *     provider: 'modal' | 'venice' | 'cloudflare',
+ *                             // image: any of the three
+ *                             // video: 'modal' only — nothing else is accepted
  *     model?: string,
  *     prompt: string,
  *     negativePrompt?: string,
@@ -12,6 +14,13 @@
  *     seconds?: number,       // video length
  *     imageBase64?: string,   // Venice Edit / Wan i2v only (do NOT send on text-to-image)
  *     mimeType?: string,
+ *     count?: number,         // image: how many to generate in one batch (modal, max 4)
+ *     mode?: string,          // image (modal): text | img2img | expand | pose
+ *     strength?: number,      // img2img: 0.05-1.0, how far from the source
+ *     expand?: object,        // expand: {left,right,top,bottom} in pixels
+ *     controlScale?: number,  // pose: how strictly to follow the skeleton
+ *     detectPose?: boolean,   // pose: extract a skeleton from a photo (else
+ *                             //       the image IS the skeleton)
  *     accessKey?: string,     // required for provider:'modal' only if VIDEO_ACCESS_KEYS is set
  *   }
  *
@@ -23,11 +32,11 @@
  *
  * Env (Vercel → Settings → Environment Variables):
  *   VENICE_API_KEY         — uncensored images + Edit (safe_mode:false)
- *   CLOUDFLARE_ACCOUNT_ID  — Workers AI account id (images + Seedance video)
+ *   CLOUDFLARE_ACCOUNT_ID  — Workers AI account id (filtered images)
  *   CLOUDFLARE_API_TOKEN   — API token with Workers AI permission
- *   FAL_KEY                — Wan 2.2 video via fal.ai (recommended)
- *   NVIDIA_API_KEY         — hosted FLUX/SDXL image (optional; safety-filtered)
- *   NVIDIA_MEDIA_BASE_URL  — self-hosted Wan NIM only (OpenAI-compatible base URL)
+ *   SUPABASE_URL           — generated video is uploaded here and returned as a
+ *   SUPABASE_SERVICE_ROLE_KEY  URL; without these, any clip over ~3MB is
+ *                            rejected rather than dying as an opaque 413
  *   MODAL_WAN_ENDPOINT     — self-hosted Wan 2.2 5B video on Modal, scale-to-zero,
  *                            no external content filter (kind:'video', provider:'modal', model:'wan2.2-5b')
  *   MODAL_LTX_ENDPOINT     — self-hosted LTX-Video on Modal, same deal
@@ -49,6 +58,7 @@
  */
 
 import { requireAdminAuth } from '../lib/auth.js';
+import { storeMediaAsset, decodeDataUrl } from '../lib/hub.js';
 import {
   billingEnabled,
   findPerson,
@@ -95,77 +105,13 @@ const VENICE_EDIT_MODELS = {
   'gpt-image-2-edit': 'gpt-image-2-edit',
 };
 
-const CLOUDFLARE_VIDEO_MODELS = {
-  'seedance-mini': 'bytedance/seedance-2.0-mini',
-  'seedance-2.0-mini': 'bytedance/seedance-2.0-mini',
-  'bytedance/seedance-2.0-mini': 'bytedance/seedance-2.0-mini',
-  'seedance-fast': 'bytedance/seedance-2.0-fast',
-  'seedance-2.0-fast': 'bytedance/seedance-2.0-fast',
-  'bytedance/seedance-2.0-fast': 'bytedance/seedance-2.0-fast',
-  'seedance': 'bytedance/seedance-2.0',
-  'seedance-2.0': 'bytedance/seedance-2.0',
-  'bytedance/seedance-2.0': 'bytedance/seedance-2.0',
-};
-
-/** Hosted on ai.api.nvidia.com/v1/genai (401 without key). Qwen needs a self-hosted NIM base URL. */
-const NVIDIA_IMAGE_MODELS = {
-  'flux-schnell': 'black-forest-labs/flux.1-schnell',
-  'black-forest-labs/flux.1-schnell': 'black-forest-labs/flux.1-schnell',
-  'flux-dev': 'black-forest-labs/flux.1-dev',
-  'black-forest-labs/flux.1-dev': 'black-forest-labs/flux.1-dev',
-  'sdxl': 'stabilityai/stable-diffusion-xl',
-  'stable-diffusion-xl': 'stabilityai/stable-diffusion-xl',
-  'stabilityai/stable-diffusion-xl': 'stabilityai/stable-diffusion-xl',
-  // Legacy aliases — not on the hosted catalog; handler falls back to Cloudflare.
-  'qwen-image': 'qwen/qwen-image',
-  'qwen/qwen-image': 'qwen/qwen-image',
-};
-
-const NVIDIA_HOSTED_IMAGE = new Set([
-  'black-forest-labs/flux.1-schnell',
-  'black-forest-labs/flux.1-dev',
-  'stabilityai/stable-diffusion-xl',
-  'stabilityai/stable-diffusion-3-medium',
-]);
-
-const NVIDIA_VIDEO_MODELS = {
-  'wan2.2': 'wan-ai/wan2.2',
-  'wan-ai/wan2.2': 'wan-ai/wan2.2',
-  'wan2.2-t2v': 'wan-ai/wan2.2',
-  'wan2.2-i2v': 'wan-ai/wan2.2',
-};
-
-/** Hosted Wan 2.2 on fal.ai (NVIDIA’s free genai host 404s for Wan). */
-const FAL_VIDEO_MODELS = {
-  'wan2.2': 'fal-ai/wan/v2.2-5b/text-to-video',
-  'wan2.2-t2v': 'fal-ai/wan/v2.2-5b/text-to-video',
-  'wan2.2-5b': 'fal-ai/wan/v2.2-5b/text-to-video',
-  'wan2.2-a14b': 'fal-ai/wan/v2.2-a14b/text-to-video',
-  'wan2.2-i2v': 'fal-ai/wan/v2.2-5b/image-to-video',
-  'fal-wan-t2v': 'fal-ai/wan/v2.2-5b/text-to-video',
-  'fal-wan-i2v': 'fal-ai/wan/v2.2-5b/image-to-video',
-  'fal-ai/wan/v2.2-5b/text-to-video': 'fal-ai/wan/v2.2-5b/text-to-video',
-  'fal-ai/wan/v2.2-a14b/text-to-video': 'fal-ai/wan/v2.2-a14b/text-to-video',
-  'fal-ai/wan/v2.2-5b/image-to-video': 'fal-ai/wan/v2.2-5b/image-to-video',
-};
 
 
-const NVIDIA_GEN_BASE = 'https://ai.api.nvidia.com/v1';
-const NVIDIA_NVCF_STATUS = 'https://api.nvcf.nvidia.com/v2/nvcf/pexec/status';
 
-function cloudflareCreds() {
-  const accountId = (process.env.CLOUDFLARE_ACCOUNT_ID || process.env.CF_ACCOUNT_ID || '').trim();
-  const token = (process.env.CLOUDFLARE_API_TOKEN || process.env.CF_API_TOKEN || '').trim();
-  return { accountId, token };
-}
 
-function nvidiaSelfHostBase() {
-  const raw = (process.env.NVIDIA_MEDIA_BASE_URL || '').trim().replace(/\/$/, '');
-  // Guard: people sometimes paste the public NVIDIA host here — that is NOT a Wan NIM.
-  if (!raw) return null;
-  if (/ai\.api\.nvidia\.com|integrate\.api\.nvidia\.com/i.test(raw)) return null;
-  return raw;
-}
+
+
+
 
 function stripDataUrl(input) {
   const s = String(input || '');
@@ -204,11 +150,76 @@ function oversizeError(kind = 'image') {
   return err;
 }
 
-function asDataUrl(mime, b64OrDataUrl) {
-  const s = String(b64OrDataUrl || '');
-  if (s.startsWith('data:')) return s;
-  return `data:${mime};base64,${s}`;
+/**
+ * Upload each generated image and swap its bytes for a URL.
+ *
+ * Batching makes this necessary rather than merely tidy: one 1024px image
+ * survives the response body, four do not. Images that already carry a URL,
+ * and every image if storage is unconfigured, are left exactly as they were —
+ * the existing oversize guard still catches those.
+ */
+async function persistImageResult(out) {
+  if (out?.kind !== 'image' || !Array.isArray(out.images) || !out.images.length) return out;
+  if (!out.images.some((img) => img?.base64)) return out; // already hosted
+
+  const uploaded = await Promise.all(
+    out.images.map(async (img) => {
+      if (!img?.base64) return img;
+      const mimeType = img.mimeType || 'image/webp';
+      const bytes = decodeDataUrl(img.base64)?.bytes || Buffer.from(img.base64, 'base64');
+      const url = await storeMediaAsset(bytes, mimeType, 'image');
+      return url ? { url, mimeType } : img;
+    }),
+  );
+
+  const stored = uploaded.every((img) => img.url);
+  return { ...out, images: uploaded, stored };
 }
+
+/**
+ * Move a generated video out of the JSON response and into object storage.
+ *
+ * Vercel's 4.5MB cap applies to the response this function sends the browser,
+ * NOT to what it fetches from Modal — so a 20MB clip arrives here fine and
+ * then dies on the way out, as an opaque 413 with no error text. Any video
+ * beyond a few seconds crosses that line, which is why self-hosted video
+ * looked broken while images worked.
+ *
+ * Uploading here means the browser gets a URL and the bytes never transit
+ * Vercel's response path. Modal is unchanged — this works with the apps as
+ * they are already deployed.
+ *
+ * Falls back to leaving the data URL in place when storage is unconfigured
+ * AND the clip is small enough to survive, so a short generation still works
+ * on a bare install.
+ */
+async function persistVideoResult(out) {
+  const src = out?.videoUrl;
+  if (!src || !src.startsWith('data:')) return out; // already a hosted URL
+
+  const decoded = decodeDataUrl(src);
+  if (!decoded) return out;
+
+  const url = await storeMediaAsset(decoded.bytes, decoded.mimeType, 'video');
+  if (url) {
+    return { ...out, videoUrl: url, bytes: decoded.bytes.length, stored: true };
+  }
+
+  // No storage. Only inline what will actually fit through the response.
+  if (payloadTooLarge(out)) {
+    const mb = (decoded.bytes.length / 1_048_576).toFixed(1);
+    const err = new Error(
+      `Generated video is ${mb}MB — too large to return through Vercel (4.5MB limit / HTTP 413). ` +
+        `Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY so video can be stored and returned as a URL, ` +
+        `or request a shorter clip.`,
+    );
+    err.status = 413;
+    err.code = 'PAYLOAD_TOO_LARGE';
+    throw err;
+  }
+  return { ...out, stored: false };
+}
+
 
 function parseSize(size, fallbackW = 1024, fallbackH = 1024) {
   const m = String(size || '').match(/(\d+)\s*[x×*]\s*(\d+)/i);
@@ -219,13 +230,6 @@ function parseSize(size, fallbackW = 1024, fallbackH = 1024) {
   };
 }
 
-function videoAspectFromSize(size) {
-  const dims = String(size || '832x480').replace('*', 'x');
-  if (dims === '480x832') return '9:16';
-  if (dims === '832x480') return '16:9';
-  const { width, height } = parseSize(dims, 832, 480);
-  return width >= height ? '16:9' : '9:16';
-}
 
 function extractErrorDetail(data) {
   if (!data || typeof data !== 'object') return null;
@@ -246,21 +250,7 @@ function extractErrorDetail(data) {
   return null;
 }
 
-function explainNvidiaAuth(status, detail, modelId) {
-  const text = String(detail || '');
-  if (status !== 401 && status !== 403 && !/permission|forbidden|unauthorized|not authorized|auth_failure|public api/i.test(text)) {
-    return null;
-  }
-  return (
-    `NVIDIA denied access to ${modelId} (${status}${text ? `: ${text}` : ''}). ` +
-    `Image models need a key from build.nvidia.com (model page → Get API Key). ` +
-    `For video, use Cloudflare · Seedance (CLOUDFLARE_* keys) — Wan is self-hosted NIM only.`
-  );
-}
 
-function isNvidiaSafetyBlock(detail) {
-  return /nsfw|safety|content.?filter|blocked|moderated|inappropriate/i.test(String(detail || ''));
-}
 
 function veniceImageKey() {
   return (process.env.VENICE_API_KEY || '').trim();
@@ -268,7 +258,7 @@ function veniceImageKey() {
 
 /**
  * Uncensored Venice images — native POST /image/generate with safe_mode:false.
- * Cloudflare / NVIDIA / fal hosts keep their own filters; use Venice for unrestricted.
+ * Cloudflare keeps its own filter; use Venice or Modal for unrestricted.
  */
 async function generateVeniceImage({ prompt, model, size, negativePrompt }) {
   const key = veniceImageKey();
@@ -485,120 +475,10 @@ function cleanMediaError(msg) {
     .trim();
 }
 
-function parseNvidiaImages(data) {
-  const fromOpenAi = (data?.data || [])
-    .map((d) => {
-      if (d.b64_json) {
-        return {
-          mimeType: 'image/png',
-          base64: String(d.b64_json).replace(/^data:image\/\w+;base64,/, ''),
-        };
-      }
-      if (d.url) return { mimeType: 'image/png', url: d.url };
-      return null;
-    })
-    .filter(Boolean);
-  if (fromOpenAi.length) return fromOpenAi;
 
-  const artifacts = Array.isArray(data?.artifacts) ? data.artifacts : [];
-  const fromArts = artifacts
-    .map((a) => {
-      const b64 = a?.base64 || a?.b64_json;
-      if (!b64) return null;
-      return {
-        mimeType: a?.mime_type || a?.mimeType || 'image/png',
-        base64: String(b64).replace(/^data:image\/\w+;base64,/, ''),
-      };
-    })
-    .filter(Boolean);
-  if (fromArts.length) return fromArts;
 
-  if (typeof data?.image === 'string' && data.image) {
-    return [{
-      mimeType: 'image/png',
-      base64: String(data.image).replace(/^data:image\/\w+;base64,/, ''),
-    }];
-  }
-  return [];
-}
 
-function parseNvidiaVideoB64(data) {
-  if (!data || typeof data !== 'object') return null;
-  const direct =
-    data?.data?.b64_json ||
-    data?.data?.[0]?.b64_json ||
-    data?.b64_json ||
-    data?.video ||
-    data?.artifacts?.[0]?.base64;
-  if (typeof direct === 'string' && direct) return direct;
-  return null;
-}
 
-async function nvidiaFetch(url, key, body, { accept = 'application/json' } = {}) {
-  const upstream = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${key}`,
-      Accept: accept,
-    },
-    body: JSON.stringify(body),
-  });
-  const headers = Object.fromEntries(upstream.headers.entries());
-  const ctype = (upstream.headers.get('content-type') || '').toLowerCase();
-  let data = {};
-  if (ctype.includes('application/json') || ctype.includes('text/')) {
-    data = await upstream.json().catch(() => ({}));
-  } else if (upstream.ok) {
-    const buf = Buffer.from(await upstream.arrayBuffer());
-    data = { __binary: buf, __contentType: ctype || 'application/octet-stream' };
-  } else {
-    const text = await upstream.text().catch(() => '');
-    data = { message: text };
-  }
-  return { ok: upstream.ok, status: upstream.status, data, headers, url };
-}
-
-async function waitNvcf(reqId, key, timeoutMs = 240_000) {
-  const start = Date.now();
-  let delay = 1500;
-  while (Date.now() - start < timeoutMs) {
-    const upstream = await fetch(`${NVIDIA_NVCF_STATUS}/${encodeURIComponent(reqId)}`, {
-      headers: {
-        Authorization: `Bearer ${key}`,
-        Accept: 'application/json',
-      },
-    });
-    if (upstream.status === 200) {
-      const data = await upstream.json().catch(() => ({}));
-      return { ok: true, status: 200, data };
-    }
-    if (upstream.status !== 202) {
-      const data = await upstream.json().catch(() => ({}));
-      return { ok: false, status: upstream.status, data };
-    }
-    await new Promise((r) => setTimeout(r, delay));
-    delay = Math.min(8000, Math.floor(delay * 1.35));
-  }
-  const err = new Error(`NVIDIA job ${reqId} timed out waiting for NVCF completion.`);
-  err.status = 504;
-  throw err;
-}
-
-async function nvidiaGenai(modelId, body, key) {
-  const url = `${NVIDIA_GEN_BASE}/genai/${modelId}`;
-  let result = await nvidiaFetch(url, key, body);
-  if (result.status === 202) {
-    const reqId = result.headers['nvcf-reqid'] || result.headers['NVCF-REQID'];
-    if (!reqId) {
-      const err = new Error('NVIDIA returned 202 without NVCF-REQID — cannot poll.');
-      err.status = 502;
-      throw err;
-    }
-    result = await waitNvcf(String(reqId), key);
-  }
-  return result;
-}
 
 async function generateCloudflareImage({ prompt, model, size, negativePrompt }) {
   const { accountId, token } = cloudflareCreds();
@@ -684,641 +564,16 @@ async function generateCloudflareImage({ prompt, model, size, negativePrompt }) 
   };
 }
 
-function extractCloudflareVideoUrl(payload) {
-  if (!payload || typeof payload !== 'object') return null;
-  const candidates = [
-    payload.result?.video,
-    payload.result?.result?.video,
-    payload.result?.video_url,
-    payload.result?.output?.video,
-    payload.result?.output?.url,
-    payload.result?.outputs?.[0]?.url,
-    payload.result?.outputs?.[0]?.video,
-    payload.video,
-    payload.video_url,
-    payload.result?.url,
-    payload.url,
-  ];
-  for (const c of candidates) {
-    if (typeof c === 'string' && /^https?:\/\//i.test(c.trim())) return c.trim();
-    if (typeof c === 'string' && c.trim().startsWith('data:video')) return c.trim();
-  }
-  // Nested { video: { url } }
-  const nested = payload.result?.video?.url || payload.video?.url;
-  if (typeof nested === 'string' && nested.trim()) return nested.trim();
-  return null;
-}
 
-function extractCloudflareRequestId(payload) {
-  if (!payload || typeof payload !== 'object') return null;
-  const id =
-    payload.result?.request_id ||
-    payload.result?.id ||
-    payload.request_id ||
-    payload.id;
-  return typeof id === 'string' && id.trim() ? id.trim() : null;
-}
 
-function cloudflareAiDetail(data, status) {
-  return (
-    extractErrorDetail(data) ||
-    (Array.isArray(data?.errors) && data.errors[0]?.message) ||
-    `Cloudflare video HTTP ${status || 'error'}`
-  );
-}
 
-async function cloudflareAiPost(url, token, body) {
-  const upstream = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-  const data = await upstream.json().catch(() => ({}));
-  return { ok: upstream.ok, status: upstream.status, data };
-}
 
-/**
- * Seedance is a Cloudflare AI partner model.
- * Official REST shape: POST /accounts/{id}/ai/run/{model_name} with flat params
- * (model_name keeps the slash: bytedance/seedance-2.0-mini — do NOT encode it).
- * Docs also show envelope POST /ai/run { model, input } for some partner UIs.
- */
-async function generateCloudflareVideo({
-  prompt,
-  model,
-  size,
-  seconds,
-  imageBase64,
-  mimeType,
-}) {
-  const { accountId, token } = cloudflareCreds();
-  if (!accountId || !token) {
-    const err = new Error(
-      'Missing CLOUDFLARE_ACCOUNT_ID or CLOUDFLARE_API_TOKEN in Vercel env (needed for Seedance video).'
-    );
-    err.status = 503;
-    throw err;
-  }
-  if (!/^[a-f0-9]{32}$/i.test(accountId)) {
-    const err = new Error(
-      `CLOUDFLARE_ACCOUNT_ID looks invalid (${accountId.slice(0, 8)}…). ` +
-        `It must be the 32-character hex Account ID from the Cloudflare dashboard. ` +
-        `Wrong IDs return Cloudflare error 7003 “No route for that URI”.`
-    );
-    err.status = 503;
-    throw err;
-  }
 
-  const modelId = CLOUDFLARE_VIDEO_MODELS[model] || CLOUDFLARE_VIDEO_MODELS['seedance-mini'];
-  const duration = Math.min(12, Math.max(4, Number(seconds) || 5));
-  const aspect_ratio = videoAspectFromSize(size);
-  const resolution = '720p';
 
-  const input = {
-    prompt,
-    aspect_ratio,
-    duration,
-    resolution,
-  };
-  if (imageBase64) {
-    const { mime, b64 } = stripDataUrl(imageBase64);
-    const mt = (mimeType || mime || 'image/png').replace('image/jpg', 'image/jpeg');
-    input.image = asDataUrl(mt, b64);
-  }
 
-  const runBase = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run`;
-  // Keep slash in model path — Cloudflare routes /ai/run/bytedance/seedance-2.0-mini
-  const modelUrl = `${runBase}/${modelId}`;
 
-  const attempts = [
-    { label: 'path+flat', url: modelUrl, body: input },
-    { label: 'path+envelope', url: modelUrl, body: { model: modelId, input } },
-    { label: 'root+envelope', url: runBase, body: { model: modelId, input } },
-  ];
 
-  let lastDetail = 'Cloudflare video failed';
-  let lastStatus = 502;
-  let accepted = null;
 
-  for (const attempt of attempts) {
-    const res = await cloudflareAiPost(attempt.url, token, attempt.body);
-    const videoUrl = extractCloudflareVideoUrl(res.data);
-    if (res.ok && videoUrl) {
-      return {
-        kind: 'video',
-        provider: 'cloudflare',
-        model: modelId,
-        videoUrl,
-        mime: 'video/mp4',
-      };
-    }
-
-    const reqId = extractCloudflareRequestId(res.data);
-    const statusText = String(
-      res.data?.result?.status || res.data?.status || ''
-    ).toLowerCase();
-    if (res.ok && reqId && (statusText.includes('queue') || statusText.includes('run') || !videoUrl)) {
-      accepted = { url: attempt.url, requestId: reqId, label: attempt.label };
-      break;
-    }
-
-    lastStatus = res.status || lastStatus;
-    lastDetail = cloudflareAiDetail(res.data, res.status);
-    // Path route exists but model/token problem — stop guessing other URLs.
-    if (res.status === 400 || res.status === 401 || res.status === 403) break;
-    if (attempt.label === 'path+flat' && res.status !== 404 && !/no route/i.test(lastDetail)) break;
-  }
-
-  if (accepted) {
-    const started = Date.now();
-    let delay = 2500;
-    while (Date.now() - started < 280_000) {
-      await new Promise((r) => setTimeout(r, delay));
-      const poll = await cloudflareAiPost(accepted.url, token, {
-        request_id: accepted.requestId,
-      });
-      const videoUrl = extractCloudflareVideoUrl(poll.data);
-      if (poll.ok && videoUrl) {
-        return {
-          kind: 'video',
-          provider: 'cloudflare',
-          model: modelId,
-          videoUrl,
-          mime: 'video/mp4',
-        };
-      }
-      const st = String(poll.data?.result?.status || poll.data?.status || '').toLowerCase();
-      if (st.includes('fail') || st.includes('error') || poll.status >= 400) {
-        lastStatus = poll.status || 502;
-        lastDetail = cloudflareAiDetail(poll.data, poll.status);
-        break;
-      }
-      delay = Math.min(10_000, Math.floor(delay * 1.25));
-    }
-    if (!/timed out|fail/i.test(lastDetail)) {
-      lastDetail = `Seedance job ${accepted.requestId} timed out waiting for video.`;
-      lastStatus = 504;
-    }
-  }
-
-  const noRoute = /no route|7003/i.test(String(lastDetail));
-  const hint = noRoute
-    ? ` Check CLOUDFLARE_ACCOUNT_ID is the 32-char hex Account ID. ` +
-      `Then enable ${modelId} under Cloudflare AI → Models, and use a token with Workers AI permissions. ` +
-      `Or switch Media → Video to Wan 2.2 (fal.ai) if FAL_KEY is set.`
-    : /not found|404|does not exist|unknown model|not enabled|not available/i.test(String(lastDetail))
-      ? ` Enable ${modelId} in the Cloudflare dashboard (AI → Models), ` +
-        `or use Wan 2.2 · fal.ai for video.`
-      : '';
-
-  const err = new Error(`${lastDetail}.${hint}`);
-  err.status = lastStatus;
-  throw err;
-}
-
-function buildNvidiaImageBody(modelId, prompt, negativePrompt, size) {
-  const { width, height } = parseSize(size, 1024, 1024);
-  const aspect =
-    Math.abs(width / height - 1) < 0.05 ? '1:1' : width > height ? '16:9' : '9:16';
-  const seed = Math.floor(Math.random() * 1_000_000);
-
-  if (/stable-diffusion-xl/i.test(modelId)) {
-    const text_prompts = [{ text: prompt, weight: 1.0 }];
-    if (negativePrompt) text_prompts.push({ text: negativePrompt, weight: -1.0 });
-    return {
-      text_prompts,
-      seed,
-      steps: 20,
-      cfg_scale: 5,
-      width: Math.min(1024, width),
-      height: Math.min(1024, height),
-      // Hosted NVIDIA often ignores this, but some NIM builds honor it.
-      enable_safety_checker: false,
-    };
-  }
-
-  const body = {
-    prompt,
-    seed,
-    steps: /flux\.1-schnell/i.test(modelId) ? 4 : 20,
-    cfg_scale: /flux/i.test(modelId) ? 0 : 4.0,
-    aspect_ratio: aspect,
-    enable_safety_checker: false,
-  };
-  if (negativePrompt) body.negative_prompt = negativePrompt;
-  return body;
-}
-
-async function generateNvidiaImage({ prompt, model, size, negativePrompt }) {
-  const key = (process.env.NVIDIA_API_KEY || process.env.NVIDIA_NIM_API_KEY || '').trim();
-  if (!key) {
-    const err = new Error('Missing NVIDIA_API_KEY in Vercel env.');
-    err.status = 503;
-    throw err;
-  }
-
-  const modelId = NVIDIA_IMAGE_MODELS[model] || NVIDIA_IMAGE_MODELS['flux-schnell'];
-  const selfHost = nvidiaSelfHostBase();
-  const hosted = NVIDIA_HOSTED_IMAGE.has(modelId);
-
-  if (!hosted && !selfHost) {
-    const err = new Error(
-      `${modelId} is not on NVIDIA’s free hosted genai catalog. ` +
-        `Set NVIDIA_NIM_BASE_URL (or WAN_NIM_BASE_URL) to your self-hosted NIM, ` +
-        `or pick NVIDIA · FLUX.1 Schnell / SDXL which are hosted.`
-    );
-    err.status = 404;
-    err.code = 'NVIDIA_MODEL_NOT_HOSTED';
-    throw err;
-  }
-
-  const genaiBody = buildNvidiaImageBody(modelId, prompt, negativePrompt, size);
-  const attempts = [];
-
-  if (hosted) {
-    const result = await nvidiaGenai(modelId, genaiBody, key);
-    attempts.push(result);
-    const images = result.ok ? parseNvidiaImages(result.data) : [];
-    if (images.length) {
-      return { kind: 'image', provider: 'nvidia', model: modelId, images };
-    }
-  }
-
-  if (selfHost) {
-    const { width, height } = parseSize(size, 1024, 1024);
-    const openaiBody = {
-      model: modelId,
-      prompt,
-      n: 1,
-      response_format: 'b64_json',
-      size: `${width}x${height}`,
-    };
-    if (negativePrompt) openaiBody.negative_prompt = negativePrompt;
-    const result = await nvidiaFetch(`${selfHost}/v1/images/generations`, key, openaiBody);
-    attempts.push(result);
-    const images = result.ok ? parseNvidiaImages(result.data) : [];
-    if (images.length) {
-      return { kind: 'image', provider: 'nvidia', model: modelId, images };
-    }
-
-    const infer = await nvidiaFetch(`${selfHost}/v1/infer`, key, genaiBody);
-    attempts.push(infer);
-    const inferImages = infer.ok ? parseNvidiaImages(infer.data) : [];
-    if (inferImages.length) {
-      return { kind: 'image', provider: 'nvidia', model: modelId, images: inferImages };
-    }
-  }
-
-  const result = attempts[attempts.length - 1] || { status: 502, data: {} };
-  const detail =
-    attempts.map((a) => extractErrorDetail(a.data) || `HTTP ${a.status}`).filter(Boolean).join(' · ') ||
-    `NVIDIA image HTTP ${result.status || 'error'}`;
-  const cleaned = cleanMediaError(detail);
-  const msg =
-    explainNvidiaAuth(result.status, cleaned, modelId) ||
-    (isNvidiaSafetyBlock(cleaned)
-      ? `NVIDIA returned a safety/content error (${cleaned}).`
-      : cleaned);
-  const err = new Error(msg);
-  err.status = result.status || 502;
-  err.code = isNvidiaSafetyBlock(cleaned) ? 'NVIDIA_NSFW' : undefined;
-  throw err;
-}
-
-async function generateFalFluxImage({ prompt, size, negativePrompt }) {
-  const key = (process.env.FAL_KEY || process.env.FAL_API_KEY || '').trim();
-  if (!key) {
-    const err = new Error('Missing FAL_KEY for fal.ai image fallback.');
-    err.status = 503;
-    throw err;
-  }
-
-  const { width, height } = parseSize(size, 1024, 1024);
-  const modelId = 'fal-ai/flux/schnell';
-  const input = {
-    prompt,
-    image_size: {
-      width: Math.min(1536, width),
-      height: Math.min(1536, height),
-    },
-    num_images: 1,
-  };
-  if (negativePrompt) input.negative_prompt = negativePrompt;
-
-  const submitUrl = `https://queue.fal.run/${modelId}`;
-  const submit = await fetch(submitUrl, {
-    method: 'POST',
-    headers: {
-      Authorization: `Key ${key}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(input),
-  });
-  const submitted = await submit.json().catch(() => ({}));
-  if (!submit.ok) {
-    const detail = extractErrorDetail(submitted) || `fal.ai HTTP ${submit.status}`;
-    const err = new Error(cleanMediaError(detail));
-    err.status = submit.status || 502;
-    throw err;
-  }
-
-  let imageUrl =
-    submitted?.images?.[0]?.url ||
-    submitted?.data?.images?.[0]?.url ||
-    submitted?.output?.images?.[0]?.url;
-
-  if (!imageUrl) {
-    const requestId = submitted.request_id || submitted.requestId;
-    const statusUrl = submitted.status_url || (requestId ? `https://queue.fal.run/${modelId}/requests/${requestId}/status` : null);
-    const resultUrl = submitted.response_url || (requestId ? `https://queue.fal.run/${modelId}/requests/${requestId}` : null);
-    if (!statusUrl || !resultUrl) {
-      const err = new Error('fal.ai Flux did not return a request id.');
-      err.status = 502;
-      throw err;
-    }
-    const started = Date.now();
-    let delay = 1200;
-    while (Date.now() - started < 120_000) {
-      const st = await fetch(statusUrl, { headers: { Authorization: `Key ${key}` } });
-      const statusBody = await st.json().catch(() => ({}));
-      const status = String(statusBody.status || statusBody.state || '').toUpperCase();
-      if (status === 'COMPLETED' || status === 'OK') {
-        const done = await fetch(resultUrl, { headers: { Authorization: `Key ${key}` } });
-        const result = await done.json().catch(() => ({}));
-        imageUrl =
-          result?.images?.[0]?.url ||
-          result?.data?.images?.[0]?.url ||
-          result?.output?.images?.[0]?.url;
-        break;
-      }
-      if (status === 'FAILED' || status === 'ERROR') {
-        const detail = extractErrorDetail(statusBody) || 'fal.ai Flux job failed';
-        const err = new Error(cleanMediaError(detail));
-        err.status = 502;
-        throw err;
-      }
-      await new Promise((r) => setTimeout(r, delay));
-      delay = Math.min(6000, Math.floor(delay * 1.25));
-    }
-  }
-
-  if (!imageUrl) {
-    const err = new Error('fal.ai Flux finished without an image URL.');
-    err.status = 502;
-    throw err;
-  }
-
-  return {
-    kind: 'image',
-    provider: 'fal',
-    model: modelId,
-    images: [{ mimeType: 'image/jpeg', url: imageUrl }],
-  };
-}
-
-/** Optional Cloudflare/fal chain — only used when those providers are selected. */
-async function generateImageWithFallbacks({ prompt, size, negativePrompt, preferredCfModel = 'flux-schnell' }) {
-  const cfModels = [
-    preferredCfModel,
-    'flux-schnell',
-    'sdxl-lightning',
-    'sdxl',
-  ].filter((m, i, arr) => arr.indexOf(m) === i);
-
-  const errors = [];
-  for (const model of cfModels) {
-    try {
-      return await generateCloudflareImage({
-        prompt,
-        model,
-        size,
-        negativePrompt,
-      });
-    } catch (err) {
-      errors.push(`Cloudflare ${model}: ${cleanMediaError(err.message)}`);
-    }
-  }
-
-  if ((process.env.FAL_KEY || process.env.FAL_API_KEY || '').trim()) {
-    try {
-      return await generateFalFluxImage({ prompt, size, negativePrompt });
-    } catch (err) {
-      errors.push(`fal Flux: ${cleanMediaError(err.message)}`);
-    }
-  }
-
-  const err = new Error(errors.join(' · ') || 'All image backends failed.');
-  err.status = 502;
-  throw err;
-}
-
-async function generateFalWanVideo({
-  prompt,
-  model,
-  imageBase64,
-  mimeType,
-}) {
-  const key = (process.env.FAL_KEY || process.env.FAL_API_KEY || '').trim();
-  if (!key) {
-    const err = new Error(
-      'Missing FAL_KEY in Vercel env. Hosted Wan 2.2 runs on fal.ai — get a key at https://fal.ai/dashboard/keys'
-    );
-    err.status = 503;
-    throw err;
-  }
-
-  const wantsI2v = /i2v|image-to-video/i.test(String(model || ''));
-  let modelId = FAL_VIDEO_MODELS[model] || FAL_VIDEO_MODELS['wan2.2-t2v'];
-  if (wantsI2v || imageBase64) {
-    modelId = FAL_VIDEO_MODELS['wan2.2-i2v'] || 'fal-ai/wan/v2.2-5b/image-to-video';
-  }
-
-  const input = { prompt };
-  if (imageBase64) {
-    const { mime, b64 } = stripDataUrl(imageBase64);
-    const mt = (mimeType || mime || 'image/png').replace('image/jpg', 'image/jpeg');
-    input.image_url = asDataUrl(mt, b64);
-  } else if (wantsI2v) {
-    const err = new Error('Wan image→video needs a reference image.');
-    err.status = 400;
-    throw err;
-  }
-
-  // Queue submit
-  const submitUrl = `https://queue.fal.run/${modelId}`;
-  const submit = await fetch(submitUrl, {
-    method: 'POST',
-    headers: {
-      Authorization: `Key ${key}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(input),
-  });
-  const submitted = await submit.json().catch(() => ({}));
-  if (!submit.ok) {
-    const detail = extractErrorDetail(submitted) || `fal.ai HTTP ${submit.status}`;
-    const err = new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
-    err.status = submit.status || 502;
-    throw err;
-  }
-
-  // Sync-ish: some endpoints return the result immediately
-  let videoUrl =
-    submitted?.video?.url ||
-    submitted?.data?.video?.url ||
-    submitted?.output?.video?.url;
-  if (videoUrl) {
-    return {
-      kind: 'video',
-      provider: 'fal',
-      model: modelId,
-      videoUrl,
-      mime: 'video/mp4',
-    };
-  }
-
-  const requestId = submitted.request_id || submitted.requestId;
-  const statusUrl = submitted.status_url || (requestId ? `https://queue.fal.run/${modelId}/requests/${requestId}/status` : null);
-  const resultUrl = submitted.response_url || (requestId ? `https://queue.fal.run/${modelId}/requests/${requestId}` : null);
-  if (!statusUrl || !resultUrl) {
-    const err = new Error('fal.ai did not return a request id for Wan video.');
-    err.status = 502;
-    throw err;
-  }
-
-  const started = Date.now();
-  let delay = 2000;
-  while (Date.now() - started < 280_000) {
-    const st = await fetch(statusUrl, {
-      headers: { Authorization: `Key ${key}` },
-    });
-    const statusBody = await st.json().catch(() => ({}));
-    const status = String(statusBody.status || statusBody.state || '').toUpperCase();
-    if (status === 'COMPLETED' || status === 'OK') {
-      const done = await fetch(resultUrl, {
-        headers: { Authorization: `Key ${key}` },
-      });
-      const result = await done.json().catch(() => ({}));
-      videoUrl =
-        result?.video?.url ||
-        result?.data?.video?.url ||
-        result?.output?.video?.url;
-      if (!videoUrl) {
-        const err = new Error('fal.ai Wan finished but returned no video URL.');
-        err.status = 502;
-        throw err;
-      }
-      return {
-        kind: 'video',
-        provider: 'fal',
-        model: modelId,
-        videoUrl,
-        mime: 'video/mp4',
-      };
-    }
-    if (status === 'FAILED' || status === 'ERROR') {
-      const detail = extractErrorDetail(statusBody) || 'fal.ai Wan job failed';
-      const err = new Error(detail);
-      err.status = 502;
-      throw err;
-    }
-    await new Promise((r) => setTimeout(r, delay));
-    delay = Math.min(8000, Math.floor(delay * 1.25));
-  }
-
-  const err = new Error('fal.ai Wan video timed out waiting for the queue.');
-  err.status = 504;
-  throw err;
-}
-
-async function generateNvidiaWanVideo({
-  prompt,
-  model,
-  size,
-  seconds,
-  imageBase64,
-  mimeType,
-  negativePrompt,
-}) {
-  // Prefer fal hosted Wan when FAL_KEY is set (NVIDIA hosted genai 404s).
-  if ((process.env.FAL_KEY || process.env.FAL_API_KEY || '').trim()) {
-    return generateFalWanVideo({ prompt, model, imageBase64, mimeType });
-  }
-
-  const key = (process.env.NVIDIA_API_KEY || process.env.NVIDIA_NIM_API_KEY || '').trim();
-  if (!key) {
-    const err = new Error(
-      'Wan 2.2 needs FAL_KEY (hosted on fal.ai) or NVIDIA_MEDIA_BASE_URL (self-hosted NIM). ' +
-        'NVIDIA’s free ai.api.nvidia.com host returns 404 for Wan.'
-    );
-    err.status = 503;
-    throw err;
-  }
-
-  const modelId = NVIDIA_VIDEO_MODELS[model] || NVIDIA_VIDEO_MODELS['wan2.2'];
-  const dims = (size || '832x480').includes('*')
-    ? size.replace('*', 'x')
-    : size || '832x480';
-  const allowed = new Set(['832x480', '480x832']);
-  const finalSize = allowed.has(dims) ? dims : '832x480';
-  const secs = Math.min(12, Math.max(1, Number(seconds) || 4));
-  const selfHost = nvidiaSelfHostBase();
-
-  if (!selfHost) {
-    const err = new Error(
-      'Wan 2.2 is not on NVIDIA’s free hosted API. Add FAL_KEY for hosted Wan on fal.ai, ' +
-        'or set NVIDIA_MEDIA_BASE_URL to your own Wan NIM (not ai.api.nvidia.com).'
-    );
-    err.status = 404;
-    throw err;
-  }
-
-  const body = {
-    model: modelId,
-    prompt,
-    size: finalSize,
-    seconds: secs,
-  };
-  if (negativePrompt) body.negative_prompt = negativePrompt;
-  if (imageBase64) {
-    const { mime, b64: raw } = stripDataUrl(imageBase64);
-    const mt = (mimeType || mime || 'image/png').replace('image/jpg', 'image/jpeg');
-    body.input_reference = asDataUrl(mt, raw);
-  }
-
-  const result = await nvidiaFetch(`${selfHost}/v1/videos/generations`, key, body);
-  if (result.data?.__binary) {
-    return {
-      kind: 'video',
-      provider: 'nvidia',
-      model: modelId,
-      videoUrl: `data:${result.data.__contentType || 'video/mp4'};base64,${result.data.__binary.toString('base64')}`,
-      mime: result.data.__contentType || 'video/mp4',
-    };
-  }
-
-  const b64 = result.ok ? parseNvidiaVideoB64(result.data) : null;
-  if (!b64) {
-    const detail = extractErrorDetail(result.data) || `Wan NIM HTTP ${result.status || 'error'}`;
-    const err = new Error(
-      `${detail}. Or add FAL_KEY for hosted Wan 2.2 on fal.ai.`
-    );
-    err.status = result.status || 502;
-    throw err;
-  }
-
-  const clean = String(b64).replace(/^data:video\/\w+;base64,/, '');
-  return {
-    kind: 'video',
-    provider: 'nvidia',
-    model: modelId,
-    videoUrl: `data:video/mp4;base64,${clean}`,
-    mime: 'video/mp4',
-  };
-}
 
 /**
  * Self-hosted SDXL images on Modal (scale-to-zero, no external content filter).
@@ -1334,11 +589,74 @@ const MODAL_IMAGE_MODELS = {
   'wai-Illustrious': 'wai-illustrious',
 };
 
-async function generateModalSdxlImage({ prompt, negativePrompt, model, size }) {
+/**
+ * The warm endpoint for a given model.
+ *
+ * Modal derives a web endpoint's URL from the app name plus the function name,
+ * so the `warm` function on app `wan-video` is reachable at
+ * ic4pi--wan-video-warm.modal.run — the same URL as `generate` with the
+ * trailing function name swapped. Deriving it keeps one endpoint env var per
+ * app instead of two that can drift apart.
+ */
+/**
+ * Swap the function name on a Modal generate URL for another endpoint on the
+ * same app. Modal derives a web endpoint's URL from app name + function name,
+ * so `generate`, `warm`, `submit` and `result` differ only in that last
+ * segment. Deriving them keeps one env var per app rather than four that can
+ * drift apart.
+ */
+function modalEndpoint(model, fn) {
+  const base = /ltx/i.test(model)
+    ? MODAL_LTX_ENDPOINT
+    : /wan/i.test(model)
+      ? MODAL_WAN_ENDPOINT
+      : MODAL_SDXL_ENDPOINT;
+  return base.replace(/-generate(\.modal\.run)$/, `-${fn}$1`);
+}
+
+function warmEndpointFor(model) {
+  return modalEndpoint(model, 'warm');
+}
+
+/** Clip count for a requested length. Each clip is ~5s; apps re-clamp at 6. */
+function clipsForSeconds(seconds) {
+  return Math.min(6, Math.max(1, Math.round((Number(seconds) || 5) / 5)));
+}
+
+/** Per-model video geometry, matching what each app is built around. */
+function videoGeometry(model, size) {
+  const isLtx = /ltx/i.test(String(model || ''));
+  const fallback = isLtx ? '704x480' : '832x480';
+  const dims = String(size || fallback).split(/[x*]/i).map(Number);
+  return {
+    width: dims[0] || (isLtx ? 704 : 832),
+    height: dims[1] || 480,
+    fps: isLtx ? 24 : 16,
+    num_frames: isLtx ? 121 : 81,
+  };
+}
+
+/**
+ * Modes the self-hosted image app supports beyond plain text-to-image.
+ * Each maps to a pipeline built over the same checkpoint, so switching mode
+ * costs no extra VRAM or load time.
+ */
+const MODAL_IMAGE_MODES = new Set(['text', 'img2img', 'expand', 'outpaint', 'pose']);
+
+async function generateModalSdxlImage({
+  prompt, negativePrompt, model, size, count,
+  mode, imageBase64, strength, expand, controlScale, detectPose,
+}) {
   const dims = String(size || '1024x1024').split(/[x*]/i).map(Number);
   const width = dims[0] || 1024;
   const height = dims[1] || 1024;
   const modalModel = MODAL_IMAGE_MODELS[model] || 'lustify';
+  const imageMode = MODAL_IMAGE_MODES.has(String(mode || '')) ? String(mode) : 'text';
+  if (imageMode !== 'text' && !imageBase64) {
+    const err = new Error(`Mode "${imageMode}" needs a source image.`);
+    err.status = 400;
+    throw err;
+  }
 
   const resp = await fetch(MODAL_SDXL_ENDPOINT, {
     method: 'POST',
@@ -1349,30 +667,47 @@ async function generateModalSdxlImage({ prompt, negativePrompt, model, size }) {
       model: modalModel,
       width,
       height,
+      n: Math.max(1, Math.min(4, Number(count) || 1)),
+      ...(imageMode !== 'text'
+        ? {
+            mode: imageMode,
+            image: imageBase64,
+            ...(strength != null ? { strength: Number(strength) } : {}),
+            ...(expand ? { expand } : {}),
+            ...(controlScale != null ? { control_scale: Number(controlScale) } : {}),
+            ...(detectPose != null ? { detect_pose: !!detectPose } : {}),
+          }
+        : {}),
     }),
   });
 
   const body = await resp.json().catch(() => ({}));
-  if (!resp.ok || !body.image_base64) {
+  if (!resp.ok || !(body.images_base64?.length || body.image_base64)) {
     const err = new Error(body.error || `Modal SDXL HTTP ${resp.status}`);
     err.status = resp.status || 502;
     throw err;
   }
 
+  // images_base64 is the batch shape; image_base64 is the older singular key,
+  // still sent so a stale app version keeps working.
+  const batch = body.images_base64?.length ? body.images_base64 : [body.image_base64];
+  const mimeType = body.mime_type || 'image/webp';
+
   return {
     kind: 'image',
     provider: 'modal',
     model: modalModel,
-    images: [{ base64: body.image_base64, mimeType: 'image/png' }],
+    images: batch.map((base64) => ({ base64, mimeType })),
     uncensored: true,
     elapsedSeconds: body.elapsed_seconds,
-    note: 'Self-hosted SDXL on Modal (scale-to-zero, no external content filter).',
+    mode: imageMode,
+    note: `Self-hosted SDXL on Modal${imageMode !== 'text' ? ` · ${imageMode}` : ''}${batch.length > 1 ? ` · ${batch.length} images` : ''} (scale-to-zero, no external content filter).`,
   };
 }
 
 /**
  * Self-hosted Wan 2.2 5B on Modal (scale-to-zero, no external content filter -
- * unlike fal.ai's hosted Wan, nothing here moderates the prompt).
+ * nothing here moderates the prompt).
  * Env: MODAL_WAN_ENDPOINT (defaults to the deployed endpoint below).
  */
 const MODAL_WAN_ENDPOINT =
@@ -1491,6 +826,142 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(204).end();
 
+  // Cold-start warmup. The browser fires this when someone focuses the prompt
+  // box, so the ~60s of weight loading overlaps the time they spend typing
+  // instead of being tacked onto the generate click.
+  //
+  // Proxied rather than called from the browser because the Modal endpoints
+  // send no CORS headers. Deliberately fire-and-forget: the response is not
+  // awaited past dispatch, no error is surfaced, and a failed warm just means
+  // the generation pays the cold start it would have paid anyway.
+  if (String(req.query?.op || '') === 'warm') {
+    const target = String(req.query?.model || req.body?.model || '');
+    const endpoint = warmEndpointFor(target);
+
+    try {
+      // 5s ceiling: spawn() returns almost immediately, and nothing downstream
+      // needs the answer.
+      await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+        signal: AbortSignal.timeout(5000),
+      });
+    } catch {
+      // Warming is best-effort by design.
+    }
+    return res.status(202).json({ warming: true, target: target || 'sdxl' });
+  }
+
+  // Async video jobs.
+  //   POST ?op=submit  {model, prompt, ...}  -> { jobId, model }
+  //   POST ?op=result  {jobId, model}        -> { status: running|done|... }
+  //
+  // The synchronous path is bounded by this function's own 800s timeout, which
+  // is what caps clip length — not the models. Splitting submit from result
+  // keeps every request short, so length is bounded by the Modal app's own
+  // hour-long timeout instead. A finished clip goes through the same storage
+  // path as the sync route, so the bytes still never reach the response.
+  if (String(req.query?.op || '') === 'submit') {
+    if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+    const {
+      model: jm, prompt: jp, negativePrompt: jn, size: js, seconds: jsec, accessKey: jk,
+      video: jv, strength: jstr, keyframes: jkf,
+    } = req.body || {};
+    if (!jp || !String(jp).trim()) return res.status(400).json({ error: 'prompt is required' });
+
+    // Billing is checked at submit: a job that cannot be paid for should never
+    // occupy a GPU. The charge itself lands at collection, when the real
+    // elapsed time is known.
+    if (billingEnabled()) {
+      const person = findPerson(jk);
+      if (!person) return res.status(401).json({ error: 'Invalid or missing access key.' });
+      try {
+        await assertHasCredit(person);
+      } catch (creditErr) {
+        return res.status(creditErr.status || 402).json({ error: creditErr.message });
+      }
+    }
+
+    const geo = videoGeometry(jm, js);
+    const upstream = await fetch(modalEndpoint(jm, 'submit'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: String(jp).trim(),
+        negative_prompt: jn || undefined,
+        ...geo,
+        num_clips: clipsForSeconds(jsec),
+        // Restyling an existing clip (Wan) and pinning keyframes to timestamps
+        // (LTX) both replace the clip chain rather than adding to it, so
+        // num_clips is ignored downstream when either is present.
+        ...(jv ? { video: jv, strength: Number(jstr) || 0.6 } : {}),
+        ...(Array.isArray(jkf) && jkf.length ? { keyframes: jkf } : {}),
+      }),
+    });
+    const sub = await upstream.json().catch(() => ({}));
+    if (!upstream.ok || sub.error || !sub.job_id) {
+      return res
+        .status(upstream.ok ? 502 : upstream.status)
+        .json({ error: sub.error || `Modal submit HTTP ${upstream.status}` });
+    }
+    return res.status(202).json({ jobId: sub.job_id, model: jm, status: 'running' });
+  }
+
+  if (String(req.query?.op || '') === 'result') {
+    if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+    const { jobId, model: rm, accessKey: rk } = req.body || {};
+    if (!jobId) return res.status(400).json({ error: 'jobId is required' });
+
+    const upstream = await fetch(modalEndpoint(rm, 'result'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: jobId }),
+    });
+    const job = await upstream.json().catch(() => ({}));
+
+    if (job.status !== 'done') {
+      // running | expired | error — passed through as-is so the client can
+      // tell "still working" from "this will never finish".
+      return res.status(job.status === 'running' ? 200 : 502).json({
+        status: job.status || 'error',
+        ...(job.error ? { error: job.error } : {}),
+      });
+    }
+
+    let out = {
+      kind: 'video',
+      provider: 'modal',
+      model: rm,
+      videoUrl: `data:video/mp4;base64,${job.video_base64}`,
+      mime: 'video/mp4',
+      uncensored: true,
+      elapsedSeconds: job.elapsed_seconds,
+      numClips: job.num_clips,
+    };
+
+    try {
+      out = await persistVideoResult(out);
+    } catch (persistErr) {
+      return res
+        .status(persistErr.status || 502)
+        .json({ status: 'error', error: persistErr.message });
+    }
+
+    if (billingEnabled()) {
+      const person = findPerson(rk);
+      if (person) {
+        const billing = await chargeForGeneration(person, {
+          elapsedSeconds: out.elapsedSeconds,
+          prompt: 'async video job',
+        });
+        out.billing = { name: person.name, markupPct: person.markupPct, ...billing };
+      }
+    }
+
+    return res.status(200).json({ status: 'done', ...out });
+  }
+
   // Admin-only balance management for the Modal video access keys:
   //   GET  /api/media-generate?op=credit             -> list everyone's balance
   //   POST /api/media-generate?op=credit {key, usd}   -> add (or subtract) credit
@@ -1523,6 +994,12 @@ export default async function handler(req, res) {
     negativePrompt,
     size,
     seconds,
+    count,
+    mode,
+    strength,
+    expand,
+    controlScale,
+    detectPose,
     imageBase64,
     mimeType,
     accessKey,
@@ -1542,7 +1019,10 @@ export default async function handler(req, res) {
     });
   }
 
-  const respondImage = async (out) => {
+  const respondImage = async (rawOut) => {
+    // Storage first: with it, size stops being a constraint at all and the
+    // fallbacks below never run.
+    const out = await persistImageResult(rawOut);
     if (imageResultTooLarge(out)) {
       if (veniceImageKey() && out.provider !== 'venice') {
         console.warn('image payload too large for Vercel; falling back to Venice webp');
@@ -1586,6 +1066,13 @@ export default async function handler(req, res) {
           negativePrompt,
           model,
           size,
+          count,
+          mode,
+          imageBase64,
+          strength,
+          expand,
+          controlScale,
+          detectPose,
         });
 
         if (person) {
@@ -1612,7 +1099,7 @@ export default async function handler(req, res) {
         return respondImage(out);
       }
 
-      // Venice = uncensored path (safe_mode:false). CF/NVIDIA/fal keep host filters.
+      // Venice = uncensored path (safe_mode:false). Cloudflare keeps its filter.
       if (provider === 'venice') {
         const out = await generateVeniceImage({
           prompt: prompt.trim(),
@@ -1623,53 +1110,30 @@ export default async function handler(req, res) {
         return respondImage(out);
       }
 
-      // Honor the user's selected provider. Never silently skip NVIDIA or swap models.
-      if (provider === 'nvidia') {
-        const out = await generateNvidiaImage({
-          prompt: prompt.trim(),
-          model,
-          size,
-          negativePrompt,
+      // NVIDIA and fal are not image providers here — both bill per generation
+      // and filter output. Rejected rather than quietly redirected, so a stale
+      // client sees why instead of getting a different model's picture back.
+      if (provider === 'nvidia' || provider === 'fal') {
+        return res.status(400).json({
+          error:
+            `Unsupported image provider "${provider}". ` +
+            `Use "modal" (lustify / wai-illustrious), "venice", or "cloudflare".`,
         });
-        return respondImage(out);
       }
 
-      if (provider === 'fal') {
-        const out = await generateFalFluxImage({
-          prompt: prompt.trim(),
-          size,
-          negativePrompt,
-        });
-        return respondImage(out);
-      }
-
-      // Default / cloudflare
-      const preferredCf = model || 'flux-schnell';
-      try {
-        const out = await generateCloudflareImage({
-          prompt: prompt.trim(),
-          model: preferredCf,
-          size,
-          negativePrompt,
-        });
-        return respondImage(out);
-      } catch (cfPrimaryErr) {
-        console.warn('cloudflare primary failed:', cfPrimaryErr.message);
-        const out = await generateImageWithFallbacks({
-          prompt: prompt.trim(),
-          size,
-          negativePrompt,
-          preferredCfModel: preferredCf,
-        });
-        out.fallbackFrom = 'cloudflare';
-        out.fallbackNote = `Primary Cloudflare model failed; used ${out.provider} · ${out.model}.`;
-        return respondImage(out);
-      }
+      // Default / cloudflare. No cross-provider fallback: a failure here used
+      // to land on fal or NVIDIA, which is exactly what must not happen.
+      const out = await generateCloudflareImage({
+        prompt: prompt.trim(),
+        model: model || 'flux-schnell',
+        size,
+        negativePrompt,
+      });
+      return respondImage(out);
     }
 
     if (kind === 'video') {
-      // Explicit opt-in only - self-hosted, no external content filter (unlike
-      // fal.ai's hosted Wan, which applies its own, unverified moderation).
+      // Self-hosted only, and no external content filter.
       if (provider === 'modal') {
         // Billing only kicks in once VIDEO_ACCESS_KEYS is set in Vercel env.
         // Until then this stays open/unmetered (single-owner use).
@@ -1701,91 +1165,34 @@ export default async function handler(req, res) {
               seconds,
             });
 
+        // Off to storage before billing. If this throws, storage is
+        // misconfigured — an owner problem, not the requester's, so they are
+        // not charged for a clip they cannot receive.
+        const stored = await persistVideoResult(out);
+
         if (person) {
           const billing = await chargeForGeneration(person, {
-            elapsedSeconds: out.elapsedSeconds,
+            elapsedSeconds: stored.elapsedSeconds,
             prompt: prompt.trim(),
           });
-          out.billing = { name: person.name, markupPct: person.markupPct, ...billing };
+          stored.billing = { name: person.name, markupPct: person.markupPct, ...billing };
         }
 
-        return res.status(200).json(out);
+        return res.status(200).json(stored);
       }
 
-      const isWan = provider === 'nvidia' || provider === 'fal' || /wan/i.test(String(model || ''));
-
-      if (isWan) {
-        try {
-          const out = await generateNvidiaWanVideo({
-            prompt: prompt.trim(),
-            model: model || 'wan2.2-t2v',
-            size: size || '832x480',
-            seconds,
-            imageBase64,
-            mimeType,
-            negativePrompt,
-          });
-          return res.status(200).json(out);
-        } catch (wanErr) {
-          // Fall through to Cloudflare Seedance if configured
-          console.warn('Wan video failed, trying Cloudflare Seedance:', wanErr.message);
-          try {
-            const out = await generateCloudflareVideo({
-              prompt: prompt.trim(),
-              model: 'seedance-mini',
-              size: size || '832x480',
-              seconds,
-              imageBase64,
-              mimeType,
-            });
-            out.fallbackFrom = provider || 'nvidia';
-            out.fallbackNote = wanErr.message || 'Wan unavailable; used Cloudflare · Seedance Mini.';
-            return res.status(200).json(out);
-          } catch (cfErr) {
-            const err = new Error(
-              `${wanErr.message} Also tried Cloudflare Seedance: ${cfErr.message}`
-            );
-            err.status = wanErr.status || cfErr.status || 502;
-            throw err;
-          }
-        }
-      }
-
-      try {
-        const out = await generateCloudflareVideo({
-          prompt: prompt.trim(),
-          model: model || 'seedance-mini',
-          size: size || '832x480',
-          seconds,
-          imageBase64,
-          mimeType,
-        });
-        return res.status(200).json(out);
-      } catch (cfErr) {
-        // Seedance often needs dashboard enablement — fall back to fal Wan if key exists.
-        if ((process.env.FAL_KEY || process.env.FAL_API_KEY || '').trim()) {
-          console.warn('Cloudflare Seedance failed, falling back to fal Wan:', cfErr.message);
-          try {
-            const out = await generateFalWanVideo({
-              prompt: prompt.trim(),
-              model: imageBase64 ? 'wan2.2-i2v' : 'wan2.2-t2v',
-              imageBase64,
-              mimeType,
-            });
-            out.fallbackFrom = 'cloudflare';
-            out.fallbackNote =
-              cfErr.message || 'Cloudflare Seedance unavailable; used Wan 2.2 on fal.ai.';
-            return res.status(200).json(out);
-          } catch (falErr) {
-            const err = new Error(
-              `${cfErr.message} Also tried fal Wan: ${falErr.message}`
-            );
-            err.status = cfErr.status || falErr.status || 502;
-            throw err;
-          }
-        }
-        throw cfErr;
-      }
+      // Video is self-hosted only. fal and NVIDIA both bill per generation and
+      // apply their own moderation, and Cloudflare's Seedance models are a
+      // third-party pass-through outside the Workers AI free tier — none of
+      // them are the cheap, unfiltered path this exists to provide. The picker
+      // has offered nothing but the two Modal models for a while; this makes
+      // the backend agree rather than silently routing elsewhere.
+      return res.status(400).json({
+        error:
+          `Unsupported video provider "${provider || 'none'}". ` +
+          `Video is self-hosted only: use provider "modal" with model ` +
+          `"ltx-video" or "wan2.2-5b".`,
+      });
     }
 
     return res.status(400).json({ error: `Unknown kind: ${kind}` });
@@ -1799,3 +1206,10 @@ export default async function handler(req, res) {
     return res.status(status).json(payload);
   }
 }
+
+// Exposed for scripts/check-video-persist.mjs — same convention as
+// lib/animate/providers.js. Not part of the HTTP surface.
+export const __test = {
+  persistVideoResult, persistImageResult, payloadTooLarge, SAFE_JSON_BYTES,
+  warmEndpointFor, modalEndpoint, clipsForSeconds, videoGeometry,
+};

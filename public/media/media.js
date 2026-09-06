@@ -6,16 +6,21 @@ const IMAGE_MODELS = [
   { value: 'cloudflare:sdxl', label: 'Cloudflare · SDXL Base (free, filtered)', kind: 'image', provider: 'cloudflare', model: 'sdxl', usesRef: false },
 ];
 
-// maxSeconds is a per-model safety cap on the Length picker, not a stylistic
-// choice - measured live against the deployed site (not just Modal directly):
-// a single 5s Wan clip at real settings (40 steps, 832x480) took 6m20s end to
-// end, so 4 chained clips would run ~25min, way past Vercel's 800s function
-// timeout - the request would die with the GPU time already spent and nothing
-// delivered. LTX at 30 steps did the same job in ~2min, so it can safely go
-// up to the Modal endpoint's own 6-clip/30s cap.
+// maxSeconds is a per-model safety cap on the Length picker.
+//
+// It used to be bounded by Vercel: a single 5s Wan clip at 40 steps took 6m20s
+// end to end, so four chained clips would have blown the 800s function timeout
+// and died with the GPU time already spent. Video now goes through the async
+// job API (?op=submit / ?op=result), so no single request has to outlive that
+// timeout, and the binding constraint is the Modal apps' own 6-clip ceiling
+// (~30s) and their 3600s function timeout.
+//
+// Six Wan clips at the old 40-step speed would be ~38min — inside Modal's
+// timeout, but a long wait. The Lightning LoRA in modal/wan_app.py should cut
+// that sharply; re-measure once it is deployed.
 const VIDEO_MODELS = [
-  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, slow)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', usesRef: false, maxSeconds: 5 },
-  { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', usesRef: false, maxSeconds: 30 },
+  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, slow)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', usesRef: false, maxSeconds: 30, modes: ['text', 'restyle'] },
+  { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', usesRef: false, maxSeconds: 30, modes: ['text', 'keyframes'] },
   // fal.ai / NVIDIA / Cloudflare video removed - fal and NVIDIA both bill per
   // generation, and Cloudflare's Seedance models are a third-party pass-through
   // (not covered by the Workers AI free Neurons tier, not on Cloudflare's own
@@ -56,6 +61,23 @@ const els = {
   size: document.getElementById('mediaSize'),
   sizeWrap: document.getElementById('sizeWrap'),
   length: document.getElementById('mediaLength'),
+  count: document.getElementById('mediaCount'),
+  countWrap: document.getElementById('countWrap'),
+  mode: document.getElementById('mediaMode'),
+  modeWrap: document.getElementById('modeWrap'),
+  strength: document.getElementById('mediaStrength'),
+  strengthWrap: document.getElementById('strengthWrap'),
+  expand: document.getElementById('mediaExpand'),
+  expandWrap: document.getElementById('expandWrap'),
+  poseSource: document.getElementById('mediaPoseSource'),
+  poseWrap: document.getElementById('poseWrap'),
+  videoMode: document.getElementById('mediaVideoMode'),
+  videoModeWrap: document.getElementById('videoModeWrap'),
+  srcVideo: document.getElementById('mediaSrcVideo'),
+  srcVideoWrap: document.getElementById('srcVideoWrap'),
+  keyframesWrap: document.getElementById('keyframesWrap'),
+  keyframeRows: document.getElementById('keyframeRows'),
+  addKeyframe: document.getElementById('addKeyframe'),
   lengthWrap: document.getElementById('lengthWrap'),
   ref: document.getElementById('mediaRef'),
   refWrap: document.getElementById('refWrap'),
@@ -70,6 +92,18 @@ const els = {
 
 let kind = 'image';
 let refData = null; // { base64, mimeType }
+let srcVideoData = null; // base64 data URL of a clip to restyle
+
+const VIDEO_MODE_LABELS = {
+  text: 'Text → Video',
+  restyle: 'Restyle a video (keeps the motion)',
+  keyframes: 'Timeline keyframes (guide the motion)',
+};
+
+/** Vercel rejects request bodies over 4.5MB, and a source clip has to fit
+ *  inside one alongside everything else. Compressing video in the browser is
+ *  not practical, so this is a hard limit the user is told about up front. */
+const SRC_VIDEO_MAX_BYTES = 3_000_000;
 
 function currentModels() {
   return kind === 'video' ? VIDEO_MODELS : IMAGE_MODELS;
@@ -119,9 +153,42 @@ function selectedSpec() {
   return currentModels().find((m) => m.value === value) || currentModels()[0];
 }
 
+/** The self-hosted video app's mode, or 'text' when the picker doesn't apply. */
+function videoMode() {
+  const spec = selectedSpec();
+  if (kind !== 'video' || spec?.provider !== 'modal') return 'text';
+  return els.videoMode.value || 'text';
+}
+
+function fillVideoModes() {
+  const spec = selectedSpec();
+  const modes = (kind === 'video' && spec?.modes) || ['text'];
+  const prev = els.videoMode.value;
+  els.videoMode.innerHTML = '';
+  for (const m of modes) {
+    const opt = document.createElement('option');
+    opt.value = m;
+    opt.textContent = VIDEO_MODE_LABELS[m] || m;
+    els.videoMode.appendChild(opt);
+  }
+  // Restyle and keyframes belong to different models, so a mode carried over
+  // from the previous model is usually invalid — fall back rather than keep it.
+  if (modes.includes(prev)) els.videoMode.value = prev;
+}
+
+/** The self-hosted image app's mode, or 'text' when the picker doesn't apply. */
+function imageMode() {
+  const spec = selectedSpec();
+  if (kind !== 'image' || spec?.provider !== 'modal') return 'text';
+  return els.mode.value || 'text';
+}
+
 function modelUsesRef(spec) {
   if (!spec) return false;
   if (spec.usesRef) return true;
+  // Every self-hosted image mode except plain text-to-image works from a
+  // source image the user supplies.
+  if (imageMode() !== 'text') return true;
   return kind === 'video' && /i2v/i.test(spec.model || '');
 }
 
@@ -134,14 +201,47 @@ function syncFields() {
   els.refWrap.classList.toggle('hidden', !usesRef);
   const opt = els.refWrap.querySelector('.opt');
   if (opt) {
-    opt.textContent = kind === 'image' ? '(required for image→image)' : '(required for image→video)';
+    // Name what the upload is actually for in this mode — "reference image"
+    // means something different when outpainting than when matching a pose.
+    opt.textContent =
+      kind === 'video'
+        ? '(required for image→video)'
+        : {
+            img2img: '(the image to restyle)',
+            expand: '(the image to expand outward from)',
+            pose: '(photo or stick figure to take the pose from)',
+          }[imageMode()] || '(required for image→image)';
   }
   els.accessKeyWrap.classList.toggle('hidden', spec?.provider !== 'modal');
-  els.lengthWrap.classList.toggle('hidden', kind !== 'video');
+  // Batching is a self-hosted feature: it works by filling one GPU call, which
+  // only applies to the Modal app. Hosted providers bill per image, so asking
+  // for four there costs four times as much for no speed gain.
+  const selfHostedImage = kind === 'image' && spec?.provider === 'modal';
+  els.countWrap.classList.toggle('hidden', !selfHostedImage);
+  els.modeWrap.classList.toggle('hidden', !selfHostedImage);
+
+  // Each mode reveals only the controls it actually reads.
+  const m = imageMode();
+  const vm = videoMode();
+  const selfHostedVideo = kind === 'video' && spec?.provider === 'modal';
+  els.videoModeWrap.classList.toggle('hidden', !selfHostedVideo || (spec?.modes?.length || 1) < 2);
+  els.srcVideoWrap.classList.toggle('hidden', vm !== 'restyle');
+  els.keyframesWrap.classList.toggle('hidden', vm !== 'keyframes');
+  // Length is chosen by the source clip when restyling, and by the last
+  // keyframe when keyframing — neither reads the picker.
+  els.lengthWrap.classList.toggle('hidden', kind !== 'video' || vm !== 'text');
+
+  // Strength means "how far from the source" in both img2img and restyle.
+  els.strengthWrap.classList.toggle('hidden', m !== 'img2img' && vm !== 'restyle');
+  els.expandWrap.classList.toggle('hidden', m !== 'expand');
+  els.poseWrap.classList.toggle('hidden', m !== 'pose');
 }
 
-function setStatus(msg) {
+function setStatus(msg, isError = false) {
   els.status.textContent = msg || '';
+  // Validation messages ("that clip is too big") read as failures, not
+  // progress — they should not look like "Generating…".
+  els.status.classList.toggle('is-error', !!msg && isError);
 }
 
 function loadImageElement(fileOrUrl) {
@@ -203,13 +303,137 @@ els.tabs.forEach((tab) => {
     fillModels();
     fillSizes();
     fillLengths();
+    fillVideoModes();
     syncFields();
   });
 });
 
 els.model.addEventListener('change', () => {
   fillLengths();
+  fillVideoModes();
   syncFields();
+});
+
+// Switching mode changes which fields apply and whether a source is required.
+els.mode.addEventListener('change', syncFields);
+els.videoMode.addEventListener('change', syncFields);
+
+// ---- Source video for restyling -----------------------------------------
+els.srcVideo.addEventListener('change', async () => {
+  const file = els.srcVideo.files?.[0];
+  srcVideoData = null;
+  if (!file) return;
+
+  if (file.size > SRC_VIDEO_MAX_BYTES) {
+    els.srcVideo.value = '';
+    setStatus(
+      `That clip is ${(file.size / 1_048_576).toFixed(1)}MB. The upload has to fit in a ` +
+        `3MB request — try a few seconds at 480p.`,
+      true,
+    );
+    return;
+  }
+
+  srcVideoData = await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+  if (srcVideoData) setStatus(`Loaded ${file.name} — its motion is kept, the look is replaced.`);
+});
+
+// ---- Timeline keyframes --------------------------------------------------
+// Each row is one image pinned to a second in the clip. LTX invents the motion
+// between them, so the rows are the whole point of the feature — kept as plain
+// DOM rows rather than a canvas, since the data is just (image, time).
+const MAX_KEYFRAMES = 4;
+const keyframeState = [];
+
+function renderKeyframeRows() {
+  els.keyframeRows.innerHTML = '';
+  keyframeState.forEach((kf, i) => {
+    const row = document.createElement('div');
+    row.className = 'keyframe-row';
+
+    const file = document.createElement('input');
+    file.type = 'file';
+    file.accept = 'image/*';
+    file.addEventListener('change', async () => {
+      const f = file.files?.[0];
+      if (!f) return;
+      try {
+        kf.image = (await compressImageFile(f)).base64;
+      } catch (err) {
+        kf.image = null;
+        setStatus(err.message, true);
+      }
+    });
+
+    const at = document.createElement('input');
+    at.type = 'number';
+    at.min = '0';
+    at.step = '0.5';
+    at.value = String(kf.at);
+    at.title = 'Seconds into the clip';
+    at.addEventListener('change', () => { kf.at = Math.max(0, Number(at.value) || 0); });
+
+    const drop = document.createElement('button');
+    drop.type = 'button';
+    drop.className = 'kf-drop';
+    drop.textContent = '✕';
+    drop.title = 'Remove this keyframe';
+    drop.addEventListener('click', () => {
+      keyframeState.splice(i, 1);
+      renderKeyframeRows();
+    });
+
+    row.append(file, at, drop);
+    els.keyframeRows.appendChild(row);
+  });
+  els.addKeyframe.disabled = keyframeState.length >= MAX_KEYFRAMES;
+}
+
+els.addKeyframe.addEventListener('click', () => {
+  if (keyframeState.length >= MAX_KEYFRAMES) return;
+  // Space new marks out rather than stacking them all on second 0.
+  const last = keyframeState[keyframeState.length - 1];
+  keyframeState.push({ image: null, at: last ? last.at + 2 : 0 });
+  renderKeyframeRows();
+});
+renderKeyframeRows();
+
+// ---- Cold-start warming --------------------------------------------------
+// A Modal app that has scaled to zero spends ~60s loading weights before it
+// generates anything. Firing that off when the prompt box is focused overlaps
+// the load with the time someone spends typing, so the wait mostly disappears
+// instead of landing on the Generate click.
+//
+// Fire-and-forget on purpose: the response is ignored, failures are silent,
+// and a warm that does not land just means the generation pays the cold start
+// it would have paid regardless. Only self-hosted models have a cold start,
+// so hosted providers are skipped.
+let warmedFor = null;
+
+function warmSelectedModel() {
+  const spec = selectedSpec();
+  if (!spec || spec.provider !== 'modal') return;
+  // Once per model per page load — refocusing the box must not re-ping.
+  if (warmedFor === spec.value) return;
+  warmedFor = spec.value;
+
+  fetch(`/api/media-generate?op=warm&model=${encodeURIComponent(spec.model)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+    keepalive: true,
+  }).catch(() => {});
+}
+
+els.prompt.addEventListener('focus', warmSelectedModel);
+// Switching model after focusing should warm the new one too.
+els.model.addEventListener('change', () => {
+  if (document.activeElement === els.prompt) warmSelectedModel();
 });
 
 // Remember the access key locally so friends don't retype it every visit.
@@ -290,6 +514,57 @@ function friendlyHttpError(status, data) {
   return data?.error || `HTTP ${status}`;
 }
 
+async function runSync(body) {
+  const res = await fetch('/api/media-generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(friendlyHttpError(res.status, data));
+  return data;
+}
+
+const POLL_MS = 5000;
+// Ceiling matches the Modal apps' own 3600s timeout: past that the job is gone
+// and there is nothing left to wait for.
+const POLL_CEILING_MS = 3_600_000;
+
+async function runVideoJob(body) {
+  const submitRes = await fetch('/api/media-generate?op=submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const job = await submitRes.json().catch(() => ({}));
+  if (!submitRes.ok || !job.jobId) throw new Error(friendlyHttpError(submitRes.status, job));
+
+  const started = Date.now();
+  for (;;) {
+    await new Promise((r) => setTimeout(r, POLL_MS));
+
+    const elapsed = Math.round((Date.now() - started) / 1000);
+    setStatus(`Generating… ${elapsed}s. Self-hosted video takes minutes; leave this open.`);
+
+    const pollRes = await fetch('/api/media-generate?op=result', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobId: job.jobId, model: body.model, accessKey: body.accessKey }),
+    });
+    const out = await pollRes.json().catch(() => ({}));
+
+    if (out.status === 'done') return out;
+    // A transient poll failure is not a failed job — the generation is still
+    // running on Modal. Only an explicit terminal status ends the wait.
+    if (out.status && out.status !== 'running') {
+      throw new Error(out.error || `Generation ${out.status}.`);
+    }
+    if (Date.now() - started > POLL_CEILING_MS) {
+      throw new Error('Gave up waiting after an hour — the job outlived its Modal timeout.');
+    }
+  }
+}
+
 els.generate.addEventListener('click', async () => {
   const prompt = (els.prompt.value || '').trim();
   if (!prompt) {
@@ -321,8 +596,44 @@ els.generate.addEventListener('click', async () => {
     if (neg && kind === 'image') {
       body.negativePrompt = neg;
     }
+    if (kind === 'image' && spec.provider === 'modal') {
+      body.count = Number(els.count.value) || 1;
+      const m = imageMode();
+      body.mode = m;
+      if (m === 'img2img') {
+        body.strength = (Number(els.strength.value) || 35) / 100;
+      } else if (m === 'expand') {
+        const [px, dir] = String(els.expand.value).split(':');
+        const n = Number(px) || 256;
+        body.expand = {
+          left: dir === 'tall' ? 0 : n,
+          right: dir === 'tall' ? 0 : n,
+          top: dir === 'wide' ? 0 : n,
+          bottom: dir === 'wide' ? 0 : n,
+        };
+      } else if (m === 'pose') {
+        body.detectPose = els.poseSource.value === 'detect';
+        body.controlScale = 0.8;
+      }
+    }
     if (kind === 'video') {
       body.seconds = Number(els.length.value) || 5;
+      const vm = videoMode();
+      if (vm === 'restyle') {
+        if (!srcVideoData) throw new Error('Pick a source video to restyle.');
+        body.video = srcVideoData;
+        body.strength = (Number(els.strength.value) || 60) / 100;
+      } else if (vm === 'keyframes') {
+        // Frame index, not seconds: the app works in frames, and LTX runs at
+        // 24fps. Doing the conversion here keeps the app's contract numeric.
+        const ready = keyframeState.filter((kf) => kf.image);
+        if (!ready.length) throw new Error('Add at least one keyframe with an image.');
+        body.keyframes = ready.map((kf) => ({
+          image: kf.image,
+          frame: Math.round(kf.at * 24),
+          strength: 1.0,
+        }));
+      }
     }
     if (spec.provider === 'modal') {
       body.accessKey = (els.accessKey.value || '').trim();
@@ -334,13 +645,14 @@ els.generate.addEventListener('click', async () => {
       body.mimeType = refData.mimeType;
     }
 
-    const res = await fetch('/api/media-generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(friendlyHttpError(res.status, data));
+    // Self-hosted video goes through the async job API. One blocking request
+    // would be bounded by the API's 800s function timeout, which is what caps
+    // clip length — polling moves the ceiling to the Modal app's own timeout
+    // and lets the UI show progress instead of hanging.
+    const data =
+      kind === 'video' && spec.provider === 'modal'
+        ? await runVideoJob(body)
+        : await runSync(body);
 
     if (data.kind === 'image') {
       if (data.note) setStatus(data.note);
@@ -415,4 +727,5 @@ els.generate.addEventListener('click', async () => {
 fillModels();
 fillSizes();
 fillLengths();
+fillVideoModes();
 syncFields();

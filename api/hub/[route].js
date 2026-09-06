@@ -26,6 +26,8 @@ import {
   WRITER_MODEL,
   requireHub,
   fail,
+  storeMediaAsset,
+  decodeDataUrl,
 } from '../../lib/hub.js';
 
 /**
@@ -531,22 +533,36 @@ Return JSON: {"title":"...","outline":{},"sections":[{"heading":"...","body":"..
  * POST /api/hub/media
  *   { threadId, kind?: 'image'|'video', size?, negativePrompt?, model? }
  *
- * Runs a media thread's seed prompt through generation, Cloudflare first and
- * Venice as fallback, then saves the result back onto the thread.
+ * Runs a media thread's seed prompt through generation, then saves the result
+ * back onto the thread.
  *
  * This deliberately delegates to the existing /api/media-generate rather than
- * calling Cloudflare and Venice directly. That endpoint already normalises
- * every response shape those providers return (result.image, images[0],
- * b64_json, raw binary, data URLs) and enforces the 4.5MB body limit.
- * Re-implementing it here would mean maintaining two copies of that logic,
- * and the second copy would be the wrong one.
+ * calling providers directly. That endpoint already normalises every response
+ * shape those providers return (result.image, images[0], b64_json, raw binary,
+ * data URLs) and enforces the 4.5MB body limit. Re-implementing it here would
+ * mean maintaining two copies of that logic, and the second copy would be the
+ * wrong one.
+ *
+ * Provider order mirrors the Media Studio picker (public/media/media.js): the
+ * self-hosted Modal apps are first because they are the ones actually
+ * deployed and unfiltered. Cloudflare stays as a fallback for images only —
+ * it is the sole remaining hosted image provider after Venice/NVIDIA were
+ * dropped from the picker.
  */
 
 
-const ORDER = [
-  { provider: 'cloudflare', model: '@cf/black-forest-labs/flux-1-schnell' },
-  { provider: 'venice', model: 'flux-2-pro' },
-];
+const ORDER_BY_KIND = {
+  image: [
+    { provider: 'modal', model: 'lustify' },
+    { provider: 'cloudflare', model: '@cf/black-forest-labs/flux-1-schnell' },
+  ],
+  video: [
+    // LTX first: the Studio labels it the fast one and caps it at 30s, where
+    // Wan is labelled slow and capped at 5s.
+    { provider: 'modal', model: 'ltx-video' },
+    { provider: 'modal', model: 'wan2.2-5b' },
+  ],
+};
 
 function baseUrl(req) {
   const host = req.headers['x-forwarded-host'] || req.headers.host;
@@ -558,8 +574,10 @@ async function handle_media(req, res) {
   if (!requireHub(res)) return;
   if (req.method !== 'POST') return fail(res, 405, 'POST only');
 
-  const { threadId, kind = 'image', size, negativePrompt, model } = req.body || {};
+  const { threadId, kind = 'image', size, negativePrompt, model, seconds, accessKey } =
+    req.body || {};
   if (!threadId) return fail(res, 400, 'threadId required');
+  if (!ORDER_BY_KIND[kind]) return fail(res, 400, "kind must be 'image' or 'video'");
 
   const { data: thread } = await db
     .from('threads')
@@ -578,7 +596,17 @@ async function handle_media(req, res) {
   const attempts = [];
   let success = null;
 
-  for (const target of ORDER) {
+  // An explicit `model` pins the request to that one model rather than
+  // silently falling through to a different one the caller didn't ask for.
+  const order = model
+    ? ORDER_BY_KIND[kind].filter((t) => t.model === model).concat(
+        ORDER_BY_KIND[kind].some((t) => t.model === model)
+          ? []
+          : [{ provider: 'modal', model }],
+      )
+    : ORDER_BY_KIND[kind];
+
+  for (const target of order) {
     try {
       const upstream = await fetch(`${baseUrl(req)}/api/media-generate`, {
         method: 'POST',
@@ -586,10 +614,13 @@ async function handle_media(req, res) {
         body: JSON.stringify({
           kind,
           provider: target.provider,
-          model: model || target.model,
+          model: target.model,
           prompt,
           ...(negativePrompt ? { negativePrompt } : {}),
           ...(size ? { size } : {}),
+          ...(kind === 'video' && seconds ? { seconds } : {}),
+          // Modal is metered per access key when VIDEO_ACCESS_KEYS is set.
+          ...(target.provider === 'modal' && accessKey ? { accessKey } : {}),
         }),
       });
 
@@ -598,7 +629,7 @@ async function handle_media(req, res) {
         attempts.push(`${target.provider}: ${upstream.status} ${body?.error || ''}`.trim());
         continue;
       }
-      success = { ...body, provider: target.provider, model: model || target.model };
+      success = { ...body, provider: target.provider, model: target.model };
       break;
     } catch (e) {
       attempts.push(`${target.provider}: ${e.message}`);
@@ -607,14 +638,40 @@ async function handle_media(req, res) {
 
   if (!success) return fail(res, 502, 'all providers failed', attempts);
 
+  // /api/media-generate never returns a bare `url` — it returns
+  // `images: [{ base64 | url, mimeType }]` for images and `videoUrl` (an http
+  // URL or a data: URL) for video. Read those shapes, matching what Media
+  // Studio does in public/media/media.js.
+  const asset = extractAsset(success);
+  if (!asset) {
+    return fail(res, 502, 'provider returned no usable asset', [
+      ...attempts,
+      `${success.provider}: response had no images[] or videoUrl`,
+    ]);
+  }
+
   // Store a URL, never base64. A single 1024px image is ~1-2MB of base64;
   // writing that into a text column bloats every subsequent thread read and
-  // pushes responses past Vercel's 4.5MB body limit.
-  const url = success.url || success.imageUrl || success.assetUrl || null;
-  const content = url
-    ? `![${thread.title || 'generated'}](${url})`
-    : `Generated with ${success.provider} (${success.model}) — image returned inline; ` +
-      `store it via your existing asset path and update this message with the URL.`;
+  // pushes responses past Vercel's 4.5MB body limit. Video is far worse, so
+  // an un-storable video is an error rather than an inline fallback.
+  let url = asset.url;
+  if (!url && asset.bytes) {
+    url = await storeMediaAsset(asset.bytes, asset.mimeType, threadId);
+  }
+  if (!url) {
+    if (success.kind === 'video') {
+      return fail(res, 502, 'video generated but asset storage is unavailable', [
+        ...attempts,
+        'configure Supabase Storage (HUB_MEDIA_BUCKET) to persist generated video',
+      ]);
+    }
+    // Images are small enough to survive inline while storage is unconfigured.
+    url = `data:${asset.mimeType};base64,${asset.bytes.toString('base64')}`;
+  }
+
+  const title = thread.title || 'generated';
+  const content =
+    success.kind === 'video' ? `[${title} (video)](${url})` : `![${title}](${url})`;
 
   await db.from('messages').insert({
     thread_id: threadId,
@@ -626,11 +683,45 @@ async function handle_media(req, res) {
   return res.json({
     ok: true,
     threadId,
+    kind: success.kind || kind,
     provider: success.provider,
     model: success.model,
     url,
+    stored: !url.startsWith('data:'),
     fallbacksTried: attempts,
   });
+}
+
+/**
+ * Pull the generated bytes (or an already-hosted URL) out of a
+ * /api/media-generate response.
+ *
+ * @returns {{url: string|null, bytes: Buffer|null, mimeType: string}|null}
+ */
+function extractAsset(result) {
+  if (result?.kind === 'video' || result?.videoUrl) {
+    const videoUrl = result.videoUrl;
+    if (!videoUrl) return null;
+    const decoded = decodeDataUrl(videoUrl);
+    return decoded
+      ? { url: null, bytes: decoded.bytes, mimeType: decoded.mimeType }
+      : { url: videoUrl, bytes: null, mimeType: result.mime || 'video/mp4' };
+  }
+
+  const img = result?.images?.[0];
+  if (!img) return null;
+  if (img.url) {
+    return { url: img.url, bytes: null, mimeType: img.mimeType || 'image/png' };
+  }
+  if (!img.base64) return null;
+  // Some providers hand back a full data: URL in the base64 field.
+  const decoded = decodeDataUrl(img.base64);
+  if (decoded) return { url: null, ...decoded };
+  return {
+    url: null,
+    bytes: Buffer.from(img.base64, 'base64'),
+    mimeType: img.mimeType || 'image/png',
+  };
 }
 
 
@@ -1289,3 +1380,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'hub failure', details: e.message });
   }
 }
+
+// Exposed for scripts/check-media-extract.mjs — same convention as
+// lib/animate/providers.js. Not part of the HTTP surface.
+export const __test = { extractAsset, ORDER_BY_KIND };
