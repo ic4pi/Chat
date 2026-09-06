@@ -105,7 +105,7 @@ class Wan:
         fps: int = DEFAULT_FPS,
         num_clips: int = 1,
         seed: int = 42,
-        steps: int = 50,
+        steps: int = 40,  # measured: 40 steps, 832x480, ~6m20s for one 5s clip
         guidance_scale: float = 5.0,
     ) -> dict:
         import torch

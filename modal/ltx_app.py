@@ -93,7 +93,7 @@ class LTX:
         fps: int = DEFAULT_FPS,
         num_clips: int = 1,
         seed: int = 42,
-        steps: int = 50,
+        steps: int = 30,  # measured: 30 steps, ~2min for one 5s clip
         guidance_scale: float = 3.0,
     ) -> dict:
         import torch
