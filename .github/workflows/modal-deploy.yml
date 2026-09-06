@@ -49,18 +49,24 @@ jobs:
         run: |
           probe() {
             local name="$1" val="$2" want="$3"
-            if [ -z "$val" ]; then echo "$name: MISSING"; return; fi
+            if [ -z "$val" ]; then echo "$name: MISSING"; return 1; fi
             local trimmed; trimmed=$(printf '%s' "$val" | tr -d '[:space:]')
             local ws=""; [ "${#trimmed}" -ne "${#val}" ] && ws="  <-- HAS WHITESPACE, re-paste it"
             case "$trimmed" in
-              "$want"*) echo "$name: starts '$want' ok, length ${#trimmed}$ws" ;;
-              ak-*)     echo "$name: starts 'ak-' — that is the ID, halves are SWAPPED$ws" ;;
-              as-*)     echo "$name: starts 'as-' — that is the SECRET, halves are SWAPPED$ws" ;;
-              *)        echo "$name: unexpected prefix, length ${#trimmed}$ws" ;;
+              "$want"*) echo "$name: starts '$want' ok, length ${#trimmed}$ws"; [ -z "$ws" ] || return 1 ;;
+              ak-*)     echo "$name: starts 'ak-' — that is the ID, halves are SWAPPED$ws"; return 1 ;;
+              as-*)     echo "$name: starts 'as-' — that is the SECRET, halves are SWAPPED$ws"; return 1 ;;
+              *)        echo "$name: unexpected prefix, length ${#trimmed}$ws"; return 1 ;;
             esac
           }
-          probe MODAL_TOKEN_ID     "$MODAL_TOKEN_ID"     "ak-"
-          probe MODAL_TOKEN_SECRET "$MODAL_TOKEN_SECRET" "as-"
+          bad=0
+          probe MODAL_TOKEN_ID     "$MODAL_TOKEN_ID"     "ak-" || bad=1
+          probe MODAL_TOKEN_SECRET "$MODAL_TOKEN_SECRET" "as-" || bad=1
+          if [ "$bad" = 1 ]; then
+            echo "::error::Token secrets are the wrong shape — see the two lines above."
+            exit 1
+          fi
+          echo "Both halves look right; handing off to modal deploy."
 
       - name: Deploy
         env:
