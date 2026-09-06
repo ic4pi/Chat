@@ -10,7 +10,8 @@
     "animate": "node scripts/animate-sequence.mjs",
     "test:animate": "node scripts/test-animate-local.mjs",
     "check:packages": "node scripts/check-packages.mjs",
-    "check:media": "node scripts/check-media-extract.mjs"
+    "check:media": "node scripts/check-media-extract.mjs",
+    "check:modal": "node scripts/check-modal-endpoints.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",
