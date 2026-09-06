@@ -38,6 +38,30 @@ jobs:
       - name: Install Modal
         run: pip install modal
 
+      # "Token validation failed" says nothing about which half is wrong. The
+      # prefixes (ak- / as-) are structural, not secret, so checking them and
+      # the lengths distinguishes swapped halves and pasted whitespace — the
+      # two things that produce this error with a valid token.
+      - name: Check token shape
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          probe() {
+            local name="$1" val="$2" want="$3"
+            if [ -z "$val" ]; then echo "$name: MISSING"; return; fi
+            local trimmed; trimmed=$(printf '%s' "$val" | tr -d '[:space:]')
+            local ws=""; [ "${#trimmed}" -ne "${#val}" ] && ws="  <-- HAS WHITESPACE, re-paste it"
+            case "$trimmed" in
+              "$want"*) echo "$name: starts '$want' ok, length ${#trimmed}$ws" ;;
+              ak-*)     echo "$name: starts 'ak-' — that is the ID, halves are SWAPPED$ws" ;;
+              as-*)     echo "$name: starts 'as-' — that is the SECRET, halves are SWAPPED$ws" ;;
+              *)        echo "$name: unexpected prefix, length ${#trimmed}$ws" ;;
+            esac
+          }
+          probe MODAL_TOKEN_ID     "$MODAL_TOKEN_ID"     "ak-"
+          probe MODAL_TOKEN_SECRET "$MODAL_TOKEN_SECRET" "as-"
+
       - name: Deploy
         env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
