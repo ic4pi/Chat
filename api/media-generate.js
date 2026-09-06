@@ -68,6 +68,13 @@ import {
   listAllBalances,
 } from '../lib/video-billing.js';
 
+/** Endpoints get pasted from a browser or a phone, which readily appends a
+ *  trailing slash. Modal treats ".../generate/" as a different route and 404s,
+ *  so normalise rather than make a slash a config error. */
+function cleanEndpoint(url, fallback) {
+  return String(url || fallback).trim().replace(/\/+$/, '');
+}
+
 /** Stay under Vercel’s 4.5MB JSON body limit (request + response). */
 const SAFE_JSON_BYTES = 3_200_000;
 
@@ -580,8 +587,10 @@ async function generateCloudflareImage({ prompt, model, size, negativePrompt }) 
  * Two checkpoints: lustify (realistic) and wai-illustrious (anime/illustration).
  * Env: MODAL_SDXL_ENDPOINT (defaults to the deployed endpoint below).
  */
-const MODAL_SDXL_ENDPOINT =
-  process.env.MODAL_SDXL_ENDPOINT || 'https://ic4pi--sdxl-nsfw-generate.modal.run';
+const MODAL_SDXL_ENDPOINT = cleanEndpoint(
+  process.env.MODAL_SDXL_ENDPOINT,
+  'https://ic4pi--sdxl-nsfw-generate.modal.run',
+);
 
 const MODAL_IMAGE_MODELS = {
   lustify: 'lustify',
@@ -715,8 +724,10 @@ async function generateModalSdxlImage({
  * nothing here moderates the prompt).
  * Env: MODAL_WAN_ENDPOINT (defaults to the deployed endpoint below).
  */
-const MODAL_WAN_ENDPOINT =
-  process.env.MODAL_WAN_ENDPOINT || 'https://ic4pi--wan-video-generate.modal.run';
+const MODAL_WAN_ENDPOINT = cleanEndpoint(
+  process.env.MODAL_WAN_ENDPOINT,
+  'https://ic4pi--wan-video-generate.modal.run',
+);
 
 async function generateModalWanVideo({
   prompt,
@@ -781,8 +792,10 @@ async function generateModalWanVideo({
  * request/response shape and clip-chaining approach as generateModalWanVideo.
  * Env: MODAL_LTX_ENDPOINT (defaults to the deployed endpoint below).
  */
-const MODAL_LTX_ENDPOINT =
-  process.env.MODAL_LTX_ENDPOINT || 'https://ic4pi--ltx-video-generate.modal.run';
+const MODAL_LTX_ENDPOINT = cleanEndpoint(
+  process.env.MODAL_LTX_ENDPOINT,
+  'https://ic4pi--ltx-video-generate.modal.run',
+);
 
 async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds }) {
   const dims = String(size || '704x480').split(/[x*]/i).map(Number);
