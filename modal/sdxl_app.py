@@ -132,6 +132,7 @@ class SDXL:
         # Checkpoints load lazily and stay cached per container: holding both
         # in VRAM at once would not fit an L4 alongside generation.
         self._loaded: dict = {}
+        self._native_sched: dict = {}
         self._siblings: dict = {}
         self._cnet = None
         self._pose_det = None
@@ -189,49 +190,62 @@ class SDXL:
             self._pose_det = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
         return self._pose_det(img, hand_and_face=True)
 
-    def _pipe(self, name: str):
-        if name in self._loaded:
-            return self._loaded[name]
+    def _pipe(self, name: str, karras: bool | None = None):
+        if name not in self._loaded:
+            spec = CHECKPOINTS[name]
+            pipe = self._cls.from_pretrained(
+                spec["repo"],
+                torch_dtype=self._torch.float16,
+                # These community re-exports ship a single unsuffixed safetensors
+                # file, not an fp16-variant one — variant="fp16" would 404 on them.
+                use_safetensors=True,
+                cache_dir="/cache/hf",
+                # The point of self-hosting is that nothing moderates the output.
+                safety_checker=None,
+                requires_safety_checker=False,
+            )
+            print(f"loaded {name}: scheduler={type(pipe.scheduler).__name__}", flush=True)
 
-        spec = CHECKPOINTS[name]
-        pipe = self._cls.from_pretrained(
-            spec["repo"],
-            torch_dtype=self._torch.float16,
-            # These community re-exports ship a single unsuffixed safetensors
-            # file, not an fp16-variant one — variant="fp16" would 404 on them.
-            use_safetensors=True,
-            cache_dir="/cache/hf",
-            # The point of self-hosting is that nothing moderates the output.
-            safety_checker=None,
-            requires_safety_checker=False,
-        )
+            # Resident on the GPU, NOT offloaded. SDXL in fp16 is ~7GB against
+            # the L4's 24GB, so enable_model_cpu_offload() was shuttling
+            # weights across PCIe every step to solve a memory problem that
+            # does not exist here. Offloading is kept only as an escape hatch
+            # for a smaller card.
+            if os.environ.get("SDXL_CPU_OFFLOAD") == "1":
+                pipe.enable_model_cpu_offload()
+            else:
+                pipe.to("cuda")
+
+            # Only one checkpoint stays resident; swapping is cheaper than OOM.
+            # Siblings wrap the outgoing weights, so they go too.
+            self._loaded.clear()
+            self._siblings.clear()
+            self._loaded[name] = pipe
+            # The scheduler the checkpoint actually publishes, kept aside so a
+            # per-request Karras toggle can always get back to it rather than
+            # ratcheting one direction for the life of the container.
+            self._native_sched[name] = pipe.scheduler
+
+        pipe = self._loaded[name]
+
         # DPM++ 2M Karras reaches the same quality in ~20-25 steps that the
         # default scheduler needs 30+ for — but only when the checkpoint's own
         # scheduler config is compatible with the Karras sigma schedule. On at
         # least one community conversion it isn't: generation dies mid-run with
         # "IndexError: index ... is out of bounds" as the solver steps past the
         # end of its own sigma array, which only surfaces once GPU time has
-        # already been spent. Opt-in and off by default so a checkpoint swap
-        # can't silently break generation.
-        if os.environ.get("SDXL_KARRAS") == "1":
+        # already been spent. Opt-in (env default, per-request override) so a
+        # checkpoint swap can't silently break generation.
+        want_karras = (os.environ.get("SDXL_KARRAS") == "1") if karras is None else karras
+        if want_karras:
             pipe.scheduler = self._sched.from_config(
-                pipe.scheduler.config, use_karras_sigmas=True, algorithm_type="dpmsolver++"
+                self._native_sched[name].config,
+                use_karras_sigmas=True,
+                algorithm_type="dpmsolver++",
             )
-
-        # Resident on the GPU, NOT offloaded. SDXL in fp16 is ~7GB against the
-        # L4's 24GB, so enable_model_cpu_offload() was shuttling weights across
-        # PCIe every step to solve a memory problem that does not exist here.
-        # Offloading is kept only as an escape hatch for a smaller card.
-        if os.environ.get("SDXL_CPU_OFFLOAD") == "1":
-            pipe.enable_model_cpu_offload()
         else:
-            pipe.to("cuda")
+            pipe.scheduler = self._native_sched[name]
 
-        # Only one checkpoint stays resident; swapping is cheaper than OOM.
-        # Siblings wrap the outgoing weights, so they go too.
-        self._loaded.clear()
-        self._siblings.clear()
-        self._loaded[name] = pipe
         return pipe
 
     @modal.method()
@@ -260,10 +274,12 @@ class SDXL:
         expand: dict | None = None,
         control_scale: float = 0.8,
         detect_pose: bool = True,
+        karras: bool | None = None,  # diagnostic override; see SDXL_KARRAS above
     ) -> dict:
         started = time.time()
         name = model if model in CHECKPOINTS else DEFAULT_MODEL
-        pipe = self._pipe(name)
+        pipe = self._pipe(name, karras=karras)
+        scheduler_used = type(pipe.scheduler).__name__
 
         # SDXL is trained at multiples of 64; off-grid sizes produce seams.
         width = max(512, int(round(width / 64)) * 64)
@@ -357,6 +373,7 @@ class SDXL:
             "width": images[0].width,
             "height": images[0].height,
             "seed": seed,
+            "scheduler": scheduler_used,
         }
 
 
@@ -383,9 +400,15 @@ def generate(payload: dict) -> dict:
             expand=payload.get("expand"),
             control_scale=float(payload.get("control_scale") or 0.8),
             detect_pose=bool(payload.get("detect_pose", True)),
+            karras=payload.get("karras"),
         )
     except Exception as exc:
-        return {"error": f"{type(exc).__name__}: {exc}"}
+        import traceback
+
+        return {
+            "error": f"{type(exc).__name__}: {exc}",
+            "traceback": "".join(traceback.format_exc()).strip()[-3000:],
+        }
 
 
 @app.function(image=image, timeout=60)
