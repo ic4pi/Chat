@@ -19,6 +19,11 @@ import types
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+# `python3 modal/check_apps.py --repos` prints every Hugging Face repo id the
+# three apps pull, so the deploy workflow can preflight them from one place
+# instead of a hand-kept copy that drifts.
+PRINT_REPOS = "--repos" in sys.argv
+
 failures = []
 checks = 0
 
@@ -26,6 +31,10 @@ checks = 0
 def check(cond, label, detail=""):
     global checks
     checks += 1
+    if PRINT_REPOS:
+        if not cond:
+            failures.append(label)
+        return
     if cond:
         print(f"check-modal-apps: ok — {label}")
     else:
@@ -234,6 +243,23 @@ check(
     idx != -1 and 'cache_dir="/cache/hf"' in src[idx:idx + 200],
     "SDXL caches the OpenPose annotator on the volume",
 )
+
+if PRINT_REPOS:
+    sdxl_mod = modules["sdxl_app.py"]
+    repos = [spec["repo"] for spec in sdxl_mod.CHECKPOINTS.values()]
+    repos.append(sdxl_mod.POSE_CONTROLNET)
+    repos.append("lllyasviel/Annotators")
+    repos.append(modules["ltx_app.py"].MODEL_ID)
+    repos.append(modules["wan_app.py"].MODEL_ID)
+    lora = getattr(modules["wan_app.py"], "LIGHTNING_LORA_REPO", "")
+    if lora:
+        repos.append(lora)
+    seen = set()
+    for r in repos:
+        if r and r not in seen:
+            seen.add(r)
+            print(r)
+    sys.exit(0)
 
 print()
 if failures:
