@@ -67,13 +67,18 @@ def main():
         # quick just proves the checkpoint loads and the pipeline runs. batch
         # measures what a real request costs, which is the only number worth
         # quoting: 512px/8 steps is not what anyone generates.
+        # No steps here on purpose. Pinning a step count measures whatever
+        # this script happens to hardcode, not what the app does: an earlier
+        # version sent steps=30 and so reported 57s for a deploy that had just
+        # switched its default to 8. The app chooses; we report what it chose.
         req = (
             {"width": 512, "height": 512, "steps": 8, "n": 1}
             if args.profile == "quick"
-            else {"width": 1024, "height": 1024, "steps": 30, "n": 4}
+            else {"width": 1024, "height": 1024, "n": 4}
         )
+        shown = req.get("steps", "the app's default")
         print(f"generating on {url} — {req['n']}x {req['width']}x{req['height']}, "
-              f"{req['steps']} steps (cold start, be patient)...", flush=True)
+              f"{shown} steps (cold start, be patient)...", flush=True)
         started = time.time()
         status, body = post(
             url,
@@ -85,8 +90,10 @@ def main():
         if status == 200 and images:
             gpu = body.get("elapsed_seconds")
             per = f", {gpu / len(images):.1f}s each" if isinstance(gpu, (int, float)) else ""
+            used = body.get("steps", req.get("steps", "?"))
+            lane = "Lightning" if body.get("fast") else "full steps"
             print(f"  OK - {len(images)} image(s) at {req['width']}x{req['height']}, "
-                  f"{req['steps']} steps: {gpu}s on the GPU{per}; "
+                  f"{used} steps via {lane}: {gpu}s on the GPU{per}; "
                   f"{wall:.1f}s wall including cold start")
         else:
             msg = body.get("error") or f"HTTP {status} with no image in the response"
