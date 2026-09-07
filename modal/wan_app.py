@@ -209,15 +209,28 @@ class Wan:
         self.t2v = WanPipeline.from_pretrained(
             MODEL_ID, vae=vae, torch_dtype=torch.bfloat16, cache_dir="/cache/hf"
         )
-        # TI2V-5B carries no CLIP vision tower, so the i2v pipeline is built off
-        # the t2v components rather than loaded a second time — same weights in
-        # VRAM, both entry points available for the chain.
-        self.i2v = WanImageToVideoPipeline(
-            tokenizer=self.t2v.tokenizer,
-            text_encoder=self.t2v.text_encoder,
+        # Built with from_pretrained, not by hand from the t2v components.
+        # Constructing the class directly skips the repo's own config, so the
+        # pipeline fell back to Wan 2.1's image conditioning - latent, masked
+        # latent and mask concatenated on the channel axis - and handed the
+        # transformer 100 channels (48 + 48 + 4) where TI2V-5B takes 48:
+        #
+        #   RuntimeError: Given groups=1, weight of size [3072, 48, 1, 2, 2],
+        #   expected input[1, 100, 21, 30, 52] to have 48 channels, but got 100
+        #
+        # Clip one is text-to-video and renders fine; every clip after it seeds
+        # from the previous frame through this pipeline, so any multi-clip
+        # request died partway with weights already paid for. Passing the
+        # loaded components keeps it to one set of weights in VRAM.
+        self.i2v = WanImageToVideoPipeline.from_pretrained(
+            MODEL_ID,
             vae=self.t2v.vae,
-            scheduler=self.t2v.scheduler,
             transformer=self.t2v.transformer,
+            text_encoder=self.t2v.text_encoder,
+            tokenizer=self.t2v.tokenizer,
+            scheduler=self.t2v.scheduler,
+            torch_dtype=torch.bfloat16,
+            cache_dir="/cache/hf",
         )
         # Loaded onto the shared transformer, so both pipelines get it.
         # A failure here must not take generation down — it falls back to full

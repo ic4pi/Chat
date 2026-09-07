@@ -127,10 +127,14 @@ def main():
             print(f"rendering one clip on {url} — {geo['width']}x{geo['height']}, "
                   f"{geo['num_frames']} frames (minutes, be patient)...", flush=True)
             started = time.time()
+            # Two clips, not one. Clip one is plain text-to-video; every clip
+            # after it seeds from the previous frame through the image-to-video
+            # pipeline, which is a different code path entirely - and the one
+            # that was broken while a single-clip smoke passed.
             status, body = post(
                 url,
                 {"prompt": "a red balloon drifting over a field, cinematic",
-                 "num_clips": 1, **geo},
+                 "num_clips": 2, **geo},
                 GENERATE_TIMEOUT,
             )
             wall = time.time() - started
