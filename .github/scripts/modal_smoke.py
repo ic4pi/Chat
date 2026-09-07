@@ -72,6 +72,11 @@ def main():
         else:
             msg = body.get("error") or f"HTTP {status} with no image in the response"
             print(f"  FAILED - {msg}")
+            if body.get("traceback"):
+                print("  --- traceback from the app ---")
+                for line in body["traceback"].splitlines():
+                    print(f"  {line}")
+                print("  --- end traceback ---")
             failures.append(f"sdxl generate: {msg}")
 
     # Video generation is minutes of GPU per clip; confirming the endpoints

@@ -470,7 +470,16 @@ def generate(payload: dict) -> dict:
             detect_pose=bool(payload.get("detect_pose", True)),
         )
     except Exception as exc:
-        return {"error": f"{type(exc).__name__}: {exc}"}
+        # The bare message is not enough to place a failure inside the
+        # pipeline: "IndexError: index 9 is out of bounds" says nothing about
+        # which call raised it, and the traceback only exists in Modal's own
+        # logs, which the caller cannot read. Send the last frames back.
+        import traceback
+
+        return {
+            "error": f"{type(exc).__name__}: {exc}",
+            "traceback": "".join(traceback.format_exc()).strip()[-3000:],
+        }
 
 
 @app.function(image=image, timeout=60)
