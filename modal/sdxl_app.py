@@ -85,9 +85,16 @@ def _peft_version():
 #     trained on that schedule and produces mush on the default "leading".
 #
 # Set SDXL_LIGHTNING_LORA_REPO="" to deploy without it and keep full steps.
-LIGHTNING_LORA_REPO = os.environ.get(
-    "SDXL_LIGHTNING_LORA_REPO", "ByteDance/SDXL-Lightning"
-)
+# OFF by default. It works - four 1024px images in 2.7s against 18.9s - but
+# it is distilled to guidance 1.0, and at that guidance the model does not
+# follow the prompt: "girl at a hot dog festival in an eating contest" came
+# back as a lone head. At 4.7s an image on an A100 the full-guidance path is
+# already fast, so the speed is not worth the output. Off means off: no
+# download, no load, no branch at request time.
+#
+# SDXL_LIGHTNING_LORA_REPO=ByteDance/SDXL-Lightning turns it back on, and
+# {"fast": true} then picks it per request.
+LIGHTNING_LORA_REPO = os.environ.get("SDXL_LIGHTNING_LORA_REPO", "")
 LIGHTNING_LORA_WEIGHT = os.environ.get(
     "SDXL_LIGHTNING_LORA_WEIGHT", "sdxl_lightning_8step_lora.safetensors"
 )
