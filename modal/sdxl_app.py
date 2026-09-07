@@ -90,6 +90,9 @@ image = (
         "diffusers==0.36.0",
         "transformers==4.51.3",
         "accelerate==1.6.0",
+        # diffusers routes load_lora_weights through peft; without it
+        # every Lightning LoRA here silently falls back to full steps.
+        "peft==0.17.1",
         "safetensors",
         "sentencepiece",
         "pillow",
