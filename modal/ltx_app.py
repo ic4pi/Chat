@@ -59,6 +59,13 @@ image = (
 #   MODAL_APP_NAME=ltx-video-v2 modal deploy modal/ltx_app.py
 # The site picks the target with MODAL_*_ENDPOINT, so switching back is
 # deleting an env var rather than redeploying.
+# GPU. The L4 is the cheap card and the slow one: SDXL 4x1024px takes ~57s on
+# it, and an LTX clip runs into minutes. Diffusion is bandwidth-bound and the
+# A100 has ~5x the memory bandwidth, so it is roughly 3-4x faster for ~3.5x
+# the hourly rate - close to cost-neutral per image on a scale-to-zero app,
+# bought purely as latency. Override per deploy with MODAL_GPU=L4.
+GPU = os.environ.get("MODAL_GPU", "A100")
+
 app = modal.App(os.environ.get("MODAL_APP_NAME", "ltx-video"))
 cache = modal.Volume.from_name("ltx-model-cache", create_if_missing=True)
 
@@ -111,7 +118,7 @@ def _round_to(value: int, multiple: int, minimum: int) -> int:
 
 
 @app.cls(
-    gpu="L4",
+    gpu=GPU,
     image=image,
     volumes={"/cache": cache},
     secrets=hf_secret,

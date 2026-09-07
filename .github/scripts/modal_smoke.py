@@ -105,9 +105,45 @@ def main():
                 print("  --- end traceback ---")
             failures.append(f"sdxl generate: {msg}")
 
-    # Video generation is minutes of GPU per clip; confirming the endpoints
-    # exist is the proportionate check here. A 404 means the app is not
-    # deployed under that name, which is the failure worth catching.
+    # In batch mode, actually render one short clip so the video timing is
+    # measured rather than guessed - the number that decides whether the GPU
+    # is fast enough. Minutes of GPU, so it stays off the quick path.
+    if args.profile == "batch":
+        for name, app, geo in (
+            ("ltx", f"ltx-video{args.suffix}",
+             {"width": 704, "height": 480, "num_frames": 121, "fps": 24}),
+            ("wan", f"wan-video{args.suffix}",
+             {"width": 832, "height": 480, "num_frames": 81, "fps": 16}),
+        ):
+            if want not in ("all", name):
+                continue
+            url = endpoint(args.workspace, app, "generate")
+            print(f"rendering one clip on {url} — {geo['width']}x{geo['height']}, "
+                  f"{geo['num_frames']} frames (minutes, be patient)...", flush=True)
+            started = time.time()
+            status, body = post(
+                url,
+                {"prompt": "a red balloon drifting over a field, cinematic",
+                 "num_clips": 1, **geo},
+                GENERATE_TIMEOUT,
+            )
+            wall = time.time() - started
+            if status == 200 and body.get("video_base64"):
+                mb = len(body["video_base64"]) * 3 / 4 / 1_048_576
+                lane = "Lightning" if body.get("fast") else "full steps"
+                print(f"  OK - {body.get('num_frames', '?')} frames via {lane} "
+                      f"({body.get('steps', '?')} steps): "
+                      f"{body.get('elapsed_seconds', '?')}s on the GPU, "
+                      f"{wall:.1f}s wall, {mb:.1f}MB")
+            else:
+                msg = body.get("error") or f"HTTP {status} with no video"
+                print(f"  FAILED - {msg}")
+                failures.append(f"{name} generate: {msg}")
+        return 1 if failures else 0
+
+    # Quick mode: video generation is minutes of GPU per clip, so confirming
+    # the endpoints exist is the proportionate check. A 404 means the app is
+    # not deployed under that name, which is the failure worth catching.
     for name, app in (("wan", f"wan-video{args.suffix}"), ("ltx", f"ltx-video{args.suffix}")):
         if want not in ("all", name):
             continue
