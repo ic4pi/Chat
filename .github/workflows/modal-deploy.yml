@@ -165,4 +165,16 @@ jobs:
           # the start of another flag and dies with "expected one argument".
           python3 .github/scripts/modal_smoke.py \
             --workspace=ic4pi --suffix="${{ inputs.suffix }}" --apps="${{ inputs.apps }}" \
-            --profile="${{ inputs.profile }}"
+            --profile="${{ inputs.profile }}" --out-dir=smoke-output
+
+      # Every check so far proves bytes came back, not that they are worth
+      # having: a distilled 8-step render can be fast, ugly, and pass
+      # identically. Download this to actually look at the output.
+      - name: Upload the generated samples
+        if: ${{ inputs.mode == 'deploy' && inputs.profile == 'batch' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: samples-${{ inputs.apps }}-${{ github.run_number }}
+          path: smoke-output/
+          if-no-files-found: ignore
+          retention-days: 14

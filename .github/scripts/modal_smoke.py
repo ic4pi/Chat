@@ -16,7 +16,9 @@ the checkpoint), hence the long timeout.
 """
 
 import argparse
+import base64
 import json
+import os
 import time
 import sys
 import urllib.error
@@ -45,11 +47,29 @@ def endpoint(workspace, app, fn):
     return f"https://{workspace}--{app}-{fn}.modal.run"
 
 
+def save(out_dir, name, b64):
+    if not out_dir or not b64:
+        return
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, name)
+    with open(path, "wb") as fh:
+        fh.write(base64.b64decode(b64))
+    print(f"     saved {path} ({os.path.getsize(path) / 1024:.0f}KB)")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--workspace", required=True)
     ap.add_argument("--suffix", default="")
     ap.add_argument("--apps", default="all")
+    ap.add_argument(
+        "--out-dir",
+        default="",
+        help="Write the generated images/clips here so they can be looked at. "
+             "Every check so far asserts that bytes came back, not that they "
+             "are worth having - a distilled 8-step render can be fast and "
+             "ugly and pass identically.",
+    )
     ap.add_argument(
         "--profile",
         choices=["quick", "batch"],
@@ -95,6 +115,9 @@ def main():
             print(f"  OK - {len(images)} image(s) at {req['width']}x{req['height']}, "
                   f"{used} steps via {lane}: {gpu}s on the GPU{per}; "
                   f"{wall:.1f}s wall including cold start")
+            ext = "webp" if "webp" in str(body.get("mime_type", "webp")) else "png"
+            for i, img in enumerate(images):
+                save(args.out_dir, f"sdxl-{used}steps-{i + 1}.{ext}", img)
             if body.get("lora_error"):
                 first = str(body["lora_error"]).splitlines()[0][:300]
                 print(f"  !! Lightning did NOT load: {first}")
@@ -146,6 +169,8 @@ def main():
                       f"({body.get('steps', '?')} steps): "
                       f"{body.get('elapsed_seconds', '?')}s on the GPU, "
                       f"{wall:.1f}s wall, {mb:.1f}MB")
+                save(args.out_dir, f"{name}-{body.get('num_frames', 0)}frames.mp4",
+                     body["video_base64"])
                 if body.get("lora_error"):
                     first = str(body["lora_error"]).splitlines()[0][:300]
                     print(f"  !! Lightning did NOT load: {first}")
