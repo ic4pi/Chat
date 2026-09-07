@@ -461,7 +461,15 @@ def submit(payload: dict) -> dict:
         )
         return {"job_id": call.object_id, "status": "running"}
     except Exception as exc:
-        return {"error": f"{type(exc).__name__}: {exc}"}
+        # The bare message does not say which call inside the pipeline raised
+        # it, and the traceback lives only in Modal's logs, which the caller
+        # cannot read. Two deploys were spent guessing at one line before.
+        import traceback
+
+        return {
+            "error": f"{type(exc).__name__}: {exc}",
+            "traceback": "".join(traceback.format_exc()).strip()[-3000:],
+        }
 
 
 @app.function(image=image, timeout=60)

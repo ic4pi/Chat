@@ -154,6 +154,11 @@ def main():
             else:
                 msg = body.get("error") or f"HTTP {status} with no video"
                 print(f"  FAILED - {msg}")
+                if body.get("traceback"):
+                    print("  --- traceback from the app ---")
+                    for line in body["traceback"].splitlines():
+                        print(f"  {line}")
+                    print("  --- end traceback ---")
                 failures.append(f"{name} generate: {msg}")
         return 1 if failures else 0
 
