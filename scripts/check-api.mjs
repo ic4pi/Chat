@@ -361,4 +361,90 @@ if (!sharedCoderIds.size) {
 }
 ok(`coder-package parity (${sharedCoderIds.size} shared ids)`);
 
+// 11) Sandbox path safety. Three handlers used to build an absolute path by
+//     string concat and check it with a raw startsWith, which passes for
+//     `repo/../../etc/passwd`; two of them then interpolated that path into a
+//     `bash -c` string, where bash expands $(...) inside double quotes. Both
+//     classes of bug are easy to reintroduce, so pin them here.
+const repoPath = await import(pathToFileURL(path.join(root, 'lib/repo-path.js')).href);
+if (typeof repoPath.resolveRepoPath !== 'function') {
+  fail('lib/repo-path.js must export resolveRepoPath');
+}
+for (const bad of ['../../etc/passwd', 'a/../../../etc/shadow', '/etc/passwd', '..', '']) {
+  if (repoPath.resolveRepoPath(bad).ok) {
+    fail(`resolveRepoPath must reject ${JSON.stringify(bad)}`);
+  }
+}
+if (!repoPath.resolveRepoPath('src/app.js').ok) {
+  fail('resolveRepoPath must accept an ordinary relative path');
+}
+for (const rel of [
+  'lib/sandbox-api/file.js',
+  'lib/sandbox-api/write-files.js',
+  'lib/sandbox-api/git-push.js',
+]) {
+  const src = readFileSync(path.join(root, rel), 'utf8');
+  if (!src.includes('resolveRepoPath')) {
+    fail(`${rel} must resolve client paths through resolveRepoPath (lib/repo-path.js)`);
+  }
+  if (/startsWith\(REPO_DIR/.test(src)) {
+    fail(`${rel} still prefix-checks an unnormalized path — use resolveRepoPath instead`);
+  }
+}
+// No client-supplied value may reach a shell string in the path handlers.
+// A shell is only a problem when it IS the command — `head -c` is not `bash -c`.
+const SHELL_INVOCATION_RE = /cmd:\s*'(?:bash|sh)'[\s\S]{0,80}?args:\s*\['-l?c',\s*`[^`]*\$\{/;
+for (const [rel, banned] of [
+  ['lib/sandbox-api/file.js', SHELL_INVOCATION_RE],
+  ['lib/sandbox-api/git-push.js', /git (?:add|commit) -m? ?\$\{/],
+]) {
+  if (banned.test(readFileSync(path.join(root, rel), 'utf8'))) {
+    fail(`${rel} interpolates a caller-supplied value into a shell command — pass it as argv`);
+  }
+}
+// search.js does build a `find`/`rg` pipeline in a shell, which is fine only
+// because the keyword is reduced to an allowlist first. If that sanitizer goes,
+// the shell string becomes injectable.
+const searchSrc = readFileSync(path.join(root, 'lib/sandbox-api/search.js'), 'utf8');
+if (!/safeKw\s*=\s*kw\.replace\(\/\[\^a-zA-Z0-9_\.-\]\/g, ''\)/.test(searchSrc)) {
+  fail('lib/sandbox-api/search.js must allowlist-sanitize keywords before building a shell command');
+}
+ok('sandbox path safety');
+
+// 12) Secrets must fail closed and must not overlap.
+//     ADMIN_PASSWORD was accepted as a paid-models unlock secret, and the
+//     client caches that value in localStorage — so the admin credential ended
+//     up in every visitor's browser. The sweep cron skipped its check entirely
+//     when CRON_SECRET was unset.
+const metaSrc = readFileSync(path.join(root, 'lib/model-meta.js'), 'utf8');
+const unlockFn = metaSrc.match(/export function paidUnlockSecrets\(\)[\s\S]*?\n}/)?.[0] || '';
+if (!unlockFn) fail('could not find paidUnlockSecrets() in lib/model-meta.js');
+if (/ADMIN_PASSWORD|ADMIN_USERNAME/.test(unlockFn)) {
+  fail('paidUnlockSecrets() must not accept ADMIN_PASSWORD — the client caches it in localStorage');
+}
+const hubSrc = readFileSync(path.join(root, 'api/hub/[route].js'), 'utf8');
+if (!/if \(!process\.env\.CRON_SECRET\)/.test(hubSrc)) {
+  fail('api/hub/[route].js sweep must fail closed when CRON_SECRET is unset');
+}
+if (!readFileSync(path.join(root, 'public/app.js'), 'utf8').includes('notePaidLockout')) {
+  fail('public/app.js must clear a rejected paid password (notePaidLockout) or users dead-end');
+}
+ok('secret separation + fail-closed gates');
+
+// 13) Security headers must stay on the deployment.
+const vercelCfg = JSON.parse(readFileSync(path.join(root, 'vercel.json'), 'utf8'));
+const globalHeaders = (vercelCfg.headers || []).find((h) => h.source === '/(.*)');
+if (!globalHeaders) fail('vercel.json must set security headers on /(.*)');
+const headerKeys = new Set(globalHeaders.headers.map((h) => h.key));
+for (const required of [
+  'X-Content-Type-Options',
+  'Referrer-Policy',
+  'X-Frame-Options',
+  'Strict-Transport-Security',
+  'Permissions-Policy',
+]) {
+  if (!headerKeys.has(required)) fail(`vercel.json is missing the ${required} header`);
+}
+ok(`security headers (${headerKeys.size})`);
+
 console.log('check-api: all checks passed');

@@ -226,6 +226,25 @@ function savePaidPassword(pw) {
 function paidUnlocked() {
   return !!loadPaidPassword();
 }
+/**
+ * The server rejected our cached unlock password — it was rotated, or the site
+ * stopped accepting ADMIN_PASSWORD as an unlock secret. Drop the stale value
+ * and reopen the prompt.
+ *
+ * Without this the only thing that ever cleared the cache was the manual lock
+ * toggle, so a rejected password left the picker claiming "Unlocked" while
+ * every paid request kept 403ing, with no visible way back.
+ *
+ * Returns true if a stale password was cleared.
+ */
+function notePaidLockout(data) {
+  if (!data?.paidLocked || !paidUnlocked()) return false;
+  savePaidPassword('');
+  updateModelPickerLabel();
+  renderModelSelect();
+  openUnlockPaidModal();
+  return true;
+}
 function paidAuthHeaders(extra = {}) {
   const headers = { ...extra };
   const pw = loadPaidPassword();
@@ -2575,6 +2594,7 @@ async function callChat(provider, model, messages, personaId) {
     let data = null;
     let errText = null;
     try { data = await res.json(); } catch { errText = 'Non-JSON response'; }
+    notePaidLockout(data);
     return { ok: res.ok, status: res.status, data, errText, stopped: activeChatUserStopped };
   } catch (err) {
     if (activeChatUserStopped || err?.name === 'AbortError') {
@@ -2623,6 +2643,7 @@ async function streamChatResponse({ provider, model, messages, personaId, signal
       let data = null;
       let errText = null;
       try { data = await res.json(); } catch { errText = 'Non-JSON response'; }
+      notePaidLockout(data);
       return { ok: false, status: res.status, data, errText };
     }
 
@@ -3326,6 +3347,7 @@ async function callGroupStream(chat, apiMessages, onEvent) {
       let data = null;
       let errText = null;
       try { data = await res.json(); } catch { errText = 'Non-JSON response'; }
+      notePaidLockout(data);
       return { ok: false, status: res.status, data, errText };
     }
     if (!res.body) {

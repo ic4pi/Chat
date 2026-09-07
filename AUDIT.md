@@ -9,6 +9,13 @@ own endpoints, and `sandbox-runner/` (excluded by `.vercelignore`).
 
 **Tally:** 4 critical · 3 high · 5 medium/hygiene · 7 things already right.
 
+**Status:** F-02, F-03, F-04, F-06, F-07, F-08 and F-10 are fixed, F-09 partly on
+`claude/app-audit-recommendations-ee634k`, each pinned by a new check in
+`scripts/check-api.mjs`. F-01 and F-05 need an access-gate decision and a login
+screen; F-11 and F-12 are deferred. A fifth injection — the commit message in
+`git-push.js`, missed in the first pass — was found while fixing F-04 and is
+fixed with it.
+
 ---
 
 ## If you read nothing else
@@ -41,7 +48,7 @@ Free-model chat has no gate at all. Media generation is gated only on
 at build time. Then a per-IP token bucket in KV (`lib/kv.js` already exists) in
 front of the generate and sandbox-create routes. Narrow CORS to your own origin.
 
-### F-02 — Shell command injection in `/api/file` via `path` (verified)
+### F-02 — [FIXED] Shell command injection in `/api/file` via `path` (verified)
 
 The query parameter is concatenated into a `bash -c` string inside double
 quotes. Bash still expands `$(…)`, backticks and `\` there, so
@@ -59,7 +66,7 @@ await sandbox.runCommand({ cmd: 'bash',
 building a shell string. `search.js` already handles keywords correctly with an
 allowlist regex — the file-path interpolation on those two lines is the leak.
 
-### F-03 — The path-traversal guard doesn't stop traversal (verified)
+### F-03 — [FIXED] The path-traversal guard doesn't stop traversal (verified)
 
 Both the file reader and the writer check `abs.startsWith(REPO_DIR + '/')`. That
 passes for `/vercel/sandbox/repo/../../etc/passwd` — the prefix is intact, the
@@ -71,7 +78,7 @@ and `write-files` writes anywhere in it.
 **Fix:** `path.posix.normalize()` before the `startsWith` check. One shared
 helper for both handlers — they've drifted apart once already.
 
-### F-04 — Command injection in `/api/git-push` (verified)
+### F-04 — [FIXED] Command injection in `/api/git-push` (verified)
 
 Entries in the `files` array are sanitized for `..` and `"`, then interpolated
 into `git add -- "…"` under `bash -c`. Neither `$`, backtick nor `\` is
@@ -108,7 +115,7 @@ delete any thread, message, topic or nudge.
 caller identity rather than trusting `fromThreadId` from the body. If the hub
 ever serves more than one person, move to the anon key plus RLS policies.
 
-### F-06 — Your admin password can end up in every visitor's `localStorage`
+### F-06 — [FIXED] Your admin password can end up in every visitor's `localStorage`
 
 `paidUnlockSecrets()` accepts `PAID_MODELS_PASSWORD`, `ADMIN_PASSWORD`, *and*
 `username:password`. The client persists whatever was typed under a
@@ -125,7 +132,7 @@ prompt live, sits in browser storage on every machine that unlocked a paid model
 `paidUnlockSecrets()`; require a distinct `PAID_MODELS_PASSWORD` and 503 when
 unset. Then rotate `ADMIN_PASSWORD`, since it may already be cached.
 
-### F-07 — The cron secret falls open when unset
+### F-07 — [FIXED] The cron secret falls open when unset
 
 `if (process.env.CRON_SECRET && req.headers.authorization !== …)` — unset means
 the check is skipped. Anyone can then trigger `/api/hub/sweep`, which walks every
@@ -142,7 +149,7 @@ sweep route contradicts a stance the codebase otherwise holds.
 
 ## Medium & hygiene
 
-### F-08 — Five high-severity `undici` advisories (verified)
+### F-08 — [FIXED] Five high-severity `undici` advisories (verified)
 
 Via `@vercel/sandbox`. Response desynchronization through the retry interceptor,
 CRLF injection, cross-user disclosure via cache-directive parsing — all relevant
@@ -150,16 +157,26 @@ to a codebase whose job is proxying HTTP.
 
 **Fix:** `npm audit fix`, run `npm run check`, commit the lockfile.
 
-### F-09 — No security headers; `vercel.json` has no `headers` block
+### F-09 — [PARTLY FIXED] No security headers; `vercel.json` has no `headers` block
 
 No CSP, `X-Frame-Options` or `Referrer-Policy`. The renderer is XSS-safe today,
 but CSP is the backstop for the day someone adds an `innerHTML` to a page that
 renders model output — there are already 45 `innerHTML` sites in `public/`.
 
-**Fix:** a `headers` block with a CSP allowing your origin plus the API hosts,
-`frame-ancestors 'none'`, and `Referrer-Policy: strict-origin-when-cross-origin`.
+**Done:** `vercel.json` now sets `X-Content-Type-Options`, `Referrer-Policy`,
+`X-Frame-Options`, `Strict-Transport-Security` and `Permissions-Policy`
+(`microphone=(self)`, since `public/app.js:4929` uses `SpeechRecognition`).
 
-### F-10 — You wrote a good test gate and nothing runs it
+**Still open — CSP.** Not shipped because the artifact preview at
+`public/index.html:525` uses `srcdoc`, and a `srcdoc` iframe inherits the
+parent's CSP: any real `script-src` silently blanks every artifact preview.
+Fixing that first means pointing the iframe at `/artifact-preview.html` and
+posting the HTML in, so that one path can carry its own looser policy —
+isolation is unchanged, because `sandbox="allow-scripts"` without
+`allow-same-origin` is what provides it, not the URL. Then run the policy as
+`Content-Security-Policy-Report-Only` for a week before enforcing.
+
+### F-10 — [FIXED] You wrote a good test gate and nothing runs it
 
 `scripts/check-api.mjs` is 14 real checks (handler-export contracts, provider and
 auth interfaces, timeout budgets, function cap, coder-package parity). It passes

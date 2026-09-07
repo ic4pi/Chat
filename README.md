@@ -26,8 +26,9 @@ In **Vercel → Project → Settings → Environment Variables** add:
 | `CLOUDFLARE_API_TOKEN` | API token with Workers AI permission | Media Studio image gen |
 | `NVIDIA_MEDIA_BASE_URL` | *(optional)* self-hosted NIM base URL | Override for Wan/Qwen OpenAI-compatible NIM |
 | `ADMIN_USERNAME` | anything you want | Gate for `/admin` |
-| `ADMIN_PASSWORD` | anything you want | Gate for `/admin` (also unlocks paid models if `PAID_MODELS_PASSWORD` unset) |
-| `PAID_MODELS_PASSWORD` | *(optional)* separate paid-model unlock | If set, also unlocks paid LLMs. **Either this or `ADMIN_PASSWORD` works** — you do not need both. |
+| `ADMIN_PASSWORD` | anything you want | Gate for `/admin`. **Not** accepted as the paid-model unlock — the browser caches that secret in `localStorage`, so the two must differ. |
+| `PAID_MODELS_PASSWORD` | **required** to use paid LLMs | Unlocks paid models in the Model picker. Must be different from `ADMIN_PASSWORD`. Unset = paid models stay locked. |
+| `CRON_SECRET` | **required** for `/api/hub/sweep` | The sweep cron rejects every request without it (503 when unset). |
 | `VERCEL_TOKEN` | Vercel account token with Sandbox access | **Required for Workspace** (`/agent`) coding VMs |
 | `VERCEL_TEAM_ID` | Team id from Vercel dashboard | **Required for Workspace** |
 | `VERCEL_PROJECT_ID` | Project id from Vercel dashboard | **Required for Workspace** |

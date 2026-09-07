@@ -988,7 +988,13 @@ If nothing is worth keeping, return empty arrays. Empty is a correct answer.`;
 
 async function handle_sweep(req, res) {
   if (!requireHub(res)) return;
-  if (process.env.CRON_SECRET && req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
+  // Fail closed, same as lib/auth.js. This used to skip the check entirely when
+  // CRON_SECRET was unset, which left a route that walks every thread making an
+  // LLM call per thread open to anyone who found the URL.
+  if (!process.env.CRON_SECRET) {
+    return fail(res, 503, 'Sweep is not configured. Set CRON_SECRET in Vercel, then redeploy.');
+  }
+  if (req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
     return fail(res, 401, 'unauthorized');
   }
 

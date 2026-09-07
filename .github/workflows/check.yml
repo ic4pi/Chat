@@ -1,0 +1,28 @@
+# Runs the repo's own pre-push gate on every push and PR.
+#
+# scripts/check-api.mjs was already the gate that lib/sandbox-api/git-push.js
+# enforces before a sandbox agent may push. Nothing ran it on the human path,
+# so the unguarded route into main was the one people use.
+name: check
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # --ignore-scripts matches vercel.json's installCommand, so CI resolves
+      # the same tree the deployment does.
+      - run: npm ci --ignore-scripts
+
+      - run: npm run check
