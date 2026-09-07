@@ -190,7 +190,7 @@ class SDXL:
             self._pose_det = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
         return self._pose_det(img, hand_and_face=True)
 
-    def _pipe(self, name: str, karras: bool | None = None):
+    def _pipe(self, name: str, karras: bool | str | None = None):
         if name not in self._loaded:
             spec = CHECKPOINTS[name]
             pipe = self._cls.from_pretrained(
@@ -236,12 +236,33 @@ class SDXL:
         # end of its own sigma array, which only surfaces once GPU time has
         # already been spent. Opt-in (env default, per-request override) so a
         # checkpoint swap can't silently break generation.
-        want_karras = (os.environ.get("SDXL_KARRAS") == "1") if karras is None else karras
-        if want_karras:
+        #
+        # "standard" ignores the repo's published scheduler entirely and builds
+        # a fresh one off stock SDXL numbers. Diagnostic: this checkpoint
+        # declares EDMDPMSolverMultistepScheduler with sigma_max=80, far past
+        # the ~14.6 effective range the base SDXL UNet was trained against —
+        # every request through it, karras or not, decoded to flat colour
+        # static, i.e. the schedule never actually denoises. A mis-set
+        # scheduler_config.json on the repo, not anything in this file.
+        env_want = os.environ.get("SDXL_KARRAS") or ""
+        want = (True if env_want == "1" else env_want or False) if karras is None else karras
+        if want is True:
             pipe.scheduler = self._sched.from_config(
                 self._native_sched[name].config,
                 use_karras_sigmas=True,
                 algorithm_type="dpmsolver++",
+            )
+        elif want == "standard":
+            from diffusers import EulerDiscreteScheduler
+
+            pipe.scheduler = EulerDiscreteScheduler(
+                beta_start=0.00085,
+                beta_end=0.012,
+                beta_schedule="scaled_linear",
+                num_train_timesteps=1000,
+                steps_offset=1,
+                timestep_spacing="leading",
+                prediction_type="epsilon",
             )
         else:
             pipe.scheduler = self._native_sched[name]
@@ -274,7 +295,7 @@ class SDXL:
         expand: dict | None = None,
         control_scale: float = 0.8,
         detect_pose: bool = True,
-        karras: bool | None = None,  # diagnostic override; see SDXL_KARRAS above
+        karras: bool | str | None = None,  # diagnostic override; see SDXL_KARRAS above
     ) -> dict:
         started = time.time()
         name = model if model in CHECKPOINTS else DEFAULT_MODEL
