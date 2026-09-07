@@ -138,3 +138,13 @@ jobs:
             echo "Point the site at these in Vercel → Settings → Environment Variables"
             echo "(Production), then redeploy. Deleting them reverts to the originals."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # "Deployed" only means the container image built. It says nothing about
+      # whether the checkpoint loads on a GPU or whether a request returns
+      # pixels - the gap that let a dead checkpoint id sit here while deploys
+      # went green. Generate one small image for real.
+      - name: Smoke test the deployed apps
+        if: ${{ inputs.mode == 'deploy' }}
+        run: |
+          python3 .github/scripts/modal_smoke.py \
+            --workspace ic4pi --suffix "${{ inputs.suffix }}" --apps "${{ inputs.apps }}"
