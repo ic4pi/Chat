@@ -84,6 +84,24 @@ image = (
 # bought purely as latency. Override per deploy with MODAL_GPU=L4.
 GPU = os.environ.get("MODAL_GPU", "A100")
 
+def _peft_version():
+    """Which peft the *serving container* has, or None.
+
+    A Modal deploy does not evict warm containers: for up to
+    scaledown_window seconds afterwards, requests can still be answered by a
+    container running the previous image. That cost two cycles here - a fix
+    was deployed, the next request was served by the old container, and the
+    unchanged error read as "the fix did not work". Reporting the version the
+    answering container actually has makes the difference visible.
+    """
+    try:
+        import peft
+
+        return peft.__version__
+    except Exception:
+        return None
+
+
 app = modal.App(os.environ.get("MODAL_APP_NAME", "wan-video"))
 cache = modal.Volume.from_name("wan-model-cache", create_if_missing=True)
 
@@ -351,6 +369,7 @@ class Wan:
             "fast": self.fast,
             "steps": steps,
             "lora_error": self.lora_error,
+            "peft": _peft_version(),
         }
 
 

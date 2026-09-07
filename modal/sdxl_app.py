@@ -55,6 +55,24 @@ POSE_CONTROLNET = os.environ.get(
 
 DEFAULT_MODEL = "lustify"
 
+def _peft_version():
+    """Which peft the *serving container* has, or None.
+
+    A Modal deploy does not evict warm containers: for up to
+    scaledown_window seconds afterwards, requests can still be answered by a
+    container running the previous image. That cost two cycles here - a fix
+    was deployed, the next request was served by the old container, and the
+    unchanged error read as "the fix did not work". Reporting the version the
+    answering container actually has makes the difference visible.
+    """
+    try:
+        import peft
+
+        return peft.__version__
+    except Exception:
+        return None
+
+
 # Step-distillation LoRA. SDXL at 1024px needs ~30 steps with the stock
 # scheduler, which is ~25s an image on an L4; Lightning gets the same picture
 # in 8. It loads onto whichever checkpoint is resident, so it speeds up both
@@ -523,6 +541,7 @@ class SDXL:
             "fast": self.fast,
             "steps": steps,
             "lora_error": self.lora_error,
+            "peft": _peft_version(),
         }
 
 

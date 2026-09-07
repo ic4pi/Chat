@@ -97,6 +97,10 @@ def main():
                   f"{wall:.1f}s wall including cold start")
             if body.get("lora_error"):
                 print(f"  !! Lightning did NOT load: {body['lora_error']}")
+                if not body.get("peft"):
+                    print("     (the answering container has no peft - it may be a warm "
+                          "container still running the previous image; retry after "
+                          "the scaledown window)")
         else:
             msg = body.get("error") or f"HTTP {status} with no image in the response"
             print(f"  FAILED - {msg}")
@@ -139,6 +143,10 @@ def main():
                       f"{wall:.1f}s wall, {mb:.1f}MB")
                 if body.get("lora_error"):
                     print(f"  !! Lightning did NOT load: {body['lora_error']}")
+                    if not body.get("peft"):
+                        print("     (the answering container has no peft - it may be a "
+                              "warm container still running the previous image; retry "
+                              "after the scaledown window)")
             else:
                 msg = body.get("error") or f"HTTP {status} with no video"
                 print(f"  FAILED - {msg}")
