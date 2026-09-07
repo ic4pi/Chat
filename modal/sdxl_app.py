@@ -27,13 +27,19 @@ import modal
 # Both are community SDXL checkpoints distributed as single .safetensors files.
 # Override per deploy without editing this file:
 #   modal deploy modal/sdxl_app.py  (reads SDXL_LUSTIFY_REPO / SDXL_WAI_REPO)
+# Both ids here were wrong and had been since this file was written: the Hub
+# answers 401 for each, so every image request died in the checkpoint load and
+# reported it as "model is not cached locally and an error occurred while
+# trying to fetch metadata from the Hub" — which reads like a network fault.
+# These two are verified reachable by the deploy workflow's preflight; do not
+# change them without re-running it (mode: probe).
 CHECKPOINTS = {
     "lustify": {
-        "repo": os.environ.get("SDXL_LUSTIFY_REPO", "John6666/lustify-sdxl-nsfw-checkpoint-v20-sdxl"),
+        "repo": os.environ.get("SDXL_LUSTIFY_REPO", "John6666/lustify-sdxl-nsfwsfw-v2-sdxl"),
         "single_file": None,
     },
     "wai-illustrious": {
-        "repo": os.environ.get("SDXL_WAI_REPO", "John6666/wai-nsfw-illustrious-sdxl-v110-sdxl"),
+        "repo": os.environ.get("SDXL_WAI_REPO", "John6666/wai-nsfw-illustrious-sdxl-v140-sdxl"),
         "single_file": None,
     },
 }
