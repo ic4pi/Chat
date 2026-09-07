@@ -193,6 +193,9 @@ class LTX:
         steps: int = 30,  # measured: 30 steps, ~2min for one 5s clip
         guidance_scale: float = 3.0,
         keyframes: list | None = None,
+        # Swallow parameters a newer endpoint knows about and this container
+        # does not - a deploy does not evict warm containers.
+        **_forward_compat,
     ) -> dict:
         import torch
         from diffusers.utils import export_to_video

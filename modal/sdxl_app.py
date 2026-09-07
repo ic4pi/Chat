@@ -461,6 +461,10 @@ class SDXL:
         expand: dict | None = None,
         control_scale: float = 0.8,
         detect_pose: bool = True,
+        # Swallow parameters a newer endpoint knows about and this container
+        # does not. Adding one to this signature otherwise breaks every warm
+        # container until it scales down.
+        **_forward_compat,
     ) -> dict:
         started = time.time()
         name = model if model in CHECKPOINTS else DEFAULT_MODEL
@@ -599,7 +603,11 @@ def generate(payload: dict) -> dict:
             height=int(payload.get("height") or 1024),
             seed=int(payload.get("seed") or 42),
             steps=int(payload["steps"]) if payload.get("steps") else None,
-            fast=payload.get("fast"),
+            # Only when the caller actually asked. A deploy does not evict warm
+            # containers, so a new endpoint can call into an older run() for
+            # minutes afterwards; sending a parameter it has never heard of
+            # fails every request in that window with a TypeError.
+            **({"fast": payload["fast"]} if "fast" in payload else {}),
             guidance_scale=(
                 float(payload["guidance_scale"]) if payload.get("guidance_scale") else None
             ),

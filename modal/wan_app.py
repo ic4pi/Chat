@@ -300,6 +300,9 @@ class Wan:
         guidance_scale: float | None = None,
         video: str = "",
         strength: float = 0.6,
+        # Swallow parameters a newer endpoint knows about and this container
+        # does not - a deploy does not evict warm containers.
+        **_forward_compat,
     ) -> dict:
         import torch
         from diffusers.utils import export_to_video
