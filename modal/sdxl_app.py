@@ -228,31 +228,33 @@ class SDXL:
 
         pipe = self._loaded[name]
 
-        # DPM++ 2M Karras reaches the same quality in ~20-25 steps that the
-        # default scheduler needs 30+ for — but only when the checkpoint's own
-        # scheduler config is compatible with the Karras sigma schedule. On at
-        # least one community conversion it isn't: generation dies mid-run with
-        # "IndexError: index ... is out of bounds" as the solver steps past the
-        # end of its own sigma array, which only surfaces once GPU time has
-        # already been spent. Opt-in (env default, per-request override) so a
-        # checkpoint swap can't silently break generation.
+        # Default to a scheduler built from stock SDXL numbers rather than
+        # whatever the checkpoint's own scheduler_config.json declares.
+        # lustify-sdxl-nsfwsfw-v2-sdxl declares EDMDPMSolverMultistepScheduler
+        # with sigma_max=80 — far past the ~14.6 effective range the base SDXL
+        # UNet (which this is a fine-tune of, not an EDM retrain) was trained
+        # against. Every request through that config decoded to flat colour
+        # static: the schedule never actually converges, 30 real denoising
+        # steps and all. A plain EulerDiscreteScheduler on stock values decodes
+        # a real image on the same weights in the same number of steps. This
+        # is a mis-set scheduler_config.json on that repo, not a per-checkpoint
+        # fact worth trusting blindly, so it's the default for every checkpoint
+        # rather than special-cased to just the one caught broken.
         #
-        # "standard" ignores the repo's published scheduler entirely and builds
-        # a fresh one off stock SDXL numbers. Diagnostic: this checkpoint
-        # declares EDMDPMSolverMultistepScheduler with sigma_max=80, far past
-        # the ~14.6 effective range the base SDXL UNet was trained against —
-        # every request through it, karras or not, decoded to flat colour
-        # static, i.e. the schedule never actually denoises. A mis-set
-        # scheduler_config.json on the repo, not anything in this file.
-        env_want = os.environ.get("SDXL_KARRAS") or ""
-        want = (True if env_want == "1" else env_want or False) if karras is None else karras
+        # karras=True asks for the checkpoint's own declared scheduler wrapped
+        # in DPM++ 2M Karras instead — kept as an escape hatch, but it crashes
+        # outright on lustify's config ("IndexError: index ... out of bounds")
+        # for the same sigma_max reason, so it is opt-in, never the default.
+        want = "standard" if karras is None else karras
         if want is True:
             pipe.scheduler = self._sched.from_config(
                 self._native_sched[name].config,
                 use_karras_sigmas=True,
                 algorithm_type="dpmsolver++",
             )
-        elif want == "standard":
+        elif want is False:
+            pipe.scheduler = self._native_sched[name]
+        else:  # "standard"
             from diffusers import EulerDiscreteScheduler
 
             pipe.scheduler = EulerDiscreteScheduler(
@@ -264,8 +266,6 @@ class SDXL:
                 timestep_spacing="leading",
                 prediction_type="epsilon",
             )
-        else:
-            pipe.scheduler = self._native_sched[name]
 
         return pipe
 
@@ -285,7 +285,7 @@ class SDXL:
         width: int = 1024,
         height: int = 1024,
         seed: int = 42,
-        steps: int = 30,  # the checkpoint's own scheduler; see SDXL_KARRAS above
+        steps: int = 30,  # tuned for the standard Euler scheduler; see karras= above
         guidance_scale: float = 6.0,
         n: int = 1,
         fmt: str = "webp",
@@ -295,7 +295,7 @@ class SDXL:
         expand: dict | None = None,
         control_scale: float = 0.8,
         detect_pose: bool = True,
-        karras: bool | str | None = None,  # diagnostic override; see SDXL_KARRAS above
+        karras: bool | str | None = None,  # "standard" (default), True, or False — see _pipe above
     ) -> dict:
         started = time.time()
         name = model if model in CHECKPOINTS else DEFAULT_MODEL
