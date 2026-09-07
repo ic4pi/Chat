@@ -17,6 +17,7 @@ the checkpoint), hence the long timeout.
 
 import argparse
 import json
+import time
 import sys
 import urllib.error
 import urllib.request
@@ -49,6 +50,13 @@ def main():
     ap.add_argument("--workspace", required=True)
     ap.add_argument("--suffix", default="")
     ap.add_argument("--apps", default="all")
+    ap.add_argument(
+        "--profile",
+        choices=["quick", "batch"],
+        default="quick",
+        help="quick: 512px/8 steps/1 image, just proves it renders. "
+             "batch: 1024px/30 steps/4 images, the real generation cost.",
+    )
     args = ap.parse_args()
 
     failures = []
@@ -56,19 +64,30 @@ def main():
 
     if want in ("all", "sdxl"):
         url = endpoint(args.workspace, f"sdxl-nsfw{args.suffix}", "generate")
-        print(f"generating a test image on {url} (cold start, be patient)...", flush=True)
-        # Small and few steps: this proves the checkpoint loads and the
-        # pipeline runs, and nothing more is needed for that.
+        # quick just proves the checkpoint loads and the pipeline runs. batch
+        # measures what a real request costs, which is the only number worth
+        # quoting: 512px/8 steps is not what anyone generates.
+        req = (
+            {"width": 512, "height": 512, "steps": 8, "n": 1}
+            if args.profile == "quick"
+            else {"width": 1024, "height": 1024, "steps": 30, "n": 4}
+        )
+        print(f"generating on {url} — {req['n']}x {req['width']}x{req['height']}, "
+              f"{req['steps']} steps (cold start, be patient)...", flush=True)
+        started = time.time()
         status, body = post(
             url,
-            {"prompt": "a red apple on a wooden table", "width": 512, "height": 512,
-             "steps": 8, "n": 1, "model": "lustify"},
+            {"prompt": "a red apple on a wooden table", "model": "lustify", **req},
             GENERATE_TIMEOUT,
         )
+        wall = time.time() - started
         images = body.get("images_base64") or ([body["image_base64"]] if body.get("image_base64") else [])
         if status == 200 and images:
-            print(f"  OK - {len(images)} image, {len(images[0])} base64 chars, "
-                  f"{body.get('elapsed_seconds', '?')}s")
+            gpu = body.get("elapsed_seconds")
+            per = f", {gpu / len(images):.1f}s each" if isinstance(gpu, (int, float)) else ""
+            print(f"  OK - {len(images)} image(s) at {req['width']}x{req['height']}, "
+                  f"{req['steps']} steps: {gpu}s on the GPU{per}; "
+                  f"{wall:.1f}s wall including cold start")
         else:
             msg = body.get("error") or f"HTTP {status} with no image in the response"
             print(f"  FAILED - {msg}")
