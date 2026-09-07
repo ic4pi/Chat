@@ -33,7 +33,7 @@ CHECKPOINTS = {
         "single_file": None,
     },
     "wai-illustrious": {
-        "repo": os.environ.get("SDXL_WAI_REPO", "John6666/wai-nsfw-illustrious-v110-sdxl"),
+        "repo": os.environ.get("SDXL_WAI_REPO", "John6666/wai-nsfw-illustrious-sdxl-v140-sdxl"),
         "single_file": None,
     },
 }
@@ -206,10 +206,17 @@ class SDXL:
             requires_safety_checker=False,
         )
         # DPM++ 2M Karras reaches the same quality in ~20-25 steps that the
-        # default scheduler needs 30+ for.
-        pipe.scheduler = self._sched.from_config(
-            pipe.scheduler.config, use_karras_sigmas=True, algorithm_type="dpmsolver++"
-        )
+        # default scheduler needs 30+ for — but only when the checkpoint's own
+        # scheduler config is compatible with the Karras sigma schedule. On at
+        # least one community conversion it isn't: generation dies mid-run with
+        # "IndexError: index ... is out of bounds" as the solver steps past the
+        # end of its own sigma array, which only surfaces once GPU time has
+        # already been spent. Opt-in and off by default so a checkpoint swap
+        # can't silently break generation.
+        if os.environ.get("SDXL_KARRAS") == "1":
+            pipe.scheduler = self._sched.from_config(
+                pipe.scheduler.config, use_karras_sigmas=True, algorithm_type="dpmsolver++"
+            )
 
         # Resident on the GPU, NOT offloaded. SDXL in fp16 is ~7GB against the
         # L4's 24GB, so enable_model_cpu_offload() was shuttling weights across
@@ -243,7 +250,7 @@ class SDXL:
         width: int = 1024,
         height: int = 1024,
         seed: int = 42,
-        steps: int = 22,  # DPM++ 2M Karras; 30 was for the default scheduler
+        steps: int = 30,  # the checkpoint's own scheduler; see SDXL_KARRAS above
         guidance_scale: float = 6.0,
         n: int = 1,
         fmt: str = "webp",
