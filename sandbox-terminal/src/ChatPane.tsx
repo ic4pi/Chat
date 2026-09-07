@@ -43,7 +43,7 @@ import {
   type SearchHit,
 } from './contextBudget.js';
 import { copyText, downloadTextFile } from './downloadFile.js';
-import { loadPaidPassword } from './providerPrefs.js';
+import { loadPaidPassword, FALLBACK_MODELS } from './providerPrefs.js';
 import {
   cleanForSpeech,
   getSpeechRecognition,
@@ -386,8 +386,25 @@ function isTransientNetworkError(raw: string): boolean {
   return lower === 'load failed' || lower === 'failed to fetch' || lower.includes('networkerror');
 }
 
+/** OpenRouter's free tier for a popular model runs out and 404s — always
+ *  fixable by trying a different free model, never by the user reading a
+ *  provider stack trace. */
+function isFreeModelUnavailableError(msg: string): boolean {
+  return /unavailable for free/i.test(msg);
+}
+
+/** Free OpenRouter models to rotate through when one 404s as exhausted.
+ *  'openrouter/free' is a routing placeholder, not a real completions model
+ *  — excluded so the fallback always lands on something that can answer. */
+const OPENROUTER_FREE_FALLBACK_CHAIN = FALLBACK_MODELS.openrouter
+  .map(m => m.id)
+  .filter(id => id !== 'openrouter/free');
+
 function friendlyError(raw: string): string {
   const lower = raw.toLowerCase();
+  if (isFreeModelUnavailableError(raw)) {
+    return "The free AI model is temporarily full and a backup didn't work either. Try again in a minute.";
+  }
   if (isTransientNetworkError(raw)) {
     return 'Connection dropped before the model replied (often a timeout). Try again or a faster model.';
   }
@@ -820,6 +837,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   ): Promise<PendingChange[]> => {
     if (!text || sendingRef.current) return [];
     sendingRef.current = true;
+    let usedFallbackModel: string | null = null;
 
     // 1) Show the bubble IMMEDIATELY — never wait on auto-context / network first.
     const userMsg: Message = { id: uid(), role: 'user', content: text, kind };
@@ -919,15 +937,30 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       prov: string,
       mod: string,
       key?: string,
+      triedFreeFallback = false,
     ): Promise<AgentReply> => {
       try {
         return await callAgentOnce(history, systemPrompt, sid, prov, mod, key);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (!isTransientNetworkError(msg)) throw err;
-        setLiveThoughts('');
-        await new Promise((r) => setTimeout(r, 1200));
-        return callAgentOnce(history, systemPrompt, sid, prov, mod, key);
+        if (isTransientNetworkError(msg)) {
+          setLiveThoughts('');
+          await new Promise((r) => setTimeout(r, 1200));
+          return callAgentOnce(history, systemPrompt, sid, prov, mod, key);
+        }
+        // Free-tier capacity error — rotate to a different free model once,
+        // same provider, never paid. The user never needs to see this class
+        // of error at all if a backup answers.
+        if (!triedFreeFallback && prov === 'openrouter' && isFreeModelUnavailableError(msg)) {
+          const next = OPENROUTER_FREE_FALLBACK_CHAIN.find(id => id !== mod);
+          if (next) {
+            setLiveThoughts('');
+            const result = await callAgent(history, systemPrompt, sid, prov, next, key, true);
+            usedFallbackModel = next;
+            return result;
+          }
+        }
+        throw err;
       }
     };
 
@@ -1091,6 +1124,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       // Always hit agent-chat — it accepts systemPrompt. /api/chat ignores it
       // and is the main-chat persona endpoint, not the agent.
       let reply = await callAgentWithContinue(history, systemPrompt, sid, prov, mod, key);
+      if (usedFallbackModel) {
+        reply += `\n\n_(the usual free model was full — answered by a backup instead)_`;
+        usedFallbackModel = null;
+      }
       let segs  = parseSegments(reply);
       let report = extractFileChangeReport(reply);
       // Full-file writes (new files / explicit rewrites) + unresolved Edit:
@@ -1150,6 +1187,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           { role: 'user', content: nudgeText },
         ];
         reply = await callAgentWithContinue(nudgedHistory, systemPrompt, sid, prov, mod, key);
+        if (usedFallbackModel) {
+          reply += `\n\n_(the usual free model was full — answered by a backup instead)_`;
+          usedFallbackModel = null;
+        }
         segs  = parseSegments(reply);
         report = extractFileChangeReport(reply);
         fc = [
@@ -1182,7 +1223,13 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
     } catch (e: unknown) {
       const msg = friendlyError(e instanceof Error ? e.message : String(e));
       setError(msg);
-      setMessages(m => [...m, { id: uid(), role: 'assistant', content: `⚠ ${msg}` }]);
+      // Never show the same failure twice in a row (e.g. a retry hitting the
+      // identical error) — one clear message beats a wall of repeats.
+      setMessages(m => {
+        const last = m[m.length - 1];
+        if (last?.role === 'assistant' && last.content === `⚠ ${msg}`) return m;
+        return [...m, { id: uid(), role: 'assistant', content: `⚠ ${msg}` }];
+      });
       return [];
     } finally {
       setLoading(false);
