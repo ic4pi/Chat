@@ -88,31 +88,31 @@ export const PreviewPanel = forwardRef<PreviewHandle, Props>(function PreviewPan
           placeholder="auto — leave blank"
           title="Leave blank to auto-detect. Only type a command if your project needs a specific one."
           style={{ flex: 1, background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
-            borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 16 }}
+            borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 22 }}
         />
         <input
           value={port}
           onChange={e => setPort(e.target.value.replace(/[^\d]/g, ''))}
           placeholder="port"
           style={{ width: 64, background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
-            borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 16 }}
+            borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 22 }}
         />
         <button type="button" onClick={() => void start()} disabled={starting}
           style={{ background: '#FF3D8E', color: '#0B0D12', border: 'none', borderRadius: 4,
             padding: '6px 12px', cursor: starting ? 'default' : 'pointer', fontFamily: 'inherit',
-            fontSize: 16, fontWeight: 700, opacity: starting ? 0.6 : 1, whiteSpace: 'nowrap' }}>
+            fontSize: 22, fontWeight: 700, opacity: starting ? 0.6 : 1, whiteSpace: 'nowrap' }}>
           {starting ? 'Starting…' : url ? 'Restart' : 'Preview'}
         </button>
         {url && (
           <>
             <button type="button" onClick={() => setReloadKey(k => k + 1)}
               style={{ background: '#171B26', color: '#9198AA', border: '1px solid #232838',
-                borderRadius: 4, padding: '6px 10px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 16 }}>
+                borderRadius: 4, padding: '6px 10px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 22 }}>
               ↻
             </button>
             <a href={url} target="_blank" rel="noreferrer"
               style={{ background: '#171B26', color: '#9198AA', border: '1px solid #232838',
-                borderRadius: 4, padding: '6px 10px', fontFamily: 'inherit', fontSize: 16,
+                borderRadius: 4, padding: '6px 10px', fontFamily: 'inherit', fontSize: 22,
                 textDecoration: 'none', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
               Open ↗
             </a>
@@ -121,7 +121,7 @@ export const PreviewPanel = forwardRef<PreviewHandle, Props>(function PreviewPan
       </div>
 
       {error && (
-        <div style={{ padding: '8px 12px', color: '#ff9b9b', fontSize: 16, borderBottom: '1px solid #191D27' }}>
+        <div style={{ padding: '8px 12px', color: '#ff9b9b', fontSize: 22, borderBottom: '1px solid #191D27' }}>
           {error}
         </div>
       )}
@@ -136,7 +136,7 @@ export const PreviewPanel = forwardRef<PreviewHandle, Props>(function PreviewPan
             style={{ flex: 1, minHeight: 0, border: 'none', background: '#fff' }}
           />
           {usedCommand && (
-            <div style={{ padding: '4px 12px', fontSize: 13, color: '#656C7E',
+            <div style={{ padding: '4px 12px', fontSize: 18, color: '#656C7E',
               borderTop: '1px solid #191D27', flexShrink: 0 }}>
               running: {usedCommand}
             </div>
@@ -144,7 +144,7 @@ export const PreviewPanel = forwardRef<PreviewHandle, Props>(function PreviewPan
         </>
       ) : (
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: '#656C7E', fontSize: 16, textAlign: 'center', padding: 20 }}>
+          color: '#656C7E', fontSize: 22, textAlign: 'center', padding: 20 }}>
           {starting ? 'Starting your preview…' : 'Hit "Preview" to see your app running here.'}
         </div>
       )}

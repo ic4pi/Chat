@@ -62,7 +62,7 @@ const selectStyle: React.CSSProperties = {
   borderRadius: 4,
   padding: '5px 8px',
   fontFamily: 'inherit',
-  fontSize: 16,
+  fontSize: 22,
   width: '100%',
   minHeight: 32,
   cursor: 'pointer',
@@ -70,7 +70,7 @@ const selectStyle: React.CSSProperties = {
 
 const badgeStyle: React.CSSProperties = {
   display: 'inline-block',
-  fontSize: 14,
+  fontSize: 20,
   fontWeight: 700,
   letterSpacing: '0.04em',
   padding: '2px 7px',
@@ -330,11 +330,11 @@ export function ChunkModelPanel({
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
         <h2
           id="chunk-model-panel-title"
-          style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#FF3D8E', letterSpacing: '0.06em', textTransform: 'uppercase' }}
+          style={{ margin: 0, fontSize: 22, fontWeight: 700, color: '#FF3D8E', letterSpacing: '0.06em', textTransform: 'uppercase' }}
         >
           LLM per code slice
         </h2>
-        <span style={{ fontSize: 14, color: '#656C7E' }}>
+        <span style={{ fontSize: 20, color: '#656C7E' }}>
           Choices save here. Default run: HTML + CSS + JS (max 6). Needs an open sandbox to save files.
         </span>
       </div>
@@ -342,7 +342,7 @@ export function ChunkModelPanel({
       {!sandboxReady && (
         <div role="status" style={{
           marginBottom: 10, padding: '8px 10px', borderRadius: 6,
-          background: 'rgba(52,211,153,.16)', border: '1px solid rgba(52,211,153,.16)', color: '#ffcc66', fontSize: 16,
+          background: 'rgba(52,211,153,.16)', border: '1px solid rgba(52,211,153,.16)', color: '#ffcc66', fontSize: 22,
         }}>
           Open a <strong style={{ color: '#ffe0a0' }}>blank project</strong> or <strong style={{ color: '#ffe0a0' }}>GitHub repo</strong> first.
           Generate is locked until a sandbox can receive files.
@@ -394,7 +394,7 @@ export function ChunkModelPanel({
 
               <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span id={rowLabelId} style={{ fontSize: 17, fontWeight: 600, color: '#ECEEF3' }}>
+                  <span id={rowLabelId} style={{ fontSize: 23, fontWeight: 600, color: '#ECEEF3' }}>
                     {chunk.label}
                   </span>
                   <span
@@ -405,7 +405,7 @@ export function ChunkModelPanel({
                   >
                     {badge}
                   </span>
-                  <span style={{ fontSize: 14, color: '#656C7E' }}>{chunk.description}</span>
+                  <span style={{ fontSize: 20, color: '#656C7E' }}>{chunk.description}</span>
                 </div>
 
                 <div
@@ -416,7 +416,7 @@ export function ChunkModelPanel({
                   }}
                 >
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    <label id={provLabelId} htmlFor={`chunk-provider-${chunk.id}`} style={{ fontSize: 14, color: '#9198AA', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    <label id={provLabelId} htmlFor={`chunk-provider-${chunk.id}`} style={{ fontSize: 20, color: '#9198AA', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                       Provider
                     </label>
                     <select
@@ -434,7 +434,7 @@ export function ChunkModelPanel({
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    <label id={modelLabelId} htmlFor={`chunk-model-${chunk.id}`} style={{ fontSize: 14, color: '#9198AA', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    <label id={modelLabelId} htmlFor={`chunk-model-${chunk.id}`} style={{ fontSize: 20, color: '#9198AA', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                       Model
                     </label>
                     <select
@@ -472,7 +472,7 @@ export function ChunkModelPanel({
       </ul>
 
       <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
-        <label htmlFor="chunk-generate-prompt" style={{ fontSize: 14, color: '#9198AA', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        <label htmlFor="chunk-generate-prompt" style={{ fontSize: 20, color: '#9198AA', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
           Feature prompt
         </label>
         <textarea
@@ -491,7 +491,7 @@ export function ChunkModelPanel({
             cursor: 'text',
           }}
         />
-        <p id="chunk-generate-hint" style={{ margin: 0, fontSize: 14, color: '#656C7E' }}>
+        <p id="chunk-generate-hint" style={{ margin: 0, fontSize: 20, color: '#656C7E' }}>
           Generate → <code style={{ color: '#9198AA' }}>POST /api/generate</code>.
           Unconfigured models fall back to general-purpose. Keep ≤6 slices enabled.
         </p>
@@ -510,7 +510,7 @@ export function ChunkModelPanel({
               borderRadius: 4,
               padding: '8px 16px',
               fontFamily: 'inherit',
-              fontSize: 16,
+              fontSize: 22,
               fontWeight: 700,
               letterSpacing: '0.04em',
               textTransform: 'uppercase',
@@ -530,7 +530,7 @@ export function ChunkModelPanel({
                 borderRadius: 4,
                 padding: '7px 12px',
                 fontFamily: 'inherit',
-                fontSize: 15,
+                fontSize: 21,
                 cursor: 'pointer',
               }}
             >
@@ -538,13 +538,13 @@ export function ChunkModelPanel({
             </button>
           )}
           {status && (
-            <span role="status" aria-live="polite" style={{ fontSize: 15, color: '#34D399' }}>
+            <span role="status" aria-live="polite" style={{ fontSize: 21, color: '#34D399' }}>
               {status}
             </span>
           )}
         </div>
         {error && (
-          <div role="alert" style={{ fontSize: 16, color: '#ff6a6a' }}>{error}</div>
+          <div role="alert" style={{ fontSize: 22, color: '#ff6a6a' }}>{error}</div>
         )}
       </div>
     </section>

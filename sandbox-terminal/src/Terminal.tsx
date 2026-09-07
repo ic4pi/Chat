@@ -141,7 +141,7 @@ export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function Sandbo
     const term = new Terminal({
       theme: THEME,
       fontFamily: '"JetBrains Mono","Fira Code",ui-monospace,monospace',
-      fontSize: 18, lineHeight: 1.45, cursorBlink: true,
+      fontSize: 24, lineHeight: 1.45, cursorBlink: true,
       convertEol: true, scrollback: 3000, allowProposedApi: true,
     });
     const fit   = new FitAddon();
@@ -388,12 +388,12 @@ export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function Sandbo
       {/* toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
         borderBottom: '1px solid #191D27', background: '#0B0D12', flexShrink: 0 }}>
-        <span style={{ color: '#FF3D8E', fontSize: 15, letterSpacing: '0.1em',
+        <span style={{ color: '#FF3D8E', fontSize: 21, letterSpacing: '0.1em',
           textTransform: 'uppercase', whiteSpace: 'nowrap', userSelect: 'none' }}>
           // shell
         </span>
         {!sandboxId && (
-          <span style={{ fontSize: 14, color: '#9198AA', whiteSpace: 'nowrap' }}>
+          <span style={{ fontSize: 20, color: '#9198AA', whiteSpace: 'nowrap' }}>
             open a repo to run
           </span>
         )}
@@ -403,23 +403,23 @@ export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function Sandbo
           placeholder="bash -c '…'" autoFocus
           style={{ flex: 1, minWidth: 0, background: '#171B26', color: '#ECEEF3',
             border: '1px solid #232838', borderRadius: 4, padding: '5px 10px',
-            fontFamily: 'inherit', fontSize: 17, outline: 'none', opacity: isRunning ? .6 : 1 }} />
+            fontFamily: 'inherit', fontSize: 23, outline: 'none', opacity: isRunning ? .6 : 1 }} />
         {isRunning
           ? <button onClick={cancel}  data-testid="cancel-btn"
               style={{ background: '#2a1010', color: '#ff6a6a', border: '1px solid #5a2020',
                 borderRadius: 4, padding: '5px 14px', cursor: 'pointer',
-                fontFamily: 'inherit', fontSize: 16, fontWeight: 700 }}>Cancel</button>
+                fontFamily: 'inherit', fontSize: 22, fontWeight: 700 }}>Cancel</button>
           : <button onClick={runShellInput} disabled={!command.trim()} data-testid="run-btn"
               style={{ background: command.trim() ? '#FF3D8E' : '#191D27',
                 color: command.trim() ? '#0B0D12' : '#323A50', border: 'none',
                 borderRadius: 4, padding: '5px 16px', cursor: command.trim() ? 'pointer' : 'default',
-                fontFamily: 'inherit', fontSize: 16, fontWeight: 700 }}>Run</button>}
+                fontFamily: 'inherit', fontSize: 22, fontWeight: 700 }}>Run</button>}
         <button onClick={clear} style={{ background: 'transparent', color: '#656C7E',
           border: '1px solid #232838', borderRadius: 4, padding: '5px 10px',
-          cursor: 'pointer', fontFamily: 'inherit', fontSize: 16 }}>Clear</button>
+          cursor: 'pointer', fontFamily: 'inherit', fontSize: 22 }}>Clear</button>
         <div title={`${status}${exitCode !== null ? ` (exit ${exitCode})` : ''}`}
           style={{ display: 'flex', alignItems: 'center', gap: 5, color: dotColor,
-            fontSize: 15, minWidth: 90, whiteSpace: 'nowrap' }}>
+            fontSize: 21, minWidth: 90, whiteSpace: 'nowrap' }}>
           <div style={{ width: 7, height: 7, borderRadius: '50%', background: dotColor,
             boxShadow: isRunning ? `0 0 5px ${dotColor}` : 'none' }} />
           {status}{exitCode !== null && status === 'done' ? ` (${exitCode})` : ''}
