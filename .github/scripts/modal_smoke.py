@@ -95,6 +95,8 @@ def main():
             print(f"  OK - {len(images)} image(s) at {req['width']}x{req['height']}, "
                   f"{used} steps via {lane}: {gpu}s on the GPU{per}; "
                   f"{wall:.1f}s wall including cold start")
+            if body.get("lora_error"):
+                print(f"  !! Lightning did NOT load: {body['lora_error']}")
         else:
             msg = body.get("error") or f"HTTP {status} with no image in the response"
             print(f"  FAILED - {msg}")
@@ -135,6 +137,8 @@ def main():
                       f"({body.get('steps', '?')} steps): "
                       f"{body.get('elapsed_seconds', '?')}s on the GPU, "
                       f"{wall:.1f}s wall, {mb:.1f}MB")
+                if body.get("lora_error"):
+                    print(f"  !! Lightning did NOT load: {body['lora_error']}")
             else:
                 msg = body.get("error") or f"HTTP {status} with no video"
                 print(f"  FAILED - {msg}")

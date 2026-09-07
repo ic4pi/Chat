@@ -202,6 +202,7 @@ class Wan:
         # A failure here must not take generation down — it falls back to full
         # steps, which is slow but correct, and says so in the response.
         self.fast = False
+        self.lora_error = None if LIGHTNING_LORA_REPO else "no LoRA configured"
         if LIGHTNING_LORA_REPO:
             try:
                 kwargs = {"cache_dir": "/cache/hf"}
@@ -211,6 +212,10 @@ class Wan:
                 self.t2v.fuse_lora()
                 self.fast = True
             except Exception as exc:
+                # Into the response, not just Modal's logs: a silent fallback
+                # to 40 steps is a 10x slowdown that looks identical to
+                # "video is just slow" from the outside.
+                self.lora_error = f"{type(exc).__name__}: {exc}"
                 print(f"Lightning LoRA unavailable ({exc!r}); using full steps.")
 
         # Restyling an existing clip. Shares the loaded components, so it adds
@@ -342,6 +347,7 @@ class Wan:
             "fps": fps,
             "fast": self.fast,
             "steps": steps,
+            "lora_error": self.lora_error,
         }
 
 

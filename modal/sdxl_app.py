@@ -256,6 +256,7 @@ class SDXL:
         self._cnet = None
         self._pose_det = None
         self.fast = False
+        self.lora_error = None
 
     def _sibling(self, name: str, kind: str):
         """An img2img / inpaint / controlnet pipeline over the same weights.
@@ -333,6 +334,7 @@ class SDXL:
         # A failure here must not take generation down - it falls back to full
         # steps, which is slower but correct, and the response says so.
         self.fast = False
+        self.lora_error = None if LIGHTNING_LORA_REPO else "no LoRA configured"
         if LIGHTNING_LORA_REPO:
             try:
                 from diffusers import EulerDiscreteScheduler
@@ -347,6 +349,10 @@ class SDXL:
                 )
                 self.fast = True
             except Exception as exc:
+                # Into the response, not just Modal's logs: a silent fallback
+                # to 30 steps is a 4x slowdown that looks identical to
+                # "the GPU is just slow" from the outside.
+                self.lora_error = f"{type(exc).__name__}: {exc}"
                 print(f"Lightning LoRA unavailable ({exc!r}); using full steps.")
 
         # DPM++ 2M Karras reaches the same quality in ~20-25 steps that the
@@ -513,6 +519,7 @@ class SDXL:
             # cannot tell them apart from the image alone.
             "fast": self.fast,
             "steps": steps,
+            "lora_error": self.lora_error,
         }
 
 
