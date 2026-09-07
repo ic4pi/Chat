@@ -219,12 +219,12 @@ export function DiffPanel({
               data-testid="push-toggle-btn"
               style={{ ...btnBase, background: '#FF3D8E', color: '#0B0D12',
                 border: 'none', fontWeight: 700, padding: '4px 12px' }}>
-              {showPush ? 'Hide push' : 'Push'}
+              {showPush ? 'Hide' : 'Publish to GitHub'}
             </button>
           ) : (
             <span style={{ fontSize: 14, color: '#323A50', whiteSpace: 'nowrap' }}
-              title={pushBlockedReason || 'Verify sandbox first'}>
-              Push locked
+              title={pushBlockedReason || 'Checking your app first'}>
+              Not ready yet
             </span>
           )}
         </div>
@@ -242,8 +242,12 @@ export function DiffPanel({
             <div style={{ margin: '8px 10px', padding: '8px 10px', background: '#0B0D12',
               border: '1px solid #232838', borderRadius: 6 }}>
               <div style={{ fontSize: 14, color: '#9198AA', marginBottom: 6, lineHeight: 1.4 }}>
-                GitHub token with <code style={{ color: '#FF3D8E' }}>repo</code> scope.
-                Push re-runs sandbox checks and refuses on failure.
+                Paste a GitHub token so this can save to your account. No repo yet? One gets
+                created for you automatically. Don't have a token —{' '}
+                <a href="https://github.com/settings/tokens/new?scopes=repo&description=Workspace"
+                  target="_blank" rel="noreferrer" style={{ color: '#FF3D8E' }}>
+                  get one here
+                </a>.
               </div>
               <input
                 type="password"
@@ -286,7 +290,7 @@ export function DiffPanel({
                     border: 'none', borderRadius: 4, padding: '7px 14px',
                     cursor: token.trim() && !pushing ? 'pointer' : 'default',
                     fontFamily: 'inherit', fontSize: 16, fontWeight: 700 }}>
-                  {pushing ? 'Pushing…' : 'Commit & push'}
+                  {pushing ? 'Publishing…' : 'Publish'}
                 </button>
                 {onCopyGitCommands && (
                   <button type="button" onClick={onCopyGitCommands}

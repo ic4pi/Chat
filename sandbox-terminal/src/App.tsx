@@ -171,7 +171,7 @@ type MobileTab = 'files' | 'chat' | 'terminal' | 'preview';
 // ---------------------------------------------------------------------------
 // VerifyBanner
 // ---------------------------------------------------------------------------
-function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, onSetCommand, onDismiss }: {
+function VerifyBanner({ verifyState, attempt, askCommand, onRun, onSetCommand, onDismiss }: {
   verifyState: string; attempt: number; testCommand: string | null; askCommand: boolean;
   onRun: () => void; onSetCommand: (c: string) => void; onDismiss: () => void;
 }) {
@@ -183,23 +183,22 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
     || String(verifyState).startsWith('retry');
   const color = passed ? '#0B0D12' : failed ? '#fff' : '#0B0D12';
   const bg = passed ? '#34D399' : failed ? '#8a1f1f' : '#FF3D8E';
-  const shortCmd = testCommand
-    ? (testCommand.length > 64 ? `${testCommand.slice(0, 64)}…` : testCommand)
-    : '…';
-  const label = verifyState === 'detecting' ? 'SANDBOX CHECK — detecting test / smoke…' :
-    verifyState === 'running' ? `SANDBOX CHECK RUNNING — ${shortCmd}` :
-    passed ? 'SANDBOX VERIFIED — Push unlocked. Incomplete stubs never get this far.' :
-    failed ? `SANDBOX FAILED — Push LOCKED after ${attempt} attempts. Fix until green.` :
-    `SANDBOX AUTO-FIX — attempt ${attempt}/5 (do not push yet)`;
+  const label = verifyState === 'detecting' ? 'Checking your app…' :
+    verifyState === 'running' ? 'Testing your app…' :
+    passed ? '✓ It works — ready to save' :
+    failed ? `Couldn't fix it automatically after ${attempt} tries.` :
+    `Found a problem — fixing it (try ${attempt} of 5)…`;
   if (askCommand) return (
     <div data-testid="verify-banner" style={{ padding: '10px 12px', background: '#5a1010',
       borderTop: '2px solid #ff6a6a', flexShrink: 0 }}>
       <div style={{ fontSize: 17, fontWeight: 800, color: '#ffb4b4', marginBottom: 4,
         letterSpacing: '0.04em' }}>
-        PUSH LOCKED — no sandbox check found
+        Couldn't check this project automatically
       </div>
       <div style={{ fontSize: 15, color: '#ffd0d0', marginBottom: 6, lineHeight: 1.45 }}>
-        Enter <code style={{ color: '#FF3D8E' }}>npm test</code> / your command, or add{' '}
+        If you're just building a webpage, ask for an <code style={{ color: '#FF3D8E' }}>index.html</code>{' '}
+        and this goes away on its own. Otherwise enter{' '}
+        <code style={{ color: '#FF3D8E' }}>npm test</code> / your command, or add{' '}
         <code style={{ color: '#FF3D8E' }}>index.html</code> for built-in smoke. Nothing ships unproven.
       </div>
       <div style={{ display: 'flex', gap: 6 }}>
@@ -331,6 +330,19 @@ export function App() {
   const [coderBrands,  setCoderBrands]  = useState<ResolvedCoderBrand[]>([]);
   const [keys,         setKeys]         = useState(() => loadProviderKeys());
   const [showKeys,     setShowKeys]     = useState(false);
+  // Model pickers, roles, slices, keys — all dev-only config with working
+  // defaults already. Tucked away so the default screen is just "what do you
+  // want to build" instead of a wall of dropdowns nobody asked for.
+  const [showAdvanced, setShowAdvanced] = useState(
+    () => localStorage.getItem('workspace_show_advanced_v1') === '1',
+  );
+  const toggleAdvanced = () => {
+    setShowAdvanced(s => {
+      const next = !s;
+      try { localStorage.setItem('workspace_show_advanced_v1', next ? '1' : '0'); } catch { /* ignore */ }
+      return next;
+    });
+  };
   const [showRoles,    setShowRoles]    = useState(false);
   const [showSlices,   setShowSlices]   = useState(false);
   const [roleModels,   setRoleModels]   = useState(() => loadRoleModels());
@@ -939,6 +951,15 @@ export function App() {
             Delete
           </button>
         )}
+        <button type="button" onClick={toggleAdvanced}
+          title="Model choice, roles, slices, API keys — advanced/developer options"
+          style={{ background: showAdvanced ? 'rgba(52,211,153,.16)' : 'transparent',
+            color: showAdvanced ? '#34D399' : '#656C7E', border: '1px solid #232838',
+            borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
+            fontFamily: 'inherit', fontSize: 14 }}>
+          {showAdvanced ? '▾ Advanced' : '▸ Advanced'}
+        </button>
+        {showAdvanced && <>
         <select value={role} onChange={e => handleRoleChange(e.target.value as RoleId)}
           title="Role — uses the model you assigned for write / review / plan"
           style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
@@ -1084,8 +1105,9 @@ export function App() {
               style={{ accentColor: '#FF3D8E' }} />
           </label>
         </div>
+        </>}
       </div>
-      {showKeys && (
+      {showAdvanced && showKeys && (
         <div style={{ padding: '8px 12px', borderTop: '1px solid #191D27',
           display: 'grid', gap: 6, gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
           <div style={{ gridColumn: '1 / -1', fontSize: 14, color: '#656C7E', lineHeight: 1.4 }}>
@@ -1104,7 +1126,7 @@ export function App() {
           ))}
         </div>
       )}
-      {showRoles && (
+      {showAdvanced && showRoles && (
         <div style={{ padding: '8px 12px', borderTop: '1px solid #191D27', fontSize: 14, color: '#9198AA', lineHeight: 1.5 }}>
           Switch the role dropdown to use a different model for writing, reviewing, or planning.
           Changing provider/model while a role is selected saves that assignment.
@@ -1113,7 +1135,7 @@ export function App() {
           plan={roleModels.plan.model.split('/').pop()}
         </div>
       )}
-      {showSlices && (
+      {showAdvanced && showSlices && (
         <div id="chunk-model-panel">
           <ChunkModelPanel
             sandboxReady={!!repo.sandboxId && !!repo.root}
@@ -1144,11 +1166,11 @@ export function App() {
     }}>
       {applyFailed.length > 0 ? (
         <div style={{ color: '#ffb4b4', fontWeight: 800, marginBottom: 4, letterSpacing: '0.03em' }}>
-          ⛔ SANDBOX PROTECTED — {applyFailed.length} write{applyFailed.length === 1 ? '' : 's'} blocked
+          ⛔ {applyFailed.length} file{applyFailed.length === 1 ? '' : 's'} couldn't save
         </div>
       ) : (
         <div style={{ color: '#34D399', fontWeight: 700, marginBottom: 4 }}>
-          Saved to sandbox — not GitHub yet. Push stays locked until Auto-test is green.
+          Saved. Checking it works, then you can publish it.
         </div>
       )}
       {applyOk.map(r => (
@@ -1202,17 +1224,17 @@ export function App() {
       <DiffPanel
         changes={repo.pendingChanges} applying={applying}
         appliedPaths={appliedPaths}
-        canPush={!!repo.sandboxId && !!repo.repoUrl && autoVerify.pushAllowed}
+        canPush={!!repo.sandboxId && autoVerify.pushAllowed}
         pushBlockedReason={
-          !repo.sandboxId || !repo.repoUrl
+          !repo.sandboxId
             ? null
             : autoVerify.pushAllowed
               ? null
               : autoVerify.verifyState === 'failed'
-                ? 'Push locked — tests/smoke failed. Retry Auto-test until verified.'
+                ? "Can't save yet — still fixing an issue. Hang on."
                 : autoVerify.verifyState === 'running' || autoVerify.verifyState === 'detecting' || String(autoVerify.verifyState).startsWith('retry')
-                  ? 'Push locked — sandbox is still verifying…'
-                  : 'Push locked until Auto-test passes in the sandbox.'
+                  ? 'Checking your app works…'
+                  : 'Checking your app works before you can save.'
         }
         pushing={pushing}
         pushError={pushError}
@@ -1225,7 +1247,7 @@ export function App() {
           const cmd = buildPushShellCommands({ commitMessage: 'Apply agent changes' });
           const ok = await copyText(cmd);
           if (ok) {
-            setPushOk('Git commands copied — paste into Terminal. For push with auth, use Push to GitHub (only after verified).');
+            setPushOk('Git commands copied — paste into Terminal. Or just use "Publish to GitHub" above once it\'s verified.');
             setMobileTab('terminal');
           }
         }}
