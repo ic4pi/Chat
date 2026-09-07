@@ -12,9 +12,12 @@ these via MODAL_IMAGE_MODELS and defaults to "lustify".
 
 Deploy:  modal deploy modal/sdxl_app.py
 
-!! RECONSTRUCTED — see modal/README.md before deploying over a working app.
-   The checkpoint sources in particular are the least certain part of this
-   file; confirm them against the live app first. !!
+!! RECONSTRUCTED — see modal/README.md before deploying over a working app. !!
+
+The checkpoint ids this file shipped with were guessed and both were wrong —
+the Hub answered 401 for each, which surfaced as "model is not cached locally"
+at request time. The current pair is confirmed reachable; re-run the deploy
+workflow with mode: probe before changing either.
 """
 
 import base64
