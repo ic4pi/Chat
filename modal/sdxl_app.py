@@ -55,6 +55,30 @@ POSE_CONTROLNET = os.environ.get(
 
 DEFAULT_MODEL = "lustify"
 
+# Step-distillation LoRA. SDXL at 1024px needs ~30 steps with the stock
+# scheduler, which is ~25s an image on an L4; Lightning gets the same picture
+# in 8. It loads onto whichever checkpoint is resident, so it speeds up both
+# without a second set of weights - the same trick wan_app.py already uses.
+#
+# Two hard requirements, both from the distillation:
+#   - guidance_scale must be ~1.0. Real CFG on a distilled model burns the
+#     image out.
+#   - the scheduler must use timestep_spacing="trailing". Lightning was
+#     trained on that schedule and produces mush on the default "leading".
+#
+# Set SDXL_LIGHTNING_LORA_REPO="" to deploy without it and keep full steps.
+LIGHTNING_LORA_REPO = os.environ.get(
+    "SDXL_LIGHTNING_LORA_REPO", "ByteDance/SDXL-Lightning"
+)
+LIGHTNING_LORA_WEIGHT = os.environ.get(
+    "SDXL_LIGHTNING_LORA_WEIGHT", "sdxl_lightning_8step_lora.safetensors"
+)
+
+FAST_STEPS = 8
+FAST_GUIDANCE = 1.0
+FULL_STEPS = 30      # measured: 4x 1024x1024 in 56.4s on an L4, 14.1s each
+FULL_GUIDANCE = 6.0
+
 # Batch ceiling. Four 1024px images fit an L4 comfortably alongside a resident
 # SDXL; past that the activations start competing with the weights.
 MAX_BATCH = 4
@@ -143,6 +167,13 @@ def download_weights():
     except Exception as exc:  # pose detection is optional, the rest is not
         print(f"openpose annotator skipped: {exc}", flush=True)
 
+    if LIGHTNING_LORA_REPO:
+        try:
+            print(f"caching LoRA {LIGHTNING_LORA_REPO}", flush=True)
+            snapshot_download(LIGHTNING_LORA_REPO, cache_dir="/cache/hf")
+        except Exception as exc:  # the LoRA is a speed-up, not a requirement
+            print(f"Lightning LoRA not pre-cached: {exc}", flush=True)
+
     cache.commit()
     print("weights cached", flush=True)
 
@@ -217,6 +248,7 @@ class SDXL:
         self._siblings: dict = {}
         self._cnet = None
         self._pose_det = None
+        self.fast = False
 
     def _sibling(self, name: str, kind: str):
         """An img2img / inpaint / controlnet pipeline over the same weights.
@@ -289,6 +321,27 @@ class SDXL:
             safety_checker=None,
             requires_safety_checker=False,
         )
+        # Lightning is loaded per checkpoint because _pipe() swaps checkpoints
+        # in and out; a LoRA fused into the outgoing weights goes with them.
+        # A failure here must not take generation down - it falls back to full
+        # steps, which is slower but correct, and the response says so.
+        self.fast = False
+        if LIGHTNING_LORA_REPO:
+            try:
+                from diffusers import EulerDiscreteScheduler
+
+                kwargs = {"cache_dir": "/cache/hf"}
+                if LIGHTNING_LORA_WEIGHT:
+                    kwargs["weight_name"] = LIGHTNING_LORA_WEIGHT
+                pipe.load_lora_weights(LIGHTNING_LORA_REPO, **kwargs)
+                pipe.fuse_lora()
+                pipe.scheduler = EulerDiscreteScheduler.from_config(
+                    pipe.scheduler.config, timestep_spacing="trailing"
+                )
+                self.fast = True
+            except Exception as exc:
+                print(f"Lightning LoRA unavailable ({exc!r}); using full steps.")
+
         # DPM++ 2M Karras reaches the same quality in ~20-25 steps that the
         # default scheduler needs 30+ for — but only when the checkpoint's own
         # scheduler config is compatible with the Karras sigma schedule. On
@@ -297,7 +350,7 @@ class SDXL:
         # as the solver steps past the end of its own sigma array. A sampler
         # optimisation is not worth a checkpoint that cannot render at all, so
         # the model's own scheduler is the default and the swap is opt-in.
-        if os.environ.get("SDXL_KARRAS") == "1":
+        if os.environ.get("SDXL_KARRAS") == "1" and not self.fast:
             pipe.scheduler = self._sched.from_config(
                 pipe.scheduler.config, use_karras_sigmas=True, algorithm_type="dpmsolver++"
             )
@@ -334,8 +387,8 @@ class SDXL:
         width: int = 1024,
         height: int = 1024,
         seed: int = 42,
-        steps: int = 30,  # the checkpoint's own scheduler; 22 was for DPM++
-        guidance_scale: float = 6.0,
+        steps: int | None = None,       # None: FAST_STEPS if Lightning loaded
+        guidance_scale: float | None = None,
         n: int = 1,
         fmt: str = "webp",
         mode: str = "text",
@@ -348,6 +401,13 @@ class SDXL:
         started = time.time()
         name = model if model in CHECKPOINTS else DEFAULT_MODEL
         pipe = self._pipe(name)
+
+        # Resolved after _pipe(), which is what decides whether Lightning is
+        # actually fused onto this checkpoint.
+        if steps is None:
+            steps = FAST_STEPS if self.fast else FULL_STEPS
+        if guidance_scale is None:
+            guidance_scale = FAST_GUIDANCE if self.fast else FULL_GUIDANCE
 
         # SDXL is trained at multiples of 64; off-grid sizes produce seams.
         width = max(512, int(round(width / 64)) * 64)
@@ -441,6 +501,11 @@ class SDXL:
             "width": images[0].width,
             "height": images[0].height,
             "seed": seed,
+            # Which path actually ran: a response that took 8 steps and one
+            # that took 30 are very different amounts of GPU, and the caller
+            # cannot tell them apart from the image alone.
+            "fast": self.fast,
+            "steps": steps,
         }
 
 
@@ -459,7 +524,10 @@ def generate(payload: dict) -> dict:
             width=int(payload.get("width") or 1024),
             height=int(payload.get("height") or 1024),
             seed=int(payload.get("seed") or 42),
-            steps=int(payload.get("steps") or 30),
+            steps=int(payload["steps"]) if payload.get("steps") else None,
+            guidance_scale=(
+                float(payload["guidance_scale"]) if payload.get("guidance_scale") else None
+            ),
             n=int(payload.get("n") or 1),
             fmt=str(payload.get("format") or "webp"),
             mode=str(payload.get("mode") or "text"),

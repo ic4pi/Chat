@@ -291,6 +291,7 @@ if PRINT_REPOS:
     repos = [spec["repo"] for spec in sdxl_mod.CHECKPOINTS.values()]
     repos.append(sdxl_mod.POSE_CONTROLNET)
     repos.append("lllyasviel/Annotators")
+    repos.append(getattr(sdxl_mod, "LIGHTNING_LORA_REPO", ""))
     repos.append(modules["ltx_app.py"].MODEL_ID)
     repos.append(modules["wan_app.py"].MODEL_ID)
     lora = getattr(modules["wan_app.py"], "LIGHTNING_LORA_REPO", "")
