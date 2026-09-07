@@ -29,11 +29,11 @@ import modal
 #   modal deploy modal/sdxl_app.py  (reads SDXL_LUSTIFY_REPO / SDXL_WAI_REPO)
 CHECKPOINTS = {
     "lustify": {
-        "repo": os.environ.get("SDXL_LUSTIFY_REPO", "John6666/lustify-sdxl-nsfw-checkpoint-v20-sdxl"),
+        "repo": os.environ.get("SDXL_LUSTIFY_REPO", "John6666/lustify-sdxl-nsfwsfw-v2-sdxl"),
         "single_file": None,
     },
     "wai-illustrious": {
-        "repo": os.environ.get("SDXL_WAI_REPO", "John6666/wai-nsfw-illustrious-sdxl-v110-sdxl"),
+        "repo": os.environ.get("SDXL_WAI_REPO", "John6666/wai-nsfw-illustrious-v110-sdxl"),
         "single_file": None,
     },
 }
@@ -197,7 +197,8 @@ class SDXL:
         pipe = self._cls.from_pretrained(
             spec["repo"],
             torch_dtype=self._torch.float16,
-            variant="fp16",
+            # These community re-exports ship a single unsuffixed safetensors
+            # file, not an fp16-variant one — variant="fp16" would 404 on them.
             use_safetensors=True,
             cache_dir="/cache/hf",
             # The point of self-hosting is that nothing moderates the output.
