@@ -77,6 +77,15 @@ jobs:
           IFS=',' read -ra TERMS <<< "${{ inputs.search }}"
           python3 .github/scripts/hf_check.py --search "${TERMS[@]}"
 
+      # Which weight file inside a LoRA repo to load is not guessable: the
+      # Lightning repo carries one set per Wan variant and the wrong one fails
+      # with hundreds of shape mismatches, not a name error.
+      - name: List LoRA repo contents
+        if: ${{ inputs.mode == 'probe' }}
+        run: |
+          python3 .github/scripts/hf_check.py --files \
+            lightx2v/Wan2.2-Lightning ByteDance/SDXL-Lightning
+
       # "Token validation failed" says nothing about which half is wrong. The
       # prefixes (ak- / as-) are structural, not secret, so checking them and
       # the lengths distinguishes swapped halves and pasted whitespace — the

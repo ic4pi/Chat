@@ -104,6 +104,25 @@ def summarise(heading, lines):
         fh.write(f"\n### {heading}\n" + "\n".join(lines) + "\n")
 
 
+def files(repo_ids):
+    """List a repo's files. Which weight file to load is not guessable: the
+    Lightning LoRA repo carries one set per Wan variant, and the wrong one
+    fails with hundreds of shape mismatches rather than a name error."""
+    for repo in repo_ids:
+        code, meta = _get(f"{API}/{repo}")
+        if code != 200:
+            print(f"{repo}: HTTP {code}")
+            continue
+        names = [s.get("rfilename", "") for s in meta.get("siblings", [])]
+        print(f"=== {repo} ({len(names)} files) ===")
+        lines = []
+        for n in sorted(names):
+            if n.endswith((".safetensors", ".ckpt", ".pt", ".bin")):
+                print(f"  {n}")
+                lines.append(f"- `{n}`")
+        summarise(f"files in {repo}", lines or ["- (no weight files)"])
+
+
 def main(argv):
     if len(argv) < 2:
         sys.exit("usage: hf_check.py --status <repo>... | --search <term>...")
@@ -117,6 +136,9 @@ def main(argv):
         return 0
     if mode == "--search":
         search(rest)
+        return 0
+    if mode == "--files":
+        files(rest)
         return 0
     sys.exit(f"unknown mode {mode}")
 
