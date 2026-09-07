@@ -12,9 +12,12 @@ these via MODAL_IMAGE_MODELS and defaults to "lustify".
 
 Deploy:  modal deploy modal/sdxl_app.py
 
-!! RECONSTRUCTED — see modal/README.md before deploying over a working app.
-   The checkpoint sources in particular are the least certain part of this
-   file; confirm them against the live app first. !!
+!! RECONSTRUCTED — see modal/README.md before deploying over a working app. !!
+
+The checkpoint ids this file shipped with were guessed and both were wrong —
+the Hub answered 401 for each, which surfaced as "model is not cached locally"
+at request time. The current pair is confirmed reachable; re-run the deploy
+workflow with mode: probe before changing either.
 """
 
 import base64
@@ -27,13 +30,19 @@ import modal
 # Both are community SDXL checkpoints distributed as single .safetensors files.
 # Override per deploy without editing this file:
 #   modal deploy modal/sdxl_app.py  (reads SDXL_LUSTIFY_REPO / SDXL_WAI_REPO)
+# Both ids here were wrong and had been since this file was written: the Hub
+# answers 401 for each, so every image request died in the checkpoint load and
+# reported it as "model is not cached locally and an error occurred while
+# trying to fetch metadata from the Hub" — which reads like a network fault.
+# These two are verified reachable by the deploy workflow's preflight; do not
+# change them without re-running it (mode: probe).
 CHECKPOINTS = {
     "lustify": {
-        "repo": os.environ.get("SDXL_LUSTIFY_REPO", "John6666/lustify-sdxl-nsfw-checkpoint-v20-sdxl"),
+        "repo": os.environ.get("SDXL_LUSTIFY_REPO", "John6666/lustify-sdxl-nsfwsfw-v2-sdxl"),
         "single_file": None,
     },
     "wai-illustrious": {
-        "repo": os.environ.get("SDXL_WAI_REPO", "John6666/wai-nsfw-illustrious-sdxl-v110-sdxl"),
+        "repo": os.environ.get("SDXL_WAI_REPO", "John6666/wai-nsfw-illustrious-sdxl-v140-sdxl"),
         "single_file": None,
     },
 }
@@ -46,6 +55,66 @@ POSE_CONTROLNET = os.environ.get(
 
 DEFAULT_MODEL = "lustify"
 
+def _peft_version():
+    """Which peft the *serving container* has, or None.
+
+    A Modal deploy does not evict warm containers: for up to
+    scaledown_window seconds afterwards, requests can still be answered by a
+    container running the previous image. That cost two cycles here - a fix
+    was deployed, the next request was served by the old container, and the
+    unchanged error read as "the fix did not work". Reporting the version the
+    answering container actually has makes the difference visible.
+    """
+    try:
+        import peft
+
+        return peft.__version__
+    except Exception:
+        return None
+
+
+# Step-distillation LoRA. SDXL at 1024px needs ~30 steps with the stock
+# scheduler, which is ~25s an image on an L4; Lightning gets the same picture
+# in 8. It loads onto whichever checkpoint is resident, so it speeds up both
+# without a second set of weights - the same trick wan_app.py already uses.
+#
+# Two hard requirements, both from the distillation:
+#   - guidance_scale must be ~1.0. Real CFG on a distilled model burns the
+#     image out.
+#   - the scheduler must use timestep_spacing="trailing". Lightning was
+#     trained on that schedule and produces mush on the default "leading".
+#
+# Set SDXL_LIGHTNING_LORA_REPO="" to deploy without it and keep full steps.
+# OFF by default. It works - four 1024px images in 2.7s against 18.9s - but
+# it is distilled to guidance 1.0, and at that guidance the model does not
+# follow the prompt: "girl at a hot dog festival in an eating contest" came
+# back as a lone head. At 4.7s an image on an A100 the full-guidance path is
+# already fast, so the speed is not worth the output. Off means off: no
+# download, no load, no branch at request time.
+#
+# SDXL_LIGHTNING_LORA_REPO=ByteDance/SDXL-Lightning turns it back on, and
+# {"fast": true} then picks it per request.
+LIGHTNING_LORA_REPO = os.environ.get("SDXL_LIGHTNING_LORA_REPO", "")
+LIGHTNING_LORA_WEIGHT = os.environ.get(
+    "SDXL_LIGHTNING_LORA_WEIGHT", "sdxl_lightning_8step_lora.safetensors"
+)
+
+FAST_STEPS = 8
+FAST_GUIDANCE = 1.0
+FULL_STEPS = 30
+FULL_GUIDANCE = 6.0
+
+# Full steps by default. Lightning renders four 1024px images in 2.7s against
+# 18.9s, but it is distilled to run at guidance 1.0, and at that guidance the
+# model barely follows the prompt: "girl at a hot dog festival in an eating
+# contest" came back as a lone head. Prompt adherence is the product; 4.7s an
+# image at full guidance on an A100 is already fast enough that trading it
+# away for 0.7s is a bad deal.
+#
+# Still available per request with {"fast": true}, or flip the default with
+# SDXL_FAST=1.
+FAST_BY_DEFAULT = os.environ.get("SDXL_FAST") == "1"
+
 # Batch ceiling. Four 1024px images fit an L4 comfortably alongside a resident
 # SDXL; past that the activations start competing with the weights.
 MAX_BATCH = 4
@@ -57,6 +126,9 @@ image = (
         "diffusers==0.36.0",
         "transformers==4.51.3",
         "accelerate==1.6.0",
+        # diffusers routes load_lora_weights through peft; without it
+        # every Lightning LoRA here silently falls back to full steps.
+        "peft==0.17.1",
         "safetensors",
         "sentencepiece",
         "pillow",
@@ -69,8 +141,94 @@ image = (
 #   MODAL_APP_NAME=sdxl-nsfw-v2 modal deploy modal/sdxl_app.py
 # The site picks the target with MODAL_*_ENDPOINT, so switching back is
 # deleting an env var rather than redeploying.
+# GPU. The L4 is the cheap card and the slow one: SDXL 4x1024px takes ~57s on
+# it, and an LTX clip runs into minutes. Diffusion is bandwidth-bound and the
+# A100 has ~5x the memory bandwidth, so it is roughly 3-4x faster for ~3.5x
+# the hourly rate - close to cost-neutral per image on a scale-to-zero app,
+# bought purely as latency. Override per deploy with MODAL_GPU=L4.
+GPU = os.environ.get("MODAL_GPU", "A100")
+
 app = modal.App(os.environ.get("MODAL_APP_NAME", "sdxl-nsfw"))
 cache = modal.Volume.from_name("sdxl-model-cache", create_if_missing=True)
+
+# Optional Hugging Face token. A token lifts Hub rate limits, which is what
+# turns a cold start into "model is not cached locally and an error occurred
+# while trying to fetch metadata from the Hub".
+#
+# Opt in by NAME, never by try/except: Secret.from_name() is lazy, so a
+# missing secret does not raise here — it fails the whole deploy later. Off
+# unless asked for:
+#   modal secret create huggingface-secret HF_TOKEN=hf_...
+#   MODAL_HF_SECRET=huggingface-secret modal deploy modal/sdxl_app.py
+_hf_secret_name = os.environ.get("MODAL_HF_SECRET", "").strip()
+hf_secret = [modal.Secret.from_name(_hf_secret_name)] if _hf_secret_name else []
+
+
+def _load_pipeline(cls, repo: str, torch_dtype, **kwargs):
+    """from_pretrained that survives a repo with no fp16 variant.
+
+    Community SDXL checkpoints (the John6666 conversions among them) ship one
+    set of plain *.safetensors — no *.fp16.safetensors. Asking for
+    variant="fp16" makes diffusers look for files that were never published,
+    and the resulting Hub miss surfaces as "model is not cached locally and an
+    error occurred while trying to fetch metadata from the Hub", which reads
+    like a network fault and is not one. Try the variant, fall back to plain.
+    """
+    try:
+        return cls.from_pretrained(
+            repo, torch_dtype=torch_dtype, variant="fp16", **kwargs
+        )
+    except Exception:
+        return cls.from_pretrained(repo, torch_dtype=torch_dtype, **kwargs)
+
+
+def download_weights():
+    """Populate the cache volume at deploy time.
+
+    Without this the first request to a cold container is also the first ~7GB
+    download from the Hub, inside the request path — so a slow or rate-limited
+    Hub does not mean "slow image", it means the request fails with an OSError
+    the site can only report verbatim. Deploy pays that cost once instead.
+
+    snapshot_download rather than from_pretrained: this runs on a CPU builder
+    and only needs the files on disk, not a pipeline instantiated in RAM.
+    """
+    from huggingface_hub import snapshot_download
+
+    # Weights ship as .safetensors; the .bin/.ckpt copies are the same tensors
+    # again and would double both the download and the volume.
+    dupes = ["*.bin", "*.ckpt", "*.msgpack", "*.onnx", "*.h5"]
+
+    for name, spec in CHECKPOINTS.items():
+        print(f"caching {name}: {spec['repo']}", flush=True)
+        snapshot_download(spec["repo"], cache_dir="/cache/hf", ignore_patterns=dupes)
+
+    print(f"caching controlnet: {POSE_CONTROLNET}", flush=True)
+    snapshot_download(POSE_CONTROLNET, cache_dir="/cache/hf", ignore_patterns=dupes)
+
+    try:
+        # The OpenPose annotator publishes .pth only — no ignore list here.
+        print("caching openpose annotator", flush=True)
+        snapshot_download("lllyasviel/Annotators", cache_dir="/cache/hf")
+    except Exception as exc:  # pose detection is optional, the rest is not
+        print(f"openpose annotator skipped: {exc}", flush=True)
+
+    if LIGHTNING_LORA_REPO:
+        try:
+            print(f"caching LoRA {LIGHTNING_LORA_REPO}", flush=True)
+            snapshot_download(LIGHTNING_LORA_REPO, cache_dir="/cache/hf")
+        except Exception as exc:  # the LoRA is a speed-up, not a requirement
+            print(f"Lightning LoRA not pre-cached: {exc}", flush=True)
+
+    cache.commit()
+    print("weights cached", flush=True)
+
+
+# Runs during `modal deploy`, writing straight into the volume the serving
+# class mounts, so a cold container finds the weights already on disk.
+image = image.env({"HF_HOME": "/cache/hf"}).run_function(
+    download_weights, volumes={"/cache": cache}, secrets=hf_secret, timeout=3600
+)
 
 
 def _decode_image(data: str):
@@ -113,9 +271,10 @@ def _expand_canvas(img, left: int, right: int, top: int, bottom: int):
 
 
 @app.cls(
-    gpu="L4",
+    gpu=GPU,
     image=image,
     volumes={"/cache": cache},
+    secrets=hf_secret,
     scaledown_window=300,
     timeout=1800,
 )
@@ -135,6 +294,9 @@ class SDXL:
         self._siblings: dict = {}
         self._cnet = None
         self._pose_det = None
+        self.fast = False
+        self.lightning_available = False
+        self.lora_error = None
 
     def _sibling(self, name: str, kind: str):
         """An img2img / inpaint / controlnet pipeline over the same weights.
@@ -186,7 +348,10 @@ class SDXL:
         if self._pose_det is None:
             from controlnet_aux import OpenposeDetector
 
-            self._pose_det = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
+            # No cache_dir meant this re-downloaded on every cold container.
+            self._pose_det = OpenposeDetector.from_pretrained(
+                "lllyasviel/Annotators", cache_dir="/cache/hf"
+            )
         return self._pose_det(img, hand_and_face=True)
 
     def _pipe(self, name: str):
@@ -194,21 +359,64 @@ class SDXL:
             return self._loaded[name]
 
         spec = CHECKPOINTS[name]
-        pipe = self._cls.from_pretrained(
+        pipe = _load_pipeline(
+            self._cls,
             spec["repo"],
-            torch_dtype=self._torch.float16,
-            variant="fp16",
+            self._torch.float16,
             use_safetensors=True,
             cache_dir="/cache/hf",
             # The point of self-hosting is that nothing moderates the output.
             safety_checker=None,
             requires_safety_checker=False,
         )
+        # Lightning is loaded per checkpoint because _pipe() swaps checkpoints
+        # in and out; a LoRA fused into the outgoing weights goes with them.
+        # A failure here must not take generation down - it falls back to full
+        # steps, which is slower but correct, and the response says so.
+        self.lightning_available = False
+        self._sched_full = None
+        self._sched_fast = None
+        self.lora_error = None if LIGHTNING_LORA_REPO else "no LoRA configured"
+        if LIGHTNING_LORA_REPO:
+            try:
+                from diffusers import EulerDiscreteScheduler
+
+                kwargs = {"cache_dir": "/cache/hf"}
+                if LIGHTNING_LORA_WEIGHT:
+                    kwargs["weight_name"] = LIGHTNING_LORA_WEIGHT
+                # NOT fused: fusing bakes the LoRA into the weights for the
+                # life of the container, which would force every request to
+                # the distilled model. Left as a switchable adapter so quality
+                # and speed are a per-request choice.
+                pipe.load_lora_weights(LIGHTNING_LORA_REPO, **kwargs)
+                pipe.disable_lora()
+                # Lightning was trained on the trailing timestep schedule and
+                # produces mush on the default "leading"; the stock scheduler
+                # is kept so full-step renders are unaffected.
+                self._sched_full = pipe.scheduler
+                self._sched_fast = EulerDiscreteScheduler.from_config(
+                    pipe.scheduler.config, timestep_spacing="trailing"
+                )
+                self.lightning_available = True
+            except Exception as exc:
+                # Into the response, not just Modal's logs: a silent fallback
+                # to 30 steps is a 4x slowdown that looks identical to
+                # "the GPU is just slow" from the outside.
+                self.lora_error = f"{type(exc).__name__}: {exc}"
+                print(f"Lightning LoRA unavailable ({exc!r}); using full steps.")
+
         # DPM++ 2M Karras reaches the same quality in ~20-25 steps that the
-        # default scheduler needs 30+ for.
-        pipe.scheduler = self._sched.from_config(
-            pipe.scheduler.config, use_karras_sigmas=True, algorithm_type="dpmsolver++"
-        )
+        # default scheduler needs 30+ for — but only when the checkpoint's own
+        # scheduler config is compatible with the Karras sigma schedule. On
+        # these community conversions it is not: generation dies with
+        # "IndexError: index 23 is out of bounds for dimension 0 with size 23"
+        # as the solver steps past the end of its own sigma array. A sampler
+        # optimisation is not worth a checkpoint that cannot render at all, so
+        # the model's own scheduler is the default and the swap is opt-in.
+        if os.environ.get("SDXL_KARRAS") == "1" and not self.fast:
+            pipe.scheduler = self._sched.from_config(
+                pipe.scheduler.config, use_karras_sigmas=True, algorithm_type="dpmsolver++"
+            )
 
         # Resident on the GPU, NOT offloaded. SDXL in fp16 is ~7GB against the
         # L4's 24GB, so enable_model_cpu_offload() was shuttling weights across
@@ -242,8 +450,9 @@ class SDXL:
         width: int = 1024,
         height: int = 1024,
         seed: int = 42,
-        steps: int = 22,  # DPM++ 2M Karras; 30 was for the default scheduler
-        guidance_scale: float = 6.0,
+        steps: int | None = None,       # None: follows `fast`
+        guidance_scale: float | None = None,
+        fast: bool | None = None,       # None: FAST_BY_DEFAULT
         n: int = 1,
         fmt: str = "webp",
         mode: str = "text",
@@ -252,10 +461,29 @@ class SDXL:
         expand: dict | None = None,
         control_scale: float = 0.8,
         detect_pose: bool = True,
+        # Swallow parameters a newer endpoint knows about and this container
+        # does not. Adding one to this signature otherwise breaks every warm
+        # container until it scales down.
+        **_forward_compat,
     ) -> dict:
         started = time.time()
         name = model if model in CHECKPOINTS else DEFAULT_MODEL
         pipe = self._pipe(name)
+
+        # Resolved after _pipe(), which is what loads the adapter.
+        want_fast = FAST_BY_DEFAULT if fast is None else bool(fast)
+        self.fast = want_fast and self.lightning_available
+        if self.lightning_available:
+            if self.fast:
+                pipe.enable_lora()
+                pipe.scheduler = self._sched_fast
+            else:
+                pipe.disable_lora()
+                pipe.scheduler = self._sched_full
+        if steps is None:
+            steps = FAST_STEPS if self.fast else FULL_STEPS
+        if guidance_scale is None:
+            guidance_scale = FAST_GUIDANCE if self.fast else FULL_GUIDANCE
 
         # SDXL is trained at multiples of 64; off-grid sizes produce seams.
         width = max(512, int(round(width / 64)) * 64)
@@ -349,6 +577,13 @@ class SDXL:
             "width": images[0].width,
             "height": images[0].height,
             "seed": seed,
+            # Which path actually ran: a response that took 8 steps and one
+            # that took 30 are very different amounts of GPU, and the caller
+            # cannot tell them apart from the image alone.
+            "fast": self.fast,
+            "steps": steps,
+            "lora_error": self.lora_error,
+            "peft": _peft_version(),
         }
 
 
@@ -367,6 +602,15 @@ def generate(payload: dict) -> dict:
             width=int(payload.get("width") or 1024),
             height=int(payload.get("height") or 1024),
             seed=int(payload.get("seed") or 42),
+            steps=int(payload["steps"]) if payload.get("steps") else None,
+            # Only when the caller actually asked. A deploy does not evict warm
+            # containers, so a new endpoint can call into an older run() for
+            # minutes afterwards; sending a parameter it has never heard of
+            # fails every request in that window with a TypeError.
+            **({"fast": payload["fast"]} if "fast" in payload else {}),
+            guidance_scale=(
+                float(payload["guidance_scale"]) if payload.get("guidance_scale") else None
+            ),
             n=int(payload.get("n") or 1),
             fmt=str(payload.get("format") or "webp"),
             mode=str(payload.get("mode") or "text"),
@@ -377,7 +621,16 @@ def generate(payload: dict) -> dict:
             detect_pose=bool(payload.get("detect_pose", True)),
         )
     except Exception as exc:
-        return {"error": f"{type(exc).__name__}: {exc}"}
+        # The bare message is not enough to place a failure inside the
+        # pipeline: "IndexError: index 9 is out of bounds" says nothing about
+        # which call raised it, and the traceback only exists in Modal's own
+        # logs, which the caller cannot read. Send the last frames back.
+        import traceback
+
+        return {
+            "error": f"{type(exc).__name__}: {exc}",
+            "traceback": "".join(traceback.format_exc()).strip()[-3000:],
+        }
 
 
 @app.function(image=image, timeout=60)

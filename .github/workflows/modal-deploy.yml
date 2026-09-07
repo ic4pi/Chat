@@ -24,6 +24,22 @@ on:
         default: 'all'
         type: choice
         options: [all, sdxl, ltx, wan]
+      mode:
+        description: 'deploy, or probe to only report which model repos are reachable'
+        required: true
+        default: 'deploy'
+        type: choice
+        options: [deploy, probe]
+      search:
+        description: 'probe mode only - comma-separated Hub search terms'
+        required: false
+        default: 'lustify sdxl,wai nsfw illustrious'
+      profile:
+        description: 'smoke size. quick = 512px/8 steps. batch = 1024px/30 steps/4 images (real cost)'
+        required: false
+        default: 'quick'
+        type: choice
+        options: [quick, batch]
 
 jobs:
   deploy:
@@ -38,11 +54,44 @@ jobs:
       - name: Install Modal
         run: pip install modal
 
+      # A model repo that has been deleted, renamed or gated fails the image
+      # build ~10 minutes in, as a RepositoryNotFoundError buried in build
+      # output - which is how a dead SDXL checkpoint read as a caching bug for
+      # days. Ask the Hub first; it takes seconds. The repo ids come from the
+      # app files themselves, so this cannot drift from what they load.
+      - name: Preflight model repos
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -o pipefail
+          if python3 modal/check_apps.py --repos | python3 .github/scripts/hf_check.py --status; then
+            echo "All model repos reachable."
+          elif [ "${{ inputs.mode }}" = "deploy" ]; then
+            echo "::error::A model repo above is unreachable, so the image build would fail. Fix the repo id in modal/ (or add an HF_TOKEN secret if it is gated) and re-run."
+            exit 1
+          fi
+
+      - name: Search the Hub for replacements
+        if: ${{ inputs.mode == 'probe' }}
+        run: |
+          IFS=',' read -ra TERMS <<< "${{ inputs.search }}"
+          python3 .github/scripts/hf_check.py --search "${TERMS[@]}"
+
+      # Which weight file inside a LoRA repo to load is not guessable: the
+      # Lightning repo carries one set per Wan variant and the wrong one fails
+      # with hundreds of shape mismatches, not a name error.
+      - name: List LoRA repo contents
+        if: ${{ inputs.mode == 'probe' }}
+        run: |
+          python3 .github/scripts/hf_check.py --files \
+            lightx2v/Wan2.2-Lightning ByteDance/SDXL-Lightning
+
       # "Token validation failed" says nothing about which half is wrong. The
       # prefixes (ak- / as-) are structural, not secret, so checking them and
       # the lengths distinguishes swapped halves and pasted whitespace — the
       # two things that produce this error with a valid token.
       - name: Check token shape
+        if: ${{ inputs.mode == 'deploy' }}
         env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
@@ -69,6 +118,7 @@ jobs:
           echo "Both halves look right; handing off to modal deploy."
 
       - name: Deploy
+        if: ${{ inputs.mode == 'deploy' }}
         env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
@@ -103,3 +153,28 @@ jobs:
             echo "Point the site at these in Vercel → Settings → Environment Variables"
             echo "(Production), then redeploy. Deleting them reverts to the originals."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # "Deployed" only means the container image built. It says nothing about
+      # whether the checkpoint loads on a GPU or whether a request returns
+      # pixels - the gap that let a dead checkpoint id sit here while deploys
+      # went green. Generate one small image for real.
+      - name: Smoke test the deployed apps
+        if: ${{ inputs.mode == 'deploy' }}
+        run: |
+          # --suffix=-v2, not --suffix -v2: argparse reads a leading dash as
+          # the start of another flag and dies with "expected one argument".
+          python3 .github/scripts/modal_smoke.py \
+            --workspace=ic4pi --suffix="${{ inputs.suffix }}" --apps="${{ inputs.apps }}" \
+            --profile="${{ inputs.profile }}" --out-dir=smoke-output
+
+      # Every check so far proves bytes came back, not that they are worth
+      # having: a distilled 8-step render can be fast, ugly, and pass
+      # identically. Download this to actually look at the output.
+      - name: Upload the generated samples
+        if: ${{ inputs.mode == 'deploy' && inputs.profile == 'batch' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: samples-${{ inputs.apps }}-${{ github.run_number }}
+          path: smoke-output/
+          if-no-files-found: ignore
+          retention-days: 14

@@ -549,6 +549,33 @@ async function runSyncVideoFallback(body) {
 }
 
 const POLL_MS = 5000;
+/** Consecutive dropped polls before giving up. 24 x 5s = two minutes offline. */
+const MAX_POLL_NETWORK_FAILURES = 24;
+const PENDING_JOB_KEY = 'mediaPendingVideoJob';
+
+function savePendingJob(job) {
+  try { localStorage.setItem(PENDING_JOB_KEY, JSON.stringify(job)); } catch { /* private mode */ }
+}
+
+function clearPendingJob() {
+  try { localStorage.removeItem(PENDING_JOB_KEY); } catch { /* private mode */ }
+}
+
+function readPendingJob() {
+  try {
+    const raw = localStorage.getItem(PENDING_JOB_KEY);
+    if (!raw) return null;
+    const job = JSON.parse(raw);
+    // Modal drops uncollected results well before this; older is not worth offering.
+    if (!job?.jobId || Date.now() - (job.startedAt || 0) > POLL_CEILING_MS) {
+      clearPendingJob();
+      return null;
+    }
+    return job;
+  } catch {
+    return null;
+  }
+}
 // Ceiling matches the Modal apps' own 3600s timeout: past that the job is gone
 // and there is nothing left to wait for.
 const POLL_CEILING_MS = 3_600_000;
@@ -576,19 +603,52 @@ async function runVideoJob(body) {
   }
   if (!submitRes.ok || !job.jobId) throw new Error(friendlyHttpError(submitRes.status, job));
 
-  const started = Date.now();
+  // Survives a reload: the clip keeps rendering on Modal whatever this page
+  // does, so the id is worth more than the tab it was started in.
+  savePendingJob({ jobId: job.jobId, model: body.model, startedAt: Date.now() });
+  try {
+    return await awaitVideoJob(job.jobId, body, Date.now());
+  } finally {
+    clearPendingJob();
+  }
+}
+
+/** Poll one submitted job to completion. */
+async function awaitVideoJob(jobId, body, started) {
+  let networkFailures = 0;
+
   for (;;) {
     await new Promise((r) => setTimeout(r, POLL_MS));
 
     const elapsed = Math.round((Date.now() - started) / 1000);
     setStatus(`Generating… ${elapsed}s. Self-hosted video takes minutes; leave this open.`);
 
-    const pollRes = await fetch('/api/media-generate?op=result', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId: job.jobId, model: body.model, accessKey: body.accessKey }),
-    });
-    const out = await pollRes.json().catch(() => ({}));
+    // fetch REJECTS on a dropped connection - it does not return a response.
+    // On mobile Safari a backgrounded tab does exactly that and reports
+    // "Load failed", so an un-caught poll threw straight out of this loop and
+    // abandoned a clip that was still rendering, and still billing. The job
+    // lives on Modal; a failed poll says nothing about it.
+    let out;
+    try {
+      const pollRes = await fetch('/api/media-generate?op=result', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId, model: body.model, accessKey: body.accessKey }),
+      });
+      out = await pollRes.json().catch(() => ({}));
+      networkFailures = 0;
+    } catch {
+      networkFailures += 1;
+      if (networkFailures >= MAX_POLL_NETWORK_FAILURES) {
+        throw new Error(
+          `Lost contact with the server for ${Math.round(
+            (MAX_POLL_NETWORK_FAILURES * POLL_MS) / 1000,
+          )}s. The clip may still be rendering — reload this page to pick it back up.`,
+        );
+      }
+      setStatus(`Connection dropped (${networkFailures}) — still waiting, the clip keeps rendering…`);
+      continue;
+    }
 
     if (out.status === 'done') return out;
     // A transient poll failure is not a failed job — the generation is still
@@ -599,6 +659,64 @@ async function runVideoJob(body) {
     if (Date.now() - started > POLL_CEILING_MS) {
       throw new Error('Gave up waiting after an hour — the job outlived its Modal timeout.');
     }
+  }
+}
+
+/** Render one finished clip. Shared by a live generation and a resumed one. */
+function renderVideoResult(data) {
+  if (data.fallbackNote) setStatus(data.fallbackNote);
+  const open = document.createElement('a');
+  open.href = data.videoUrl;
+  if (String(data.videoUrl || '').startsWith('data:')) {
+    open.download = `video-${Date.now()}.mp4`;
+    open.textContent = 'Download';
+  } else {
+    open.target = '_blank';
+    open.rel = 'noopener';
+    open.textContent = 'Open / download';
+  }
+  const { card } = cardShell(
+    `${data.provider} · ${data.model}${data.fallbackFrom ? ' (fallback)' : ''}`,
+    open,
+  );
+  const vid = document.createElement('video');
+  vid.src = data.videoUrl;
+  vid.controls = true;
+  vid.playsInline = true;
+  card.insertBefore(vid, card.firstChild);
+  prependCard(card);
+  if (data.billing) {
+    setStatus(`Done. Charged $${data.billing.chargedUsd.toFixed(2)} · balance $${data.billing.balanceUsd.toFixed(2)}`);
+  } else if (!data.fallbackNote) {
+    setStatus('Done.');
+  }
+}
+
+/**
+ * Pick a clip back up after the page went away.
+ *
+ * A clip renders on Modal whatever this tab does: closing it, a phone
+ * suspending it, or a reload does not stop the GPU. Without this the work was
+ * paid for and then thrown away, which is what a "Load failed" at four
+ * minutes actually cost.
+ */
+async function resumePendingVideoJob() {
+  const pending = readPendingJob();
+  if (!pending) return;
+
+  const waited = Math.round((Date.now() - pending.startedAt) / 1000);
+  setStatus(`Picking up a clip started ${waited}s ago…`);
+  try {
+    const out = await awaitVideoJob(
+      pending.jobId,
+      { model: pending.model, accessKey: (els.accessKey.value || '').trim() },
+      pending.startedAt,
+    );
+    clearPendingJob();
+    renderVideoResult(out);
+  } catch (err) {
+    clearPendingJob();
+    setStatus(`Could not pick that clip back up: ${err.message || err}`, true);
   }
 }
 
@@ -722,32 +840,7 @@ els.generate.addEventListener('click', async () => {
       }
       if (!data.note && !data.fallbackNote) setStatus('Done.');
     } else if (data.kind === 'video') {
-      if (data.fallbackNote) setStatus(data.fallbackNote);
-      const open = document.createElement('a');
-      open.href = data.videoUrl;
-      if (String(data.videoUrl || '').startsWith('data:')) {
-        open.download = `video-${Date.now()}.mp4`;
-        open.textContent = 'Download';
-      } else {
-        open.target = '_blank';
-        open.rel = 'noopener';
-        open.textContent = 'Open / download';
-      }
-      const { card } = cardShell(
-        `${data.provider} · ${data.model}${data.fallbackFrom ? ' (fallback)' : ''}`,
-        open,
-      );
-      const vid = document.createElement('video');
-      vid.src = data.videoUrl;
-      vid.controls = true;
-      vid.playsInline = true;
-      card.insertBefore(vid, card.firstChild);
-      prependCard(card);
-      if (data.billing) {
-        setStatus(`Done. Charged $${data.billing.chargedUsd.toFixed(2)} · balance $${data.billing.balanceUsd.toFixed(2)}`);
-      } else if (!data.fallbackNote) {
-        setStatus('Done.');
-      }
+      renderVideoResult(data);
     } else {
       // "Unexpected response" alone gives nothing to act on. The keys say
       // whether this is an error body, a stale API shape, or a cached client
@@ -775,3 +868,4 @@ fillSizes();
 fillLengths();
 fillVideoModes();
 syncFields();
+void resumePendingVideoJob();

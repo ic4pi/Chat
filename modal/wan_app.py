@@ -40,10 +40,20 @@ DEFAULT_FPS = 16
 # roughly an order of magnitude off a clip. guidance_scale MUST be 1.0 with it —
 # a distilled model given real CFG produces burnt, oversaturated frames.
 #
-# Set LIGHTNING_LORA_REPO="" to deploy without it and fall back to full steps.
-LIGHTNING_LORA_REPO = os.environ.get(
-    "WAN_LIGHTNING_LORA_REPO", "lightx2v/Wan2.2-Lightning"
-)
+# OFF by default, because it cannot work with this model. Every weight file in
+# lightx2v/Wan2.2-Lightning is for a Wan 2.2 A14B variant - T2V-A14B and
+# I2V-A14B, hidden dim 5120 - and this app runs TI2V-5B, dim 3072. Loading it
+# fails with a shape mismatch on every block:
+#
+#   size mismatch for blocks.0.attn1.to_q.lora_A.default_0.weight: copying a
+#   param with shape [64, 5120] ... the shape in current model is [64, 3072]
+#
+# There is no TI2V-5B Lightning LoRA in that repo, so the 4-step path this was
+# written for has never been reachable. Leaving it on cost a download and a
+# failed load on every cold container while quietly running 40 steps. Point
+# WAN_LIGHTNING_LORA_REPO (and _WEIGHT) at a real TI2V-5B distillation if one
+# appears, or switch MODEL_ID to an A14B variant to use these.
+LIGHTNING_LORA_REPO = os.environ.get("WAN_LIGHTNING_LORA_REPO", "")
 LIGHTNING_LORA_WEIGHT = os.environ.get("WAN_LIGHTNING_LORA_WEIGHT", "")
 
 FAST_STEPS = 4
@@ -60,6 +70,9 @@ image = (
         "diffusers==0.36.0",
         "transformers==4.51.3",
         "accelerate==1.6.0",
+        # diffusers routes load_lora_weights through peft; without it
+        # every Lightning LoRA here silently falls back to full steps.
+        "peft==0.17.1",
         "safetensors",
         "sentencepiece",
         "ftfy",
@@ -74,8 +87,80 @@ image = (
 #   MODAL_APP_NAME=wan-video-v2 modal deploy modal/wan_app.py
 # The site picks the target with MODAL_*_ENDPOINT, so switching back is
 # deleting an env var rather than redeploying.
+# GPU. The L4 is the cheap card and the slow one: SDXL 4x1024px takes ~57s on
+# it, and an LTX clip runs into minutes. Diffusion is bandwidth-bound and the
+# A100 has ~5x the memory bandwidth, so it is roughly 3-4x faster for ~3.5x
+# the hourly rate - close to cost-neutral per image on a scale-to-zero app,
+# bought purely as latency. Override per deploy with MODAL_GPU=L4.
+GPU = os.environ.get("MODAL_GPU", "A100")
+
+def _peft_version():
+    """Which peft the *serving container* has, or None.
+
+    A Modal deploy does not evict warm containers: for up to
+    scaledown_window seconds afterwards, requests can still be answered by a
+    container running the previous image. That cost two cycles here - a fix
+    was deployed, the next request was served by the old container, and the
+    unchanged error read as "the fix did not work". Reporting the version the
+    answering container actually has makes the difference visible.
+    """
+    try:
+        import peft
+
+        return peft.__version__
+    except Exception:
+        return None
+
+
 app = modal.App(os.environ.get("MODAL_APP_NAME", "wan-video"))
 cache = modal.Volume.from_name("wan-model-cache", create_if_missing=True)
+
+# Optional Hugging Face token. A token lifts Hub rate limits, which is what
+# turns a cold start into "model is not cached locally and an error occurred
+# while trying to fetch metadata from the Hub".
+#
+# Opt in by NAME, never by try/except: Secret.from_name() is lazy, so a
+# missing secret does not raise here — it fails the whole deploy later. Off
+# unless asked for:
+#   modal secret create huggingface-secret HF_TOKEN=hf_...
+#   MODAL_HF_SECRET=huggingface-secret modal deploy modal/sdxl_app.py
+_hf_secret_name = os.environ.get("MODAL_HF_SECRET", "").strip()
+hf_secret = [modal.Secret.from_name(_hf_secret_name)] if _hf_secret_name else []
+
+
+def download_weights():
+    """Populate the cache volume at deploy time.
+
+    Otherwise the first request to a cold container is also the first ~10GB
+    download from the Hub, inside the request path — a slow or rate-limited
+    Hub then fails the request instead of merely slowing it.
+
+    snapshot_download rather than from_pretrained: this runs on a CPU builder
+    and only needs the files on disk, not a pipeline instantiated in RAM.
+    """
+    from huggingface_hub import snapshot_download
+
+    dupes = ["*.bin", "*.ckpt", "*.msgpack", "*.onnx", "*.h5"]
+
+    print(f"caching {MODEL_ID}", flush=True)
+    snapshot_download(MODEL_ID, cache_dir="/cache/hf", ignore_patterns=dupes)
+
+    if LIGHTNING_LORA_REPO:
+        try:
+            print(f"caching LoRA {LIGHTNING_LORA_REPO}", flush=True)
+            snapshot_download(LIGHTNING_LORA_REPO, cache_dir="/cache/hf")
+        except Exception as exc:  # the LoRA is a speed-up, not a requirement
+            print(f"Lightning LoRA not pre-cached: {exc}", flush=True)
+
+    cache.commit()
+    print("weights cached", flush=True)
+
+
+# Runs during `modal deploy`, writing straight into the volume the serving
+# class mounts, so a cold container finds the weights already on disk.
+image = image.env({"HF_HOME": "/cache/hf"}).run_function(
+    download_weights, volumes={"/cache": cache}, secrets=hf_secret, timeout=3600
+)
 
 
 def _video_to_frames(data: str, width: int, height: int, max_frames: int):
@@ -107,7 +192,7 @@ def _video_to_frames(data: str, width: int, height: int, max_frames: int):
 
 
 @app.cls(
-    gpu="L4",
+    gpu=GPU,
     image=image,
     volumes={"/cache": cache},
     # Weights are ~10GB off a cold volume; a short window makes every request
@@ -116,6 +201,7 @@ def _video_to_frames(data: str, width: int, height: int, max_frames: int):
     # rather than on an always-on box.
     scaledown_window=300,
     timeout=3600,
+    secrets=hf_secret,
 )
 class Wan:
     @modal.enter()
@@ -133,20 +219,34 @@ class Wan:
         self.t2v = WanPipeline.from_pretrained(
             MODEL_ID, vae=vae, torch_dtype=torch.bfloat16, cache_dir="/cache/hf"
         )
-        # TI2V-5B carries no CLIP vision tower, so the i2v pipeline is built off
-        # the t2v components rather than loaded a second time — same weights in
-        # VRAM, both entry points available for the chain.
-        self.i2v = WanImageToVideoPipeline(
-            tokenizer=self.t2v.tokenizer,
-            text_encoder=self.t2v.text_encoder,
+        # Built with from_pretrained, not by hand from the t2v components.
+        # Constructing the class directly skips the repo's own config, so the
+        # pipeline fell back to Wan 2.1's image conditioning - latent, masked
+        # latent and mask concatenated on the channel axis - and handed the
+        # transformer 100 channels (48 + 48 + 4) where TI2V-5B takes 48:
+        #
+        #   RuntimeError: Given groups=1, weight of size [3072, 48, 1, 2, 2],
+        #   expected input[1, 100, 21, 30, 52] to have 48 channels, but got 100
+        #
+        # Clip one is text-to-video and renders fine; every clip after it seeds
+        # from the previous frame through this pipeline, so any multi-clip
+        # request died partway with weights already paid for. Passing the
+        # loaded components keeps it to one set of weights in VRAM.
+        self.i2v = WanImageToVideoPipeline.from_pretrained(
+            MODEL_ID,
             vae=self.t2v.vae,
-            scheduler=self.t2v.scheduler,
             transformer=self.t2v.transformer,
+            text_encoder=self.t2v.text_encoder,
+            tokenizer=self.t2v.tokenizer,
+            scheduler=self.t2v.scheduler,
+            torch_dtype=torch.bfloat16,
+            cache_dir="/cache/hf",
         )
         # Loaded onto the shared transformer, so both pipelines get it.
         # A failure here must not take generation down — it falls back to full
         # steps, which is slow but correct, and says so in the response.
         self.fast = False
+        self.lora_error = None if LIGHTNING_LORA_REPO else "no LoRA configured"
         if LIGHTNING_LORA_REPO:
             try:
                 kwargs = {"cache_dir": "/cache/hf"}
@@ -156,6 +256,10 @@ class Wan:
                 self.t2v.fuse_lora()
                 self.fast = True
             except Exception as exc:
+                # Into the response, not just Modal's logs: a silent fallback
+                # to 40 steps is a 10x slowdown that looks identical to
+                # "video is just slow" from the outside.
+                self.lora_error = f"{type(exc).__name__}: {exc}"
                 print(f"Lightning LoRA unavailable ({exc!r}); using full steps.")
 
         # Restyling an existing clip. Shares the loaded components, so it adds
@@ -196,6 +300,9 @@ class Wan:
         guidance_scale: float | None = None,
         video: str = "",
         strength: float = 0.6,
+        # Swallow parameters a newer endpoint knows about and this container
+        # does not - a deploy does not evict warm containers.
+        **_forward_compat,
     ) -> dict:
         import torch
         from diffusers.utils import export_to_video
@@ -287,6 +394,8 @@ class Wan:
             "fps": fps,
             "fast": self.fast,
             "steps": steps,
+            "lora_error": self.lora_error,
+            "peft": _peft_version(),
         }
 
 
@@ -365,7 +474,15 @@ def submit(payload: dict) -> dict:
         )
         return {"job_id": call.object_id, "status": "running"}
     except Exception as exc:
-        return {"error": f"{type(exc).__name__}: {exc}"}
+        # The bare message does not say which call inside the pipeline raised
+        # it, and the traceback lives only in Modal's logs, which the caller
+        # cannot read. Two deploys were spent guessing at one line before.
+        import traceback
+
+        return {
+            "error": f"{type(exc).__name__}: {exc}",
+            "traceback": "".join(traceback.format_exc()).strip()[-3000:],
+        }
 
 
 @app.function(image=image, timeout=60)

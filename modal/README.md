@@ -30,9 +30,17 @@ So:
 
 - **Do not `modal deploy` these over a working app** expecting a no-op. Deploy
   to a differently-named app first and compare output.
-- The **SDXL checkpoint repos are the least certain part** — they are the one
-  thing that could not be derived from the client at all, only guessed from the
-  names `lustify` and `wai-illustrious`. Confirm before trusting them.
+- The **SDXL checkpoint repos were guessed, and both guesses were wrong.** They
+  are the one thing that could not be derived from the client at all, only
+  inferred from the names `lustify` and `wai-illustrious`. The Hub answered 401
+  for `John6666/lustify-sdxl-nsfw-checkpoint-v20-sdxl` and
+  `John6666/wai-nsfw-illustrious-sdxl-v110-sdxl`, so every image request died
+  loading the checkpoint and reported it as a Hub metadata error — which reads
+  like a network fault, and hid the real cause for days. They now point at
+  repos confirmed reachable. **Never change a model id without re-running the
+  preflight:** the *Deploy Modal apps* workflow with `mode: probe` reports the
+  status of every repo all three apps pull, and a `deploy` run refuses to build
+  when one is unreachable.
 - Everything else (names, shapes, dimensions, caps) is pinned by the client and
   by `scripts/check-modal-endpoints.mjs`.
 
