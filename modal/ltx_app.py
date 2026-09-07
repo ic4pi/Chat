@@ -255,6 +255,10 @@ class LTX:
                 "fps": fps,
                 "mode": "keyframes",
                 "keyframe_count": len(conditions),
+                # Without this a 30-step render and an 8-step one are
+                # indistinguishable from the response, which is how a LoRA
+                # that never loaded stayed invisible on the other apps.
+                "steps": steps,
             }
 
         frames: list = []
@@ -294,6 +298,7 @@ class LTX:
             "num_clips": num_clips,
             "num_frames": len(frames),
             "fps": fps,
+            "steps": steps,
         }
 
 
