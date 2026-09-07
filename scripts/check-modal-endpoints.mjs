@@ -12,11 +12,15 @@
  *
  * Cold starts are slow by design (scale-to-zero), so the timeout is generous
  * and a first run may take several minutes.
+ *
+ * Defaults target the -v2 apps, which is what .github/workflows/modal-deploy.yml
+ * deploys and what api/media-generate.js resolves to first. Override any of
+ * them with MODAL_WAN_ENDPOINT / MODAL_LTX_ENDPOINT / MODAL_SDXL_ENDPOINT.
  */
 
 const ENDPOINTS = {
   wan: {
-    url: process.env.MODAL_WAN_ENDPOINT || 'https://ic4pi--wan-video-generate.modal.run',
+    url: process.env.MODAL_WAN_ENDPOINT || 'https://ic4pi--wan-video-v2-generate.modal.run',
     kind: 'video',
     // Mirrors generateModalWanVideo(): 832x480, 81 frames, 16fps, 1 clip.
     body: { prompt: 'a red balloon drifting over a field, cinematic',
@@ -24,7 +28,7 @@ const ENDPOINTS = {
     expect: ['video_base64'],
   },
   ltx: {
-    url: process.env.MODAL_LTX_ENDPOINT || 'https://ic4pi--ltx-video-generate.modal.run',
+    url: process.env.MODAL_LTX_ENDPOINT || 'https://ic4pi--ltx-video-v2-generate.modal.run',
     kind: 'video',
     // Mirrors generateModalLtxVideo(): 704x480, 121 frames, 24fps, 1 clip.
     body: { prompt: 'a red balloon drifting over a field, cinematic',
@@ -32,11 +36,13 @@ const ENDPOINTS = {
     expect: ['video_base64'],
   },
   sdxl: {
-    url: process.env.MODAL_SDXL_ENDPOINT || 'https://ic4pi--sdxl-nsfw-generate.modal.run',
+    url: process.env.MODAL_SDXL_ENDPOINT || 'https://ic4pi--sdxl-nsfw-v2-generate.modal.run',
     kind: 'image',
     // Mirrors generateModalSdxlImage().
     body: { prompt: 'a red balloon over a field', model: 'lustify', width: 1024, height: 1024 },
-    expect: ['image_base64'],
+    // images_base64 is the batch shape the app returns now; image_base64 is
+    // the older singular key, still sent so a stale app version passes too.
+    expect: [['images_base64', 'image_base64']],
   },
 };
 
@@ -76,13 +82,17 @@ async function check(name) {
     if (!res.ok) return { name, ok: false, why: `HTTP ${res.status} ${body.error || ''}`.trim(), secs };
     if (body.error) return { name, ok: false, why: `app error: ${body.error}`, secs };
 
-    const missing = spec.expect.filter((k) => !body[k]);
+    // An entry may be a list of acceptable alternatives for one payload key.
+    const resolveKey = (k) => (Array.isArray(k) ? k.find((alt) => body[alt]) : (body[k] ? k : null));
+    const missing = spec.expect.filter((k) => !resolveKey(k));
     if (missing.length) {
+      const label = missing.map((k) => (Array.isArray(k) ? k.join('|') : k)).join(', ');
       return { name, ok: false, secs,
-               why: `missing ${missing.join(', ')} — got keys: ${Object.keys(body).join(', ') || '(none)'}` };
+               why: `missing ${label} — got keys: ${Object.keys(body).join(', ') || '(none)'}` };
     }
 
-    const bytes = Buffer.from(body[spec.expect[0]], 'base64').length;
+    const first = body[resolveKey(spec.expect[0])];
+    const bytes = Buffer.from(Array.isArray(first) ? first[0] : first, 'base64').length;
     // A payload this size 413s on Vercel before it ever reaches the browser.
     const tooBig = bytes > 4.5 * 1_048_576;
     return { name, ok: true, secs, bytes, tooBig,
