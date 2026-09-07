@@ -75,6 +75,41 @@ function cleanEndpoint(url, fallback) {
   return String(url || fallback).trim().replace(/\/+$/, '');
 }
 
+/**
+ * The error for a failed Modal call, with a 404 spelled out.
+ *
+ * A 404 from a *.modal.run host is never "the app errored" — it means no app
+ * of that name is deployed in that workspace, so the request never reached
+ * any code. That is a config problem, and it cost hours once because the
+ * message read like a normal upstream failure. This one names the workspace
+ * and app slug parsed out of the URL and the env var to fix, so a
+ * one-character typo in an endpoint reads as one.
+ */
+function modalError(label, resp, body, endpoint, envVar, deployedAs) {
+  if (body?.error) {
+    const err = new Error(body.error);
+    err.status = resp.status || 502;
+    return err;
+  }
+  if (resp.status === 404) {
+    const host = String(endpoint).replace(/^https?:\/\//, '').split('/')[0];
+    const m = host.match(/^([^-]+)--(.+)-([^-]+)\.modal\.run$/);
+    const detail = m
+      ? `no Modal app named "${m[2]}" is deployed in workspace "${m[1]}"`
+      : `${host} is not a deployed Modal endpoint`;
+    const err = new Error(
+      `${label}: ${detail} (HTTP 404 calling ${endpoint}). ` +
+        `Fix ${envVar} in Vercel → Settings → Environment Variables, then redeploy. ` +
+        `The "Deploy Modal apps" workflow deploys this one as ${deployedAs}<suffix>.`,
+    );
+    err.status = 404;
+    return err;
+  }
+  const err = new Error(`${label} HTTP ${resp.status} calling ${endpoint}`);
+  err.status = resp.status || 502;
+  return err;
+}
+
 /** Stay under Vercel’s 4.5MB JSON body limit (request + response). */
 const SAFE_JSON_BYTES = 3_200_000;
 
@@ -695,11 +730,9 @@ async function generateModalSdxlImage({
     // Naming the URL matters more than it looks: a 404 here means the site is
     // pointed at an app that does not exist, and the only way to tell which is
     // to say which one was called. Endpoints are public URLs, not secrets.
-    const err = new Error(
-      body.error || `Modal SDXL HTTP ${resp.status} calling ${MODAL_SDXL_ENDPOINT}`,
+    throw modalError(
+      'Modal SDXL', resp, body, MODAL_SDXL_ENDPOINT, 'MODAL_SDXL_ENDPOINT', 'sdxl-nsfw',
     );
-    err.status = resp.status || 502;
-    throw err;
   }
 
   // images_base64 is the batch shape; image_base64 is the older singular key,
@@ -766,11 +799,9 @@ async function generateModalWanVideo({
 
   const body = await resp.json().catch(() => ({}));
   if (!resp.ok || !body.video_base64) {
-    const err = new Error(
-      body.error || `Modal Wan HTTP ${resp.status} calling ${MODAL_WAN_ENDPOINT}`,
+    throw modalError(
+      'Modal Wan', resp, body, MODAL_WAN_ENDPOINT, 'MODAL_WAN_ENDPOINT', 'wan-video',
     );
-    err.status = resp.status || 502;
-    throw err;
   }
 
   return {
@@ -822,11 +853,9 @@ async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds }) 
 
   const body = await resp.json().catch(() => ({}));
   if (!resp.ok || !body.video_base64) {
-    const err = new Error(
-      body.error || `Modal LTX HTTP ${resp.status} calling ${MODAL_LTX_ENDPOINT}`,
+    throw modalError(
+      'Modal LTX', resp, body, MODAL_LTX_ENDPOINT, 'MODAL_LTX_ENDPOINT', 'ltx-video',
     );
-    err.status = resp.status || 502;
-    throw err;
   }
 
   return {
