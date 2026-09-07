@@ -94,8 +94,19 @@ LIGHTNING_LORA_WEIGHT = os.environ.get(
 
 FAST_STEPS = 8
 FAST_GUIDANCE = 1.0
-FULL_STEPS = 30      # measured: 4x 1024x1024 in 56.4s on an L4, 14.1s each
+FULL_STEPS = 30
 FULL_GUIDANCE = 6.0
+
+# Full steps by default. Lightning renders four 1024px images in 2.7s against
+# 18.9s, but it is distilled to run at guidance 1.0, and at that guidance the
+# model barely follows the prompt: "girl at a hot dog festival in an eating
+# contest" came back as a lone head. Prompt adherence is the product; 4.7s an
+# image at full guidance on an A100 is already fast enough that trading it
+# away for 0.7s is a bad deal.
+#
+# Still available per request with {"fast": true}, or flip the default with
+# SDXL_FAST=1.
+FAST_BY_DEFAULT = os.environ.get("SDXL_FAST") == "1"
 
 # Batch ceiling. Four 1024px images fit an L4 comfortably alongside a resident
 # SDXL; past that the activations start competing with the weights.
@@ -277,6 +288,7 @@ class SDXL:
         self._cnet = None
         self._pose_det = None
         self.fast = False
+        self.lightning_available = False
         self.lora_error = None
 
     def _sibling(self, name: str, kind: str):
@@ -354,7 +366,9 @@ class SDXL:
         # in and out; a LoRA fused into the outgoing weights goes with them.
         # A failure here must not take generation down - it falls back to full
         # steps, which is slower but correct, and the response says so.
-        self.fast = False
+        self.lightning_available = False
+        self._sched_full = None
+        self._sched_fast = None
         self.lora_error = None if LIGHTNING_LORA_REPO else "no LoRA configured"
         if LIGHTNING_LORA_REPO:
             try:
@@ -363,12 +377,20 @@ class SDXL:
                 kwargs = {"cache_dir": "/cache/hf"}
                 if LIGHTNING_LORA_WEIGHT:
                     kwargs["weight_name"] = LIGHTNING_LORA_WEIGHT
+                # NOT fused: fusing bakes the LoRA into the weights for the
+                # life of the container, which would force every request to
+                # the distilled model. Left as a switchable adapter so quality
+                # and speed are a per-request choice.
                 pipe.load_lora_weights(LIGHTNING_LORA_REPO, **kwargs)
-                pipe.fuse_lora()
-                pipe.scheduler = EulerDiscreteScheduler.from_config(
+                pipe.disable_lora()
+                # Lightning was trained on the trailing timestep schedule and
+                # produces mush on the default "leading"; the stock scheduler
+                # is kept so full-step renders are unaffected.
+                self._sched_full = pipe.scheduler
+                self._sched_fast = EulerDiscreteScheduler.from_config(
                     pipe.scheduler.config, timestep_spacing="trailing"
                 )
-                self.fast = True
+                self.lightning_available = True
             except Exception as exc:
                 # Into the response, not just Modal's logs: a silent fallback
                 # to 30 steps is a 4x slowdown that looks identical to
@@ -421,8 +443,9 @@ class SDXL:
         width: int = 1024,
         height: int = 1024,
         seed: int = 42,
-        steps: int | None = None,       # None: FAST_STEPS if Lightning loaded
+        steps: int | None = None,       # None: follows `fast`
         guidance_scale: float | None = None,
+        fast: bool | None = None,       # None: FAST_BY_DEFAULT
         n: int = 1,
         fmt: str = "webp",
         mode: str = "text",
@@ -436,8 +459,16 @@ class SDXL:
         name = model if model in CHECKPOINTS else DEFAULT_MODEL
         pipe = self._pipe(name)
 
-        # Resolved after _pipe(), which is what decides whether Lightning is
-        # actually fused onto this checkpoint.
+        # Resolved after _pipe(), which is what loads the adapter.
+        want_fast = FAST_BY_DEFAULT if fast is None else bool(fast)
+        self.fast = want_fast and self.lightning_available
+        if self.lightning_available:
+            if self.fast:
+                pipe.enable_lora()
+                pipe.scheduler = self._sched_fast
+            else:
+                pipe.disable_lora()
+                pipe.scheduler = self._sched_full
         if steps is None:
             steps = FAST_STEPS if self.fast else FULL_STEPS
         if guidance_scale is None:
@@ -561,6 +592,7 @@ def generate(payload: dict) -> dict:
             height=int(payload.get("height") or 1024),
             seed=int(payload.get("seed") or 42),
             steps=int(payload["steps"]) if payload.get("steps") else None,
+            fast=payload.get("fast"),
             guidance_scale=(
                 float(payload["guidance_scale"]) if payload.get("guidance_scale") else None
             ),
