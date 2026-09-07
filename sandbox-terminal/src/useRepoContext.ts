@@ -59,6 +59,7 @@ export interface RepoContextActions {
   setPendingChanges: (changes: PendingChange[]) => void;
   /** Write pending (or explicitly provided) changes to disk/sandbox. */
   applyChanges:    (files?: PendingChange[]) => Promise<{ path: string; ok: boolean; error?: string }[]>;
+  refreshTree:     () => Promise<void>;
   clearChanges:    () => void;
 }
 
@@ -258,6 +259,31 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
 
   const clearContext = useCallback(() => setContextFiles(new Map()), []);
 
+  /**
+   * Re-read the project tree from the sandbox.
+   *
+   * The tree was only ever populated by openRepo / startBlankProject, so
+   * every file the agent wrote after that stayed invisible in the sidebar —
+   * a blank project that had just had a whole app written into it still
+   * showed nothing but README.md.
+   */
+  const refreshTree = useCallback(async () => {
+    if (!root && !sandboxId) return;
+    try {
+      const url = sandboxId
+        ? `${API_URL}/files`
+        : `${API_URL}/files?root=${encodeURIComponent(root)}`;
+      const res = await fetch(url, {
+        headers: sandboxId ? { 'X-Sandbox-Session': sandboxId } : {},
+      });
+      if (!res.ok) return;
+      const data = await res.json() as { tree?: FileNode[]; totalFiles?: number };
+      if (!Array.isArray(data.tree)) return;
+      setTree(data.tree);
+      setTotalFiles(data.totalFiles ?? 0);
+    } catch { /* the tree is a convenience — never fail a write over it */ }
+  }, [root, sandboxId]);
+
   const applyChanges = useCallback(async (files?: PendingChange[]) => {
     // Prefer an explicit list — callers that just received model output must
     // not wait on React state (pendingChanges) or they race and write nothing.
@@ -277,13 +303,42 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
       ? { files: toWrite.map(c => ({ path: c.path, content: c.content })) }
       : { root, files: toWrite.map(c => ({ path: c.path, content: c.content })) };
 
-    const res = await fetch(`${API_URL}/write-files`, {
-      method: 'POST',
-      headers: sessionHeaders(),
-      body: JSON.stringify(body),
-    });
-    const data = await res.json() as { results: Array<{ path: string; written: boolean; error?: string }> };
-    const results = (data.results ?? []).map(r => ({ path: r.path, ok: r.written, error: r.error }));
+    // A failed write must never look like a successful one. write-files
+    // answers `{ error }` (no `results`) when the session is gone or the
+    // sandbox is unconfigured, and Vercel can answer with non-JSON on a
+    // hard error — both used to collapse to an empty result list, which
+    // renders no banner at all. The chat then said the app was built while
+    // nothing had been written.
+    let data: { results?: Array<{ path: string; written: boolean; error?: string }>; error?: string } = {};
+    let res: Response;
+    try {
+      res = await fetch(`${API_URL}/write-files`, {
+        method: 'POST',
+        headers: sessionHeaders(),
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      return [
+        ...toWrite.map(c => ({ path: c.path, ok: false, error: `Could not reach the sandbox: ${reason}` })),
+        ...preFailedResults,
+      ];
+    }
+    try {
+      data = await res.json() as typeof data;
+    } catch {
+      data = { error: `Sandbox returned a non-JSON response (HTTP ${res.status})` };
+    }
+
+    if (!Array.isArray(data.results)) {
+      const reason = data.error || `write-files failed (HTTP ${res.status})`;
+      return [
+        ...toWrite.map(c => ({ path: c.path, ok: false, error: reason })),
+        ...preFailedResults,
+      ];
+    }
+
+    const results = data.results.map(r => ({ path: r.path, ok: r.written, error: r.error }));
     const written = new Set(results.filter(r => r.ok).map(r => r.path));
     // Immediately refresh open-context entries with the bytes we just wrote.
     // Re-fetch alone used to no-op when the path was already in the Map.
@@ -301,9 +356,11 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
       for (const p of written) {
         if (contextFiles.has(p)) await addToContext(p, { force: true });
       }
+      // New files exist on disk now — show them in the sidebar.
+      await refreshTree();
     }
     return [...results, ...preFailedResults];
-  }, [root, sandboxId, pendingChanges, contextFiles, sessionHeaders, addToContext]);
+  }, [root, sandboxId, pendingChanges, contextFiles, sessionHeaders, addToContext, refreshTree]);
 
   const clearChanges = useCallback(() => setPendingChanges([]), []);
 
@@ -314,6 +371,6 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     rustReady, rustDetail,
     goReady, goDetail,
     openRepo, startBlankProject, addToContext, injectContextFile, removeFromContext, clearContext,
-    setPendingChanges, applyChanges, clearChanges,
+    setPendingChanges, applyChanges, clearChanges, refreshTree,
   };
 }

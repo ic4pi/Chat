@@ -93,6 +93,7 @@ Chat history, active chat / persona / model selection, sidebar preferences, and 
 | `/api/animate-sequence` | Frame-chain AI animation → video | none (keys server-side; prefer local CLI) |
 | `/api/group-chat` | Multi-persona round-table | none (keys server-side) |
 | `/api/generate` | Multi-LLM code-slice orchestrator (`POST /generate` rewrite). Needs `OPENROUTER_API_KEY` (or BYOK), Vercel Pro for `maxDuration: 300`, and an open Workspace sandbox to apply files. Default slices: HTML/CSS/JS (max 6). | none (keys server-side) |
+| `/api/preview-start` | Starts a dev server in the Workspace sandbox and returns its public URL. With no `command` it picks one from the project: `package.json` `dev`/`start` script (running `npm install` first when `node_modules` is missing), else a built-in static file server for a plain `index.html` site. A command that dies on boot returns its log tail instead of a URL. | none |
 | `/api/models?provider=venice` | Live Venice model catalog | none |
 | `/api/public-config` | Persona IDs and names (no prompts) | none |
 | `/api/admin-config` | Full config incl. system prompts | HTTP Basic auth |
@@ -105,6 +106,20 @@ vercel dev
 ```
 
 `vercel dev` reads env vars from Vercel (or from a local `.env` file). Without a real KV connection you'll see the fallback behavior described above.
+
+### Checking the Workspace end to end
+
+```
+npm run check:workspace
+```
+
+Drives the whole `/agent` "build me an app" path — `init-blank` → parse a model
+reply → `write-files` → file tree → `detect-test-command` → run the smoke test →
+`preview-start` → fetch the served app → click through it in headless Chromium.
+It runs against a local stand-in sandbox (`scripts/workspace-harness/`), so it
+needs **no** Vercel Sandbox or model credentials. The browser step is skipped
+with a printed note if `sandbox-terminal/node_modules` or a Chromium binary is
+missing; everything else still runs.
 
 ## Files
 
@@ -123,3 +138,6 @@ vercel dev
 - `scripts/animate-sequence.mjs` — CLI: `npm run animate -- --prompt "…"`.
 - `api/animate-sequence.js` — optional HTTP entry for the same workflow.
 - `public/admin.js`, `public/admin.css` — admin UI logic + styles (referenced by the inlined admin HTML in `api/admin.js`).
+- `sandbox-terminal/` — Workspace (`/agent`) UI source. Build with `npm run build` inside it, then copy `dist/` over `public/agent/` — that prebuilt copy is what the deployment serves.
+- `lib/sandbox-api/static-server.js` — the small static file server dropped into the sandbox so a plain HTML/CSS/JS app can be previewed.
+- `scripts/check-workspace.mjs` — end-to-end Workspace check (see above).

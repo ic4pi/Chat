@@ -19,7 +19,10 @@ interface Props {
 }
 
 export function PreviewPanel({ sandboxId, detectedPort }: Props) {
-  const [command, setCommand] = useState('npm run dev');
+  // Empty means "auto": the server picks from the project shape (npm dev/start
+  // script, or a built-in static server for a plain index.html site).
+  const [command, setCommand] = useState('');
+  const [startedWith, setStartedWith] = useState<string | null>(null);
   const [port, setPort] = useState<string>(String(detectedPort ?? 3000));
   const [url, setUrl] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -46,15 +49,23 @@ export function PreviewPanel({ sandboxId, detectedPort }: Props) {
     }
     setStarting(true);
     setError(null);
+    setStartedWith(null);
     try {
       const res = await fetch(`${API_URL}/preview-start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Sandbox-Session': sandboxId },
         body: JSON.stringify({ command, port: p }),
       });
-      const data = await res.json() as { url?: string; error?: string };
+      const data = await res.json() as {
+        url?: string; error?: string; command?: string; source?: string;
+      };
       if (!res.ok || !data.url) throw new Error(data.error || `HTTP ${res.status}`);
       setUrl(data.url);
+      setStartedWith(
+        data.command
+          ? `${data.command}${data.source ? `  ·  ${data.source}` : ''}`
+          : null,
+      );
       setReloadKey(k => k + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -69,7 +80,7 @@ export function PreviewPanel({ sandboxId, detectedPort }: Props) {
         <input
           value={command}
           onChange={e => setCommand(e.target.value)}
-          placeholder="npm run dev"
+          placeholder="auto-detect (npm run dev, or static server)"
           style={{ flex: 1, background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
             borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 12 }}
         />
@@ -104,8 +115,16 @@ export function PreviewPanel({ sandboxId, detectedPort }: Props) {
       </div>
 
       {error && (
-        <div style={{ padding: '8px 12px', color: '#ff9b9b', fontSize: 12, borderBottom: '1px solid #191D27' }}>
+        <div style={{ padding: '8px 12px', color: '#ff9b9b', fontSize: 12, borderBottom: '1px solid #191D27',
+          whiteSpace: 'pre-wrap', fontFamily: 'inherit', maxHeight: 160, overflow: 'auto' }}>
           {error}
+        </div>
+      )}
+
+      {!error && startedWith && (
+        <div style={{ padding: '6px 12px', color: '#656C7E', fontSize: 11, borderBottom: '1px solid #191D27',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {startedWith}
         </div>
       )}
 
@@ -120,7 +139,8 @@ export function PreviewPanel({ sandboxId, detectedPort }: Props) {
       ) : (
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
           color: '#656C7E', fontSize: 12, textAlign: 'center', padding: 20 }}>
-          Start a dev server (or run one from chat) and hit "Start preview" to see it live here.
+          Hit "Start preview" — Workspace picks the right command for the project
+          (npm dev script, or a built-in static server for a plain HTML site).
         </div>
       )}
     </div>
