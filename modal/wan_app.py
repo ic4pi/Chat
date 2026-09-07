@@ -40,10 +40,20 @@ DEFAULT_FPS = 16
 # roughly an order of magnitude off a clip. guidance_scale MUST be 1.0 with it —
 # a distilled model given real CFG produces burnt, oversaturated frames.
 #
-# Set LIGHTNING_LORA_REPO="" to deploy without it and fall back to full steps.
-LIGHTNING_LORA_REPO = os.environ.get(
-    "WAN_LIGHTNING_LORA_REPO", "lightx2v/Wan2.2-Lightning"
-)
+# OFF by default, because it cannot work with this model. Every weight file in
+# lightx2v/Wan2.2-Lightning is for a Wan 2.2 A14B variant - T2V-A14B and
+# I2V-A14B, hidden dim 5120 - and this app runs TI2V-5B, dim 3072. Loading it
+# fails with a shape mismatch on every block:
+#
+#   size mismatch for blocks.0.attn1.to_q.lora_A.default_0.weight: copying a
+#   param with shape [64, 5120] ... the shape in current model is [64, 3072]
+#
+# There is no TI2V-5B Lightning LoRA in that repo, so the 4-step path this was
+# written for has never been reachable. Leaving it on cost a download and a
+# failed load on every cold container while quietly running 40 steps. Point
+# WAN_LIGHTNING_LORA_REPO (and _WEIGHT) at a real TI2V-5B distillation if one
+# appears, or switch MODEL_ID to an A14B variant to use these.
+LIGHTNING_LORA_REPO = os.environ.get("WAN_LIGHTNING_LORA_REPO", "")
 LIGHTNING_LORA_WEIGHT = os.environ.get("WAN_LIGHTNING_LORA_WEIGHT", "")
 
 FAST_STEPS = 4
