@@ -110,6 +110,73 @@ function modalError(label, resp, body, endpoint, envVar, deployedAs) {
   return err;
 }
 
+/**
+ * Modal endpoints, resolved rather than trusted.
+ *
+ * A Modal web endpoint's URL is workspace + app name + function name, so the
+ * whole address is one hand-typed string in a Vercel env var. One wrong
+ * character there ("sdx1" for "sdxl") 404s every request, and a 404 from a
+ * *.modal.run host is indistinguishable from any other upstream failure
+ * unless you go and read the URL — which is exactly how a one-character typo
+ * took image generation down for days.
+ *
+ * So each app carries an ordered list of addresses: whatever is configured
+ * first, then the app names the deploy workflow actually creates. A 404 is
+ * treated as "no app of that name" and moves to the next candidate; the first
+ * one that answers is remembered for the rest of the container's life. A
+ * typo'd env var costs one wasted round trip, not an outage.
+ */
+const MODAL_WORKSPACE = 'ic4pi';
+
+function modalHostParts(url) {
+  const host = String(url || '').replace(/^https?:\/\//, '').split('/')[0];
+  const m = host.match(/^([^-]+)--(.+)-([^-.]+)\.modal\.run$/);
+  return m ? { workspace: m[1], app: m[2], fn: m[3] } : null;
+}
+
+function modalApp(label, envVar, base) {
+  const configured = process.env[envVar] ? cleanEndpoint(process.env[envVar]) : null;
+  const workspace = modalHostParts(configured)?.workspace || MODAL_WORKSPACE;
+  // "-v2" is what the deploy workflow appends by default; the bare name is
+  // the original app it deploys beside.
+  const derived = [`${base}-v2`, base].map(
+    app => `https://${workspace}--${app}-generate.modal.run`,
+  );
+  return {
+    label,
+    envVar,
+    base,
+    candidates: [...new Set([...(configured ? [configured] : []), ...derived])],
+    idx: 0,
+  };
+}
+
+/** The current address for one of an app's endpoints (generate/warm/submit/result). */
+function modalUrl(app, fn = 'generate') {
+  return app.candidates[app.idx].replace(/-generate(\.modal\.run)$/, `-${fn}$1`);
+}
+
+/**
+ * POST to a Modal endpoint, advancing to the next candidate app name on a 404.
+ *
+ * If every candidate 404s the app pointer is put back where it started: a 404
+ * can also mean "this app is deployed but has no such function" (older apps
+ * expose only `generate`), and that must not leave the app pointed somewhere
+ * it was never configured to be.
+ */
+async function modalFetch(app, fn, init) {
+  const started = app.idx;
+  let resp = null;
+  while (true) {
+    resp = await fetch(modalUrl(app, fn), init);
+    if (resp.status !== 404) return resp;
+    if (app.idx >= app.candidates.length - 1) break;
+    app.idx += 1;
+  }
+  app.idx = started;
+  return resp;
+}
+
 /** Stay under Vercel’s 4.5MB JSON body limit (request + response). */
 const SAFE_JSON_BYTES = 3_200_000;
 
@@ -622,10 +689,7 @@ async function generateCloudflareImage({ prompt, model, size, negativePrompt }) 
  * Two checkpoints: lustify (realistic) and wai-illustrious (anime/illustration).
  * Env: MODAL_SDXL_ENDPOINT (defaults to the deployed endpoint below).
  */
-const MODAL_SDXL_ENDPOINT = cleanEndpoint(
-  process.env.MODAL_SDXL_ENDPOINT,
-  'https://ic4pi--sdxl-nsfw-generate.modal.run',
-);
+const MODAL_SDXL = modalApp('Modal SDXL', 'MODAL_SDXL_ENDPOINT', 'sdxl-nsfw');
 
 const MODAL_IMAGE_MODELS = {
   lustify: 'lustify',
@@ -649,13 +713,12 @@ const MODAL_IMAGE_MODELS = {
  * segment. Deriving them keeps one env var per app rather than four that can
  * drift apart.
  */
+function modalAppFor(model) {
+  return /ltx/i.test(model) ? MODAL_LTX : /wan/i.test(model) ? MODAL_WAN : MODAL_SDXL;
+}
+
 function modalEndpoint(model, fn) {
-  const base = /ltx/i.test(model)
-    ? MODAL_LTX_ENDPOINT
-    : /wan/i.test(model)
-      ? MODAL_WAN_ENDPOINT
-      : MODAL_SDXL_ENDPOINT;
-  return base.replace(/-generate(\.modal\.run)$/, `-${fn}$1`);
+  return modalUrl(modalAppFor(model), fn);
 }
 
 function warmEndpointFor(model) {
@@ -702,7 +765,7 @@ async function generateModalSdxlImage({
     throw err;
   }
 
-  const resp = await fetch(MODAL_SDXL_ENDPOINT, {
+  const resp = await modalFetch(MODAL_SDXL, 'generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -731,7 +794,7 @@ async function generateModalSdxlImage({
     // pointed at an app that does not exist, and the only way to tell which is
     // to say which one was called. Endpoints are public URLs, not secrets.
     throw modalError(
-      'Modal SDXL', resp, body, MODAL_SDXL_ENDPOINT, 'MODAL_SDXL_ENDPOINT', 'sdxl-nsfw',
+      MODAL_SDXL.label, resp, body, modalUrl(MODAL_SDXL), MODAL_SDXL.envVar, MODAL_SDXL.base,
     );
   }
 
@@ -757,10 +820,7 @@ async function generateModalSdxlImage({
  * nothing here moderates the prompt).
  * Env: MODAL_WAN_ENDPOINT (defaults to the deployed endpoint below).
  */
-const MODAL_WAN_ENDPOINT = cleanEndpoint(
-  process.env.MODAL_WAN_ENDPOINT,
-  'https://ic4pi--wan-video-generate.modal.run',
-);
+const MODAL_WAN = modalApp('Modal Wan', 'MODAL_WAN_ENDPOINT', 'wan-video');
 
 async function generateModalWanVideo({
   prompt,
@@ -781,7 +841,7 @@ async function generateModalWanVideo({
   // sent here.
   const num_clips = Math.min(6, Math.max(1, Math.round((Number(seconds) || 5) / 5)));
 
-  const resp = await fetch(MODAL_WAN_ENDPOINT, {
+  const resp = await modalFetch(MODAL_WAN, 'generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     // fetch follows 303 redirects automatically (and correctly switches to GET,
@@ -800,7 +860,7 @@ async function generateModalWanVideo({
   const body = await resp.json().catch(() => ({}));
   if (!resp.ok || !body.video_base64) {
     throw modalError(
-      'Modal Wan', resp, body, MODAL_WAN_ENDPOINT, 'MODAL_WAN_ENDPOINT', 'wan-video',
+      MODAL_WAN.label, resp, body, modalUrl(MODAL_WAN), MODAL_WAN.envVar, MODAL_WAN.base,
     );
   }
 
@@ -823,10 +883,7 @@ async function generateModalWanVideo({
  * request/response shape and clip-chaining approach as generateModalWanVideo.
  * Env: MODAL_LTX_ENDPOINT (defaults to the deployed endpoint below).
  */
-const MODAL_LTX_ENDPOINT = cleanEndpoint(
-  process.env.MODAL_LTX_ENDPOINT,
-  'https://ic4pi--ltx-video-generate.modal.run',
-);
+const MODAL_LTX = modalApp('Modal LTX', 'MODAL_LTX_ENDPOINT', 'ltx-video');
 
 async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds }) {
   const dims = String(size || '704x480').split(/[x*]/i).map(Number);
@@ -837,7 +894,7 @@ async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds }) 
 
   const num_clips = Math.min(6, Math.max(1, Math.round((Number(seconds) || 5) / 5)));
 
-  const resp = await fetch(MODAL_LTX_ENDPOINT, {
+  const resp = await modalFetch(MODAL_LTX, 'generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -854,7 +911,7 @@ async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds }) 
   const body = await resp.json().catch(() => ({}));
   if (!resp.ok || !body.video_base64) {
     throw modalError(
-      'Modal LTX', resp, body, MODAL_LTX_ENDPOINT, 'MODAL_LTX_ENDPOINT', 'ltx-video',
+      MODAL_LTX.label, resp, body, modalUrl(MODAL_LTX), MODAL_LTX.envVar, MODAL_LTX.base,
     );
   }
 
@@ -935,7 +992,7 @@ export default async function handler(req, res) {
     }
 
     const geo = videoGeometry(jm, js);
-    const upstream = await fetch(modalEndpoint(jm, 'submit'), {
+    const upstream = await modalFetch(modalAppFor(jm), 'submit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -981,7 +1038,7 @@ export default async function handler(req, res) {
     const { jobId, model: rm, accessKey: rk } = req.body || {};
     if (!jobId) return res.status(400).json({ error: 'jobId is required' });
 
-    const upstream = await fetch(modalEndpoint(rm, 'result'), {
+    const upstream = await modalFetch(modalAppFor(rm), 'result', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ job_id: jobId }),
