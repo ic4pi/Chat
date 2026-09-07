@@ -195,6 +195,48 @@ for filename, (app_name, cls_name, vol_name, endpoints) in EXPECTED.items():
     )
 
 
+# ── the video effect paths the site actually calls ──────────────────────────
+# Wan restyle sends video+strength; LTX keyframes sends a keyframes list. A
+# renamed parameter here is silent: FastAPI hands the endpoint a plain dict,
+# so an unread key is dropped and the effect just does not happen.
+
+import inspect
+
+EFFECTS = {
+    "wan_app.py": ("Wan", ["video", "strength"], "restyle"),
+    "ltx_app.py": ("LTX", ["keyframes"], "keyframes"),
+}
+
+for filename, (cls_name, params, effect) in EFFECTS.items():
+    mod = modules[filename]
+    run = mod.app.classes[cls_name][0].run
+    accepted = inspect.signature(run).parameters
+    for param in params:
+        check(
+            param in accepted,
+            f"{filename}: {effect} - run() accepts {param}",
+            f"signature: {list(accepted)}",
+        )
+    src = open(os.path.join(HERE, filename)).read()
+    submit = src[src.index("def submit("):]
+    submit = submit[: submit.index("@app.function")] if "@app.function" in submit else submit
+    for param in params:
+        check(
+            f'payload.get("{param}")' in submit,
+            f"{filename}: {effect} - submit() forwards {param} from the request body",
+        )
+
+# Every app must expose the async pair, or long clips fall back to a single
+# blocking request bounded by Vercel's function timeout.
+for filename in ("ltx_app.py", "wan_app.py"):
+    fns = set(modules[filename].app.functions)
+    check(
+        {"submit", "result"} <= fns,
+        f"{filename}: exposes the async submit/result pair",
+        f"has {sorted(fns)}",
+    )
+
+
 # ── the fp16 fallback, exercised for real ───────────────────────────────────
 
 sdxl = modules["sdxl_app.py"]
