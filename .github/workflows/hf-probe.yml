@@ -1,0 +1,82 @@
+# Asks Hugging Face which model repos actually exist, from a runner that can
+# reach it. Diagnostic only — deploys nothing, needs no GPU.
+#
+# The Modal deploy failed with RepositoryNotFoundError (401) on the SDXL
+# checkpoint, and modal/sdxl_app.py has always carried a warning that its
+# checkpoint sources were reconstructed and unverified. Guessing repo ids one
+# `modal deploy` at a time costs ten minutes a guess; this answers it in one.
+name: Probe Hugging Face models
+
+on:
+  workflow_dispatch:
+    inputs:
+      search:
+        description: 'Comma-separated search terms'
+        required: false
+        default: 'lustify,wai-nsfw-illustrious'
+      check:
+        description: 'Comma-separated exact repo ids to check'
+        required: false
+        default: >-
+          John6666/lustify-sdxl-nsfw-checkpoint-v20-sdxl,
+          John6666/wai-nsfw-illustrious-sdxl-v110-sdxl,
+          xinsir/controlnet-openpose-sdxl-1.0,
+          lllyasviel/Annotators,
+          Lightricks/LTX-Video,
+          Wan-AI/Wan2.2-TI2V-5B-Diffusers
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check exact repo ids
+        env:
+          IDS: ${{ inputs.check }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          echo "## Exact repo ids" >> "$GITHUB_STEP_SUMMARY"
+          auth=()
+          [ -n "${HF_TOKEN:-}" ] && auth=(-H "Authorization: Bearer $HF_TOKEN")
+          echo "$IDS" | tr ',' '\n' | while read -r raw; do
+            id=$(printf '%s' "$raw" | xargs)
+            [ -z "$id" ] && continue
+            code=$(curl -s -o /tmp/r.json -w '%{http_code}' \
+              "${auth[@]}" "https://huggingface.co/api/models/$id")
+            case "$code" in
+              200) note=$(python3 -c "
+import json
+d=json.load(open('/tmp/r.json'))
+f=[s['rfilename'] for s in d.get('siblings',[])]
+print(('gated' if d.get('gated') else 'public'),
+      '| fp16 variant:', 'yes' if any('fp16' in x for x in f) else 'no',
+      '| safetensors:', sum(1 for x in f if x.endswith('.safetensors')))
+") ;;
+              401|403) note="NOT ACCESSIBLE (gated or private — needs HF_TOKEN)" ;;
+              404) note="DOES NOT EXIST" ;;
+              *)   note="HTTP $code" ;;
+            esac
+            echo "$code  $id  —  $note"
+            echo "- \`$id\` — $code — $note" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Search for replacements
+        env:
+          TERMS: ${{ inputs.search }}
+        run: |
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Search results" >> "$GITHUB_STEP_SUMMARY"
+          echo "$TERMS" | tr ',' '\n' | while read -r raw; do
+            term=$(printf '%s' "$raw" | xargs)
+            [ -z "$term" ] && continue
+            echo "=== $term ==="
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "### $term" >> "$GITHUB_STEP_SUMMARY"
+            curl -s "https://huggingface.co/api/models?search=$term&limit=40&full=false&sort=downloads&direction=-1" \
+              | python3 -c "
+import json,sys
+for m in json.load(sys.stdin):
+    print(f\"{m.get('downloads',0):>9}  {'GATED' if m.get('gated') else '     '}  {m['id']}\")
+" | tee -a /tmp/out.txt
+            sed 's/^/- /' /tmp/out.txt >> "$GITHUB_STEP_SUMMARY" || true
+            : > /tmp/out.txt
+          done
