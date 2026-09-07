@@ -14,7 +14,8 @@
     "check:modal": "node scripts/check-modal-endpoints.mjs",
     "check:video": "node scripts/check-video-persist.mjs",
     "check:async": "node scripts/check-async-fallback.mjs",
-    "check:workspace": "node --experimental-strip-types scripts/check-workspace.mjs"
+    "check:workspace": "node --experimental-strip-types scripts/check-workspace.mjs",
+    "check:modal-apps": "python3 modal/check_apps.py"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",

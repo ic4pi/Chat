@@ -72,6 +72,78 @@ image = (
 app = modal.App(os.environ.get("MODAL_APP_NAME", "sdxl-nsfw"))
 cache = modal.Volume.from_name("sdxl-model-cache", create_if_missing=True)
 
+# Optional Hugging Face token. A token lifts Hub rate limits, which is what
+# turns a cold start into "model is not cached locally and an error occurred
+# while trying to fetch metadata from the Hub".
+#
+# Opt in by NAME, never by try/except: Secret.from_name() is lazy, so a
+# missing secret does not raise here — it fails the whole deploy later. Off
+# unless asked for:
+#   modal secret create huggingface-secret HF_TOKEN=hf_...
+#   MODAL_HF_SECRET=huggingface-secret modal deploy modal/sdxl_app.py
+_hf_secret_name = os.environ.get("MODAL_HF_SECRET", "").strip()
+hf_secret = [modal.Secret.from_name(_hf_secret_name)] if _hf_secret_name else []
+
+
+def _load_pipeline(cls, repo: str, torch_dtype, **kwargs):
+    """from_pretrained that survives a repo with no fp16 variant.
+
+    Community SDXL checkpoints (the John6666 conversions among them) ship one
+    set of plain *.safetensors — no *.fp16.safetensors. Asking for
+    variant="fp16" makes diffusers look for files that were never published,
+    and the resulting Hub miss surfaces as "model is not cached locally and an
+    error occurred while trying to fetch metadata from the Hub", which reads
+    like a network fault and is not one. Try the variant, fall back to plain.
+    """
+    try:
+        return cls.from_pretrained(
+            repo, torch_dtype=torch_dtype, variant="fp16", **kwargs
+        )
+    except Exception:
+        return cls.from_pretrained(repo, torch_dtype=torch_dtype, **kwargs)
+
+
+def download_weights():
+    """Populate the cache volume at deploy time.
+
+    Without this the first request to a cold container is also the first ~7GB
+    download from the Hub, inside the request path — so a slow or rate-limited
+    Hub does not mean "slow image", it means the request fails with an OSError
+    the site can only report verbatim. Deploy pays that cost once instead.
+
+    snapshot_download rather than from_pretrained: this runs on a CPU builder
+    and only needs the files on disk, not a pipeline instantiated in RAM.
+    """
+    from huggingface_hub import snapshot_download
+
+    # Weights ship as .safetensors; the .bin/.ckpt copies are the same tensors
+    # again and would double both the download and the volume.
+    dupes = ["*.bin", "*.ckpt", "*.msgpack", "*.onnx", "*.h5"]
+
+    for name, spec in CHECKPOINTS.items():
+        print(f"caching {name}: {spec['repo']}", flush=True)
+        snapshot_download(spec["repo"], cache_dir="/cache/hf", ignore_patterns=dupes)
+
+    print(f"caching controlnet: {POSE_CONTROLNET}", flush=True)
+    snapshot_download(POSE_CONTROLNET, cache_dir="/cache/hf", ignore_patterns=dupes)
+
+    try:
+        # The OpenPose annotator publishes .pth only — no ignore list here.
+        print("caching openpose annotator", flush=True)
+        snapshot_download("lllyasviel/Annotators", cache_dir="/cache/hf")
+    except Exception as exc:  # pose detection is optional, the rest is not
+        print(f"openpose annotator skipped: {exc}", flush=True)
+
+    cache.commit()
+    print("weights cached", flush=True)
+
+
+# Runs during `modal deploy`, writing straight into the volume the serving
+# class mounts, so a cold container finds the weights already on disk.
+image = image.env({"HF_HOME": "/cache/hf"}).run_function(
+    download_weights, volumes={"/cache": cache}, secrets=hf_secret, timeout=3600
+)
+
 
 def _decode_image(data: str):
     """Accept a bare base64 string or a full data: URL."""
@@ -116,6 +188,7 @@ def _expand_canvas(img, left: int, right: int, top: int, bottom: int):
     gpu="L4",
     image=image,
     volumes={"/cache": cache},
+    secrets=hf_secret,
     scaledown_window=300,
     timeout=1800,
 )
@@ -186,7 +259,10 @@ class SDXL:
         if self._pose_det is None:
             from controlnet_aux import OpenposeDetector
 
-            self._pose_det = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
+            # No cache_dir meant this re-downloaded on every cold container.
+            self._pose_det = OpenposeDetector.from_pretrained(
+                "lllyasviel/Annotators", cache_dir="/cache/hf"
+            )
         return self._pose_det(img, hand_and_face=True)
 
     def _pipe(self, name: str):
@@ -194,10 +270,10 @@ class SDXL:
             return self._loaded[name]
 
         spec = CHECKPOINTS[name]
-        pipe = self._cls.from_pretrained(
+        pipe = _load_pipeline(
+            self._cls,
             spec["repo"],
-            torch_dtype=self._torch.float16,
-            variant="fp16",
+            self._torch.float16,
             use_safetensors=True,
             cache_dir="/cache/hf",
             # The point of self-hosting is that nothing moderates the output.

@@ -62,6 +62,48 @@ image = (
 app = modal.App(os.environ.get("MODAL_APP_NAME", "ltx-video"))
 cache = modal.Volume.from_name("ltx-model-cache", create_if_missing=True)
 
+# Optional Hugging Face token. A token lifts Hub rate limits, which is what
+# turns a cold start into "model is not cached locally and an error occurred
+# while trying to fetch metadata from the Hub".
+#
+# Opt in by NAME, never by try/except: Secret.from_name() is lazy, so a
+# missing secret does not raise here — it fails the whole deploy later. Off
+# unless asked for:
+#   modal secret create huggingface-secret HF_TOKEN=hf_...
+#   MODAL_HF_SECRET=huggingface-secret modal deploy modal/sdxl_app.py
+_hf_secret_name = os.environ.get("MODAL_HF_SECRET", "").strip()
+hf_secret = [modal.Secret.from_name(_hf_secret_name)] if _hf_secret_name else []
+
+
+def download_weights():
+    """Populate the cache volume at deploy time.
+
+    Otherwise the first request to a cold container is also the first ~15GB
+    download from the Hub, inside the request path — a slow or rate-limited
+    Hub then fails the request instead of merely slowing it.
+
+    snapshot_download rather than from_pretrained: this runs on a CPU builder
+    and only needs the files on disk, not a pipeline instantiated in RAM.
+    """
+    from huggingface_hub import snapshot_download
+
+    print(f"caching {MODEL_ID}", flush=True)
+    snapshot_download(
+        MODEL_ID,
+        cache_dir="/cache/hf",
+        # Same tensors as the .safetensors copies.
+        ignore_patterns=["*.bin", "*.ckpt", "*.msgpack", "*.onnx", "*.h5"],
+    )
+    cache.commit()
+    print("weights cached", flush=True)
+
+
+# Runs during `modal deploy`, writing straight into the volume the serving
+# class mounts, so a cold container finds the weights already on disk.
+image = image.env({"HF_HOME": "/cache/hf"}).run_function(
+    download_weights, volumes={"/cache": cache}, secrets=hf_secret, timeout=3600
+)
+
 
 def _round_to(value: int, multiple: int, minimum: int) -> int:
     """LTX rejects dimensions that are not multiples of 32."""
@@ -72,6 +114,7 @@ def _round_to(value: int, multiple: int, minimum: int) -> int:
     gpu="L4",
     image=image,
     volumes={"/cache": cache},
+    secrets=hf_secret,
     scaledown_window=300,
     timeout=3600,
 )
