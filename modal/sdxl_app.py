@@ -290,10 +290,17 @@ class SDXL:
             requires_safety_checker=False,
         )
         # DPM++ 2M Karras reaches the same quality in ~20-25 steps that the
-        # default scheduler needs 30+ for.
-        pipe.scheduler = self._sched.from_config(
-            pipe.scheduler.config, use_karras_sigmas=True, algorithm_type="dpmsolver++"
-        )
+        # default scheduler needs 30+ for — but only when the checkpoint's own
+        # scheduler config is compatible with the Karras sigma schedule. On
+        # these community conversions it is not: generation dies with
+        # "IndexError: index 23 is out of bounds for dimension 0 with size 23"
+        # as the solver steps past the end of its own sigma array. A sampler
+        # optimisation is not worth a checkpoint that cannot render at all, so
+        # the model's own scheduler is the default and the swap is opt-in.
+        if os.environ.get("SDXL_KARRAS") == "1":
+            pipe.scheduler = self._sched.from_config(
+                pipe.scheduler.config, use_karras_sigmas=True, algorithm_type="dpmsolver++"
+            )
 
         # Resident on the GPU, NOT offloaded. SDXL in fp16 is ~7GB against the
         # L4's 24GB, so enable_model_cpu_offload() was shuttling weights across
@@ -327,7 +334,7 @@ class SDXL:
         width: int = 1024,
         height: int = 1024,
         seed: int = 42,
-        steps: int = 22,  # DPM++ 2M Karras; 30 was for the default scheduler
+        steps: int = 30,  # the checkpoint's own scheduler; 22 was for DPM++
         guidance_scale: float = 6.0,
         n: int = 1,
         fmt: str = "webp",
@@ -452,6 +459,7 @@ def generate(payload: dict) -> dict:
             width=int(payload.get("width") or 1024),
             height=int(payload.get("height") or 1024),
             seed=int(payload.get("seed") or 42),
+            steps=int(payload.get("steps") or 30),
             n=int(payload.get("n") or 1),
             fmt=str(payload.get("format") or "webp"),
             mode=str(payload.get("mode") or "text"),
