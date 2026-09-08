@@ -726,7 +726,7 @@ async function generateModalSdxlImage({
  */
 const MODAL_WAN_ENDPOINT = cleanEndpoint(
   process.env.MODAL_WAN_ENDPOINT,
-  'https://ic4pi--wan-video-generate.modal.run',
+  'https://ic4pi--wan-video-a14b-generate.modal.run',
 );
 
 async function generateModalWanVideo({
