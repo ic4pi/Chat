@@ -634,12 +634,27 @@ async function pollJob(jobId, model, accessKey) {
     const elapsed = Math.round((Date.now() - started) / 1000);
     setStatus(`Generating… ${elapsed}s. Self-hosted video takes minutes — safe to close this tab, come back anytime.`);
 
-    const pollRes = await fetch('/api/media-generate?op=result', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId, model, accessKey }),
-    });
-    const out = await pollRes.json().catch(() => ({}));
+    // A mobile connection dropping momentarily (locking the phone, switching
+    // wifi/cellular, backgrounding the tab) throws here — "Load failed" in
+    // Safari — before there is even a response to read. That is not the job
+    // failing, it is this one HTTP request failing; the generation is still
+    // running on Modal either way. Treated as transient like a "running"
+    // status: retry on the next tick rather than ending the wait.
+    let out;
+    try {
+      const pollRes = await fetch('/api/media-generate?op=result', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId, model, accessKey }),
+      });
+      out = await pollRes.json().catch(() => ({}));
+    } catch {
+      if (Date.now() - started > POLL_CEILING_MS) {
+        clearPendingJob();
+        throw new Error('Gave up waiting after an hour — the job outlived its Modal timeout.');
+      }
+      continue;
+    }
 
     if (out.status === 'done') {
       clearPendingJob();
