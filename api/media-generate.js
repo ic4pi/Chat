@@ -589,7 +589,7 @@ async function generateCloudflareImage({ prompt, model, size, negativePrompt }) 
  */
 const MODAL_SDXL_ENDPOINT = cleanEndpoint(
   process.env.MODAL_SDXL_ENDPOINT,
-  'https://ic4pi--sdxl-nsfw-generate.modal.run',
+  'https://ic4pi--sdxl-nsfw-v2-generate.modal.run',
 );
 
 const MODAL_IMAGE_MODELS = {
