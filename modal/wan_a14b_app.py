@@ -49,15 +49,21 @@ LIGHTNING_LORA_SUBFOLDER = os.environ.get(
 # public street). Same problem sdxl_app.py's checkpoints solved by using
 # lustify/wai-illustrious instead of stock SDXL. This is that fix for video:
 # a community NSFW LoRA, same high/low-noise-per-expert shape as Lightning,
-# stacked as a second adapter rather than replacing Lightning. Trained
-# against I2V-A14B, not T2V — same transformer architecture and dimensions,
-# so the delta should still apply, but this is unverified for T2V specifically.
-NSFW_LORA_REPO = os.environ.get("WAN_A14B_NSFW_LORA_REPO", "lopi999/Wan2.2-I2V_General-NSFW-LoRA")
-NSFW_LORA_HIGH_FILE = os.environ.get("WAN_A14B_NSFW_LORA_HIGH_FILE", "NSFW-22-H-e8.safetensors")
-NSFW_LORA_LOW_FILE = os.environ.get("WAN_A14B_NSFW_LORA_LOW_FILE", "NSFW-22-L-e8.safetensors")
-# The LoRA's own trigger word — appended to every prompt when the LoRA is
-# active, since it does nothing without it per the model card.
-NSFW_LORA_TRIGGER = os.environ.get("WAN_A14B_NSFW_LORA_TRIGGER", "nsfwsks")
+# stacked as a second adapter rather than replacing Lightning.
+#
+# First attempt (lopi999/Wan2.2-I2V_General-NSFW-LoRA) loaded without error
+# but didn't visibly change output — trained against I2V-A14B, not T2V, and
+# the delta apparently didn't transfer. This one ships T2V_14B_HIGH/LOW files
+# specifically (not just I2V), matching this app's architecture exactly.
+NSFW_LORA_REPO = os.environ.get("WAN_A14B_NSFW_LORA_REPO", "lopi999/Wan2.2-DR34ML4Y-AIO_NSFW-LoRA")
+NSFW_LORA_HIGH_FILE = os.environ.get("WAN_A14B_NSFW_LORA_HIGH_FILE", "DR34ML4Y_T2V_14B_HIGH_V2.safetensors")
+NSFW_LORA_LOW_FILE = os.environ.get("WAN_A14B_NSFW_LORA_LOW_FILE", "DR34ML4Y_T2V_14B_LOW_V2.safetensors")
+# The LoRA's own trigger words are specific acts/positions (m15510n4ry,
+# bl0wj0b, d0ubl3_bj, c0wg1rl, d0gg1e) rather than one generic on-switch —
+# appending a single fixed one would bias every generation toward that one
+# act, so this stays unset by default and the prompt itself should include
+# whichever trigger word fits, in place of NSFW_LORA_TRIGGER when set.
+NSFW_LORA_TRIGGER = os.environ.get("WAN_A14B_NSFW_LORA_TRIGGER", "")
 
 FAST_STEPS = 4
 FAST_GUIDANCE = 1.0
@@ -228,7 +234,7 @@ class WanA14B:
             guidance_scale = FAST_GUIDANCE if self.fast else FULL_GUIDANCE
 
         use_nsfw = nsfw and self.nsfw_available
-        run_prompt = f"{prompt}, {NSFW_LORA_TRIGGER}" if use_nsfw else prompt
+        run_prompt = f"{prompt}, {NSFW_LORA_TRIGGER}" if use_nsfw and NSFW_LORA_TRIGGER else prompt
 
         frames = self.pipe(
             prompt=run_prompt,
