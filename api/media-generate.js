@@ -46,6 +46,9 @@
  *   VIDEO_ACCESS_KEYS      — JSON array turning on per-person billing for both
  *                            Modal providers: [{"key","name","markupPct"}, ...]
  *                            Unset = Modal image/video stays open/unmetered.
+ *   MODAL_SHARED_SECRET    — sent as X-Modal-Secret on every Modal call. Unset
+ *                            by default (open); set it here and as the same
+ *                            env var on the Modal app(s) to require it.
  *   MODAL_L4_RATE_PER_HOUR — override the assumed Modal L4 $/hr used to
  *                            compute cost (default 0.80; check modal.com/pricing)
  *   ADMIN_USERNAME / ADMIN_PASSWORD — gates ?op=credit (see lib/auth.js)
@@ -73,6 +76,14 @@ import {
  *  so normalise rather than make a slash a config error. */
 function cleanEndpoint(url, fallback) {
   return String(url || fallback).trim().replace(/\/+$/, '');
+}
+
+/** Optional shared-secret header for calls to the Modal apps. Unset by
+ *  default (open, single-owner use) — set MODAL_SHARED_SECRET here and in
+ *  the Modal app's env of the same name to require it. */
+function modalAuthHeaders() {
+  const secret = (process.env.MODAL_SHARED_SECRET || '').trim();
+  return secret ? { 'X-Modal-Secret': secret } : {};
 }
 
 /** Stay under Vercel’s 4.5MB JSON body limit (request + response). */
@@ -865,7 +876,7 @@ export default async function handler(req, res) {
       // needs the answer.
       await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
         body: '{}',
         signal: AbortSignal.timeout(5000),
       });
@@ -908,7 +919,7 @@ export default async function handler(req, res) {
     const geo = videoGeometry(jm, js);
     const upstream = await fetch(modalEndpoint(jm, 'submit'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
       body: JSON.stringify({
         prompt: String(jp).trim(),
         negative_prompt: jn || undefined,
@@ -954,7 +965,7 @@ export default async function handler(req, res) {
 
     const upstream = await fetch(modalEndpoint(rm, 'result'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
       body: JSON.stringify({ job_id: jobId }),
     });
     const job = await upstream.json().catch(() => ({}));

@@ -24,6 +24,7 @@ import subprocess
 import tempfile
 import time
 
+import fastapi
 import modal
 
 MODEL_ID = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
@@ -59,6 +60,18 @@ FAST_STEPS = 4
 FAST_GUIDANCE = 1.0
 FULL_STEPS = 40      # measured: 832x480, ~6m20s for one 5s clip
 FULL_GUIDANCE = 5.0
+
+# Optional shared-secret gate on every web endpoint below. Unset by default —
+# same "unset = open, single-owner use" convention as VIDEO_ACCESS_KEYS in
+# api/media-generate.js. Set this (and MODAL_SHARED_SECRET in Vercel's env,
+# same name) to require the header on every call; leave both unset and the
+# app stays exactly as open as it is today.
+SHARED_SECRET = os.environ.get("MODAL_SHARED_SECRET", "")
+
+
+def _check_secret(x_modal_secret: str) -> None:
+    if SHARED_SECRET and x_modal_secret != SHARED_SECRET:
+        raise fastapi.HTTPException(status_code=401, detail="Invalid or missing X-Modal-Secret header.")
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -153,7 +166,7 @@ def _export_polished(frames, path: str, fps: int, upscale: int = 2) -> int:
 
 
 @app.cls(
-    gpu="L4",
+    gpu="A10G",
     image=image,
     volumes={"/cache": cache},
     # Weights are ~10GB off a cold volume; a short window makes every request
@@ -245,6 +258,41 @@ class Wan:
         weights by the time this runs, which is the entire point. Spawning
         run() instead would generate (and bill for) a real clip."""
         return {"ready": True}
+
+    @modal.method()
+    def generate(
+        self,
+        prompt: str,
+        negative_prompt: str = "",
+        height: int = 480,
+        width: int = 832,
+        num_frames: int = FRAMES_PER_CLIP,
+        fps: int = DEFAULT_FPS,
+        guidance_scale: float = FULL_GUIDANCE,
+    ) -> str:
+        """Minimal single-clip text-to-video entry point: one call into
+        self.t2v, no clip-chaining/i2v/restyle/Lightning branching that run()
+        does. Kept separate so the simple contract can't be perturbed by
+        run()'s other modes. Returns a base64-encoded mp4."""
+        import torch
+        from diffusers.utils import export_to_video
+
+        frames = self.t2v(
+            prompt=prompt,
+            negative_prompt=negative_prompt or None,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            num_inference_steps=FULL_STEPS,
+            guidance_scale=guidance_scale,
+            generator=torch.Generator("cpu").manual_seed(random.randint(1, 2**31 - 1)),
+            output_type="pil",
+        ).frames[0]
+
+        path = "/tmp/out_t2v.mp4"
+        export_to_video(frames, path, fps=fps)
+        with open(path, "rb") as fh:
+            return base64.b64encode(fh.read()).decode()
 
     @modal.method()
     def run(
@@ -364,9 +412,13 @@ class Wan:
 
 @app.function(image=image, timeout=3600)
 @modal.fastapi_endpoint(method="POST")
-def generate(payload: dict) -> dict:
+def generate(
+    payload: dict,
+    x_modal_secret: str = fastapi.Header(default="", alias="X-Modal-Secret"),
+) -> dict:
     """Thin CPU front door. Named `generate` because the deployed URL that
     api/media-generate.js targets is ic4pi--wan-video-generate.modal.run."""
+    _check_secret(x_modal_secret)
     prompt = (payload.get("prompt") or "").strip()
     if not prompt:
         return {"error": "Missing 'prompt'."}
@@ -391,18 +443,51 @@ def generate(payload: dict) -> dict:
 
 @app.function(image=image, timeout=60)
 @modal.fastapi_endpoint(method="POST")
-def warm() -> dict:
+def warm(
+    x_modal_secret: str = fastapi.Header(default="", alias="X-Modal-Secret"),
+) -> dict:
     """Kick a container into existence so @modal.enter() loads the weights.
 
     The browser calls this the moment someone focuses the prompt box, which
     buys ~60s of cold start back against time they were going to spend typing
     anyway. spawn() rather than remote() so it returns immediately instead of
     blocking the page for the whole load."""
+    _check_secret(x_modal_secret)
     try:
         Wan().ping.spawn()
         return {"warming": True}
     except Exception as exc:
         return {"warming": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+@app.function(image=image, timeout=3600)
+@modal.fastapi_endpoint(method="POST")
+def t2v(
+    payload: dict,
+    x_modal_secret: str = fastapi.Header(default="", alias="X-Modal-Secret"),
+) -> dict:
+    """Minimal text-to-video front door for Wan().generate() — single clip,
+    fixed shape (prompt, negative_prompt, height, width, num_frames, fps,
+    guidance_scale), no clip-chaining/i2v/restyle. URL:
+    ic4pi--wan-video-t2v.modal.run. Response: {video_base64}."""
+    _check_secret(x_modal_secret)
+    prompt = (payload.get("prompt") or "").strip()
+    if not prompt:
+        return {"error": "Missing 'prompt'."}
+
+    try:
+        video_b64 = Wan().generate.remote(
+            prompt=prompt,
+            negative_prompt=payload.get("negative_prompt") or "",
+            height=int(payload.get("height") or 480),
+            width=int(payload.get("width") or 832),
+            num_frames=int(payload.get("num_frames") or FRAMES_PER_CLIP),
+            fps=int(payload.get("fps") or DEFAULT_FPS),
+            guidance_scale=float(payload.get("guidance_scale") or FULL_GUIDANCE),
+        )
+        return {"video_base64": video_b64}
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
 
 
 # ---- Async job API -------------------------------------------------------
@@ -417,8 +502,12 @@ def warm() -> dict:
 
 @app.function(image=image, timeout=60)
 @modal.fastapi_endpoint(method="POST")
-def submit(payload: dict) -> dict:
+def submit(
+    payload: dict,
+    x_modal_secret: str = fastapi.Header(default="", alias="X-Modal-Secret"),
+) -> dict:
     """Start a generation and return immediately with its job id."""
+    _check_secret(x_modal_secret)
     prompt = (payload.get("prompt") or "").strip()
     if not prompt:
         return {"error": "Missing 'prompt'."}
@@ -444,12 +533,16 @@ def submit(payload: dict) -> dict:
 
 @app.function(image=image, timeout=60)
 @modal.fastapi_endpoint(method="POST")
-def result(payload: dict) -> dict:
+def result(
+    payload: dict,
+    x_modal_secret: str = fastapi.Header(default="", alias="X-Modal-Secret"),
+) -> dict:
     """Poll a job. Returns status "running" until the clip is ready.
 
     timeout=0 makes this a non-blocking check: Modal raises rather than
     holding the connection open, which is the whole point — a polling request
     that blocked would just move the timeout problem instead of solving it."""
+    _check_secret(x_modal_secret)
     job_id = (payload.get("job_id") or "").strip()
     if not job_id:
         return {"error": "Missing 'job_id'."}
