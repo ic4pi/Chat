@@ -134,7 +134,7 @@ def _export_polished(frames, path: str, fps: int, upscale: int = 2) -> int:
     out_fps = fps * 2
     vf = (
         f"scale=iw*{upscale}:ih*{upscale}:flags=lanczos,"
-        f"minterpolate=fps={out_fps}:mi_mode=mci:mc_mode=aobmc:vsbmc=1"
+        f"minterpolate=fps={out_fps}:mi_mode=blend"
     )
     try:
         import subprocess
