@@ -18,6 +18,7 @@ Deploy:  modal deploy modal/sdxl_app.py
 """
 
 import base64
+import random
 import io
 import os
 import time
@@ -412,7 +413,7 @@ def generate(payload: dict) -> dict:
             model=payload.get("model") or DEFAULT_MODEL,
             width=int(payload.get("width") or 1024),
             height=int(payload.get("height") or 1024),
-            seed=int(payload.get("seed") or 42),
+            seed=int(payload["seed"]) if payload.get("seed") else random.randint(1, 2**31 - 1),
             n=int(payload.get("n") or 1),
             fmt=str(payload.get("format") or "webp"),
             mode=str(payload.get("mode") or "text"),

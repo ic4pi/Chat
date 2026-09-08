@@ -15,6 +15,7 @@ Deploy:  modal deploy modal/ltx_app.py
 """
 
 import base64
+import random
 import io
 import os
 import time
@@ -319,7 +320,7 @@ def generate(payload: dict) -> dict:
             num_frames=int(payload.get("num_frames") or FRAMES_PER_CLIP),
             fps=int(payload.get("fps") or DEFAULT_FPS),
             num_clips=int(payload.get("num_clips") or 1),
-            seed=int(payload.get("seed") or 42),
+            seed=int(payload["seed"]) if payload.get("seed") else random.randint(1, 2**31 - 1),
             keyframes=payload.get("keyframes"),
             **({"polish": payload["polish"]} if "polish" in payload else {}),
         )
@@ -370,7 +371,7 @@ def submit(payload: dict) -> dict:
             num_frames=int(payload.get("num_frames") or FRAMES_PER_CLIP),
             fps=int(payload.get("fps") or DEFAULT_FPS),
             num_clips=int(payload.get("num_clips") or 1),
-            seed=int(payload.get("seed") or 42),
+            seed=int(payload["seed"]) if payload.get("seed") else random.randint(1, 2**31 - 1),
             keyframes=payload.get("keyframes"),
             **({"polish": payload["polish"]} if "polish" in payload else {}),
         )

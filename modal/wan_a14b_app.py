@@ -25,6 +25,7 @@ Deploy:  modal deploy modal/wan_a14b_app.py
 """
 
 import base64
+import random
 import os
 import time
 
@@ -285,7 +286,7 @@ def generate(payload: dict) -> dict:
             height=int(payload.get("height") or 720),
             num_frames=int(payload.get("num_frames") or FRAMES_PER_CLIP),
             fps=int(payload.get("fps") or DEFAULT_FPS),
-            seed=int(payload.get("seed") or 42),
+            seed=int(payload["seed"]) if payload.get("seed") else random.randint(1, 2**31 - 1),
             steps=int(payload["steps"]) if payload.get("steps") else None,
             guidance_scale=(
                 float(payload["guidance_scale"]) if payload.get("guidance_scale") else None
@@ -327,7 +328,7 @@ def submit(payload: dict) -> dict:
             height=int(payload.get("height") or 720),
             num_frames=int(payload.get("num_frames") or FRAMES_PER_CLIP),
             fps=int(payload.get("fps") or DEFAULT_FPS),
-            seed=int(payload.get("seed") or 42),
+            seed=int(payload["seed"]) if payload.get("seed") else random.randint(1, 2**31 - 1),
             **({"polish": payload["polish"]} if "polish" in payload else {}),
             **({"nsfw": payload["nsfw"]} if "nsfw" in payload else {}),
         )
