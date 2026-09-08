@@ -19,6 +19,7 @@
 import { loadConfig } from '../lib/config.js';
 import { resolveProvider, withProviderChatExtras } from '../lib/providers.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
+import { memoryContext } from '../lib/hub.js';
 
 const UPSTREAM_TIMEOUT_MS = 90_000;
 const MAX_PERSONAS = 12;
@@ -272,6 +273,13 @@ export default async function handler(req, res) {
     const roundSoFar = [];
     const master = (config.masterPrompt || '').trim();
 
+    let memory = '';
+    try {
+      memory = await memoryContext();
+    } catch (err) {
+      console.error('memoryContext failed:', err);
+    }
+
     for (const persona of personas) {
       if (controller.signal.aborted) break;
 
@@ -313,7 +321,7 @@ export default async function handler(req, res) {
         message: `${persona.name} is speaking (${turnResolved.label} · ${turnModel})…`,
       });
 
-      const personaPrompt = [master, persona.systemPrompt, modeRules]
+      const personaPrompt = [master, persona.systemPrompt, modeRules, memory]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n');
 

@@ -2,12 +2,14 @@
 // Groq / NVIDIA. Supports JSON (stream:false) and SSE (stream:true).
 //
 // System-prompt handling: the browser sends a personaId. The server looks up
-// that persona's system prompt in KV and prepends the master prompt — and
-// nothing else. Uncensored models get no channel/role/safety rules injected.
+// that persona's system prompt in KV and prepends the master prompt, plus
+// whatever the memory hub knows about the user when it's configured. No
+// channel/role/safety rules are injected on top of uncensored models.
 
 import { loadConfig } from '../lib/config.js';
 import { resolveProvider, withProviderChatExtras, formatProviderError } from '../lib/providers.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
+import { memoryContext } from '../lib/hub.js';
 
 /**
  * Headroom under vercel.json maxDuration 300. Must stay below the platform
@@ -26,25 +28,35 @@ function sseWrite(res, obj) {
 }
 
 /**
- * Only the admin master prompt + selected persona. Nothing else is injected —
- * no channel rules, role rules, or soft safety hedges on top of uncensored models.
- * Returns '' when neither is set so the request can omit a system message entirely.
+ * Admin master prompt + selected persona + memory hub facts (when configured).
+ * No channel rules, role rules, or soft safety hedges on top of uncensored models.
+ * Returns '' when nothing applies so the request can omit a system message entirely.
  */
 async function resolveSystemPrompt(personaId) {
+  let config;
   try {
-    const config = await loadConfig();
-    const persona =
-      config.personas.find((p) => p.id === personaId) ||
-      config.personas.find((p) => p.id === 'nexus') ||
-      config.personas[0];
-    const parts = [config.masterPrompt, persona?.systemPrompt].filter(
-      (s) => typeof s === 'string' && s.trim().length > 0,
-    );
-    return parts.join('\n\n');
+    config = await loadConfig();
   } catch (err) {
     console.error('loadConfig failed:', err);
     return '';
   }
+
+  const persona =
+    config.personas.find((p) => p.id === personaId) ||
+    config.personas.find((p) => p.id === 'nexus') ||
+    config.personas[0];
+
+  let memory = '';
+  try {
+    memory = await memoryContext();
+  } catch (err) {
+    console.error('memoryContext failed:', err);
+  }
+
+  const parts = [config.masterPrompt, persona?.systemPrompt, memory].filter(
+    (s) => typeof s === 'string' && s.trim().length > 0,
+  );
+  return parts.join('\n\n');
 }
 
 function extractDelta(chunk) {
