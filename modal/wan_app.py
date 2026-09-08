@@ -40,10 +40,18 @@ DEFAULT_FPS = 16
 # roughly an order of magnitude off a clip. guidance_scale MUST be 1.0 with it —
 # a distilled model given real CFG produces burnt, oversaturated frames.
 #
-# Set LIGHTNING_LORA_REPO="" to deploy without it and fall back to full steps.
-LIGHTNING_LORA_REPO = os.environ.get(
-    "WAN_LIGHTNING_LORA_REPO", "lightx2v/Wan2.2-Lightning"
-)
+# OFF by default: lightx2v/Wan2.2-Lightning ships LoRA weights only for the
+# Wan 2.2 A14B variants (T2V-A14B, I2V-A14B — hidden dim 5120). This app runs
+# TI2V-5B (hidden dim 3072), and the repo has no TI2V-5B build at all, so
+# loading it fails on every block with a shape mismatch:
+#   size mismatch for blocks.0.attn1.to_q.lora_A.default_0.weight: copying a
+#   param with shape [64, 5120] ... the shape in current model is [64, 3072]
+# The load failure is caught and falls back to full steps (see `fast` in the
+# response), so this was never silently broken — but it paid a download and a
+# guaranteed-failing load on every cold container for a feature that could
+# never activate. Point WAN_LIGHTNING_LORA_REPO at a real TI2V-5B distillation
+# if one appears, or switch MODEL_ID to an A14B variant to use this one.
+LIGHTNING_LORA_REPO = os.environ.get("WAN_LIGHTNING_LORA_REPO", "")
 LIGHTNING_LORA_WEIGHT = os.environ.get("WAN_LIGHTNING_LORA_WEIGHT", "")
 
 FAST_STEPS = 4
@@ -133,15 +141,34 @@ class Wan:
         self.t2v = WanPipeline.from_pretrained(
             MODEL_ID, vae=vae, torch_dtype=torch.bfloat16, cache_dir="/cache/hf"
         )
-        # TI2V-5B carries no CLIP vision tower, so the i2v pipeline is built off
-        # the t2v components rather than loaded a second time — same weights in
+        # TI2V-5B carries no CLIP vision tower, so the i2v pipeline shares the
+        # t2v components rather than loading a second copy — same weights in
         # VRAM, both entry points available for the chain.
-        self.i2v = WanImageToVideoPipeline(
-            tokenizer=self.t2v.tokenizer,
-            text_encoder=self.t2v.text_encoder,
+        #
+        # Built with from_pretrained, not by constructing the class directly.
+        # WanImageToVideoPipeline.__init__ defaults expand_timesteps=False;
+        # this repo's model_index.json sets it True (TI2V-5B conditions image
+        # frames by masking the input timesteps, not by concatenating a masked
+        # latent onto the channel axis the way Wan 2.1's i2v pipeline does),
+        # and only from_pretrained reads that. Constructed directly, the i2v
+        # pipeline took the Wan 2.1 branch and handed the transformer 100
+        # channels (48 latent + 48 masked-latent + 4 mask) where TI2V-5B's
+        # conv-in takes 48:
+        #   RuntimeError: Given groups=1, weight of size [3072, 48, 1, 2, 2],
+        #   expected input[1, 100, 21, 30, 52] to have 48 channels, but got 100
+        # Clip one is text-to-video and never touches this pipeline, so it
+        # always rendered fine; every clip after it seeds from the previous
+        # frame through i2v, so any multi-clip request died on clip two with
+        # the first clip's GPU time already spent.
+        self.i2v = WanImageToVideoPipeline.from_pretrained(
+            MODEL_ID,
             vae=self.t2v.vae,
-            scheduler=self.t2v.scheduler,
             transformer=self.t2v.transformer,
+            text_encoder=self.t2v.text_encoder,
+            tokenizer=self.t2v.tokenizer,
+            scheduler=self.t2v.scheduler,
+            torch_dtype=torch.bfloat16,
+            cache_dir="/cache/hf",
         )
         # Loaded onto the shared transformer, so both pipelines get it.
         # A failure here must not take generation down — it falls back to full
