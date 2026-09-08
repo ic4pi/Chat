@@ -36,7 +36,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install Modal
-        run: pip install modal
+        run: pip install modal fastapi
 
       # "Token validation failed" says nothing about which half is wrong. The
       # prefixes (ak- / as-) are structural, not secret, so checking them and
