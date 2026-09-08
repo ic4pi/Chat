@@ -23,8 +23,12 @@ const IMAGE_MODELS = [
 // has no submit endpoint, and the client falls back to one blocking request
 // bounded by the 800s function timeout — where anything past ~10s of Wan will
 // die. The fallback warns rather than silently letting it happen.
+// A14B is single-clip only — T2V-A14B and I2V-A14B are separate 14B models and
+// holding both resident for chaining would need ~110GB of VRAM, so its app has
+// no num_clips at all. Hence maxSeconds 5 where the other two chain to 30.
 const VIDEO_MODELS = [
-  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, slow)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', usesRef: false, maxSeconds: 30, modes: ['text', 'restyle'] },
+  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, A10G)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', usesRef: false, maxSeconds: 30, modes: ['text', 'restyle'] },
+  { value: 'modal:wan2.2-a14b', label: 'Wan 2.2 A14B · NSFW · Text → Video (best quality, 5s, A100)', kind: 'video', provider: 'modal', model: 'wan2.2-a14b', usesRef: false, maxSeconds: 5, modes: ['text'] },
   { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', usesRef: false, maxSeconds: 30, modes: ['text', 'keyframes'] },
   // fal.ai / NVIDIA / Cloudflare video removed - fal and NVIDIA both bill per
   // generation, and Cloudflare's Seedance models are a third-party pass-through
