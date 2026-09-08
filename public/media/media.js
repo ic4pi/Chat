@@ -560,6 +560,104 @@ const POLL_CEILING_MS = 3_600_000;
 // per generation.
 let asyncVideoUnavailable = false;
 
+// The job itself runs server-side on Modal regardless of whether this tab
+// stays open — closing it never kills the generation. What used to get lost
+// was the jobId: it only lived in this function's local variables, so
+// leaving the page meant losing the only handle to a job that was still
+// finishing successfully in the background. Saved here instead, so a reload
+// (or coming back later) can pick the same job back up rather than starting
+// over or losing the result entirely.
+const PENDING_JOB_KEY = 'mediaStudio.pendingVideoJob';
+
+function savePendingJob(jobId, model, accessKey) {
+  try {
+    localStorage.setItem(PENDING_JOB_KEY, JSON.stringify({ jobId, model, accessKey }));
+  } catch {
+    // Best-effort — a full quota or disabled storage just means no resume.
+  }
+}
+
+function loadPendingJob() {
+  try {
+    const raw = localStorage.getItem(PENDING_JOB_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearPendingJob() {
+  try {
+    localStorage.removeItem(PENDING_JOB_KEY);
+  } catch {
+    // Nothing to do if storage is unavailable.
+  }
+}
+
+/** Renders a finished video job's result into a result card. */
+function renderVideoResult(data) {
+  if (data.fallbackNote) setStatus(data.fallbackNote);
+  const open = document.createElement('a');
+  open.href = data.videoUrl;
+  if (String(data.videoUrl || '').startsWith('data:')) {
+    open.download = `video-${Date.now()}.mp4`;
+    open.textContent = 'Download';
+  } else {
+    open.target = '_blank';
+    open.rel = 'noopener';
+    open.textContent = 'Open / download';
+  }
+  const { card } = cardShell(
+    `${data.provider} · ${data.model}${data.fallbackFrom ? ' (fallback)' : ''}`,
+    open,
+  );
+  const vid = document.createElement('video');
+  vid.src = data.videoUrl;
+  vid.controls = true;
+  vid.playsInline = true;
+  card.insertBefore(vid, card.firstChild);
+  prependCard(card);
+  if (data.billing) {
+    setStatus(`Done. Charged $${data.billing.chargedUsd.toFixed(2)} · balance $${data.billing.balanceUsd.toFixed(2)}`);
+  } else if (!data.fallbackNote) {
+    setStatus('Done.');
+  }
+}
+
+/** Polls an already-submitted job to completion. Shared by a fresh submit
+ *  and by resuming a job left over from a previous page load. */
+async function pollJob(jobId, model, accessKey) {
+  const started = Date.now();
+  for (;;) {
+    await new Promise((r) => setTimeout(r, POLL_MS));
+
+    const elapsed = Math.round((Date.now() - started) / 1000);
+    setStatus(`Generating… ${elapsed}s. Self-hosted video takes minutes — safe to close this tab, come back anytime.`);
+
+    const pollRes = await fetch('/api/media-generate?op=result', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobId, model, accessKey }),
+    });
+    const out = await pollRes.json().catch(() => ({}));
+
+    if (out.status === 'done') {
+      clearPendingJob();
+      return out;
+    }
+    // A transient poll failure is not a failed job — the generation is still
+    // running on Modal. Only an explicit terminal status ends the wait.
+    if (out.status && out.status !== 'running') {
+      clearPendingJob();
+      throw new Error(out.error || `Generation ${out.status}.`);
+    }
+    if (Date.now() - started > POLL_CEILING_MS) {
+      clearPendingJob();
+      throw new Error('Gave up waiting after an hour — the job outlived its Modal timeout.');
+    }
+  }
+}
+
 async function runVideoJob(body) {
   if (asyncVideoUnavailable) return runSyncVideoFallback(body);
 
@@ -576,29 +674,29 @@ async function runVideoJob(body) {
   }
   if (!submitRes.ok || !job.jobId) throw new Error(friendlyHttpError(submitRes.status, job));
 
-  const started = Date.now();
-  for (;;) {
-    await new Promise((r) => setTimeout(r, POLL_MS));
+  savePendingJob(job.jobId, body.model, body.accessKey);
+  return pollJob(job.jobId, body.model, body.accessKey);
+}
 
-    const elapsed = Math.round((Date.now() - started) / 1000);
-    setStatus(`Generating… ${elapsed}s. Self-hosted video takes minutes; leave this open.`);
+/** On page load, pick back up a job left over from a previous visit instead
+ *  of it just being silently lost. The job itself never depended on the tab
+ *  staying open — only the ability to find out it finished did. */
+async function resumePendingJobOnLoad() {
+  const pending = loadPendingJob();
+  if (!pending || !pending.jobId) return;
 
-    const pollRes = await fetch('/api/media-generate?op=result', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId: job.jobId, model: body.model, accessKey: body.accessKey }),
-    });
-    const out = await pollRes.json().catch(() => ({}));
-
-    if (out.status === 'done') return out;
-    // A transient poll failure is not a failed job — the generation is still
-    // running on Modal. Only an explicit terminal status ends the wait.
-    if (out.status && out.status !== 'running') {
-      throw new Error(out.error || `Generation ${out.status}.`);
-    }
-    if (Date.now() - started > POLL_CEILING_MS) {
-      throw new Error('Gave up waiting after an hour — the job outlived its Modal timeout.');
-    }
+  els.generate.disabled = true;
+  els.generate.textContent = 'Resuming…';
+  setStatus('Resuming a video generation left over from earlier…');
+  try {
+    const data = await pollJob(pending.jobId, pending.model, pending.accessKey);
+    if (data.kind === 'video' || data.videoUrl) renderVideoResult(data);
+  } catch (err) {
+    console.error(err);
+    setStatus(`Previous job: ${String(err.message || 'failed').replace(/^(AIError:\s*)+/gi, '')}`, true);
+  } finally {
+    els.generate.disabled = false;
+    els.generate.textContent = 'Generate';
   }
 }
 
@@ -722,32 +820,7 @@ els.generate.addEventListener('click', async () => {
       }
       if (!data.note && !data.fallbackNote) setStatus('Done.');
     } else if (data.kind === 'video') {
-      if (data.fallbackNote) setStatus(data.fallbackNote);
-      const open = document.createElement('a');
-      open.href = data.videoUrl;
-      if (String(data.videoUrl || '').startsWith('data:')) {
-        open.download = `video-${Date.now()}.mp4`;
-        open.textContent = 'Download';
-      } else {
-        open.target = '_blank';
-        open.rel = 'noopener';
-        open.textContent = 'Open / download';
-      }
-      const { card } = cardShell(
-        `${data.provider} · ${data.model}${data.fallbackFrom ? ' (fallback)' : ''}`,
-        open,
-      );
-      const vid = document.createElement('video');
-      vid.src = data.videoUrl;
-      vid.controls = true;
-      vid.playsInline = true;
-      card.insertBefore(vid, card.firstChild);
-      prependCard(card);
-      if (data.billing) {
-        setStatus(`Done. Charged $${data.billing.chargedUsd.toFixed(2)} · balance $${data.billing.balanceUsd.toFixed(2)}`);
-      } else if (!data.fallbackNote) {
-        setStatus('Done.');
-      }
+      renderVideoResult(data);
     } else {
       // "Unexpected response" alone gives nothing to act on. The keys say
       // whether this is an error body, a stale API shape, or a cached client
@@ -775,3 +848,4 @@ fillSizes();
 fillLengths();
 fillVideoModes();
 syncFields();
+resumePendingJobOnLoad();
