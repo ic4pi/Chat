@@ -763,6 +763,8 @@ async function generateModalWanVideo({
   negativePrompt,
   size,
   seconds,
+  imageBase64,
+  keyframes,
   endpoint = MODAL_WAN_ENDPOINT,
   model = 'wan2.2-5b',
 }) {
@@ -792,6 +794,8 @@ async function generateModalWanVideo({
       num_frames,
       fps,
       num_clips,
+      ...(imageBase64 ? { image: imageBase64 } : {}),
+      ...(Array.isArray(keyframes) && keyframes.length ? { keyframes } : {}),
     }),
   });
 
@@ -828,7 +832,7 @@ const MODAL_LTX_ENDPOINT = cleanEndpoint(
   'https://ic4pi--ltx-video-generate.modal.run',
 );
 
-async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds }) {
+async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds, imageBase64, keyframes }) {
   const dims = String(size || '704x480').split(/[x*]/i).map(Number);
   const width = dims[0] || 704;
   const height = dims[1] || 480;
@@ -848,6 +852,8 @@ async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds }) 
       num_frames,
       fps,
       num_clips,
+      ...(imageBase64 ? { image: imageBase64 } : {}),
+      ...(Array.isArray(keyframes) && keyframes.length ? { keyframes } : {}),
     }),
   });
 
@@ -919,7 +925,7 @@ export default async function handler(req, res) {
     if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
     const {
       model: jm, prompt: jp, negativePrompt: jn, size: js, seconds: jsec, accessKey: jk,
-      video: jv, strength: jstr, keyframes: jkf,
+      video: jv, strength: jstr, keyframes: jkf, imageBase64: jimg,
     } = req.body || {};
     if (!jp || !String(jp).trim()) return res.status(400).json({ error: 'prompt is required' });
 
@@ -950,6 +956,9 @@ export default async function handler(req, res) {
         // num_clips is ignored downstream when either is present.
         ...(jv ? { video: jv, strength: Number(jstr) || 0.6 } : {}),
         ...(Array.isArray(jkf) && jkf.length ? { keyframes: jkf } : {}),
+        // Start-from-an-image. Both video apps take it as `image` and route
+        // clip 0 through their i2v pipeline instead of t2v.
+        ...(jimg ? { image: jimg } : {}),
       }),
     });
     const sub = await upstream.json().catch(() => ({}));
@@ -1073,6 +1082,7 @@ export default async function handler(req, res) {
     imageBase64,
     mimeType,
     accessKey,
+    keyframes,
   } = req.body || {};
 
   if (typeof prompt !== 'string' || !prompt.trim()) {
@@ -1228,12 +1238,16 @@ export default async function handler(req, res) {
               negativePrompt,
               size: size || '704x480',
               seconds,
+              imageBase64,
+              keyframes,
             })
           : await generateModalWanVideo({
               prompt: prompt.trim(),
               negativePrompt,
               size: size || '832x480',
               seconds,
+              imageBase64,
+              keyframes,
               ...(isA14b
                 ? { endpoint: MODAL_WAN_A14B_ENDPOINT, model: 'wan2.2-a14b' }
                 : {}),

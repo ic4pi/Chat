@@ -100,6 +100,22 @@ app = modal.App(os.environ.get("MODAL_APP_NAME", "wan-video"))
 cache = modal.Volume.from_name("wan-model-cache", create_if_missing=True)
 
 
+def _decode_image(data: str):
+    """Accept a bare base64 string or a full data: URL."""
+    from PIL import Image
+
+    if not data:
+        return None
+    if data.startswith("data:"):
+        data = data.split(",", 1)[-1]
+    return Image.open(io.BytesIO(base64.b64decode(data))).convert("RGB")
+
+
+def _wan_frames(n: int) -> int:
+    """Wan's temporal patching needs 4k+1 frames; anything else is rejected."""
+    return max(5, ((int(n) - 1) // 4) * 4 + 1)
+
+
 def _video_to_frames(data: str, width: int, height: int, max_frames: int):
     """Decode a base64 mp4 into PIL frames at the model's own geometry.
 
@@ -309,6 +325,8 @@ class Wan:
         guidance_scale: float | None = None,
         video: str = "",
         strength: float = 0.6,
+        image: str = "",     # start the clip from this frame (image-to-video)
+        keyframes: list | None = None,  # [{image, frame}] — see the block below
         polish: bool = True,  # ffmpeg interpolation + upscale pass; see _export_polished
     ) -> dict:
         import torch
@@ -364,8 +382,71 @@ class Wan:
                 "polished": polish,
             }
 
+        # Timeline keyframes. TI2V-5B has no conditioning pipeline that pins an
+        # image to an arbitrary frame index the way LTXConditionPipeline does —
+        # VACE is a different checkpoint family and there is no TI2V-5B build of
+        # it. What this model does have is i2v, so a keyframe starts a segment
+        # rather than being interpolated toward: each image appears at its own
+        # mark and the model invents motion forward from it until the next one.
+        # That means a cut at every mark, not a morph between them, which is the
+        # honest limit of these weights rather than something more code fixes.
+        if keyframes:
+            marks = []
+            for kf in keyframes[:8]:
+                img = _decode_image(kf.get("image"))
+                if img is None:
+                    continue
+                marks.append(
+                    (max(0, int(kf.get("frame", 0))), img.resize((width, height)))
+                )
+            if not marks:
+                raise ValueError("keyframes were supplied but none carried an image.")
+            marks.sort(key=lambda m: m[0])
+
+            frames = []
+            for i, (start, img) in enumerate(marks):
+                # A segment runs to the next mark; the last one gets a full clip.
+                end = marks[i + 1][0] if i + 1 < len(marks) else start + num_frames
+                seg_frames = _wan_frames(max(5, end - start))
+                out = self.i2v(
+                    image=img,
+                    prompt=prompt,
+                    negative_prompt=negative_prompt or None,
+                    height=height,
+                    width=width,
+                    num_frames=seg_frames,
+                    num_inference_steps=steps,
+                    guidance_scale=guidance_scale,
+                    generator=torch.Generator("cpu").manual_seed(seed + i),
+                    output_type="pil",
+                ).frames[0]
+                frames.extend(out)
+
+            path = "/tmp/out.mp4"
+            out_fps = _export_polished(frames, path, fps) if polish else fps
+            if not polish:
+                export_to_video(frames, path, fps=fps)
+            with open(path, "rb") as fh:
+                video_b64 = base64.b64encode(fh.read()).decode()
+            return {
+                "video_base64": video_b64,
+                "elapsed_seconds": round(time.time() - started, 2),
+                "num_clips": len(marks),
+                "num_frames": len(frames),
+                "fps": out_fps,
+                "mode": "keyframes",
+                "keyframe_count": len(marks),
+                "fast": self.fast,
+                "steps": steps,
+                "polished": polish,
+            }
+
         frames: list = []
-        seed_frame = None
+        # A supplied start image makes clip 0 take the i2v branch below instead
+        # of t2v, which is the whole of "start the video from this picture".
+        seed_frame = _decode_image(image)
+        if seed_frame is not None:
+            seed_frame = seed_frame.resize((width, height))
 
         for clip in range(num_clips):
             generator = torch.Generator("cpu").manual_seed(seed + clip)
@@ -435,6 +516,8 @@ def generate(
             seed=int(payload["seed"]) if payload.get("seed") else random.randint(1, 2**31 - 1),
             video=payload.get("video") or "",
             strength=float(payload.get("strength") or 0.6),
+            image=payload.get("image") or "",
+            keyframes=payload.get("keyframes"),
             **({"polish": payload["polish"]} if "polish" in payload else {}),
         )
     except Exception as exc:  # surfaced verbatim; the client reads body.error
@@ -524,6 +607,8 @@ def submit(
             seed=int(payload["seed"]) if payload.get("seed") else random.randint(1, 2**31 - 1),
             video=payload.get("video") or "",
             strength=float(payload.get("strength") or 0.6),
+            image=payload.get("image") or "",
+            keyframes=payload.get("keyframes"),
             **({"polish": payload["polish"]} if "polish" in payload else {}),
         )
         return {"job_id": call.object_id, "status": "running"}

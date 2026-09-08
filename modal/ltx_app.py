@@ -193,6 +193,7 @@ class LTX:
         steps: int = 30,  # measured: 30 steps, ~2min for one 5s clip
         guidance_scale: float = 3.0,
         keyframes: list | None = None,
+        image: str = "",  # start the clip from this frame (image-to-video)
         polish: bool = True,  # ffmpeg interpolation + upscale pass; see _export_polished
     ) -> dict:
         import torch
@@ -262,7 +263,11 @@ class LTX:
             }
 
         frames: list = []
-        seed_frame = None
+        # A supplied start image makes clip 0 take the i2v branch below instead
+        # of t2v, which is the whole of "start the video from this picture".
+        seed_frame = _decode_image(image)
+        if seed_frame is not None:
+            seed_frame = seed_frame.resize((width, height))
 
         for clip in range(num_clips):
             generator = torch.Generator("cpu").manual_seed(seed + clip)
@@ -322,6 +327,7 @@ def generate(payload: dict) -> dict:
             num_clips=int(payload.get("num_clips") or 1),
             seed=int(payload["seed"]) if payload.get("seed") else random.randint(1, 2**31 - 1),
             keyframes=payload.get("keyframes"),
+            image=payload.get("image") or "",
             **({"polish": payload["polish"]} if "polish" in payload else {}),
         )
     except Exception as exc:
@@ -373,6 +379,7 @@ def submit(payload: dict) -> dict:
             num_clips=int(payload.get("num_clips") or 1),
             seed=int(payload["seed"]) if payload.get("seed") else random.randint(1, 2**31 - 1),
             keyframes=payload.get("keyframes"),
+            image=payload.get("image") or "",
             **({"polish": payload["polish"]} if "polish" in payload else {}),
         )
         return {"job_id": call.object_id, "status": "running"}
