@@ -23,9 +23,13 @@ const IMAGE_MODELS = [
 // has no submit endpoint, and the client falls back to one blocking request
 // bounded by the 800s function timeout — where anything past ~10s of Wan will
 // die. The fallback warns rather than silently letting it happen.
+// A14B is single-clip only — T2V-A14B and I2V-A14B are separate 14B models and
+// holding both resident for chaining would need ~110GB of VRAM, so its app has
+// no num_clips at all. Hence maxSeconds 5 where the other two chain to 30.
 const VIDEO_MODELS = [
-  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, slow)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', usesRef: false, maxSeconds: 30, modes: ['text', 'restyle'] },
-  { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', usesRef: false, maxSeconds: 30, modes: ['text', 'keyframes'] },
+  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, A10G)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', fps: 16, usesRef: false, maxSeconds: 30, modes: ['text', 'image', 'keyframes', 'restyle'] },
+  { value: 'modal:wan2.2-a14b', label: 'Wan 2.2 A14B · NSFW · Text → Video (best quality, 5s, A100)', kind: 'video', provider: 'modal', model: 'wan2.2-a14b', fps: 16, usesRef: false, maxSeconds: 5, modes: ['text'] },
+  { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', fps: 24, usesRef: false, maxSeconds: 30, modes: ['text', 'image', 'keyframes'] },
   // fal.ai / NVIDIA / Cloudflare video removed - fal and NVIDIA both bill per
   // generation, and Cloudflare's Seedance models are a third-party pass-through
   // (not covered by the Workers AI free Neurons tier, not on Cloudflare's own
@@ -101,6 +105,7 @@ let srcVideoData = null; // base64 data URL of a clip to restyle
 
 const VIDEO_MODE_LABELS = {
   text: 'Text → Video',
+  image: 'Start from an image',
   restyle: 'Restyle a video (keeps the motion)',
   keyframes: 'Timeline keyframes (guide the motion)',
 };
@@ -193,8 +198,9 @@ function modelUsesRef(spec) {
   if (spec.usesRef) return true;
   // Every self-hosted image mode except plain text-to-image works from a
   // source image the user supplies.
-  if (imageMode() !== 'text') return true;
-  return kind === 'video' && /i2v/i.test(spec.model || '');
+  if (kind === 'image' && imageMode() !== 'text') return true;
+  // In video, the upload is the first frame the clip grows out of.
+  return kind === 'video' && videoMode() === 'image';
 }
 
 function syncFields() {
@@ -234,7 +240,7 @@ function syncFields() {
   els.keyframesWrap.classList.toggle('hidden', vm !== 'keyframes');
   // Length is chosen by the source clip when restyling, and by the last
   // keyframe when keyframing — neither reads the picker.
-  els.lengthWrap.classList.toggle('hidden', kind !== 'video' || vm !== 'text');
+  els.lengthWrap.classList.toggle('hidden', kind !== 'video' || (vm !== 'text' && vm !== 'image'));
 
   // Strength means "how far from the source" in both img2img and restyle.
   els.strengthWrap.classList.toggle('hidden', m !== 'img2img' && vm !== 'restyle');
@@ -774,13 +780,14 @@ els.generate.addEventListener('click', async () => {
         body.video = srcVideoData;
         body.strength = (Number(els.strength.value) || 60) / 100;
       } else if (vm === 'keyframes') {
-        // Frame index, not seconds: the app works in frames, and LTX runs at
-        // 24fps. Doing the conversion here keeps the app's contract numeric.
+        // Frame index, not seconds: the apps work in frames. The rate is the
+        // model's own — LTX runs at 24fps and Wan at 16, so a fixed 24 here
+        // put every Wan keyframe half again too late.
         const ready = keyframeState.filter((kf) => kf.image);
         if (!ready.length) throw new Error('Add at least one keyframe with an image.');
         body.keyframes = ready.map((kf) => ({
           image: kf.image,
-          frame: Math.round(kf.at * 24),
+          frame: Math.round(kf.at * (spec.fps || 24)),
           strength: 1.0,
         }));
       }

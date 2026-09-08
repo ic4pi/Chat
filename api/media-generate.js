@@ -37,8 +37,12 @@
  *   SUPABASE_URL           — generated video is uploaded here and returned as a
  *   SUPABASE_SERVICE_ROLE_KEY  URL; without these, any clip over ~3MB is
  *                            rejected rather than dying as an opaque 413
- *   MODAL_WAN_ENDPOINT     — self-hosted Wan 2.2 5B video on Modal, scale-to-zero,
- *                            no external content filter (kind:'video', provider:'modal', model:'wan2.2-5b')
+ *   MODAL_WAN_ENDPOINT     — self-hosted Wan 2.2 TI2V-5B video on Modal (A10G),
+ *                            scale-to-zero, no external content filter
+ *                            (kind:'video', provider:'modal', model:'wan2.2-5b')
+ *   MODAL_WAN_A14B_ENDPOINT — self-hosted Wan 2.2 T2V-A14B on Modal (A100-80GB,
+ *                            NSFW LoRA stacked on, single clip)
+ *                            (kind:'video', provider:'modal', model:'wan2.2-a14b')
  *   MODAL_LTX_ENDPOINT     — self-hosted LTX-Video on Modal, same deal
  *                            (kind:'video', provider:'modal', model:'ltx-video')
  *   MODAL_SDXL_ENDPOINT    — self-hosted SDXL images on Modal (lustify / wai-illustrious),
@@ -626,11 +630,14 @@ const MODAL_IMAGE_MODELS = {
  * drift apart.
  */
 function modalEndpoint(model, fn) {
+  // a14b is checked before the generic /wan/ test — "wan2.2-a14b" matches both.
   const base = /ltx/i.test(model)
     ? MODAL_LTX_ENDPOINT
-    : /wan/i.test(model)
-      ? MODAL_WAN_ENDPOINT
-      : MODAL_SDXL_ENDPOINT;
+    : /a14b/i.test(model)
+      ? MODAL_WAN_A14B_ENDPOINT
+      : /wan/i.test(model)
+        ? MODAL_WAN_ENDPOINT
+        : MODAL_SDXL_ENDPOINT;
   return base.replace(/-generate(\.modal\.run)$/, `-${fn}$1`);
 }
 
@@ -680,7 +687,7 @@ async function generateModalSdxlImage({
 
   const resp = await fetch(MODAL_SDXL_ENDPOINT, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
     body: JSON.stringify({
       prompt,
       negative_prompt: negativePrompt || undefined,
@@ -731,12 +738,23 @@ async function generateModalSdxlImage({
 }
 
 /**
- * Self-hosted Wan 2.2 5B on Modal (scale-to-zero, no external content filter -
- * nothing here moderates the prompt).
- * Env: MODAL_WAN_ENDPOINT (defaults to the deployed endpoint below).
+ * Self-hosted Wan 2.2 on Modal (scale-to-zero, no external content filter -
+ * nothing here moderates the prompt). Two separate apps, two separate vars:
+ *
+ *   MODAL_WAN_ENDPOINT       TI2V-5B on A10G — cheaper, chains up to 6 clips.
+ *   MODAL_WAN_A14B_ENDPOINT  T2V-A14B on A100-80GB — 14B params with an NSFW
+ *                            LoRA stacked on, single clip only, real GPU cost.
+ *
+ * They were one variable while only one Wan app was in the picker, which meant
+ * the "5B" option silently resolved to whichever app the var pointed at.
  */
 const MODAL_WAN_ENDPOINT = cleanEndpoint(
   process.env.MODAL_WAN_ENDPOINT,
+  'https://ic4pi--wan-video-generate.modal.run',
+);
+
+const MODAL_WAN_A14B_ENDPOINT = cleanEndpoint(
+  process.env.MODAL_WAN_A14B_ENDPOINT,
   'https://ic4pi--wan-video-a14b-generate.modal.run',
 );
 
@@ -745,6 +763,10 @@ async function generateModalWanVideo({
   negativePrompt,
   size,
   seconds,
+  imageBase64,
+  keyframes,
+  endpoint = MODAL_WAN_ENDPOINT,
+  model = 'wan2.2-5b',
 }) {
   const dims = String(size || '832x480').split(/[x*]/i).map(Number);
   const width = dims[0] || 832;
@@ -759,9 +781,9 @@ async function generateModalWanVideo({
   // sent here.
   const num_clips = Math.min(6, Math.max(1, Math.round((Number(seconds) || 5) / 5)));
 
-  const resp = await fetch(MODAL_WAN_ENDPOINT, {
+  const resp = await fetch(endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
     // fetch follows 303 redirects automatically (and correctly switches to GET,
     // unlike curl -X POST -L which forces POST on the redirect too).
     body: JSON.stringify({
@@ -772,13 +794,15 @@ async function generateModalWanVideo({
       num_frames,
       fps,
       num_clips,
+      ...(imageBase64 ? { image: imageBase64 } : {}),
+      ...(Array.isArray(keyframes) && keyframes.length ? { keyframes } : {}),
     }),
   });
 
   const body = await resp.json().catch(() => ({}));
   if (!resp.ok || !body.video_base64) {
     const err = new Error(
-      body.error || `Modal Wan HTTP ${resp.status} calling ${MODAL_WAN_ENDPOINT}`,
+      body.error || `Modal Wan HTTP ${resp.status} calling ${endpoint}`,
     );
     err.status = resp.status || 502;
     throw err;
@@ -787,7 +811,7 @@ async function generateModalWanVideo({
   return {
     kind: 'video',
     provider: 'modal',
-    model: 'wan2.2-5b',
+    model,
     videoUrl: `data:video/mp4;base64,${body.video_base64}`,
     mime: 'video/mp4',
     uncensored: true,
@@ -808,7 +832,7 @@ const MODAL_LTX_ENDPOINT = cleanEndpoint(
   'https://ic4pi--ltx-video-generate.modal.run',
 );
 
-async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds }) {
+async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds, imageBase64, keyframes }) {
   const dims = String(size || '704x480').split(/[x*]/i).map(Number);
   const width = dims[0] || 704;
   const height = dims[1] || 480;
@@ -819,7 +843,7 @@ async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds }) 
 
   const resp = await fetch(MODAL_LTX_ENDPOINT, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
     body: JSON.stringify({
       prompt,
       negative_prompt: negativePrompt || undefined,
@@ -828,6 +852,8 @@ async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds }) 
       num_frames,
       fps,
       num_clips,
+      ...(imageBase64 ? { image: imageBase64 } : {}),
+      ...(Array.isArray(keyframes) && keyframes.length ? { keyframes } : {}),
     }),
   });
 
@@ -899,7 +925,7 @@ export default async function handler(req, res) {
     if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
     const {
       model: jm, prompt: jp, negativePrompt: jn, size: js, seconds: jsec, accessKey: jk,
-      video: jv, strength: jstr, keyframes: jkf,
+      video: jv, strength: jstr, keyframes: jkf, imageBase64: jimg,
     } = req.body || {};
     if (!jp || !String(jp).trim()) return res.status(400).json({ error: 'prompt is required' });
 
@@ -930,6 +956,9 @@ export default async function handler(req, res) {
         // num_clips is ignored downstream when either is present.
         ...(jv ? { video: jv, strength: Number(jstr) || 0.6 } : {}),
         ...(Array.isArray(jkf) && jkf.length ? { keyframes: jkf } : {}),
+        // Start-from-an-image. Both video apps take it as `image` and route
+        // clip 0 through their i2v pipeline instead of t2v.
+        ...(jimg ? { image: jimg } : {}),
       }),
     });
     const sub = await upstream.json().catch(() => ({}));
@@ -1053,6 +1082,7 @@ export default async function handler(req, res) {
     imageBase64,
     mimeType,
     accessKey,
+    keyframes,
   } = req.body || {};
 
   if (typeof prompt !== 'string' || !prompt.trim()) {
@@ -1201,18 +1231,26 @@ export default async function handler(req, res) {
         }
 
         const isLtx = /ltx/i.test(String(model || ''));
+        const isA14b = /a14b/i.test(String(model || ''));
         const out = isLtx
           ? await generateModalLtxVideo({
               prompt: prompt.trim(),
               negativePrompt,
               size: size || '704x480',
               seconds,
+              imageBase64,
+              keyframes,
             })
           : await generateModalWanVideo({
               prompt: prompt.trim(),
               negativePrompt,
               size: size || '832x480',
               seconds,
+              imageBase64,
+              keyframes,
+              ...(isA14b
+                ? { endpoint: MODAL_WAN_A14B_ENDPOINT, model: 'wan2.2-a14b' }
+                : {}),
             });
 
         // Off to storage before billing. If this throws, storage is

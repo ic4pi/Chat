@@ -71,8 +71,8 @@ check('size threshold leaves headroom under 4.5MB', SAFE_JSON_BYTES < 4.5 * 1_04
 for (const [model, want] of [
   ['wan2.2-5b',  'https://ic4pi--wan-video-warm.modal.run'],
   ['ltx-video',  'https://ic4pi--ltx-video-warm.modal.run'],
-  ['lustify',    'https://ic4pi--sdxl-nsfw-warm.modal.run'],
-  ['',           'https://ic4pi--sdxl-nsfw-warm.modal.run'],  // default = image app
+  ['lustify',    'https://ic4pi--sdxl-nsfw-v2-warm.modal.run'],
+  ['',           'https://ic4pi--sdxl-nsfw-v2-warm.modal.run'],  // default = image app
 ]) {
   const got = warmEndpointFor(model);
   check(`warm endpoint for "${model || '(none)'}"`, got === want, `got ${got}`);
