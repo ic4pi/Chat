@@ -43,6 +43,22 @@ LIGHTNING_LORA_SUBFOLDER = os.environ.get(
     "WAN_A14B_LIGHTNING_LORA_SUBFOLDER", "Wan2.2-T2V-A14B-4steps-lora-250928"
 )
 
+# Official Wan-AI checkpoints carry content alignment from training — they
+# steer away from explicit prompts instead of generating them (confirmed: a
+# direct, explicit prompt came back as two fully-clothed men and a dog on a
+# public street). Same problem sdxl_app.py's checkpoints solved by using
+# lustify/wai-illustrious instead of stock SDXL. This is that fix for video:
+# a community NSFW LoRA, same high/low-noise-per-expert shape as Lightning,
+# stacked as a second adapter rather than replacing Lightning. Trained
+# against I2V-A14B, not T2V — same transformer architecture and dimensions,
+# so the delta should still apply, but this is unverified for T2V specifically.
+NSFW_LORA_REPO = os.environ.get("WAN_A14B_NSFW_LORA_REPO", "lopi999/Wan2.2-I2V_General-NSFW-LoRA")
+NSFW_LORA_HIGH_FILE = os.environ.get("WAN_A14B_NSFW_LORA_HIGH_FILE", "NSFW-22-H-e8.safetensors")
+NSFW_LORA_LOW_FILE = os.environ.get("WAN_A14B_NSFW_LORA_LOW_FILE", "NSFW-22-L-e8.safetensors")
+# The LoRA's own trigger word — appended to every prompt when the LoRA is
+# active, since it does nothing without it per the model card.
+NSFW_LORA_TRIGGER = os.environ.get("WAN_A14B_NSFW_LORA_TRIGGER", "nsfwsks")
+
 FAST_STEPS = 4
 FAST_GUIDANCE = 1.0
 FULL_STEPS = 40
@@ -126,6 +142,7 @@ class WanA14B:
         # steps at the model's own guidance, which is slow but correct.
         self.fast = False
         self.lora_error = None if LIGHTNING_LORA_REPO else "no LoRA configured"
+        active_adapters = []
         if LIGHTNING_LORA_REPO:
             try:
                 self.pipe.load_lora_weights(
@@ -143,11 +160,40 @@ class WanA14B:
                     load_into_transformer_2=True,
                     cache_dir="/cache/hf",
                 )
-                self.pipe.set_adapters(["lightning_high", "lightning_low"])
+                active_adapters += ["lightning_high", "lightning_low"]
                 self.fast = True
             except Exception as exc:
                 self.lora_error = f"{type(exc).__name__}: {exc}"
                 print(f"Lightning LoRA unavailable ({exc!r}); using full steps.", flush=True)
+
+        # Stacked alongside Lightning, not instead of it — see NSFW_LORA_REPO
+        # comment above. A failure here must not take the working Lightning
+        # path down either.
+        self.nsfw_available = False
+        self.nsfw_lora_error = None if NSFW_LORA_REPO else "no NSFW LoRA configured"
+        if NSFW_LORA_REPO:
+            try:
+                self.pipe.load_lora_weights(
+                    NSFW_LORA_REPO,
+                    weight_name=NSFW_LORA_HIGH_FILE,
+                    adapter_name="nsfw_high",
+                    cache_dir="/cache/hf",
+                )
+                self.pipe.load_lora_weights(
+                    NSFW_LORA_REPO,
+                    weight_name=NSFW_LORA_LOW_FILE,
+                    adapter_name="nsfw_low",
+                    load_into_transformer_2=True,
+                    cache_dir="/cache/hf",
+                )
+                active_adapters += ["nsfw_high", "nsfw_low"]
+                self.nsfw_available = True
+            except Exception as exc:
+                self.nsfw_lora_error = f"{type(exc).__name__}: {exc}"
+                print(f"NSFW LoRA unavailable ({exc!r}).", flush=True)
+
+        if active_adapters:
+            self.pipe.set_adapters(active_adapters)
 
         # 56GB of experts alone against an 80GB card — offload keeps headroom
         # for activations at 720p instead of cutting it close.
@@ -170,6 +216,7 @@ class WanA14B:
         steps: int | None = None,
         guidance_scale: float | None = None,
         polish: bool = True,
+        nsfw: bool = True,  # append the NSFW LoRA's trigger word, if it loaded
     ) -> dict:
         import torch
         from diffusers.utils import export_to_video
@@ -180,8 +227,11 @@ class WanA14B:
         if guidance_scale is None:
             guidance_scale = FAST_GUIDANCE if self.fast else FULL_GUIDANCE
 
+        use_nsfw = nsfw and self.nsfw_available
+        run_prompt = f"{prompt}, {NSFW_LORA_TRIGGER}" if use_nsfw else prompt
+
         frames = self.pipe(
-            prompt=prompt,
+            prompt=run_prompt,
             negative_prompt=negative_prompt or None,
             width=width,
             height=height,
@@ -209,6 +259,8 @@ class WanA14B:
             "steps": steps,
             "lora_error": self.lora_error,
             "polished": polish,
+            "nsfw_used": use_nsfw,
+            "nsfw_lora_error": self.nsfw_lora_error,
         }
 
 
@@ -233,6 +285,7 @@ def generate(payload: dict) -> dict:
                 float(payload["guidance_scale"]) if payload.get("guidance_scale") else None
             ),
             **({"polish": payload["polish"]} if "polish" in payload else {}),
+            **({"nsfw": payload["nsfw"]} if "nsfw" in payload else {}),
         )
     except Exception as exc:
         import traceback
@@ -270,6 +323,7 @@ def submit(payload: dict) -> dict:
             fps=int(payload.get("fps") or DEFAULT_FPS),
             seed=int(payload.get("seed") or 42),
             **({"polish": payload["polish"]} if "polish" in payload else {}),
+            **({"nsfw": payload["nsfw"]} if "nsfw" in payload else {}),
         )
         return {"job_id": call.object_id, "status": "running"}
     except Exception as exc:
