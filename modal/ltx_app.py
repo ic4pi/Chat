@@ -68,6 +68,43 @@ def _round_to(value: int, multiple: int, minimum: int) -> int:
     return max(minimum, int(round(value / multiple)) * multiple)
 
 
+def _export_polished(frames, path: str, fps: int, upscale: int = 2) -> int:
+    """Export frames to mp4, then run the clip through motion-compensated
+    frame interpolation and a lanczos upscale before returning it.
+
+    This is the actual gap between a small fast model's native output and
+    what commercial generators (Runway, Pika, Luma) look like: a chunk of
+    their polish is a post pass on top of the raw generation, not just a
+    bigger model. ffmpeg does both here in one pass — no extra model weights,
+    no extra GPU memory, nothing that can break the way an ML upscaler's
+    dependency chain can. If the pass fails for any reason, the raw clip
+    ships instead of failing the whole request.
+    """
+    from diffusers.utils import export_to_video
+
+    raw_path = path + ".raw.mp4"
+    export_to_video(frames, raw_path, fps=fps)
+    out_fps = fps * 2
+    vf = (
+        f"scale=iw*{upscale}:ih*{upscale}:flags=lanczos,"
+        f"minterpolate=fps={out_fps}:mi_mode=mci:mc_mode=aobmc:vsbmc=1"
+    )
+    try:
+        import subprocess
+
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", raw_path, "-vf", vf,
+             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", path],
+            check=True, capture_output=True, timeout=300,
+        )
+        os.remove(raw_path)
+        return out_fps
+    except Exception as exc:
+        print(f"post-process pass failed, shipping raw clip: {exc!r}", flush=True)
+        os.replace(raw_path, path)
+        return fps
+
+
 @app.cls(
     gpu="L4",
     image=image,
@@ -140,6 +177,7 @@ class LTX:
         steps: int = 30,  # measured: 30 steps, ~2min for one 5s clip
         guidance_scale: float = 3.0,
         keyframes: list | None = None,
+        polish: bool = True,  # ffmpeg interpolation + upscale pass; see _export_polished
     ) -> dict:
         import torch
         from diffusers.utils import export_to_video
@@ -191,7 +229,9 @@ class LTX:
             ).frames[0]
 
             path = "/tmp/out.mp4"
-            export_to_video(out, path, fps=fps)
+            out_fps = _export_polished(out, path, fps) if polish else fps
+            if not polish:
+                export_to_video(out, path, fps=fps)
             with open(path, "rb") as fh:
                 video_b64 = base64.b64encode(fh.read()).decode()
             return {
@@ -199,9 +239,10 @@ class LTX:
                 "elapsed_seconds": round(time.time() - started, 2),
                 "num_clips": 1,
                 "num_frames": len(out),
-                "fps": fps,
+                "fps": out_fps,
                 "mode": "keyframes",
                 "keyframe_count": len(conditions),
+                "polished": polish,
             }
 
         frames: list = []
@@ -231,7 +272,9 @@ class LTX:
             seed_frame = frames[-1]
 
         path = "/tmp/out.mp4"
-        export_to_video(frames, path, fps=fps)
+        out_fps = _export_polished(frames, path, fps) if polish else fps
+        if not polish:
+            export_to_video(frames, path, fps=fps)
         with open(path, "rb") as fh:
             video_b64 = base64.b64encode(fh.read()).decode()
 
@@ -240,7 +283,8 @@ class LTX:
             "elapsed_seconds": round(time.time() - started, 2),
             "num_clips": num_clips,
             "num_frames": len(frames),
-            "fps": fps,
+            "fps": out_fps,
+            "polished": polish,
         }
 
 
@@ -262,6 +306,7 @@ def generate(payload: dict) -> dict:
             num_clips=int(payload.get("num_clips") or 1),
             seed=int(payload.get("seed") or 42),
             keyframes=payload.get("keyframes"),
+            **({"polish": payload["polish"]} if "polish" in payload else {}),
         )
     except Exception as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}
@@ -312,6 +357,7 @@ def submit(payload: dict) -> dict:
             num_clips=int(payload.get("num_clips") or 1),
             seed=int(payload.get("seed") or 42),
             keyframes=payload.get("keyframes"),
+            **({"polish": payload["polish"]} if "polish" in payload else {}),
         )
         return {"job_id": call.object_id, "status": "running"}
     except Exception as exc:
