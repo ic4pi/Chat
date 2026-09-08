@@ -772,13 +772,22 @@ async function generateModalWanVideo({
   const width = dims[0] || 832;
   const height = dims[1] || 480;
   const fps = 16;
-  const num_frames = 81; // ~5s per clip at 16fps
+  const isA14b = /a14b/i.test(String(model || ''));
 
   // Longer requests chain multiple 5s clips inside Modal (last frame of each
   // clip feeds the next as its starting frame) instead of one giant single
   // generation - keeps quality/speed per clip consistent. Server-side cap of
   // 6 clips (~30s) is enforced again inside wan_app.py regardless of what's
   // sent here.
+  //
+  // A14B has no chained-clip path (see wan_a14b_app.py — no I2V pipeline is
+  // loaded, so there is nothing to continue a clip from). Longer there means
+  // more frames in the one pass instead: slower per second, and past the
+  // model's own ~5s training length, so untested for coherence beyond that -
+  // but it is what "longer" can mean without a second 56GB model on the GPU.
+  const num_frames = isA14b
+    ? Math.max(81, Math.round(((Number(seconds) || 5) * fps - 1) / 4) * 4 + 1)
+    : 81; // ~5s per clip at 16fps
   const num_clips = Math.min(6, Math.max(1, Math.round((Number(seconds) || 5) / 5)));
 
   const resp = await fetch(endpoint, {
@@ -793,7 +802,7 @@ async function generateModalWanVideo({
       height,
       num_frames,
       fps,
-      num_clips,
+      ...(isA14b ? {} : { num_clips }),
       ...(imageBase64 ? { image: imageBase64 } : {}),
       ...(Array.isArray(keyframes) && keyframes.length ? { keyframes } : {}),
     }),
