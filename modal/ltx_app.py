@@ -137,10 +137,25 @@ class LTX:
         # that too close to call without measuring, and an OOM costs more than
         # the offload does. Off by default; flip and time it.
         # Conditioning at explicit frame indices — the timeline keyframe path.
-        from diffusers import LTXConditionPipeline
+        from diffusers import FlowMatchEulerDiscreteScheduler, LTXConditionPipeline
 
+        # NOT the shared t2v/i2v scheduler. LTX-Video's scheduler config sets
+        # use_dynamic_shifting=True, which needs a per-call `mu` computed from
+        # the sequence length — LTXConditionPipeline.__call__ in diffusers
+        # 0.36.0 defines calculate_shift() for exactly this but never calls
+        # it, then hits retrieve_timesteps() with no mu and no way for a
+        # caller to supply one (the parameter doesn't exist on __call__):
+        #   ValueError: `mu` must be passed when `use_dynamic_shifting` is
+        #   set to be `True`
+        # t2v/i2v never hit this because their own __call__ implementations
+        # do compute and pass mu. A scheduler with dynamic shifting off
+        # (static shift=1.0 from the same config) sidesteps the gap entirely
+        # instead of waiting on an upstream diffusers fix.
+        cond_scheduler = FlowMatchEulerDiscreteScheduler.from_config(
+            self.t2v.scheduler.config, use_dynamic_shifting=False
+        )
         self.cond = LTXConditionPipeline(
-            scheduler=self.t2v.scheduler,
+            scheduler=cond_scheduler,
             vae=self.t2v.vae,
             text_encoder=self.t2v.text_encoder,
             tokenizer=self.t2v.tokenizer,
