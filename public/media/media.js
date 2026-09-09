@@ -25,10 +25,13 @@ const IMAGE_MODELS = [
 // die. The fallback warns rather than silently letting it happen.
 // A14B is single-clip only — T2V-A14B and I2V-A14B are separate 14B models and
 // holding both resident for chaining would need ~110GB of VRAM, so its app has
-// no num_clips at all. Hence maxSeconds 5 where the other two chain to 30.
+// no num_clips at all. Longer than 5s there means more frames in one pass
+// instead of chained clips - slower per second and past the model's own ~5s
+// training length, so untested for coherence beyond that. maxSeconds 20 is a
+// cautious ceiling, not a measured one; dial it back if quality falls apart.
 const VIDEO_MODELS = [
   { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, A10G)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', fps: 16, usesRef: false, maxSeconds: 30, modes: ['text', 'image', 'keyframes', 'restyle'] },
-  { value: 'modal:wan2.2-a14b', label: 'Wan 2.2 A14B · NSFW · Text → Video (best quality, 5s, A100)', kind: 'video', provider: 'modal', model: 'wan2.2-a14b', fps: 16, usesRef: false, maxSeconds: 5, modes: ['text'] },
+  { value: 'modal:wan2.2-a14b', label: 'Wan 2.2 A14B · NSFW · Text → Video (best quality, single pass, A100)', kind: 'video', provider: 'modal', model: 'wan2.2-a14b', fps: 16, usesRef: false, maxSeconds: 20, modes: ['text'] },
   { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', fps: 24, usesRef: false, maxSeconds: 30, modes: ['text', 'image', 'keyframes'] },
   // fal.ai / NVIDIA / Cloudflare video removed - fal and NVIDIA both bill per
   // generation, and Cloudflare's Seedance models are a third-party pass-through
