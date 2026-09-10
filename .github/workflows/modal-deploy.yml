@@ -23,7 +23,7 @@ on:
         required: true
         default: 'all'
         type: choice
-        options: [all, sdxl, ltx, wan, wan-a14b, stitch]
+        options: [all, sdxl, ltx, wan, wan-a14b, stitch, tts]
 
 jobs:
   deploy:
@@ -94,12 +94,14 @@ jobs:
                   deploy ltx-video modal/ltx_app.py
                   deploy wan-video modal/wan_app.py
                   deploy wan-video-a14b modal/wan_a14b_app.py
-                  deploy video-stitch modal/stitch_app.py ;;
+                  deploy video-stitch modal/stitch_app.py
+                  deploy voice-tts modal/tts_app.py ;;
             sdxl) deploy sdxl-nsfw modal/sdxl_app.py ;;
             ltx)  deploy ltx-video modal/ltx_app.py ;;
             wan)  deploy wan-video modal/wan_app.py ;;
             wan-a14b) deploy wan-video-a14b modal/wan_a14b_app.py ;;
             stitch) deploy video-stitch modal/stitch_app.py ;;
+            tts)  deploy voice-tts modal/tts_app.py ;;
           esac
 
           {

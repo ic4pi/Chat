@@ -767,6 +767,15 @@ const MODAL_STITCH_ENDPOINT = cleanEndpoint(
   'https://ic4pi--video-stitch-join.modal.run',
 );
 
+/**
+ * Character voices. See modal/tts_app.py — Chatterbox, which clones a voice
+ * zero-shot from a few seconds of reference audio.
+ */
+const MODAL_TTS_ENDPOINT = cleanEndpoint(
+  process.env.MODAL_TTS_ENDPOINT,
+  'https://ic4pi--voice-tts-speak.modal.run',
+);
+
 async function generateModalWanVideo({
   prompt,
   negativePrompt,
@@ -1061,6 +1070,54 @@ export default async function handler(req, res) {
     }
 
     return res.status(200).json({ status: 'done', ...out });
+  }
+
+  // Speak a line in a character's voice.
+  //   POST ?op=speak {text, voice?} -> { audioUrl, seconds }
+  //
+  // `voice` is a short reference recording; with one the model clones it, and
+  // the same character sounds like itself across every video. Returned as an
+  // mp3 data URL so it can go straight into the audio slot on ?op=stitch.
+  if (String(req.query?.op || '') === 'speak') {
+    if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+    const { text: vtext, voice, exaggeration, cfgWeight, gapMs, accessKey: vk } = req.body || {};
+    if (!vtext || !String(vtext).trim()) return res.status(400).json({ error: 'text is required' });
+    if (payloadTooLarge({ voice })) {
+      return res.status(413).json({
+        code: 'PAYLOAD_TOO_LARGE',
+        error: 'That voice sample is too large. A few seconds of speech is all the model needs.',
+      });
+    }
+    if (billingEnabled() && !findPerson(vk)) {
+      return res.status(401).json({ error: 'Invalid or missing access key.' });
+    }
+
+    const upstream = await fetch(MODAL_TTS_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
+      body: JSON.stringify({
+        text: String(vtext).trim(),
+        ...(voice ? { voice } : {}),
+        ...(exaggeration != null ? { exaggeration: Number(exaggeration) } : {}),
+        ...(cfgWeight != null ? { cfg_weight: Number(cfgWeight) } : {}),
+        ...(gapMs != null ? { gap_ms: Number(gapMs) } : {}),
+      }),
+    });
+    const spoken = await upstream.json().catch(() => ({}));
+    if (!upstream.ok || spoken.error || !spoken.audio_base64) {
+      return res.status(upstream.ok ? 502 : upstream.status).json({
+        error: spoken.error || `Modal TTS HTTP ${upstream.status} calling ${MODAL_TTS_ENDPOINT}`,
+      });
+    }
+
+    return res.status(200).json({
+      kind: 'audio',
+      audioUrl: `data:${spoken.mime || 'audio/mpeg'};base64,${spoken.audio_base64}`,
+      seconds: spoken.seconds,
+      lines: spoken.lines,
+      cloned: !!spoken.cloned,
+      elapsedSeconds: spoken.elapsed_seconds,
+    });
   }
 
   // Join a series of finished clips into one video.
