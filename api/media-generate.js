@@ -765,6 +765,7 @@ async function generateModalWanVideo({
   seconds,
   imageBase64,
   keyframes,
+  seed,
   endpoint = MODAL_WAN_ENDPOINT,
   model = 'wan2.2-5b',
 }) {
@@ -803,6 +804,7 @@ async function generateModalWanVideo({
       num_frames,
       fps,
       ...(isA14b ? {} : { num_clips }),
+      ...(Number.isFinite(Number(seed)) ? { seed: Number(seed) } : {}),
       ...(imageBase64 ? { image: imageBase64 } : {}),
       ...(Array.isArray(keyframes) && keyframes.length ? { keyframes } : {}),
     }),
@@ -841,7 +843,7 @@ const MODAL_LTX_ENDPOINT = cleanEndpoint(
   'https://ic4pi--ltx-video-generate.modal.run',
 );
 
-async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds, imageBase64, keyframes }) {
+async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds, imageBase64, keyframes, seed }) {
   const dims = String(size || '704x480').split(/[x*]/i).map(Number);
   const width = dims[0] || 704;
   const height = dims[1] || 480;
@@ -861,6 +863,7 @@ async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds, im
       num_frames,
       fps,
       num_clips,
+      ...(Number.isFinite(Number(seed)) ? { seed: Number(seed) } : {}),
       ...(imageBase64 ? { image: imageBase64 } : {}),
       ...(Array.isArray(keyframes) && keyframes.length ? { keyframes } : {}),
     }),
@@ -934,7 +937,7 @@ export default async function handler(req, res) {
     if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
     const {
       model: jm, prompt: jp, negativePrompt: jn, size: js, seconds: jsec, accessKey: jk,
-      video: jv, strength: jstr, keyframes: jkf, imageBase64: jimg,
+      video: jv, strength: jstr, keyframes: jkf, imageBase64: jimg, seed: jseed,
     } = req.body || {};
     if (!jp || !String(jp).trim()) return res.status(400).json({ error: 'prompt is required' });
 
@@ -960,6 +963,7 @@ export default async function handler(req, res) {
         negative_prompt: jn || undefined,
         ...geo,
         num_clips: clipsForSeconds(jsec),
+        ...(Number.isFinite(Number(jseed)) ? { seed: Number(jseed) } : {}),
         // Restyling an existing clip (Wan) and pinning keyframes to timestamps
         // (LTX) both replace the clip chain rather than adding to it, so
         // num_clips is ignored downstream when either is present.
@@ -1092,6 +1096,7 @@ export default async function handler(req, res) {
     mimeType,
     accessKey,
     keyframes,
+    seed,
   } = req.body || {};
 
   if (typeof prompt !== 'string' || !prompt.trim()) {
@@ -1249,6 +1254,7 @@ export default async function handler(req, res) {
               seconds,
               imageBase64,
               keyframes,
+              seed,
             })
           : await generateModalWanVideo({
               prompt: prompt.trim(),
@@ -1257,6 +1263,7 @@ export default async function handler(req, res) {
               seconds,
               imageBase64,
               keyframes,
+              seed,
               ...(isA14b
                 ? { endpoint: MODAL_WAN_A14B_ENDPOINT, model: 'wan2.2-a14b' }
                 : {}),
