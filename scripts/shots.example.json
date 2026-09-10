@@ -1,0 +1,9 @@
+{
+  "site": "https://example.vercel.app",
+  "model": "wan2.2-5b",
+  "seed": 12345,
+  "seconds": 5,
+  "character": "worn brown teddy bear, missing left eye, red bowtie",
+  "style": "2D cartoon, flat colors, thick black outlines",
+  "shots": ["sitting alone on a park bench at dusk", "slowly turning to look at the camera"]
+}
