@@ -106,6 +106,8 @@ const els = {
   charSave: document.getElementById('charSave'),
   charDelete: document.getElementById('charDelete'),
   charReseed: document.getElementById('charReseed'),
+  audio: document.getElementById('mediaAudio'),
+  audioWrap: document.getElementById('audioWrap'),
   series: document.getElementById('mediaSeries'),
   seriesWrap: document.getElementById('seriesWrap'),
   accessKey: document.getElementById('mediaAccessKey'),
@@ -119,6 +121,7 @@ const els = {
 let kind = 'image';
 let refData = null; // { base64, mimeType }
 let srcVideoData = null; // base64 data URL of a clip to restyle
+let audioData = null; // base64 data URL of an audio track to lay over the result
 
 const VIDEO_MODE_LABELS = {
   text: 'Text → Video',
@@ -265,6 +268,7 @@ function syncFields() {
   // supplied images, so injecting a character description into either fights
   // what the mode is for.
   const seriesable = selfHostedVideo && (vm === 'text' || vm === 'image');
+  els.audioWrap.classList.toggle('hidden', !selfHostedVideo);
   els.characterWrap.classList.toggle('hidden', !seriesable);
   els.seriesWrap.classList.toggle('hidden', !seriesable);
 
@@ -350,26 +354,36 @@ function composePrompt(shot, character) {
  *  Without storage configured the clips come back as data: URLs instead, and
  *  several of those exceed the request limit — hence the check rather than a
  *  button that fails on click. */
-function offerStitch(clipUrls, accessKey) {
-  if (clipUrls.length < 2) return;
-  const { card } = cardShell(`${clipUrls.length} clips ready`, '');
+function offerStitch(clipUrls, accessKey, audio) {
+  // One clip is only worth assembling when there is audio to lay over it.
+  if (clipUrls.length < 2 && !audio) return;
+  const joining = clipUrls.length > 1;
+  const label = joining
+    ? `Join ${clipUrls.length} clips${audio ? ' and add audio' : ''}`
+    : 'Add audio to this clip';
+  const { card } = cardShell(joining ? `${clipUrls.length} clips ready` : 'Clip ready', '');
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'text-btn media-generate';
-  btn.textContent = `Join ${clipUrls.length} clips into one video`;
+  btn.textContent = label;
   btn.addEventListener('click', async () => {
     btn.disabled = true;
-    btn.textContent = 'Joining…';
-    setStatus('Joining clips…');
+    btn.textContent = 'Working…';
+    setStatus(joining ? 'Joining clips…' : 'Adding audio…');
     try {
-      const joined = await runSync({ __op: 'stitch', clips: clipUrls, accessKey });
+      const joined = await runSync({
+        __op: 'stitch',
+        clips: clipUrls,
+        ...(audio ? { audio } : {}),
+        accessKey,
+      });
       renderVideoResult(joined);
       card.remove();
     } catch (err) {
       console.error(err);
-      setStatus(err.message || 'Join failed.', true);
+      setStatus(err.message || 'Assembly failed.', true);
       btn.disabled = false;
-      btn.textContent = `Join ${clipUrls.length} clips into one video`;
+      btn.textContent = label;
     }
   });
   card.appendChild(btn);
@@ -514,6 +528,37 @@ els.charDelete.addEventListener('click', () => {
 
 els.mode.addEventListener('change', syncFields);
 els.videoMode.addEventListener('change', syncFields);
+
+// ---- Audio track ---------------------------------------------------------
+// Read once here rather than at generate time: the file has to survive as a
+// data URL across a whole series, and the input itself can be cleared by the
+// browser between clips.
+els.audio.addEventListener('change', async () => {
+  const file = els.audio.files?.[0];
+  audioData = null;
+  if (!file) {
+    setStatus('');
+    return;
+  }
+  if (file.size > SRC_VIDEO_MAX_BYTES) {
+    els.audio.value = '';
+    setStatus(
+      `That track is ${(file.size / 1_048_576).toFixed(1)}MB. It has to fit in a 3MB ` +
+        `request — try a shorter clip or a lower bitrate mp3.`,
+      true,
+    );
+    return;
+  }
+  audioData = await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+  if (audioData) {
+    setStatus(`Loaded ${file.name} — it will be offered once the video is generated.`);
+  }
+});
 
 // ---- Source video for restyling -----------------------------------------
 els.srcVideo.addEventListener('change', async () => {
@@ -1077,19 +1122,20 @@ els.generate.addEventListener('click', async () => {
       }
     }
 
-    if (shots.length > 1) {
-      setStatus(`Done — ${shots.length} shots.`);
-      // Joining passes links, not bytes. Inline clips (no storage configured)
-      // would blow the request limit several times over, so the offer is only
-      // made when there is something linkable to send.
-      const linkable = seriesClips.filter((u) => !String(u).startsWith('data:'));
-      if (linkable.length > 1) offerStitch(linkable, body.accessKey || '');
-      else if (seriesClips.length > 1) {
-        setStatus(
-          `Done — ${shots.length} shots. Joining needs storage configured ` +
-            `(SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY) so clips are URLs rather than inline data.`,
-        );
-      }
+    if (shots.length > 1) setStatus(`Done — ${shots.length} shots.`);
+
+    // Assembly passes links, not bytes. Inline clips (no storage configured)
+    // would blow the request limit, so the offer is only made when there is
+    // something linkable to send. A lone clip is only worth assembling when
+    // there is audio to lay over it.
+    const linkable = seriesClips.filter((u) => !String(u).startsWith('data:'));
+    if (linkable.length > 1 || (linkable.length === 1 && audioData)) {
+      offerStitch(linkable, body.accessKey || '', audioData);
+    } else if (seriesClips.length > 1 || (seriesClips.length === 1 && audioData)) {
+      setStatus(
+        `Done. Joining and adding audio need storage configured ` +
+          `(SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY) so clips come back as URLs rather than inline data.`,
+      );
     }
   } catch (err) {
     console.error(err);
