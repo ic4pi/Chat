@@ -106,6 +106,9 @@ const els = {
   charSave: document.getElementById('charSave'),
   charDelete: document.getElementById('charDelete'),
   charReseed: document.getElementById('charReseed'),
+  charImage: document.getElementById('charImage'),
+  charImageState: document.getElementById('charImageState'),
+  charImagePreview: document.getElementById('charImagePreview'),
   charVoice: document.getElementById('charVoice'),
   charVoiceState: document.getElementById('charVoiceState'),
   dialogue: document.getElementById('mediaDialogue'),
@@ -129,6 +132,7 @@ let refData = null; // { base64, mimeType }
 let srcVideoData = null; // base64 data URL of a clip to restyle
 let audioData = null; // base64 data URL of an audio track to lay over the result
 let pendingVoice = null; // voice sample staged in the character editor, saved with it
+let pendingImage = null; // reference image staged the same way
 
 const VIDEO_MODE_LABELS = {
   text: 'Text → Video',
@@ -344,8 +348,19 @@ function showCharacterInEditor(c) {
   els.charStyle.value = c?.style || '';
   els.charSeed.value = c?.seed ?? newSeed();
   els.charVoice.value = '';
+  els.charImage.value = '';
   pendingVoice = null;
+  pendingImage = null;
   els.charVoiceState.textContent = c?.voice ? 'Voice sample saved.' : 'No voice sample yet.';
+  els.charImageState.textContent = c?.image ? 'Reference image saved.' : 'No reference image yet.';
+  els.charImagePreview.innerHTML = '';
+  els.charImagePreview.classList.toggle('hidden', !c?.image);
+  if (c?.image) {
+    const img = document.createElement('img');
+    img.src = c.image;
+    img.alt = c.name || 'Reference';
+    els.charImagePreview.appendChild(img);
+  }
 }
 
 /** The prompt actually sent: the shot, then the character verbatim, then the
@@ -516,6 +531,7 @@ els.charSave.addEventListener('click', () => {
     // Kept unless a new sample was staged, so editing the look does not
     // silently drop the voice.
     voice: pendingVoice ?? existing?.voice ?? '',
+    image: pendingImage ?? existing?.image ?? '',
   };
   characters = existing
     ? characters.map((c) => (c.id === existing.id ? record : c))
@@ -567,6 +583,29 @@ els.charVoice.addEventListener('change', async () => {
   els.charVoiceState.textContent = pendingVoice
     ? `Staged ${file.name} — press Save to keep it.`
     : 'Could not read that file.';
+});
+
+els.charImage.addEventListener('change', async () => {
+  const file = els.charImage.files?.[0];
+  pendingImage = null;
+  if (!file) {
+    els.charImageState.textContent = 'No new image staged.';
+    return;
+  }
+  try {
+    const compressed = await compressImageFile(file);
+    pendingImage = compressed.base64;
+    els.charImageState.textContent = `Staged ${file.name} — press Save to keep it.`;
+    els.charImagePreview.innerHTML = '';
+    els.charImagePreview.classList.remove('hidden');
+    const img = document.createElement('img');
+    img.src = pendingImage;
+    img.alt = 'Reference';
+    els.charImagePreview.appendChild(img);
+  } catch (err) {
+    els.charImage.value = '';
+    els.charImageState.textContent = err.message || 'Could not read that image.';
+  }
 });
 
 // Speaking fills the same audio slot an uploaded track would, so the voice
@@ -1056,8 +1095,12 @@ els.generate.addEventListener('click', async () => {
   }
   const usesRef = modelUsesRef(spec);
 
-  if (usesRef && !refData) {
-    alert(kind === 'image' ? 'Venice · Edit needs an uploaded image.' : 'Image → Video needs a reference image.');
+  if (usesRef && !refData && !character?.image) {
+    alert(
+      kind === 'image'
+        ? 'Venice · Edit needs an uploaded image.'
+        : 'Image → Video needs a reference image — upload one, or give the character one.',
+    );
     return;
   }
 
@@ -1125,6 +1168,12 @@ els.generate.addEventListener('click', async () => {
     if (refData && usesRef) {
       body.imageBase64 = refData.base64;
       body.mimeType = refData.mimeType;
+    } else if (usesRef && character?.image) {
+      // The character's own reference, so a saved character starts every shot
+      // from the same picture without re-uploading it each time. A manual
+      // upload still wins — it is the more specific choice.
+      body.imageBase64 = character.image;
+      body.mimeType = 'image/jpeg';
     }
 
     // Shots run one after another rather than in parallel: they share a single
