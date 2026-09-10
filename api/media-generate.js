@@ -758,6 +758,15 @@ const MODAL_WAN_A14B_ENDPOINT = cleanEndpoint(
   'https://ic4pi--wan-video-a14b-generate.modal.run',
 );
 
+/**
+ * Joining finished clips into one video. CPU-only Modal app — concatenation is
+ * an ffmpeg job, so it never wakes a GPU container. See modal/stitch_app.py.
+ */
+const MODAL_STITCH_ENDPOINT = cleanEndpoint(
+  process.env.MODAL_STITCH_ENDPOINT,
+  'https://ic4pi--video-stitch-join.modal.run',
+);
+
 async function generateModalWanVideo({
   prompt,
   negativePrompt,
@@ -1052,6 +1061,66 @@ export default async function handler(req, res) {
     }
 
     return res.status(200).json({ status: 'done', ...out });
+  }
+
+  // Join a series of finished clips into one video.
+  //   POST ?op=stitch {clips: [url, ...]} -> { kind:'video', videoUrl }
+  //
+  // Clips are passed by URL wherever storage is configured, so their bytes go
+  // Supabase -> Modal directly and never cross this function. A data: URL is
+  // accepted too, but several inline clips will exceed Vercel's request limit
+  // long before the app's own ceiling — which is the case the size check names
+  // rather than letting it die as an opaque 413.
+  if (String(req.query?.op || '') === 'stitch') {
+    if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+    const { clips, accessKey: sk } = req.body || {};
+    if (!Array.isArray(clips) || clips.length < 2) {
+      return res.status(400).json({ error: 'Send at least two clips to join.' });
+    }
+    if (payloadTooLarge({ clips })) {
+      return res.status(413).json({
+        code: 'PAYLOAD_TOO_LARGE',
+        error:
+          'These clips are too large to send inline. Set SUPABASE_URL and ' +
+          'SUPABASE_SERVICE_ROLE_KEY so clips are stored as URLs — joining then ' +
+          'passes links instead of bytes and has no practical size limit.',
+      });
+    }
+
+    // Stitching is CPU-only and costs a fraction of a generation, but it is
+    // still the owner's compute, so it sits behind the same key as video.
+    if (billingEnabled() && !findPerson(sk)) {
+      return res.status(401).json({ error: 'Invalid or missing access key.' });
+    }
+
+    const upstream = await fetch(MODAL_STITCH_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
+      body: JSON.stringify({ clips }),
+    });
+    const joined = await upstream.json().catch(() => ({}));
+    if (!upstream.ok || joined.error || !joined.video_base64) {
+      return res.status(upstream.ok ? 502 : upstream.status).json({
+        error: joined.error || `Modal stitch HTTP ${upstream.status} calling ${MODAL_STITCH_ENDPOINT}`,
+      });
+    }
+
+    let out = {
+      kind: 'video',
+      provider: 'modal',
+      model: 'stitched',
+      videoUrl: `data:video/mp4;base64,${joined.video_base64}`,
+      mime: 'video/mp4',
+      elapsedSeconds: joined.elapsed_seconds,
+      numClips: joined.count,
+      note: `Joined ${joined.count} clips.`,
+    };
+    try {
+      out = await persistVideoResult(out);
+    } catch (persistErr) {
+      return res.status(persistErr.status || 502).json({ error: persistErr.message });
+    }
+    return res.status(200).json(out);
   }
 
   // Admin-only balance management for the Modal video access keys:
