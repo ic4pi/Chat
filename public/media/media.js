@@ -106,6 +106,12 @@ const els = {
   charSave: document.getElementById('charSave'),
   charDelete: document.getElementById('charDelete'),
   charReseed: document.getElementById('charReseed'),
+  charVoice: document.getElementById('charVoice'),
+  charVoiceState: document.getElementById('charVoiceState'),
+  dialogue: document.getElementById('mediaDialogue'),
+  dialogueWrap: document.getElementById('dialogueWrap'),
+  dialogueState: document.getElementById('dialogueState'),
+  speakBtn: document.getElementById('speakBtn'),
   audio: document.getElementById('mediaAudio'),
   audioWrap: document.getElementById('audioWrap'),
   series: document.getElementById('mediaSeries'),
@@ -122,6 +128,7 @@ let kind = 'image';
 let refData = null; // { base64, mimeType }
 let srcVideoData = null; // base64 data URL of a clip to restyle
 let audioData = null; // base64 data URL of an audio track to lay over the result
+let pendingVoice = null; // voice sample staged in the character editor, saved with it
 
 const VIDEO_MODE_LABELS = {
   text: 'Text → Video',
@@ -270,6 +277,7 @@ function syncFields() {
   const seriesable = selfHostedVideo && (vm === 'text' || vm === 'image');
   els.audioWrap.classList.toggle('hidden', !selfHostedVideo);
   els.characterWrap.classList.toggle('hidden', !seriesable);
+  els.dialogueWrap.classList.toggle('hidden', !seriesable);
   els.seriesWrap.classList.toggle('hidden', !seriesable);
 
   els.strengthWrap.classList.toggle('hidden', m !== 'img2img' && vm !== 'restyle');
@@ -335,6 +343,9 @@ function showCharacterInEditor(c) {
   els.charLook.value = c?.look || '';
   els.charStyle.value = c?.style || '';
   els.charSeed.value = c?.seed ?? newSeed();
+  els.charVoice.value = '';
+  pendingVoice = null;
+  els.charVoiceState.textContent = c?.voice ? 'Voice sample saved.' : 'No voice sample yet.';
 }
 
 /** The prompt actually sent: the shot, then the character verbatim, then the
@@ -502,6 +513,9 @@ els.charSave.addEventListener('click', () => {
     look: (els.charLook.value || '').trim(),
     style: (els.charStyle.value || '').trim(),
     seed: Number(els.charSeed.value) || newSeed(),
+    // Kept unless a new sample was staged, so editing the look does not
+    // silently drop the voice.
+    voice: pendingVoice ?? existing?.voice ?? '',
   };
   characters = existing
     ? characters.map((c) => (c.id === existing.id ? record : c))
@@ -528,6 +542,75 @@ els.charDelete.addEventListener('click', () => {
 
 els.mode.addEventListener('change', syncFields);
 els.videoMode.addEventListener('change', syncFields);
+
+// ---- Character voice -----------------------------------------------------
+// A sample is staged here and written onto the character by Save, so an
+// abandoned edit does not modify the stored voice.
+els.charVoice.addEventListener('change', async () => {
+  const file = els.charVoice.files?.[0];
+  pendingVoice = null;
+  if (!file) {
+    els.charVoiceState.textContent = 'No new sample staged.';
+    return;
+  }
+  if (file.size > SRC_VIDEO_MAX_BYTES) {
+    els.charVoice.value = '';
+    els.charVoiceState.textContent = `${(file.size / 1_048_576).toFixed(1)}MB is too big — a few seconds is plenty.`;
+    return;
+  }
+  pendingVoice = await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+  els.charVoiceState.textContent = pendingVoice
+    ? `Staged ${file.name} — press Save to keep it.`
+    : 'Could not read that file.';
+});
+
+// Speaking fills the same audio slot an uploaded track would, so the voice
+// is laid over the video by exactly the path that already works.
+els.speakBtn.addEventListener('click', async () => {
+  const text = (els.dialogue.value || '').trim();
+  if (!text) {
+    els.dialogue.focus();
+    return;
+  }
+  const character = selectedCharacter();
+  els.speakBtn.disabled = true;
+  els.speakBtn.textContent = 'Speaking…';
+  els.dialogueState.textContent = '';
+  try {
+    const spoken = await runSync({
+      __op: 'speak',
+      text,
+      ...(character?.voice ? { voice: character.voice } : {}),
+      accessKey: (els.accessKey.value || '').trim(),
+    });
+    audioData = spoken.audioUrl;
+    // Clearing the file input keeps it honest: the audio slot now holds the
+    // generated line, not whatever was picked there earlier.
+    els.audio.value = '';
+    const who = spoken.cloned ? `${character.name}'s voice` : 'the default voice';
+    els.dialogueState.textContent = `${spoken.seconds}s in ${who} — ready to lay over the video.`;
+
+    const { card } = cardShell(`voice · ${spoken.cloned ? character.name : 'default'}`, `${spoken.seconds}s`);
+    const player = document.createElement('audio');
+    player.src = spoken.audioUrl;
+    player.controls = true;
+    card.insertBefore(player, card.firstChild);
+    prependCard(card);
+    setStatus('Voice ready. Generate a clip and it will be offered as the audio track.');
+  } catch (err) {
+    console.error(err);
+    els.dialogueState.textContent = err.message || 'Voice generation failed.';
+    setStatus(err.message || 'Voice generation failed.', true);
+  } finally {
+    els.speakBtn.disabled = false;
+    els.speakBtn.textContent = 'Generate voice';
+  }
+});
 
 // ---- Audio track ---------------------------------------------------------
 // Read once here rather than at generate time: the file has to survive as a
