@@ -153,10 +153,14 @@
           </div>
         </div>
 
-        <label class="media-field hidden" id="seriesWrap">
-          <span>Series <em class="opt">(one shot per line — leave empty for a single clip)</em></span>
-          <textarea id="mediaSeries" rows="4" placeholder="sitting alone on a park bench at dusk&#10;slowly turning to look at the camera&#10;standing up and walking away"></textarea>
-        </label>
+        <div class="media-field hidden" id="seriesWrap">
+          <span>Shots <em class="opt">(one clip each &mdash; write as much detail as you like; leave empty for a single clip)</em></span>
+          <div id="shotList" class="shot-list"></div>
+          <div class="char-row shot-add-row">
+            <button id="shotAdd" class="text-btn char-btn shot-add" type="button">+ Add shot</button>
+            <span id="shotCount" class="char-voice-state"></span>
+          </div>
+        </div>
 
         <label class="media-field" id="refWrap">
           <span>Reference image <em class="opt">(optional)</em></span>
@@ -165,8 +169,9 @@
         <div id="refPreview" class="ref-preview hidden"></div>
 
         <div class="media-field hidden" id="dialogueWrap">
-          <span>Dialogue <em class="opt">(spoken in the character's voice — one line per beat)</em></span>
-          <textarea id="mediaDialogue" rows="3" placeholder="I have made a terrible mistake.&#10;A truly enormous one."></textarea>
+          <span>Voice-over <em class="opt">(each shot's line, spoken in order over the finished video)</em></span>
+          <p class="dialogue-hint">Dialogue is written per shot, above. This reads those lines
+            in order in the character's voice.</p>
           <div class="char-row">
             <button id="speakBtn" class="text-btn char-btn" type="button">Generate voice</button>
             <span id="dialogueState" class="char-voice-state"></span>

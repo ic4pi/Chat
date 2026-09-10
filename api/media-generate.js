@@ -69,6 +69,7 @@ import { storeMediaAsset, decodeDataUrl } from '../lib/hub.js';
 import {
   billingEnabled,
   findPerson,
+  requirePerson,
   assertHasCredit,
   chargeForGeneration,
   addCreditUsd,
@@ -924,6 +925,12 @@ export default async function handler(req, res) {
   // awaited past dispatch, no error is surfaced, and a failed warm just means
   // the generation pays the cold start it would have paid anyway.
   if (String(req.query?.op || '') === 'warm') {
+    // Warming starts a GPU container, which bills like any other use of it.
+    try {
+      requirePerson(req.body?.accessKey || req.query?.accessKey);
+    } catch (authErr) {
+      return res.status(authErr.status || 401).json({ error: authErr.message });
+    }
     const target = String(req.query?.model || req.body?.model || '');
     const endpoint = warmEndpointFor(target);
 
@@ -959,14 +966,19 @@ export default async function handler(req, res) {
     } = req.body || {};
     if (!jp || !String(jp).trim()) return res.status(400).json({ error: 'prompt is required' });
 
-    // Billing is checked at submit: a job that cannot be paid for should never
-    // occupy a GPU. The charge itself lands at collection, when the real
-    // elapsed time is known.
+    // Auth first, unconditionally: an unauthenticated caller must never reach
+    // a GPU. Billing is checked straight after, because a job that cannot be
+    // paid for should not occupy one either. The charge itself lands at
+    // collection, when the real elapsed time is known.
+    let submitPerson;
+    try {
+      submitPerson = requirePerson(jk);
+    } catch (authErr) {
+      return res.status(authErr.status || 401).json({ error: authErr.message });
+    }
     if (billingEnabled()) {
-      const person = findPerson(jk);
-      if (!person) return res.status(401).json({ error: 'Invalid or missing access key.' });
       try {
-        await assertHasCredit(person);
+        await assertHasCredit(submitPerson);
       } catch (creditErr) {
         return res.status(creditErr.status || 402).json({ error: creditErr.message });
       }
@@ -1023,6 +1035,15 @@ export default async function handler(req, res) {
     const { jobId, model: rm, accessKey: rk } = req.body || {};
     if (!jobId) return res.status(400).json({ error: 'jobId is required' });
 
+    // A job id is a bearer token for a finished video otherwise: collection
+    // took no key of its own, so anyone holding an id could pull the result.
+    let resultPerson;
+    try {
+      resultPerson = requirePerson(rk);
+    } catch (authErr) {
+      return res.status(authErr.status || 401).json({ error: authErr.message });
+    }
+
     const upstream = await fetch(modalEndpoint(rm, 'result'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
@@ -1059,7 +1080,7 @@ export default async function handler(req, res) {
     }
 
     if (billingEnabled()) {
-      const person = findPerson(rk);
+      const person = resultPerson;
       if (person) {
         const billing = await chargeForGeneration(person, {
           elapsedSeconds: out.elapsedSeconds,
@@ -1088,8 +1109,10 @@ export default async function handler(req, res) {
         error: 'That voice sample is too large. A few seconds of speech is all the model needs.',
       });
     }
-    if (billingEnabled() && !findPerson(vk)) {
-      return res.status(401).json({ error: 'Invalid or missing access key.' });
+    try {
+      requirePerson(vk);
+    } catch (authErr) {
+      return res.status(authErr.status || 401).json({ error: authErr.message });
     }
 
     const upstream = await fetch(MODAL_TTS_ENDPOINT, {
@@ -1151,8 +1174,10 @@ export default async function handler(req, res) {
 
     // Stitching is CPU-only and costs a fraction of a generation, but it is
     // still the owner's compute, so it sits behind the same key as video.
-    if (billingEnabled() && !findPerson(sk)) {
-      return res.status(401).json({ error: 'Invalid or missing access key.' });
+    try {
+      requirePerson(sk);
+    } catch (authErr) {
+      return res.status(authErr.status || 401).json({ error: authErr.message });
     }
 
     const upstream = await fetch(MODAL_STITCH_ENDPOINT, {
@@ -1234,6 +1259,15 @@ export default async function handler(req, res) {
     seed,
   } = req.body || {};
 
+  // Every generation spends the owner's money — a Modal GPU, a Venice call on
+  // VENICE_API_KEY, a Cloudflare Workers AI credit — so the key is required
+  // here once, for all providers, rather than only on the Modal branches.
+  try {
+    requirePerson(accessKey);
+  } catch (authErr) {
+    return res.status(authErr.status || 401).json({ error: authErr.message });
+  }
+
   if (typeof prompt !== 'string' || !prompt.trim()) {
     return res.status(400).json({ error: 'prompt is required' });
   }
@@ -1278,11 +1312,12 @@ export default async function handler(req, res) {
       // access keys.
       if (provider === 'modal') {
         let person = null;
+        try {
+          person = requirePerson(accessKey);
+        } catch (authErr) {
+          return res.status(authErr.status || 401).json({ error: authErr.message });
+        }
         if (billingEnabled()) {
-          person = findPerson(accessKey);
-          if (!person) {
-            return res.status(401).json({ error: 'Invalid or missing access key for image generation.' });
-          }
           try {
             await assertHasCredit(person);
           } catch (creditErr) {
@@ -1364,14 +1399,15 @@ export default async function handler(req, res) {
     if (kind === 'video') {
       // Self-hosted only, and no external content filter.
       if (provider === 'modal') {
-        // Billing only kicks in once VIDEO_ACCESS_KEYS is set in Vercel env.
-        // Until then this stays open/unmetered (single-owner use).
+        // Auth is unconditional; billing kicks in once VIDEO_ACCESS_KEYS
+        // carries balances and KV is attached.
         let person = null;
+        try {
+          person = requirePerson(accessKey);
+        } catch (authErr) {
+          return res.status(authErr.status || 401).json({ error: authErr.message });
+        }
         if (billingEnabled()) {
-          person = findPerson(accessKey);
-          if (!person) {
-            return res.status(401).json({ error: 'Invalid or missing access key for video generation.' });
-          }
           try {
             await assertHasCredit(person);
           } catch (creditErr) {

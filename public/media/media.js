@@ -111,14 +111,15 @@ const els = {
   charImagePreview: document.getElementById('charImagePreview'),
   charVoice: document.getElementById('charVoice'),
   charVoiceState: document.getElementById('charVoiceState'),
-  dialogue: document.getElementById('mediaDialogue'),
   dialogueWrap: document.getElementById('dialogueWrap'),
   dialogueState: document.getElementById('dialogueState'),
   speakBtn: document.getElementById('speakBtn'),
   audio: document.getElementById('mediaAudio'),
   audioWrap: document.getElementById('audioWrap'),
-  series: document.getElementById('mediaSeries'),
   seriesWrap: document.getElementById('seriesWrap'),
+  shotList: document.getElementById('shotList'),
+  shotAdd: document.getElementById('shotAdd'),
+  shotCount: document.getElementById('shotCount'),
   accessKey: document.getElementById('mediaAccessKey'),
   accessKeyWrap: document.getElementById('accessKeyWrap'),
   generate: document.getElementById('mediaGenerate'),
@@ -283,6 +284,9 @@ function syncFields() {
   els.characterWrap.classList.toggle('hidden', !seriesable);
   els.dialogueWrap.classList.toggle('hidden', !seriesable);
   els.seriesWrap.classList.toggle('hidden', !seriesable);
+  // Whether a shot offers a start frame depends on the mode, so the cards are
+  // rebuilt whenever the mode changes.
+  if (seriesable) renderShots();
 
   els.strengthWrap.classList.toggle('hidden', m !== 'img2img' && vm !== 'restyle');
   els.expandWrap.classList.toggle('hidden', m !== 'expand');
@@ -332,10 +336,18 @@ function fillCharacters(selectId) {
     els.character.appendChild(opt);
   }
   if (selectId) els.character.value = selectId;
+  refreshShotCharacters();
 }
 
 function selectedCharacter() {
   return characters.find((c) => c.id === els.character.value) || null;
+}
+
+/** Rebuild the per-shot character pickers after the character list changes.
+ *  Declared here so fillCharacters() can call it before renderShots() is
+ *  reached in source order (both are hoisted). */
+function refreshShotCharacters() {
+  if (els.shotList && !els.seriesWrap.classList.contains('hidden')) renderShots();
 }
 
 function newSeed() {
@@ -415,6 +427,209 @@ function offerStitch(clipUrls, accessKey, audio) {
   card.appendChild(btn);
   prependCard(card);
 }
+
+// ---- Shots ---------------------------------------------------------------
+// A series used to be a textarea split on newlines, which capped every shot at
+// a single line and left no room for the detail these models actually need.
+// Shots are objects now: a full multi-line prompt, its own line of dialogue,
+// and its own character and reference image where the mode uses one.
+
+let shotSeq = 0;
+
+/** A fresh shot. `from` carries a previous shot's settings forward — the point
+ *  of the + button is a new prompt, not re-picking the same character and
+ *  reference every time. Prompt and dialogue deliberately do not carry. */
+function newShot(from = null) {
+  return {
+    id: `shot-${++shotSeq}`,
+    prompt: '',
+    dialogue: '',
+    characterId: from?.characterId || '',
+    ref: from?.ref || null,
+    refName: from?.refName || '',
+  };
+}
+
+let shots = [newShot()];
+
+/** Shots with something in them, in order. An empty trailing card is a card
+ *  the user has not filled in yet, not an empty clip to generate. */
+function filledShots() {
+  return shots.filter((sh) => sh.prompt.trim());
+}
+
+/** The character for a shot: its own override, else the main picker. */
+function characterForShot(shot) {
+  if (shot.characterId) {
+    return characters.find((c) => c.id === shot.characterId) || null;
+  }
+  return selectedCharacter();
+}
+
+function moveShot(index, delta) {
+  const to = index + delta;
+  if (to < 0 || to >= shots.length) return;
+  [shots[index], shots[to]] = [shots[to], shots[index]];
+  renderShots();
+}
+
+function removeShot(index) {
+  shots.splice(index, 1);
+  if (!shots.length) shots.push(newShot());
+  renderShots();
+}
+
+function duplicateShot(index) {
+  const copy = { ...shots[index], id: `shot-${++shotSeq}` };
+  shots.splice(index + 1, 0, copy);
+  renderShots();
+}
+
+function addShot() {
+  shots.push(newShot(shots[shots.length - 1]));
+  renderShots();
+  // Land the caret in the new prompt so the + button flows straight into
+  // typing rather than needing a click.
+  const last = els.shotList.querySelector('.shot-card:last-child .shot-prompt');
+  if (last) last.focus();
+}
+
+function iconButton(label, title, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'text-btn shot-btn';
+  b.textContent = label;
+  b.title = title;
+  b.setAttribute('aria-label', title);
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function renderShots() {
+  if (!els.shotList) return;
+  const usesRef = modelUsesRef(selectedSpec());
+  els.shotList.innerHTML = '';
+
+  shots.forEach((shot, i) => {
+    const card = document.createElement('div');
+    card.className = 'shot-card';
+    card.dataset.shotId = shot.id;
+
+    const head = document.createElement('div');
+    head.className = 'shot-head';
+    const title = document.createElement('span');
+    title.className = 'shot-title';
+    title.textContent = `Shot ${i + 1}`;
+    head.appendChild(title);
+
+    const tools = document.createElement('div');
+    tools.className = 'shot-tools';
+    tools.appendChild(iconButton('↑', 'Move this shot earlier', () => moveShot(i, -1)));
+    tools.appendChild(iconButton('↓', 'Move this shot later', () => moveShot(i, 1)));
+    tools.appendChild(iconButton('⧉', 'Duplicate this shot', () => duplicateShot(i)));
+    tools.appendChild(iconButton('✕', 'Remove this shot', () => removeShot(i)));
+    head.appendChild(tools);
+    card.appendChild(head);
+
+    const prompt = document.createElement('textarea');
+    prompt.className = 'shot-prompt';
+    prompt.rows = 3;
+    prompt.placeholder =
+      i === 0
+        ? 'A woman waits in line at a Wendy\u2019s counter, tray rail beside her,\nmenu boards glowing overhead. A man stands close behind her,\nshifting impatiently. Warm fast-food lighting, handheld.'
+        : 'Describe this shot \u2014 as much detail as you want.';
+    prompt.value = shot.prompt;
+    prompt.addEventListener('input', () => {
+      shot.prompt = prompt.value;
+      updateShotCount();
+    });
+    card.appendChild(prompt);
+
+    const dlg = document.createElement('input');
+    dlg.type = 'text';
+    dlg.className = 'shot-dialogue';
+    dlg.placeholder = 'Dialogue for this shot (optional)';
+    dlg.value = shot.dialogue;
+    dlg.addEventListener('input', () => {
+      shot.dialogue = dlg.value;
+    });
+    card.appendChild(dlg);
+
+    const row = document.createElement('div');
+    row.className = 'shot-row';
+
+    const charSel = document.createElement('select');
+    charSel.className = 'shot-character';
+    const inherit = document.createElement('option');
+    inherit.value = '';
+    inherit.textContent = '— main character —';
+    charSel.appendChild(inherit);
+    for (const c of characters) {
+      const o = document.createElement('option');
+      o.value = c.id;
+      o.textContent = c.name;
+      charSel.appendChild(o);
+    }
+    charSel.value = shot.characterId;
+    charSel.addEventListener('change', () => {
+      shot.characterId = charSel.value;
+    });
+    row.appendChild(charSel);
+
+    if (usesRef) {
+      const refLabel = document.createElement('label');
+      refLabel.className = 'shot-ref';
+      const refInput = document.createElement('input');
+      refInput.type = 'file';
+      refInput.accept = 'image/*';
+      const refState = document.createElement('span');
+      refState.className = 'shot-ref-state';
+      refState.textContent = shot.refName || 'no start frame';
+      refInput.addEventListener('change', async () => {
+        const file = refInput.files?.[0];
+        if (!file) {
+          shot.ref = null;
+          shot.refName = '';
+          refState.textContent = 'no start frame';
+          return;
+        }
+        refState.textContent = 'reading…';
+        try {
+          shot.ref = await compressImageFile(file);
+          shot.refName = file.name;
+          refState.textContent = file.name;
+        } catch (err) {
+          console.error(err);
+          shot.ref = null;
+          shot.refName = '';
+          refState.textContent = 'could not read that image';
+        }
+      });
+      refLabel.appendChild(refInput);
+      refLabel.appendChild(refState);
+      row.appendChild(refLabel);
+    }
+
+    card.appendChild(row);
+    els.shotList.appendChild(card);
+  });
+
+  updateShotCount();
+}
+
+/** A long prompt has to shrink to fit the one-line status readout. */
+function shotLabel(text) {
+  const flat = String(text).replace(/\s+/g, ' ').trim();
+  return flat.length > 60 ? `${flat.slice(0, 57)}…` : flat;
+}
+
+function updateShotCount() {
+  if (!els.shotCount) return;
+  const n = filledShots().length;
+  els.shotCount.textContent = n === 0 ? '' : n === 1 ? '1 shot' : `${n} shots, joined in order`;
+}
+
+if (els.shotAdd) els.shotAdd.addEventListener('click', addShot);
 
 function setStatus(msg, isError = false) {
   els.status.textContent = msg || '';
@@ -611,9 +826,16 @@ els.charImage.addEventListener('change', async () => {
 // Speaking fills the same audio slot an uploaded track would, so the voice
 // is laid over the video by exactly the path that already works.
 els.speakBtn.addEventListener('click', async () => {
-  const text = (els.dialogue.value || '').trim();
+  // One beat per shot, in shot order — the TTS app splits on newlines and
+  // puts a gap between lines, so the voice-over lines up with the cut.
+  const lines = filledShots()
+    .map((sh) => sh.dialogue.trim())
+    .filter(Boolean);
+  const text = lines.join('\n');
   if (!text) {
-    els.dialogue.focus();
+    els.dialogueState.textContent = 'Write a line of dialogue on at least one shot first.';
+    const first = els.shotList.querySelector('.shot-dialogue');
+    if (first) first.focus();
     return;
   }
   const character = selectedCharacter();
@@ -784,12 +1006,18 @@ function warmSelectedModel() {
   if (!spec || spec.provider !== 'modal') return;
   // Once per model per page load — refocusing the box must not re-ping.
   if (warmedFor === spec.value) return;
+
+  // Warming starts a GPU container, so it carries the key like any other
+  // spend. Without one there is nothing to warm — and no point marking the
+  // model warmed, or focusing the box after typing the key would do nothing.
+  const key = (els.accessKey.value || '').trim();
+  if (!key) return;
   warmedFor = spec.value;
 
   fetch(`/api/media-generate?op=warm&model=${encodeURIComponent(spec.model)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: '{}',
+    body: JSON.stringify({ accessKey: key }),
     keepalive: true,
   }).catch(() => {});
 }
@@ -1080,17 +1308,28 @@ els.generate.addEventListener('click', async () => {
   const spec = selectedSpec();
   const character = els.characterWrap.classList.contains('hidden') ? null : selectedCharacter();
 
-  // A shot list replaces the single prompt: one line per clip, each expanded
-  // with the character and style. The prompt box still works on its own when
-  // the list is empty, so nothing changes for one-off generations.
-  const seriesLines = els.seriesWrap.classList.contains('hidden')
-    ? []
-    : (els.series.value || '').split('\n').map((l) => l.trim()).filter(Boolean);
-  const shots = seriesLines.length ? seriesLines : prompt ? [prompt] : [];
+  // The shot list replaces the single prompt: one card per clip, each with its
+  // own multi-line prompt, character and start frame. The prompt box still
+  // works on its own when no shot is filled in, so one-off generations are
+  // unchanged.
+  const seriesOn = !els.seriesWrap.classList.contains('hidden');
+  const listed = seriesOn ? filledShots() : [];
+  const runShots = listed.length
+    ? listed.map((sh) => ({
+        prompt: sh.prompt.trim(),
+        character: characterForShot(sh),
+        ref: sh.ref,
+      }))
+    : prompt
+      ? [{ prompt, character, ref: null }]
+      : [];
 
-  if (!shots.length) {
-    alert(els.seriesWrap.classList.contains('hidden') ? 'Enter a prompt.' : 'Enter a prompt, or one shot per line under Series.');
-    (seriesLines.length ? els.series : els.prompt).focus();
+  if (!runShots.length) {
+    alert(seriesOn ? 'Enter a prompt, or fill in at least one shot.' : 'Enter a prompt.');
+    (seriesOn && els.shotList.querySelector('.shot-prompt')
+      ? els.shotList.querySelector('.shot-prompt')
+      : els.prompt
+    ).focus();
     return;
   }
   const usesRef = modelUsesRef(spec);
@@ -1181,12 +1420,22 @@ els.generate.addEventListener('click', async () => {
     // once for the whole list instead of once per clip. Firing them together
     // would start a container each and cost the overhead every time.
     const seriesClips = [];
-    for (const [i, shot] of shots.entries()) {
-      const perShot = { ...body, prompt: composePrompt(shot, character) };
+    for (const [i, shot] of runShots.entries()) {
+      const shotChar = shot.character;
+      const perShot = { ...body, prompt: composePrompt(shot.prompt, shotChar) };
       // One seed across the series is half of what keeps a character stable;
       // the repeated description in composePrompt() is the other half.
-      if (character && Number.isFinite(Number(character.seed))) perShot.seed = Number(character.seed);
-      if (shots.length > 1) setStatus(`Shot ${i + 1} of ${shots.length}… ${shot}`);
+      if (shotChar && Number.isFinite(Number(shotChar.seed))) perShot.seed = Number(shotChar.seed);
+      // A start frame set on the shot itself is the most specific choice, so
+      // it wins over the shared upload and over the character's reference.
+      if (usesRef && shot.ref) {
+        perShot.imageBase64 = shot.ref.base64;
+        perShot.mimeType = shot.ref.mimeType;
+      } else if (usesRef && !refData && shotChar?.image) {
+        perShot.imageBase64 = shotChar.image;
+        perShot.mimeType = 'image/jpeg';
+      }
+      if (runShots.length > 1) setStatus(`Shot ${i + 1} of ${runShots.length}… ${shotLabel(shot.prompt)}`);
 
       // Self-hosted video goes through the async job API. One blocking request
       // would be bounded by the API's 800s function timeout, which is what caps
@@ -1201,7 +1450,7 @@ els.generate.addEventListener('click', async () => {
       } catch (shotErr) {
         // One failed shot must not discard the clips already generated and
         // paid for, so the run continues and reports at the end.
-        if (shots.length === 1) throw shotErr;
+        if (runShots.length === 1) throw shotErr;
         console.error(shotErr);
         setStatus(`Shot ${i + 1} failed: ${shotErr.message}`, true);
         continue;
@@ -1254,7 +1503,7 @@ els.generate.addEventListener('click', async () => {
       }
     }
 
-    if (shots.length > 1) setStatus(`Done — ${shots.length} shots.`);
+    if (runShots.length > 1) setStatus(`Done — ${runShots.length} shots.`);
 
     // Assembly passes links, not bytes. Inline clips (no storage configured)
     // would blow the request limit, so the offer is only made when there is
@@ -1280,6 +1529,7 @@ els.generate.addEventListener('click', async () => {
 });
 
 fillCharacters();
+renderShots();
 fillModels();
 fillSizes();
 fillLengths();

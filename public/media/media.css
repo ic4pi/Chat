@@ -336,4 +336,98 @@
   font-size: 12px;
   opacity: .7;
 }
-#dialogueWrap textarea { resize: vertical; }
+
+/* ---- Shots ---------------------------------------------------------------
+   One card per clip. A shot's prompt is the thing being written, so it gets
+   the room; its settings sit under it on one line. Borders and muted text
+   follow the sheet's existing rgba/opacity idiom so the cards track the
+   surrounding theme rather than pinning their own colours. */
+.shot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+}
+.shot-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(127, 127, 127, .28);
+  border-radius: 10px;
+}
+.shot-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.shot-title {
+  font-size: 12px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  opacity: .7;
+}
+.shot-tools {
+  display: flex;
+  gap: 4px;
+}
+.shot-btn {
+  padding: 2px 8px;
+  font-size: 13px;
+  line-height: 1.4;
+  min-width: 28px;
+  white-space: nowrap;
+}
+.media-field .shot-prompt {
+  width: 100%;
+  min-height: 110px;
+  resize: vertical;
+  font: inherit;
+}
+.shot-dialogue {
+  width: 100%;
+  font: inherit;
+}
+.shot-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.shot-character { flex: 1 1 160px; min-width: 0; }
+.shot-ref {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.shot-ref input[type='file'] { flex: 1 1 auto; min-width: 0; }
+.shot-ref-state {
+  font-size: 12px;
+  opacity: .7;
+  /* .media-field uppercases its labels; a file name is not a label. */
+  text-transform: none;
+  letter-spacing: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.shot-add-row { margin-top: 8px; }
+.shot-add { font-weight: 600; }
+.dialogue-hint {
+  margin: 4px 0 8px;
+  font-size: 12px;
+  opacity: .7;
+}
+
+@media (max-width: 520px) {
+  /* Stacking flips the main axis, so the flex-basis that sets these controls'
+     WIDTH on a wide screen would set their HEIGHT here. Reset it to auto and
+     let them size to their content. */
+  .shot-row { flex-direction: column; align-items: stretch; }
+  .shot-row > .shot-character,
+  .shot-row > .shot-ref { flex: 0 0 auto; }
+  .shot-ref { flex-wrap: wrap; }
+}
