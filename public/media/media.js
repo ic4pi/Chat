@@ -94,6 +94,20 @@ const els = {
   ref: document.getElementById('mediaRef'),
   refWrap: document.getElementById('refWrap'),
   refPreview: document.getElementById('refPreview'),
+  character: document.getElementById('mediaCharacter'),
+  characterWrap: document.getElementById('characterWrap'),
+  charEditor: document.getElementById('charEditor'),
+  charEdit: document.getElementById('charEdit'),
+  charNew: document.getElementById('charNew'),
+  charName: document.getElementById('charName'),
+  charLook: document.getElementById('charLook'),
+  charStyle: document.getElementById('charStyle'),
+  charSeed: document.getElementById('charSeed'),
+  charSave: document.getElementById('charSave'),
+  charDelete: document.getElementById('charDelete'),
+  charReseed: document.getElementById('charReseed'),
+  series: document.getElementById('mediaSeries'),
+  seriesWrap: document.getElementById('seriesWrap'),
   accessKey: document.getElementById('mediaAccessKey'),
   accessKeyWrap: document.getElementById('accessKeyWrap'),
   generate: document.getElementById('mediaGenerate'),
@@ -246,9 +260,87 @@ function syncFields() {
   els.lengthWrap.classList.toggle('hidden', kind !== 'video' || (vm !== 'text' && vm !== 'image'));
 
   // Strength means "how far from the source" in both img2img and restyle.
+  // A character and a shot list only make sense for plain text/image video —
+  // restyle takes its subject from the source clip, and keyframes pin it to
+  // supplied images, so injecting a character description into either fights
+  // what the mode is for.
+  const seriesable = selfHostedVideo && (vm === 'text' || vm === 'image');
+  els.characterWrap.classList.toggle('hidden', !seriesable);
+  els.seriesWrap.classList.toggle('hidden', !seriesable);
+
   els.strengthWrap.classList.toggle('hidden', m !== 'img2img' && vm !== 'restyle');
   els.expandWrap.classList.toggle('hidden', m !== 'expand');
   els.poseWrap.classList.toggle('hidden', m !== 'pose');
+}
+
+// ---- Characters -----------------------------------------------------------
+// A recurring character is two things the model cannot remember on its own:
+// a description repeated verbatim into every prompt, and a fixed seed. Each
+// generation is an independent call with no memory of the last, so "the same
+// bear as before" means nothing to it — only the same words and the same
+// starting noise reproduce the same character.
+//
+// Kept in localStorage: this is a personal library on one device, not shared
+// state, and it must survive a reload without needing an account.
+const CHARACTERS_KEY = 'mediaStudio.characters';
+
+function loadCharacters() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CHARACTERS_KEY) || '[]');
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCharacters(list) {
+  try {
+    localStorage.setItem(CHARACTERS_KEY, JSON.stringify(list));
+  } catch {
+    // A full or disabled store just means the library does not persist.
+  }
+}
+
+let characters = loadCharacters();
+
+function fillCharacters(selectId) {
+  els.character.innerHTML = '';
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = '— none —';
+  els.character.appendChild(none);
+  for (const c of characters) {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.name || '(unnamed)';
+    els.character.appendChild(opt);
+  }
+  if (selectId) els.character.value = selectId;
+}
+
+function selectedCharacter() {
+  return characters.find((c) => c.id === els.character.value) || null;
+}
+
+function newSeed() {
+  return Math.floor(Math.random() * 2 ** 31);
+}
+
+function showCharacterInEditor(c) {
+  els.charName.value = c?.name || '';
+  els.charLook.value = c?.look || '';
+  els.charStyle.value = c?.style || '';
+  els.charSeed.value = c?.seed ?? newSeed();
+}
+
+/** The prompt actually sent: the shot, then the character verbatim, then the
+ *  style. Order matters less than the repetition — every clip has to carry the
+ *  full description or the model re-invents the character. */
+function composePrompt(shot, character) {
+  return [shot, character?.look, character?.style]
+    .map((p) => String(p || '').trim())
+    .filter(Boolean)
+    .join(', ');
 }
 
 function setStatus(msg, isError = false) {
@@ -329,6 +421,64 @@ els.model.addEventListener('change', () => {
 });
 
 // Switching mode changes which fields apply and whether a source is required.
+els.charEdit.addEventListener('click', () => {
+  const open = els.charEditor.classList.toggle('hidden');
+  if (!open) showCharacterInEditor(selectedCharacter());
+});
+
+els.charNew.addEventListener('click', () => {
+  els.character.value = '';
+  showCharacterInEditor(null);
+  els.charEditor.classList.remove('hidden');
+  els.charName.focus();
+});
+
+els.character.addEventListener('change', () => {
+  if (!els.charEditor.classList.contains('hidden')) showCharacterInEditor(selectedCharacter());
+});
+
+els.charReseed.addEventListener('click', () => {
+  els.charSeed.value = newSeed();
+});
+
+els.charSave.addEventListener('click', () => {
+  const name = (els.charName.value || '').trim();
+  if (!name) {
+    alert('Give the character a name.');
+    els.charName.focus();
+    return;
+  }
+  const existing = selectedCharacter();
+  const record = {
+    id: existing?.id || `c${Date.now()}`,
+    name,
+    look: (els.charLook.value || '').trim(),
+    style: (els.charStyle.value || '').trim(),
+    seed: Number(els.charSeed.value) || newSeed(),
+  };
+  characters = existing
+    ? characters.map((c) => (c.id === existing.id ? record : c))
+    : [...characters, record];
+  saveCharacters(characters);
+  fillCharacters(record.id);
+  els.charEditor.classList.add('hidden');
+  setStatus(`Saved “${record.name}”.`);
+});
+
+els.charDelete.addEventListener('click', () => {
+  const existing = selectedCharacter();
+  if (!existing) {
+    els.charEditor.classList.add('hidden');
+    return;
+  }
+  if (!confirm(`Delete “${existing.name}”?`)) return;
+  characters = characters.filter((c) => c.id !== existing.id);
+  saveCharacters(characters);
+  fillCharacters('');
+  showCharacterInEditor(null);
+  els.charEditor.classList.add('hidden');
+});
+
 els.mode.addEventListener('change', syncFields);
 els.videoMode.addEventListener('change', syncFields);
 
@@ -726,12 +876,22 @@ async function resumePendingJobOnLoad() {
 
 els.generate.addEventListener('click', async () => {
   const prompt = (els.prompt.value || '').trim();
-  if (!prompt) {
-    alert('Enter a prompt.');
-    els.prompt.focus();
+  const spec = selectedSpec();
+  const character = els.characterWrap.classList.contains('hidden') ? null : selectedCharacter();
+
+  // A shot list replaces the single prompt: one line per clip, each expanded
+  // with the character and style. The prompt box still works on its own when
+  // the list is empty, so nothing changes for one-off generations.
+  const seriesLines = els.seriesWrap.classList.contains('hidden')
+    ? []
+    : (els.series.value || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const shots = seriesLines.length ? seriesLines : prompt ? [prompt] : [];
+
+  if (!shots.length) {
+    alert(els.seriesWrap.classList.contains('hidden') ? 'Enter a prompt.' : 'Enter a prompt, or one shot per line under Series.');
+    (seriesLines.length ? els.series : els.prompt).focus();
     return;
   }
-  const spec = selectedSpec();
   const usesRef = modelUsesRef(spec);
 
   if (usesRef && !refData) {
@@ -805,59 +965,83 @@ els.generate.addEventListener('click', async () => {
       body.mimeType = refData.mimeType;
     }
 
-    // Self-hosted video goes through the async job API. One blocking request
-    // would be bounded by the API's 800s function timeout, which is what caps
-    // clip length — polling moves the ceiling to the Modal app's own timeout
-    // and lets the UI show progress instead of hanging.
-    const data =
-      kind === 'video' && spec.provider === 'modal'
-        ? await runVideoJob(body)
-        : await runSync(body);
+    // Shots run one after another rather than in parallel: they share a single
+    // Modal container, and the cold start plus the app's idle window is paid
+    // once for the whole list instead of once per clip. Firing them together
+    // would start a container each and cost the overhead every time.
+    for (const [i, shot] of shots.entries()) {
+      const perShot = { ...body, prompt: composePrompt(shot, character) };
+      // One seed across the series is half of what keeps a character stable;
+      // the repeated description in composePrompt() is the other half.
+      if (character && Number.isFinite(Number(character.seed))) perShot.seed = Number(character.seed);
+      if (shots.length > 1) setStatus(`Shot ${i + 1} of ${shots.length}… ${shot}`);
 
-    if (data.kind === 'image') {
-      if (data.note) setStatus(data.note);
-      else if (data.fallbackNote) setStatus(data.fallbackNote);
-      else setStatus('Done.');
-      for (const img of data.images || []) {
-        const { card, meta } = cardShell(
-          `${data.provider} · ${data.model}${data.uncensored === false ? '' : data.provider === 'venice' ? ' · uncensored' : ''}${data.fallbackFrom ? ' (fallback)' : ''}`,
-          new Date().toLocaleTimeString(),
-        );
-        const el = document.createElement('img');
-        if (img.url) {
-          el.src = img.url;
-          const a = document.createElement('a');
-          a.href = img.url;
-          a.target = '_blank';
-          a.rel = 'noopener';
-          a.textContent = 'Open';
-          meta.lastChild.replaceWith(a);
-        } else if (img.base64) {
-          el.src = `data:${img.mimeType || 'image/webp'};base64,${img.base64}`;
-          const a = document.createElement('a');
-          a.href = el.src;
-          a.download = `media-${Date.now()}.webp`;
-          a.textContent = 'Download';
-          meta.lastChild.replaceWith(a);
-        }
-        card.insertBefore(el, card.firstChild);
-        prependCard(card);
+      // Self-hosted video goes through the async job API. One blocking request
+      // would be bounded by the API's 800s function timeout, which is what caps
+      // clip length — polling moves the ceiling to the Modal app's own timeout
+      // and lets the UI show progress instead of hanging.
+      let data;
+      try {
+        data =
+          kind === 'video' && spec.provider === 'modal'
+            ? await runVideoJob(perShot)
+            : await runSync(perShot);
+      } catch (shotErr) {
+        // One failed shot must not discard the clips already generated and
+        // paid for, so the run continues and reports at the end.
+        if (shots.length === 1) throw shotErr;
+        console.error(shotErr);
+        setStatus(`Shot ${i + 1} failed: ${shotErr.message}`, true);
+        continue;
       }
-      if (!data.note && !data.fallbackNote) setStatus('Done.');
-    } else if (data.kind === 'video') {
-      renderVideoResult(data);
-    } else {
-      // "Unexpected response" alone gives nothing to act on. The keys say
-      // whether this is an error body, a stale API shape, or a cached client
-      // talking to a newer server.
-      const keys = Object.keys(data || {}).join(', ') || '(empty body)';
-      setStatus(
-        `Unexpected response — kind=${data?.kind ?? 'missing'}; keys: ${keys}` +
-          (data?.error ? ` — ${data.error}` : ''),
-        true,
-      );
-      console.error('media-generate returned:', data);
+
+      if (data.kind === 'image') {
+        if (data.note) setStatus(data.note);
+        else if (data.fallbackNote) setStatus(data.fallbackNote);
+        else setStatus('Done.');
+        for (const img of data.images || []) {
+          const { card, meta } = cardShell(
+            `${data.provider} · ${data.model}${data.uncensored === false ? '' : data.provider === 'venice' ? ' · uncensored' : ''}${data.fallbackFrom ? ' (fallback)' : ''}`,
+            new Date().toLocaleTimeString(),
+          );
+          const el = document.createElement('img');
+          if (img.url) {
+            el.src = img.url;
+            const a = document.createElement('a');
+            a.href = img.url;
+            a.target = '_blank';
+            a.rel = 'noopener';
+            a.textContent = 'Open';
+            meta.lastChild.replaceWith(a);
+          } else if (img.base64) {
+            el.src = `data:${img.mimeType || 'image/webp'};base64,${img.base64}`;
+            const a = document.createElement('a');
+            a.href = el.src;
+            a.download = `media-${Date.now()}.webp`;
+            a.textContent = 'Download';
+            meta.lastChild.replaceWith(a);
+          }
+          card.insertBefore(el, card.firstChild);
+          prependCard(card);
+        }
+        if (!data.note && !data.fallbackNote) setStatus('Done.');
+      } else if (data.kind === 'video') {
+        renderVideoResult(data);
+      } else {
+        // "Unexpected response" alone gives nothing to act on. The keys say
+        // whether this is an error body, a stale API shape, or a cached client
+        // talking to a newer server.
+        const keys = Object.keys(data || {}).join(', ') || '(empty body)';
+        setStatus(
+          `Unexpected response — kind=${data?.kind ?? 'missing'}; keys: ${keys}` +
+            (data?.error ? ` — ${data.error}` : ''),
+          true,
+        );
+        console.error('media-generate returned:', data);
+      }
     }
+
+    if (shots.length > 1) setStatus(`Done — ${shots.length} shots.`);
   } catch (err) {
     console.error(err);
     setStatus('');
@@ -868,6 +1052,7 @@ els.generate.addEventListener('click', async () => {
   }
 });
 
+fillCharacters();
 fillModels();
 fillSizes();
 fillLengths();
