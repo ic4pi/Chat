@@ -343,6 +343,39 @@ function composePrompt(shot, character) {
     .join(', ');
 }
 
+/** Offer to join a finished series into one clip.
+ *
+ *  Only URLs are sent: the stitching app fetches them itself, so the bytes go
+ *  storage -> Modal and never pass through the browser or the API function.
+ *  Without storage configured the clips come back as data: URLs instead, and
+ *  several of those exceed the request limit — hence the check rather than a
+ *  button that fails on click. */
+function offerStitch(clipUrls, accessKey) {
+  if (clipUrls.length < 2) return;
+  const { card } = cardShell(`${clipUrls.length} clips ready`, '');
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'text-btn media-generate';
+  btn.textContent = `Join ${clipUrls.length} clips into one video`;
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.textContent = 'Joining…';
+    setStatus('Joining clips…');
+    try {
+      const joined = await runSync({ __op: 'stitch', clips: clipUrls, accessKey });
+      renderVideoResult(joined);
+      card.remove();
+    } catch (err) {
+      console.error(err);
+      setStatus(err.message || 'Join failed.', true);
+      btn.disabled = false;
+      btn.textContent = `Join ${clipUrls.length} clips into one video`;
+    }
+  });
+  card.appendChild(btn);
+  prependCard(card);
+}
+
 function setStatus(msg, isError = false) {
   els.status.textContent = msg || '';
   // Validation messages ("that clip is too big") read as failures, not
@@ -679,10 +712,11 @@ function friendlyHttpError(status, data) {
 }
 
 async function runSync(body) {
-  const res = await fetch('/api/media-generate', {
+  const { __op, ...payload } = body;
+  const res = await fetch(`/api/media-generate${__op ? `?op=${__op}` : ''}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(friendlyHttpError(res.status, data));
@@ -969,6 +1003,7 @@ els.generate.addEventListener('click', async () => {
     // Modal container, and the cold start plus the app's idle window is paid
     // once for the whole list instead of once per clip. Firing them together
     // would start a container each and cost the overhead every time.
+    const seriesClips = [];
     for (const [i, shot] of shots.entries()) {
       const perShot = { ...body, prompt: composePrompt(shot, character) };
       // One seed across the series is half of what keeps a character stable;
@@ -1027,6 +1062,7 @@ els.generate.addEventListener('click', async () => {
         if (!data.note && !data.fallbackNote) setStatus('Done.');
       } else if (data.kind === 'video') {
         renderVideoResult(data);
+        if (data.videoUrl) seriesClips.push(data.videoUrl);
       } else {
         // "Unexpected response" alone gives nothing to act on. The keys say
         // whether this is an error body, a stale API shape, or a cached client
@@ -1041,7 +1077,20 @@ els.generate.addEventListener('click', async () => {
       }
     }
 
-    if (shots.length > 1) setStatus(`Done — ${shots.length} shots.`);
+    if (shots.length > 1) {
+      setStatus(`Done — ${shots.length} shots.`);
+      // Joining passes links, not bytes. Inline clips (no storage configured)
+      // would blow the request limit several times over, so the offer is only
+      // made when there is something linkable to send.
+      const linkable = seriesClips.filter((u) => !String(u).startsWith('data:'));
+      if (linkable.length > 1) offerStitch(linkable, body.accessKey || '');
+      else if (seriesClips.length > 1) {
+        setStatus(
+          `Done — ${shots.length} shots. Joining needs storage configured ` +
+            `(SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY) so clips are URLs rather than inline data.`,
+        );
+      }
+    }
   } catch (err) {
     console.error(err);
     setStatus('');
