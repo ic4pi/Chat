@@ -135,6 +135,12 @@
             <textarea id="charStyle" rows="2" placeholder="Style — 2D cartoon, flat colors, thick black outlines"></textarea>
             <input id="charSeed" type="number" placeholder="Seed (locked for consistency)" />
             <label class="char-voice">
+              <span>Reference image <em class="opt">(the shot starts from this picture)</em></span>
+              <input id="charImage" type="file" accept="image/*" />
+              <span id="charImageState" class="char-voice-state"></span>
+            </label>
+            <div id="charImagePreview" class="ref-preview hidden"></div>
+            <label class="char-voice">
               <span>Voice sample <em class="opt">(~5s of clean speech — cloned for this character)</em></span>
               <input id="charVoice" type="file" accept="audio/*" />
               <span id="charVoiceState" class="char-voice-state"></span>
