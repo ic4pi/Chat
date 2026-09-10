@@ -1073,15 +1073,20 @@ export default async function handler(req, res) {
   // rather than letting it die as an opaque 413.
   if (String(req.query?.op || '') === 'stitch') {
     if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
-    const { clips, accessKey: sk } = req.body || {};
-    if (!Array.isArray(clips) || clips.length < 2) {
-      return res.status(400).json({ error: 'Send at least two clips to join.' });
+    const { clips, audio, accessKey: sk } = req.body || {};
+    if (!Array.isArray(clips) || !clips.length) {
+      return res.status(400).json({ error: 'Send at least one clip.' });
     }
-    if (payloadTooLarge({ clips })) {
+    // One clip alone is a no-op; one clip with audio is a mux, which the app
+    // serves on a copy path that never re-encodes the video.
+    if (clips.length < 2 && !audio) {
+      return res.status(400).json({ error: 'Send at least two clips to join, or one clip with audio.' });
+    }
+    if (payloadTooLarge({ clips, audio })) {
       return res.status(413).json({
         code: 'PAYLOAD_TOO_LARGE',
         error:
-          'These clips are too large to send inline. Set SUPABASE_URL and ' +
+          'These clips (or the audio) are too large to send inline. Set SUPABASE_URL and ' +
           'SUPABASE_SERVICE_ROLE_KEY so clips are stored as URLs — joining then ' +
           'passes links instead of bytes and has no practical size limit.',
       });
@@ -1096,7 +1101,7 @@ export default async function handler(req, res) {
     const upstream = await fetch(MODAL_STITCH_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
-      body: JSON.stringify({ clips }),
+      body: JSON.stringify({ clips, ...(audio ? { audio } : {}) }),
     });
     const joined = await upstream.json().catch(() => ({}));
     if (!upstream.ok || joined.error || !joined.video_base64) {
@@ -1113,7 +1118,11 @@ export default async function handler(req, res) {
       mime: 'video/mp4',
       elapsedSeconds: joined.elapsed_seconds,
       numClips: joined.count,
-      note: `Joined ${joined.count} clips.`,
+      hasAudio: !!joined.has_audio,
+      note:
+        joined.count > 1
+          ? `Joined ${joined.count} clips${joined.has_audio ? ' with audio' : ''}.`
+          : 'Audio added.',
     };
     try {
       out = await persistVideoResult(out);
