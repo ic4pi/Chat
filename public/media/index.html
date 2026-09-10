@@ -122,6 +122,31 @@
           <select id="mediaLength"></select>
         </label>
 
+        <div class="media-field hidden" id="characterWrap">
+          <span>Character <em class="opt">(keeps a recurring character consistent)</em></span>
+          <div class="char-row">
+            <select id="mediaCharacter"></select>
+            <button id="charEdit" class="text-btn char-btn" type="button">Edit</button>
+            <button id="charNew" class="text-btn char-btn" type="button">New</button>
+          </div>
+          <div id="charEditor" class="char-editor hidden">
+            <input id="charName" type="text" placeholder="Name (e.g. Barnaby the bear)" autocomplete="off" />
+            <textarea id="charLook" rows="2" placeholder="Look — describe them fully: worn brown teddy bear, missing left eye, red bowtie"></textarea>
+            <textarea id="charStyle" rows="2" placeholder="Style — 2D cartoon, flat colors, thick black outlines"></textarea>
+            <input id="charSeed" type="number" placeholder="Seed (locked for consistency)" />
+            <div class="char-row">
+              <button id="charSave" class="text-btn char-btn" type="button">Save</button>
+              <button id="charDelete" class="text-btn char-btn" type="button">Delete</button>
+              <button id="charReseed" class="text-btn char-btn" type="button">Reroll seed</button>
+            </div>
+          </div>
+        </div>
+
+        <label class="media-field hidden" id="seriesWrap">
+          <span>Series <em class="opt">(one shot per line — leave empty for a single clip)</em></span>
+          <textarea id="mediaSeries" rows="4" placeholder="sitting alone on a park bench at dusk&#10;slowly turning to look at the camera&#10;standing up and walking away"></textarea>
+        </label>
+
         <label class="media-field" id="refWrap">
           <span>Reference image <em class="opt">(optional)</em></span>
           <input id="mediaRef" type="file" accept="image/*" />
