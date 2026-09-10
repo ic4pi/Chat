@@ -1279,6 +1279,10 @@ els.generate.addEventListener('click', async () => {
   }
 });
 
+const BUILD = 'b7';
+const hint = document.querySelector('.media-top-hint');
+if (hint) hint.textContent = `Image · Video · ${BUILD}`;
+
 fillCharacters();
 fillModels();
 fillSizes();
