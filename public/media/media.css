@@ -323,3 +323,17 @@
   border-radius: 10px;
 }
 .char-editor textarea { resize: vertical; }
+
+/* Voice sample inside the character editor, and the dialogue box. */
+.char-voice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  opacity: .9;
+}
+.char-voice-state {
+  font-size: 12px;
+  opacity: .7;
+}
+#dialogueWrap textarea { resize: vertical; }

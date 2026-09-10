@@ -134,6 +134,11 @@
             <textarea id="charLook" rows="2" placeholder="Look — describe them fully: worn brown teddy bear, missing left eye, red bowtie"></textarea>
             <textarea id="charStyle" rows="2" placeholder="Style — 2D cartoon, flat colors, thick black outlines"></textarea>
             <input id="charSeed" type="number" placeholder="Seed (locked for consistency)" />
+            <label class="char-voice">
+              <span>Voice sample <em class="opt">(~5s of clean speech — cloned for this character)</em></span>
+              <input id="charVoice" type="file" accept="audio/*" />
+              <span id="charVoiceState" class="char-voice-state"></span>
+            </label>
             <div class="char-row">
               <button id="charSave" class="text-btn char-btn" type="button">Save</button>
               <button id="charDelete" class="text-btn char-btn" type="button">Delete</button>
@@ -152,6 +157,15 @@
           <input id="mediaRef" type="file" accept="image/*" />
         </label>
         <div id="refPreview" class="ref-preview hidden"></div>
+
+        <div class="media-field hidden" id="dialogueWrap">
+          <span>Dialogue <em class="opt">(spoken in the character's voice — one line per beat)</em></span>
+          <textarea id="mediaDialogue" rows="3" placeholder="I have made a terrible mistake.&#10;A truly enormous one."></textarea>
+          <div class="char-row">
+            <button id="speakBtn" class="text-btn char-btn" type="button">Generate voice</button>
+            <span id="dialogueState" class="char-voice-state"></span>
+          </div>
+        </div>
 
         <label class="media-field hidden" id="audioWrap">
           <span>Audio track <em class="opt">(optional — laid over the finished video)</em></span>
