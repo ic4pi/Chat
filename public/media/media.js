@@ -254,7 +254,11 @@ function syncFields() {
             pose: '(photo or stick figure to take the pose from)',
           }[imageMode()] || '(required for image→image)';
   }
-  els.accessKeyWrap.classList.toggle('hidden', spec?.provider !== 'modal');
+  // Never hidden any more. It used to follow the main picker, but every stage
+  // of the episode pipeline is self-hosted — stills, clips, voice and assembly
+  // are all Modal — so hiding the key because the picker happens to sit on
+  // Cloudflare left no way to type the one thing an episode needs.
+  els.accessKeyWrap.classList.remove('hidden');
   // Batching is a self-hosted feature: it works by filling one GPU call, which
   // only applies to the Modal app. Hosted providers bill per image, so asking
   // for four there costs four times as much for no speed gain.
@@ -323,8 +327,22 @@ function saveCharacters(list) {
 
 let characters = loadCharacters();
 
+/** Rebuild the cast list, keeping whoever is already cast.
+ *
+ *  Setting `.value` on a multi-select replaces the whole selection, so saving
+ *  one character used to drop everyone else out of the scene. The current
+ *  selection is read back and restored instead, with `selectId` added to it. */
 function fillCharacters(selectId) {
+  const keep = new Set(
+    Array.from(els.character.selectedOptions || [])
+      .map((o) => o.value)
+      .filter(Boolean),
+  );
+  if (selectId) keep.add(selectId);
+
   els.character.innerHTML = '';
+  // Still offered: a plain click on it is the one-gesture way to clear the
+  // cast, where deselecting the last name otherwise needs a modifier.
   const none = document.createElement('option');
   none.value = '';
   none.textContent = '— none —';
@@ -333,13 +351,35 @@ function fillCharacters(selectId) {
     const opt = document.createElement('option');
     opt.value = c.id;
     opt.textContent = c.name || '(unnamed)';
+    opt.selected = keep.has(c.id);
     els.character.appendChild(opt);
   }
-  if (selectId) els.character.value = selectId;
 }
 
+/** Everyone cast in this generation, in bank order.
+ *
+ *  A scene with two characters talking needs both looks in the prompt or the
+ *  second one is re-invented per clip, so the picker is a multi-select and
+ *  the cast is a list everywhere except the editor. */
+function selectedCast() {
+  const picked = new Set(
+    Array.from(els.character.selectedOptions || [])
+      .map((o) => o.value)
+      .filter(Boolean),
+  );
+  return characters.filter((c) => picked.has(c.id));
+}
+
+/** The one character the editor acts on: the first of the cast. */
 function selectedCharacter() {
-  return characters.find((c) => c.id === els.character.value) || null;
+  return selectedCast()[0] || null;
+}
+
+/** The cast member who speaks a line, matched by name from the script. */
+function castMemberNamed(name) {
+  const key = String(name || '').trim().toLowerCase();
+  if (!key) return null;
+  return characters.find((c) => String(c.name || '').trim().toLowerCase() === key) || null;
 }
 
 function newSeed() {
@@ -367,14 +407,28 @@ function showCharacterInEditor(c) {
   }
 }
 
-/** The prompt actually sent: the shot, then the character verbatim, then the
- *  style. Order matters less than the repetition — every clip has to carry the
- *  full description or the model re-invents the character. */
-function composePrompt(shot, character) {
-  return [shot, character?.look, character?.style]
+/** The prompt actually sent: the shot, then every cast member verbatim, then
+ *  the style once. Order matters less than the repetition — every clip has to
+ *  carry the full description or the model re-invents the character.
+ *
+ *  The style is taken from the first cast member that has one and written
+ *  once: an episode is a single look, and repeating "2D cartoon, flat colors"
+ *  per character only dilutes the rest of the prompt. */
+function composePrompt(shot, cast) {
+  const list = Array.isArray(cast) ? cast : cast ? [cast] : [];
+  const looks = list.map((c) => String(c?.look || '').trim()).filter(Boolean);
+  const style = list.map((c) => String(c?.style || '').trim()).find(Boolean) || '';
+  return [shot, ...looks, style]
     .map((p) => String(p || '').trim())
     .filter(Boolean)
     .join(', ');
+}
+
+/** The style string alone — the still renderer needs it without a shot. */
+function castStyle(cast) {
+  return (Array.isArray(cast) ? cast : [])
+    .map((c) => String(c?.style || '').trim())
+    .find(Boolean) || '';
 }
 
 /** Offer to join a finished series into one clip.
@@ -1082,9 +1136,12 @@ async function resumePendingJobOnLoad() {
 els.generate.addEventListener('click', async () => {
   const prompt = (els.prompt.value || '').trim();
   const spec = selectedSpec();
-  // Always read: the character rides along with every generation now, so
-  // there is no mode in which the selection is silently dropped.
-  const character = selectedCharacter();
+  // Always read: the cast rides along with every generation now, so there is
+  // no mode in which the selection is silently dropped.
+  const cast = selectedCast();
+  // The first cast member owns the seed and the fallback reference image —
+  // one clip can only start from one picture, and one seed pins the whole run.
+  const character = cast[0] || null;
 
   // A shot list replaces the single prompt: one line per clip, each expanded
   // with the character and style. The prompt box still works on its own when
@@ -1101,7 +1158,8 @@ els.generate.addEventListener('click', async () => {
   }
   const usesRef = modelUsesRef(spec);
 
-  if (usesRef && !refData && !character?.image) {
+  const castRef = cast.find((c) => c.image) || null;
+  if (usesRef && !refData && !castRef?.image) {
     alert(
       kind === 'image'
         ? 'This mode needs a source image — upload one, or give the character one.'
@@ -1174,7 +1232,7 @@ els.generate.addEventListener('click', async () => {
     if (refData && usesRef) {
       body.imageBase64 = refData.base64;
       body.mimeType = refData.mimeType;
-    } else if (usesRef && character?.image) {
+    } else if (usesRef && castRef?.image) {
       // The character's own reference, so a saved character starts every shot
       // from the same picture without re-uploading it each time — for image
       // modes (edit, img2img, expand, pose) as well as image→video. A manual
@@ -1183,7 +1241,7 @@ els.generate.addEventListener('click', async () => {
       // report usesRef false and are left alone — only the description and
       // seed reach those.
       // compressImageFile() always re-encodes to JPEG, so the type is known.
-      body.imageBase64 = character.image;
+      body.imageBase64 = castRef.image;
       body.mimeType = 'image/jpeg';
     }
 
@@ -1193,7 +1251,7 @@ els.generate.addEventListener('click', async () => {
     // would start a container each and cost the overhead every time.
     const seriesClips = [];
     for (const [i, shot] of shots.entries()) {
-      const perShot = { ...body, prompt: composePrompt(shot, character) };
+      const perShot = { ...body, prompt: composePrompt(shot, cast) };
       // One seed across the series is half of what keeps a character stable;
       // the repeated description in composePrompt() is the other half. Both
       // now apply to images too, not just video.
@@ -1291,11 +1349,580 @@ els.generate.addEventListener('click', async () => {
   }
 });
 
+
+// ---- Episode pipeline ------------------------------------------------------
+// Five stages, each one writing its result back onto the same row: script ->
+// still -> clip -> line -> assembly. A shot is therefore never in two states
+// at once, and a failed stage leaves the rows before it intact, so a retry
+// repeats only what actually failed.
+//
+// The stages are separate buttons on purpose. Rendering eight shots is eight
+// GPU video generations, and a script that reads wrong is far cheaper to fix
+// before that than after. Auto-run chains 2-5 for when the script is already
+// trusted.
+
+// Still and clip are generated at one geometry so the still is exactly the
+// frame the video grows out of — a mismatch gets letterboxed into the clip.
+const EP_SIZE = '832x480';
+const EP_SECONDS = 5;
+// Illustration model for the stills (a cartoon series is not photographic),
+// and the video model that accepts a starting frame. Both self-hosted, so an
+// episode costs GPU time rather than per-generation billing.
+const EP_STILL_SPEC = IMAGE_MODELS.find((m) => m.value === 'modal:wai-illustrious') || IMAGE_MODELS[0];
+const EP_VIDEO_SPEC =
+  VIDEO_MODELS.find((m) => Array.isArray(m.modes) && m.modes.includes('image')) || VIDEO_MODELS[0];
+const EP_NEGATIVE = 'text, watermark, signature, photorealistic, 3d render, extra limbs, deformed';
+
+// Mirrors lib/providers.js. The catalogue behind each is fetched live from
+// /api/models, so only the ids have to stay in step.
+const EP_PROVIDERS = [
+  { id: 'venice', label: 'Venice' },
+  { id: 'openrouter', label: 'OpenRouter' },
+  { id: 'cerebras', label: 'Cerebras' },
+  { id: 'groq', label: 'Groq' },
+  { id: 'xai', label: 'xAI' },
+  { id: 'nvidia', label: 'NVIDIA' },
+];
+
+const EPISODE_KEY = 'mediaStudio.episode';
+
+const epEls = {
+  box: document.getElementById('episodeBox'),
+  series: document.getElementById('epSeries'),
+  style: document.getElementById('epStyle'),
+  shots: document.getElementById('epShots'),
+  provider: document.getElementById('epProvider'),
+  model: document.getElementById('epModel'),
+  premise: document.getElementById('epPremise'),
+  write: document.getElementById('epWrite'),
+  stills: document.getElementById('epStills'),
+  animate: document.getElementById('epAnimate'),
+  voice: document.getElementById('epVoice'),
+  assemble: document.getElementById('epAssemble'),
+  auto: document.getElementById('epAuto'),
+  status: document.getElementById('epStatus'),
+  script: document.getElementById('epScript'),
+};
+
+/** scene: { shot, speaker, line, still, clip, audio, state, error } */
+let episode = loadEpisode();
+let epRunning = false;
+
+function blankEpisode() {
+  return { title: '', series: '', style: '', premise: '', shots: 8, provider: '', model: '', scenes: [] };
+}
+
+/** Only the script is persisted. Stills, clips and voice lines are megabytes
+ *  of data URLs each — they would blow the localStorage quota on the first
+ *  episode and take the script down with them. */
+function loadEpisode() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(EPISODE_KEY) || 'null');
+    if (!raw || typeof raw !== 'object') return blankEpisode();
+    return {
+      ...blankEpisode(),
+      ...raw,
+      scenes: Array.isArray(raw.scenes)
+        ? raw.scenes.map((s) => ({
+            shot: String(s?.shot || ''),
+            speaker: String(s?.speaker || ''),
+            line: String(s?.line || ''),
+            still: '',
+            clip: '',
+            audio: '',
+            state: '',
+            error: '',
+          }))
+        : [],
+    };
+  } catch {
+    return blankEpisode();
+  }
+}
+
+function saveEpisode() {
+  try {
+    localStorage.setItem(
+      EPISODE_KEY,
+      JSON.stringify({
+        title: episode.title,
+        series: episode.series,
+        style: episode.style,
+        premise: episode.premise,
+        shots: episode.shots,
+        provider: episode.provider,
+        model: episode.model,
+        scenes: episode.scenes.map(({ shot, speaker, line }) => ({ shot, speaker, line })),
+      }),
+    );
+  } catch {
+    // A full store costs persistence, never the episode in front of you.
+  }
+}
+
+function epStatus(msg, isError = false) {
+  epEls.status.textContent = msg || '';
+  epEls.status.classList.toggle('is-error', !!msg && isError);
+}
+
+/** The cast for this episode, with the style box folded in.
+ *
+ *  The style lives on the episode rather than per character: one series is one
+ *  look, and typing it into every character would let them drift apart. The
+ *  bank's own style is the fallback so a character built before the episode
+ *  panel existed still renders the way it always did. */
+function epCast() {
+  const picked = selectedCast();
+  const style = String(epEls.style.value || '').trim();
+  if (!style) return picked;
+  return picked.map((c) => ({ ...c, style }));
+}
+
+/** One seed for the whole episode, from the first cast member. Stills that
+ *  share a seed share a palette and a drawing style even as the prompt moves
+ *  from shot to shot. */
+function epSeed(cast) {
+  const n = Number(cast.find((c) => Number.isFinite(Number(c.seed)))?.seed);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function epAccessKey() {
+  return (els.accessKey.value || '').trim();
+}
+
+/** Whatever the image API returned, as something the video app can decode.
+ *  It only reads base64 and data: URLs (modal/wan_app.py `_decode_image`), so
+ *  a stored image has to come back through the browser as bytes. */
+async function epAsDataUrl(img) {
+  if (img?.base64) {
+    return String(img.base64).startsWith('data:') ? img.base64 : `data:image/png;base64,${img.base64}`;
+  }
+  if (!img?.url) throw new Error('The still came back empty.');
+  const res = await fetch(img.url);
+  if (!res.ok) throw new Error(`Could not read the still back (HTTP ${res.status}).`);
+  const blob = await res.blob();
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('Could not read the still back.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+// ---- Script table ----------------------------------------------------------
+
+function epRenderScript() {
+  epEls.script.innerHTML = '';
+  const names = characters.map((c) => c.name).filter(Boolean);
+
+  episode.scenes.forEach((scene, i) => {
+    const row = document.createElement('div');
+    row.className = 'ep-row';
+
+    const num = document.createElement('div');
+    num.className = 'ep-num';
+    num.textContent = String(i + 1);
+    row.appendChild(num);
+
+    const thumb = document.createElement('img');
+    thumb.className = 'ep-thumb';
+    thumb.alt = '';
+    if (scene.still) thumb.src = scene.still;
+    row.appendChild(thumb);
+
+    const body = document.createElement('div');
+    body.className = 'ep-body';
+
+    const shot = document.createElement('textarea');
+    shot.rows = 2;
+    shot.value = scene.shot;
+    shot.placeholder = 'What the camera sees';
+    shot.addEventListener('input', () => {
+      scene.shot = shot.value;
+      saveEpisode();
+    });
+    body.appendChild(shot);
+
+    const lineRow = document.createElement('div');
+    lineRow.className = 'ep-line';
+
+    const who = document.createElement('select');
+    const silent = document.createElement('option');
+    silent.value = '';
+    silent.textContent = '— silent —';
+    who.appendChild(silent);
+    for (const n of names) {
+      const o = document.createElement('option');
+      o.value = n;
+      o.textContent = n;
+      who.appendChild(o);
+    }
+    who.value = names.includes(scene.speaker) ? scene.speaker : '';
+    who.addEventListener('change', () => {
+      scene.speaker = who.value;
+      saveEpisode();
+    });
+    lineRow.appendChild(who);
+
+    const line = document.createElement('input');
+    line.type = 'text';
+    line.value = scene.line;
+    line.placeholder = 'Spoken line';
+    line.addEventListener('input', () => {
+      scene.line = line.value;
+      saveEpisode();
+    });
+    lineRow.appendChild(line);
+    body.appendChild(lineRow);
+
+    const state = document.createElement('div');
+    state.className = 'ep-state';
+    if (scene.error) {
+      state.classList.add('is-error');
+      state.textContent = scene.error;
+    } else if (scene.state) {
+      if (scene.clip || scene.audio) state.classList.add('is-done');
+      state.textContent = scene.state;
+    }
+    body.appendChild(state);
+
+    row.appendChild(body);
+    epEls.script.appendChild(row);
+  });
+
+  epSyncButtons();
+}
+
+function epSyncButtons() {
+  const hasScript = episode.scenes.length > 0;
+  const hasStills = episode.scenes.some((s) => s.still);
+  const hasLines = episode.scenes.some((s) => s.speaker && s.line.trim());
+  epEls.write.disabled = epRunning;
+  epEls.stills.disabled = epRunning || !hasScript;
+  epEls.animate.disabled = epRunning || !hasStills;
+  // Voice needs lines, not clips: hearing a character read the script back is
+  // the cheapest way to catch a wrong voice, and it should not cost eight video
+  // generations first.
+  epEls.voice.disabled = epRunning || !hasLines;
+  // Assembly needs two clips, or one clip carrying a line.
+  const clips = episode.scenes.filter((s) => s.clip);
+  epEls.assemble.disabled =
+    epRunning || !(clips.length > 1 || (clips.length === 1 && clips[0].audio));
+}
+
+// ---- Stage 1 · script ------------------------------------------------------
+
+async function epFillModels() {
+  const provider = epEls.provider.value;
+  epEls.model.innerHTML = '<option>Loading…</option>';
+  try {
+    const res = await fetch(`/api/models?provider=${encodeURIComponent(provider)}`);
+    const data = await res.json().catch(() => ({}));
+    const list = Array.isArray(data.models) ? data.models : [];
+    epEls.model.innerHTML = '';
+    for (const m of list) {
+      const o = document.createElement('option');
+      o.value = m.id;
+      o.textContent = m.name || m.id;
+      epEls.model.appendChild(o);
+    }
+    if (!list.length) epEls.model.innerHTML = '<option value="">No models available</option>';
+    if (episode.model && list.some((m) => m.id === episode.model)) epEls.model.value = episode.model;
+  } catch {
+    epEls.model.innerHTML = '<option value="">Could not load models</option>';
+  }
+}
+
+async function epWriteScript() {
+  const cast = epCast();
+  if (!cast.length) {
+    epStatus('Pick at least one character in Cast above — the writer casts from the bank.', true);
+    return;
+  }
+  const premise = (epEls.premise.value || '').trim();
+  if (!premise) {
+    epStatus('Give the episode a premise.', true);
+    epEls.premise.focus();
+    return;
+  }
+
+  epStatus('Writing the script…');
+  const res = await fetch('/api/assist', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      mode: 'episode',
+      provider: epEls.provider.value,
+      model: epEls.model.value,
+      premise,
+      shots: Number(epEls.shots.value) || 8,
+      series: { title: (epEls.series.value || '').trim(), style: (epEls.style.value || '').trim() },
+      cast: cast.map((c) => ({ name: c.name, look: c.look })),
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Script generation failed (HTTP ${res.status}).`);
+
+  episode = {
+    ...episode,
+    title: data.title || '',
+    series: (epEls.series.value || '').trim(),
+    style: (epEls.style.value || '').trim(),
+    premise,
+    shots: Number(epEls.shots.value) || 8,
+    provider: epEls.provider.value,
+    model: epEls.model.value,
+    scenes: (data.scenes || []).map((s) => ({
+      shot: s.shot,
+      speaker: s.speaker || '',
+      line: s.line || '',
+      still: '',
+      clip: '',
+      audio: '',
+      state: '',
+      error: '',
+    })),
+  };
+  saveEpisode();
+  epRenderScript();
+  epStatus(`“${episode.title}” — ${episode.scenes.length} shots. Edit anything, then render.`);
+}
+
+// ---- Stage 2 · stills ------------------------------------------------------
+
+async function epRenderStills() {
+  const cast = epCast();
+  if (!cast.length) throw new Error('Pick at least one character in Cast above.');
+  const seed = epSeed(cast);
+  const accessKey = epAccessKey();
+
+  for (const [i, scene] of episode.scenes.entries()) {
+    if (!scene.shot.trim()) continue;
+    scene.error = '';
+    scene.state = 'Drawing…';
+    epRenderScript();
+    epStatus(`Still ${i + 1} of ${episode.scenes.length}…`);
+    try {
+      const out = await runSync({
+        kind: 'image',
+        provider: EP_STILL_SPEC.provider,
+        model: EP_STILL_SPEC.model,
+        prompt: composePrompt(scene.shot, cast),
+        negativePrompt: EP_NEGATIVE,
+        size: EP_SIZE,
+        count: 1,
+        mode: 'text',
+        ...(seed != null ? { seed } : {}),
+        accessKey,
+      });
+      scene.still = await epAsDataUrl((out.images || [])[0]);
+      scene.state = 'Still ready.';
+    } catch (err) {
+      scene.error = `Still failed: ${err.message}`;
+      scene.state = '';
+    }
+    epRenderScript();
+  }
+  const done = episode.scenes.filter((s) => s.still).length;
+  epStatus(`${done} of ${episode.scenes.length} stills rendered.`);
+}
+
+// ---- Stage 3 · animate -----------------------------------------------------
+
+async function epAnimateShots() {
+  const cast = epCast();
+  const seed = epSeed(cast);
+  const accessKey = epAccessKey();
+
+  for (const [i, scene] of episode.scenes.entries()) {
+    if (!scene.still) continue;
+    scene.error = '';
+    scene.state = 'Animating…';
+    epRenderScript();
+    epStatus(`Clip ${i + 1} of ${episode.scenes.length} — this is the slow stage.`);
+    try {
+      const out = await runVideoJob({
+        kind: 'video',
+        provider: EP_VIDEO_SPEC.provider,
+        model: EP_VIDEO_SPEC.model,
+        prompt: composePrompt(scene.shot, cast),
+        negativePrompt: EP_NEGATIVE,
+        size: EP_SIZE,
+        seconds: EP_SECONDS,
+        // The still is this shot's first frame, which is what makes the clip
+        // continue the drawing rather than invent a new one.
+        imageBase64: scene.still,
+        mimeType: 'image/jpeg',
+        ...(seed != null ? { seed } : {}),
+        accessKey,
+      });
+      scene.clip = out.videoUrl || '';
+      scene.state = scene.clip ? 'Clip ready.' : '';
+      if (!scene.clip) scene.error = 'The clip came back empty.';
+    } catch (err) {
+      scene.error = `Clip failed: ${err.message}`;
+      scene.state = '';
+    }
+    epRenderScript();
+  }
+  const done = episode.scenes.filter((s) => s.clip).length;
+  epStatus(`${done} of ${episode.scenes.length} clips animated.`);
+}
+
+// ---- Stage 4 · voice -------------------------------------------------------
+
+async function epVoiceLines() {
+  const accessKey = epAccessKey();
+  const speaking = episode.scenes.filter((s) => s.speaker && s.line.trim());
+  if (!speaking.length) {
+    epStatus('No spoken lines in this script — nothing to voice.');
+    return;
+  }
+
+  let n = 0;
+  for (const scene of episode.scenes) {
+    if (!scene.speaker || !scene.line.trim()) continue;
+    const member = castMemberNamed(scene.speaker);
+    scene.error = '';
+    scene.state = 'Speaking…';
+    epRenderScript();
+    n += 1;
+    epStatus(`Line ${n} of ${speaking.length} — ${scene.speaker}…`);
+    try {
+      const spoken = await runSync({
+        __op: 'speak',
+        text: scene.line.trim(),
+        // Without a saved sample this is the default voice, which is still
+        // better than a silent shot — the bank just has no clone for them yet.
+        ...(member?.voice ? { voice: member.voice } : {}),
+        accessKey,
+      });
+      scene.audio = spoken.audioUrl || '';
+      scene.state = scene.audio
+        ? `Voiced${member?.voice ? ` as ${scene.speaker}` : ' (default voice)'}.`
+        : '';
+      if (!scene.audio) scene.error = 'The voice came back empty.';
+    } catch (err) {
+      scene.error = `Voice failed: ${err.message}`;
+      scene.state = '';
+    }
+    epRenderScript();
+  }
+  const done = episode.scenes.filter((s) => s.audio).length;
+  epStatus(`${done} of ${speaking.length} lines voiced.`);
+}
+
+// ---- Stage 5 · assemble ----------------------------------------------------
+
+async function epAssembleEpisode() {
+  const withClips = episode.scenes.filter((s) => s.clip);
+  if (!withClips.length) throw new Error('Nothing to assemble — animate the shots first.');
+
+  // Inline clips cannot be joined: the payload would be tens of megabytes and
+  // Vercel rejects it. Storage turns every clip into a URL, which is why the
+  // API asks for it before video works at all.
+  const inline = withClips.filter((s) => String(s.clip).startsWith('data:'));
+  if (inline.length) {
+    throw new Error(
+      'Clips came back inline rather than as URLs, so they cannot be joined. ' +
+        'Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.',
+    );
+  }
+
+  epStatus(`Assembling ${withClips.length} shots…`);
+  const joined = await runSync({
+    __op: 'stitch',
+    // Each shot carries its own line, so the stitcher keeps the dialogue on
+    // the shot it belongs to instead of laying one track over the episode.
+    clips: withClips.map((s) => (s.audio ? { video: s.clip, audio: s.audio } : s.clip)),
+    accessKey: epAccessKey(),
+  });
+  renderVideoResult(joined);
+  epStatus(`“${episode.title || 'Episode'}” assembled — ${withClips.length} shots.`);
+}
+
+// ---- Wiring ----------------------------------------------------------------
+
+/** One guard for every stage: no two stages run at once, failures surface in
+ *  the status line rather than the console, and the buttons come back. */
+function epStage(fn, label) {
+  return async () => {
+    if (epRunning) return;
+    epRunning = true;
+    epSyncButtons();
+    try {
+      await fn();
+    } catch (err) {
+      console.error(err);
+      epStatus(err.message || `${label} failed.`, true);
+    } finally {
+      epRunning = false;
+      epSyncButtons();
+    }
+  };
+}
+
+epEls.write.addEventListener(
+  'click',
+  epStage(async () => {
+    await epWriteScript();
+    // Auto-run starts only after the script exists, so the one stage worth
+    // reading before spending GPU time is always the one you get to see.
+    if (epEls.auto.checked) {
+      await epRenderStills();
+      await epAnimateShots();
+      await epVoiceLines();
+      await epAssembleEpisode();
+    }
+  }, 'Script'),
+);
+
+epEls.stills.addEventListener('click', epStage(epRenderStills, 'Stills'));
+epEls.animate.addEventListener('click', epStage(epAnimateShots, 'Animation'));
+epEls.voice.addEventListener('click', epStage(epVoiceLines, 'Voice'));
+epEls.assemble.addEventListener('click', epStage(epAssembleEpisode, 'Assembly'));
+
+epEls.provider.addEventListener('change', epFillModels);
+for (const [el, key] of [
+  [epEls.series, 'series'],
+  [epEls.style, 'style'],
+  [epEls.premise, 'premise'],
+  [epEls.shots, 'shots'],
+]) {
+  el.addEventListener('input', () => {
+    episode[key] = key === 'shots' ? Number(el.value) || 8 : el.value;
+    saveEpisode();
+  });
+}
+
+// A new or renamed character has to reach the speaker dropdowns, or a script
+// written before the rename silently loses its voices.
+els.charSave.addEventListener('click', () => {
+  if (episode.scenes.length) epRenderScript();
+});
+
+function epInit() {
+  for (const p of EP_PROVIDERS) {
+    const o = document.createElement('option');
+    o.value = p.id;
+    o.textContent = p.label;
+    epEls.provider.appendChild(o);
+  }
+  epEls.provider.value = episode.provider || 'venice';
+  epEls.series.value = episode.series || '';
+  epEls.style.value = episode.style || '';
+  epEls.premise.value = episode.premise || '';
+  epEls.shots.value = episode.shots || 8;
+  epRenderScript();
+  epFillModels();
+}
+
 const BUILD = 'b8';
 const hint = document.querySelector('.media-top-hint');
 if (hint) hint.textContent = `Image · Video · ${BUILD}`;
 
 fillCharacters();
+epInit();
 fillModels();
 fillSizes();
 fillLengths();

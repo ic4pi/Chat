@@ -4,8 +4,18 @@ Join generated clips into one video — the `video-stitch` app.
 Serves POST https://ic4pi--video-stitch-join.modal.run, consumed by the
 ?op=stitch route in api/media-generate.js.
 
-    request   {clips: [url | data-url | bare base64, ...], audio?, fps?, width?, height?}
+    request   {clips: [clip, ...], audio?, fps?, width?, height?}
+              clip is  url | data-url | bare base64
+                   or  {video: <the same>, audio?: <url | data-url | base64>}
     response  {video_base64, count, elapsed_seconds, width, height, fps, has_audio}
+
+`audio` lays one track over the whole finished video. The per-clip `audio`
+field is for the other case: an episode where each shot carries its own line
+of dialogue in its own character's voice. Give a clip its own audio and it is
+padded with silence, or cut, to exactly that clip's length, so shot 4's line
+can never slide onto shot 5. Clips without audio become silence of their own
+length rather than being dropped, which is what keeps the two streams in step.
+Per-clip audio wins over a whole-video track when both are sent.
 
 One clip plus audio is a valid request — that is a mux, not a join, and it
 takes a copy path that never re-encodes the video.
@@ -71,6 +81,14 @@ def _fetch(clip: str, path: str) -> None:
         fh.write(base64.b64decode(clip))
 
 
+def _split_clip(entry):
+    """Accept both clip shapes: a bare source, or {video, audio}."""
+    if isinstance(entry, dict):
+        video = entry.get("video") or entry.get("clip") or entry.get("url") or ""
+        return str(video), str(entry.get("audio") or "")
+    return str(entry), ""
+
+
 def _probe(path: str) -> tuple[int, int, float]:
     """Dimensions and frame rate of a clip, via ffprobe."""
     out = subprocess.run(
@@ -103,10 +121,13 @@ def join(payload: dict, request=None) -> dict:
     audio = payload.get("audio") or ""
     if not isinstance(clips, list) or not clips:
         return {"error": "Send at least one clip."}
+    sources = [_split_clip(c) for c in clips]
+    if any(not v for v, _ in sources):
+        return {"error": "Every clip needs a video source."}
     # One clip is only meaningful with audio to lay over it; on its own there
     # is nothing to do and returning the input unchanged would just burn a
-    # round trip.
-    if len(clips) < 2 and not audio:
+    # round trip. A clip carrying its own dialogue counts.
+    if len(clips) < 2 and not audio and not any(a for _, a in sources):
         return {"error": "Send at least two clips to join, or one clip with audio."}
     if len(clips) > MAX_CLIPS:
         return {"error": f"Too many clips ({len(clips)}); the ceiling is {MAX_CLIPS}."}
@@ -115,15 +136,29 @@ def join(payload: dict, request=None) -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         paths = []
         try:
-            for i, clip in enumerate(clips):
+            for i, (video, _) in enumerate(sources):
                 path = os.path.join(tmp, f"in{i:03d}.mp4")
-                _fetch(str(clip), path)
+                _fetch(video, path)
                 paths.append(path)
         except Exception as exc:
             return {"error": f"Could not read clip {len(paths)}: {type(exc).__name__}: {exc}"}
 
+        # Per-clip dialogue. Fetched up front so a bad line fails the request
+        # before any ffmpeg work is paid for.
+        clip_audio: list = [None] * len(paths)
+        for i, (_, track) in enumerate(sources):
+            if not track:
+                continue
+            dest = os.path.join(tmp, f"line{i:03d}.bin")
+            try:
+                _fetch(track, dest)
+            except Exception as exc:
+                return {"error": f"Could not read the audio for clip {i + 1}: {type(exc).__name__}: {exc}"}
+            clip_audio[i] = dest
+        has_clip_audio = any(clip_audio)
+
         audio_path = None
-        if audio:
+        if audio and not has_clip_audio:
             # Extension-less: ffmpeg sniffs the container, so mp3/m4a/wav all
             # work without the caller having to declare which.
             audio_path = os.path.join(tmp, "audio.bin")
@@ -140,6 +175,8 @@ def join(payload: dict, request=None) -> dict:
         # below — the video is already exactly what the caller wants. Copying
         # the stream keeps it lossless and turns a re-encode into a file copy.
         if len(paths) == 1:
+            # A one-shot episode still carries its line on the clip itself.
+            audio_path = audio_path or clip_audio[0]
             out_path = os.path.join(tmp, "muxed.mp4")
             # apad generates audio forever, and -shortest does not reliably
             # stop it when the video stream is copied rather than encoded —
@@ -195,21 +232,52 @@ def join(payload: dict, request=None) -> dict:
                 f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}[v{i}]"
             )
             labels += f"[v{i}]"
-        graph = ";".join(parts) + f";{labels}concat=n={len(paths)}:v=1:a=0[out]"
 
         out_path = os.path.join(tmp, "joined.mp4")
         cmd = ["ffmpeg", "-y"]
-        for p in paths:
-            cmd += ["-i", p]
-        if audio_path:
-            cmd += ["-i", audio_path]
-        cmd += ["-filter_complex", graph, "-map", "[out]"]
-        if audio_path:
-            # The audio is the input after the clips, hence len(paths). Cut at
-            # the summed clip length for the same reason as the mux path above.
-            total_secs = sum(_duration(p) for p in paths)
-            cmd += ["-map", f"{len(paths)}:a:0", "-c:a", "aac", "-b:a", "192k",
-                    "-af", "apad", "-t", f"{total_secs:.3f}"]
+
+        if has_clip_audio:
+            # Each shot's line rides its own clip. Concatenating video and
+            # audio together in one filter is what guarantees they stay in
+            # step: trimming each line to its clip's exact duration means the
+            # audio timeline advances by precisely as much as the video does,
+            # so no line can drift onto the following shot. A shot with no
+            # dialogue contributes silence of its own length rather than
+            # nothing, for the same reason.
+            durs = [_duration(q) for q in paths]
+            for q in paths:
+                cmd += ["-i", q]
+            for i, track in enumerate(clip_audio):
+                if track:
+                    cmd += ["-i", track]
+                else:
+                    cmd += ["-f", "lavfi", "-t", f"{durs[i]:.3f}",
+                            "-i", "anullsrc=r=44100:cl=stereo"]
+            for i in range(len(paths)):
+                idx = len(paths) + i
+                parts.append(
+                    f"[{idx}:a]aformat=sample_fmts=fltp:sample_rates=44100:"
+                    f"channel_layouts=stereo,apad,atrim=0:{durs[i]:.3f},"
+                    f"asetpts=N/SR/TB[a{i}]"
+                )
+            labels = "".join(f"[v{i}][a{i}]" for i in range(len(paths)))
+            graph = ";".join(parts) + f";{labels}concat=n={len(paths)}:v=1:a=1[out][aout]"
+            cmd += ["-filter_complex", graph, "-map", "[out]", "-map", "[aout]",
+                    "-c:a", "aac", "-b:a", "192k"]
+        else:
+            graph = ";".join(parts) + f";{labels}concat=n={len(paths)}:v=1:a=0[out]"
+            for q in paths:
+                cmd += ["-i", q]
+            if audio_path:
+                cmd += ["-i", audio_path]
+            cmd += ["-filter_complex", graph, "-map", "[out]"]
+            if audio_path:
+                # The audio is the input after the clips, hence len(paths). Cut
+                # at the summed clip length, as the mux path above does.
+                total_secs = sum(_duration(q) for q in paths)
+                cmd += ["-map", f"{len(paths)}:a:0", "-c:a", "aac", "-b:a", "192k",
+                        "-af", "apad", "-t", f"{total_secs:.3f}"]
+
         cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
                 "-movflags", "+faststart", out_path]
 
@@ -232,6 +300,6 @@ def join(payload: dict, request=None) -> dict:
         "width": width,
         "height": height,
         "fps": fps,
-        "has_audio": bool(audio_path),
+        "has_audio": bool(audio_path or has_clip_audio),
         "elapsed_seconds": round(time.time() - started, 2),
     }

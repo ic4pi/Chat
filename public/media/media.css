@@ -308,6 +308,12 @@
   margin-top: 6px;
 }
 .char-row select { flex: 1; min-width: 0; }
+
+/* The cast picker is a multi-select list box, so it is several rows tall.
+   Centring Edit/New against it would float them halfway down the list. */
+#characterWrap .char-row { align-items: flex-start; }
+#mediaCharacter { padding: 4px; }
+#mediaCharacter option { padding: 3px 4px; }
 .char-btn {
   padding: 6px 10px;
   font-size: 13px;
@@ -337,3 +343,87 @@
   opacity: .7;
 }
 #dialogueWrap textarea { resize: vertical; }
+
+/* ---- Episode pipeline ---------------------------------------------------
+   Script -> stills -> animation -> voice -> assembly. Every stage writes its
+   result back onto the same row, so one table is the whole episode's state
+   and there is never a second place to look for what a shot is doing. */
+.episode-note { margin-bottom: 12px; }
+
+.episode-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+/* Shot count only ever holds two digits; giving it an equal column next to a
+   series title wastes the row. */
+.episode-grid > .media-field:last-child:not(:only-child) { max-width: 110px; }
+
+.episode-run { flex-wrap: wrap; margin-top: 4px; }
+.episode-run .char-btn { flex: 0 0 auto; }
+.episode-run .char-btn:disabled { opacity: .4; cursor: not-allowed; }
+.episode-run .char-btn.is-running { opacity: .7; }
+
+.episode-auto {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 4px;
+  font-size: 13px;
+  opacity: .85;
+  cursor: pointer;
+}
+.episode-auto input { margin: 0; }
+
+.episode-status { display: block; margin: 6px 0; min-height: 18px; }
+.episode-status.is-error { color: #c0392b; }
+
+.episode-script { margin-top: 10px; }
+.episode-script:empty { display: none; }
+
+.ep-row {
+  display: grid;
+  grid-template-columns: 26px 72px 1fr;
+  gap: 8px;
+  align-items: start;
+  padding: 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, .08);
+}
+.ep-row:first-child { border-top: 0; }
+
+.ep-num { font-size: 12px; opacity: .5; padding-top: 6px; }
+
+/* The still doubles as the row's progress indicator: empty until stage 2,
+   then the exact frame stage 3 animates from. */
+.ep-thumb {
+  width: 72px;
+  aspect-ratio: 16 / 9;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .06);
+  object-fit: cover;
+  display: block;
+}
+
+.ep-body { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.ep-body textarea,
+.ep-body input[type="text"],
+.ep-body select {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 13px;
+}
+.ep-body textarea { resize: vertical; }
+.ep-line { display: grid; grid-template-columns: 120px 1fr; gap: 6px; }
+.ep-state { font-size: 12px; opacity: .65; }
+.ep-state.is-error { color: #c0392b; opacity: 1; }
+.ep-state.is-done { color: #2e9e5b; opacity: 1; }
+
+@media (max-width: 620px) {
+  .episode-grid { grid-template-columns: 1fr; }
+  .episode-grid > .media-field:last-child:not(:only-child) { max-width: none; }
+  .ep-row { grid-template-columns: 22px 56px 1fr; }
+  .ep-thumb { width: 56px; }
+  .ep-line { grid-template-columns: 1fr; }
+}

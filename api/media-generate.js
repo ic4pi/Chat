@@ -1142,8 +1142,11 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Send at least one clip.' });
     }
     // One clip alone is a no-op; one clip with audio is a mux, which the app
-    // serves on a copy path that never re-encodes the video.
-    if (clips.length < 2 && !audio) {
+    // serves on a copy path that never re-encodes the video. A clip may carry
+    // its own track as { video, audio } — that is an episode shot with its own
+    // line of dialogue, and it counts as audio here.
+    const clipCarriesAudio = clips.some((c) => c && typeof c === 'object' && c.audio);
+    if (clips.length < 2 && !audio && !clipCarriesAudio) {
       return res.status(400).json({ error: 'Send at least two clips to join, or one clip with audio.' });
     }
     if (payloadTooLarge({ clips, audio })) {

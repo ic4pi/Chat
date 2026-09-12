@@ -123,9 +123,9 @@
         </label>
 
         <div class="media-field" id="characterWrap">
-          <span>Character <em class="opt">(injected into every generation — image and video, every mode)</em></span>
+          <span>Cast <em class="opt">(injected into every generation — pick more than one for a scene)</em></span>
           <div class="char-row">
-            <select id="mediaCharacter"></select>
+            <select id="mediaCharacter" multiple size="4"></select>
             <button id="charEdit" class="text-btn char-btn" type="button">Edit</button>
             <button id="charNew" class="text-btn char-btn" type="button">New</button>
           </div>
@@ -178,8 +178,8 @@
           <input id="mediaAudio" type="file" accept="audio/*" />
         </label>
 
-        <label class="media-field hidden" id="accessKeyWrap">
-          <span>Access key</span>
+        <label class="media-field" id="accessKeyWrap">
+          <span>Access key <em class="opt">(self-hosted image, video, voice and episodes)</em></span>
           <input id="mediaAccessKey" type="text" placeholder="your access key" autocomplete="off" />
         </label>
 
@@ -189,6 +189,63 @@
         </div>
       </div>
 
+
+      <div class="media-box" id="episodeBox">
+        <h2>Episode</h2>
+        <p class="media-keys-note episode-note">
+          Write a script with an LLM, render a still per shot, animate each
+          still, speak every line in its character's own voice, then assemble.
+          The cast above is what gets written for and drawn.
+        </p>
+
+        <div class="episode-grid">
+          <label class="media-field">
+            <span>Series title</span>
+            <input id="epSeries" type="text" placeholder="Barnaby &amp; Friends" autocomplete="off" />
+          </label>
+          <label class="media-field">
+            <span>Shots</span>
+            <input id="epShots" type="number" min="1" max="24" value="8" />
+          </label>
+        </div>
+
+        <label class="media-field">
+          <span>Art style <em class="opt">(one look for the whole series)</em></span>
+          <input id="epStyle" type="text" placeholder="South Park style, flat 2D construction-paper cutout, thick black outlines, simple shapes" autocomplete="off" />
+        </label>
+
+        <div class="episode-grid">
+          <label class="media-field">
+            <span>Writer &mdash; provider</span>
+            <select id="epProvider"></select>
+          </label>
+          <label class="media-field">
+            <span>Writer &mdash; model</span>
+            <select id="epModel"></select>
+          </label>
+        </div>
+
+        <label class="media-field">
+          <span>Premise <em class="opt">(one line is enough)</em></span>
+          <textarea id="epPremise" rows="3" placeholder="Barnaby loses the school talent show to a photocopier and takes it badly."></textarea>
+        </label>
+
+        <div class="char-row episode-run">
+          <button id="epWrite" class="text-btn char-btn" type="button">1 · Write script</button>
+          <button id="epStills" class="text-btn char-btn" type="button" disabled>2 · Render stills</button>
+          <button id="epAnimate" class="text-btn char-btn" type="button" disabled>3 · Animate</button>
+          <button id="epVoice" class="text-btn char-btn" type="button" disabled>4 · Voice</button>
+          <button id="epAssemble" class="text-btn char-btn" type="button" disabled>5 · Assemble</button>
+        </div>
+
+        <label class="episode-auto">
+          <input id="epAuto" type="checkbox" />
+          <span>Auto-run &mdash; after the script is approved, run stages 2&ndash;5 without stopping</span>
+        </label>
+
+        <div id="epStatus" class="media-status episode-status"></div>
+        <div id="epScript" class="episode-script"></div>
+      </div>
       <div class="media-box media-keys-box">
         <p class="media-keys-note">
           <strong>Uncensored images:</strong> pick any <em>Venice · … (uncensored)</em> model —
@@ -216,6 +273,6 @@
     </section>
   </main>
 
-  <script src="/media/media.js?v=7"></script>
+  <script src="/media/media.js?v=8"></script>
 </body>
 </html>
