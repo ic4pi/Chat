@@ -37,8 +37,12 @@
  *   SUPABASE_URL           — generated video is uploaded here and returned as a
  *   SUPABASE_SERVICE_ROLE_KEY  URL; without these, any clip over ~3MB is
  *                            rejected rather than dying as an opaque 413
- *   MODAL_WAN_ENDPOINT     — self-hosted Wan 2.2 5B video on Modal, scale-to-zero,
- *                            no external content filter (kind:'video', provider:'modal', model:'wan2.2-5b')
+ *   MODAL_WAN_ENDPOINT     — self-hosted Wan 2.2 TI2V-5B video on Modal (A10G),
+ *                            scale-to-zero, no external content filter
+ *                            (kind:'video', provider:'modal', model:'wan2.2-5b')
+ *   MODAL_WAN_A14B_ENDPOINT — self-hosted Wan 2.2 T2V-A14B on Modal (A100-80GB,
+ *                            NSFW LoRA stacked on, single clip)
+ *                            (kind:'video', provider:'modal', model:'wan2.2-a14b')
  *   MODAL_LTX_ENDPOINT     — self-hosted LTX-Video on Modal, same deal
  *                            (kind:'video', provider:'modal', model:'ltx-video')
  *   MODAL_SDXL_ENDPOINT    — self-hosted SDXL images on Modal (lustify / wai-illustrious),
@@ -46,6 +50,9 @@
  *   VIDEO_ACCESS_KEYS      — JSON array turning on per-person billing for both
  *                            Modal providers: [{"key","name","markupPct"}, ...]
  *                            Unset = Modal image/video stays open/unmetered.
+ *   MODAL_SHARED_SECRET    — sent as X-Modal-Secret on every Modal call. Unset
+ *                            by default (open); set it here and as the same
+ *                            env var on the Modal app(s) to require it.
  *   MODAL_L4_RATE_PER_HOUR — override the assumed Modal L4 $/hr used to
  *                            compute cost (default 0.80; check modal.com/pricing)
  *   ADMIN_USERNAME / ADMIN_PASSWORD — gates ?op=credit (see lib/auth.js)
@@ -73,6 +80,14 @@ import {
  *  so normalise rather than make a slash a config error. */
 function cleanEndpoint(url, fallback) {
   return String(url || fallback).trim().replace(/\/+$/, '');
+}
+
+/** Optional shared-secret header for calls to the Modal apps. Unset by
+ *  default (open, single-owner use) — set MODAL_SHARED_SECRET here and in
+ *  the Modal app's env of the same name to require it. */
+function modalAuthHeaders() {
+  const secret = (process.env.MODAL_SHARED_SECRET || '').trim();
+  return secret ? { 'X-Modal-Secret': secret } : {};
 }
 
 /** Stay under Vercel’s 4.5MB JSON body limit (request + response). */
@@ -615,11 +630,14 @@ const MODAL_IMAGE_MODELS = {
  * drift apart.
  */
 function modalEndpoint(model, fn) {
+  // a14b is checked before the generic /wan/ test — "wan2.2-a14b" matches both.
   const base = /ltx/i.test(model)
     ? MODAL_LTX_ENDPOINT
-    : /wan/i.test(model)
-      ? MODAL_WAN_ENDPOINT
-      : MODAL_SDXL_ENDPOINT;
+    : /a14b/i.test(model)
+      ? MODAL_WAN_A14B_ENDPOINT
+      : /wan/i.test(model)
+        ? MODAL_WAN_ENDPOINT
+        : MODAL_SDXL_ENDPOINT;
   return base.replace(/-generate(\.modal\.run)$/, `-${fn}$1`);
 }
 
@@ -669,7 +687,7 @@ async function generateModalSdxlImage({
 
   const resp = await fetch(MODAL_SDXL_ENDPOINT, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
     body: JSON.stringify({
       prompt,
       negative_prompt: negativePrompt || undefined,
@@ -720,13 +738,42 @@ async function generateModalSdxlImage({
 }
 
 /**
- * Self-hosted Wan 2.2 5B on Modal (scale-to-zero, no external content filter -
- * nothing here moderates the prompt).
- * Env: MODAL_WAN_ENDPOINT (defaults to the deployed endpoint below).
+ * Self-hosted Wan 2.2 on Modal (scale-to-zero, no external content filter -
+ * nothing here moderates the prompt). Two separate apps, two separate vars:
+ *
+ *   MODAL_WAN_ENDPOINT       TI2V-5B on A10G — cheaper, chains up to 6 clips.
+ *   MODAL_WAN_A14B_ENDPOINT  T2V-A14B on A100-80GB — 14B params with an NSFW
+ *                            LoRA stacked on, single clip only, real GPU cost.
+ *
+ * They were one variable while only one Wan app was in the picker, which meant
+ * the "5B" option silently resolved to whichever app the var pointed at.
  */
 const MODAL_WAN_ENDPOINT = cleanEndpoint(
   process.env.MODAL_WAN_ENDPOINT,
+  'https://ic4pi--wan-video-generate.modal.run',
+);
+
+const MODAL_WAN_A14B_ENDPOINT = cleanEndpoint(
+  process.env.MODAL_WAN_A14B_ENDPOINT,
   'https://ic4pi--wan-video-a14b-generate.modal.run',
+);
+
+/**
+ * Joining finished clips into one video. CPU-only Modal app — concatenation is
+ * an ffmpeg job, so it never wakes a GPU container. See modal/stitch_app.py.
+ */
+const MODAL_STITCH_ENDPOINT = cleanEndpoint(
+  process.env.MODAL_STITCH_ENDPOINT,
+  'https://ic4pi--video-stitch-join.modal.run',
+);
+
+/**
+ * Character voices. See modal/tts_app.py — Chatterbox, which clones a voice
+ * zero-shot from a few seconds of reference audio.
+ */
+const MODAL_TTS_ENDPOINT = cleanEndpoint(
+  process.env.MODAL_TTS_ENDPOINT,
+  'https://ic4pi--voice-tts-speak.modal.run',
 );
 
 async function generateModalWanVideo({
@@ -734,23 +781,37 @@ async function generateModalWanVideo({
   negativePrompt,
   size,
   seconds,
+  imageBase64,
+  keyframes,
+  seed,
+  endpoint = MODAL_WAN_ENDPOINT,
+  model = 'wan2.2-5b',
 }) {
   const dims = String(size || '832x480').split(/[x*]/i).map(Number);
   const width = dims[0] || 832;
   const height = dims[1] || 480;
   const fps = 16;
-  const num_frames = 81; // ~5s per clip at 16fps
+  const isA14b = /a14b/i.test(String(model || ''));
 
   // Longer requests chain multiple 5s clips inside Modal (last frame of each
   // clip feeds the next as its starting frame) instead of one giant single
   // generation - keeps quality/speed per clip consistent. Server-side cap of
   // 6 clips (~30s) is enforced again inside wan_app.py regardless of what's
   // sent here.
+  //
+  // A14B has no chained-clip path (see wan_a14b_app.py — no I2V pipeline is
+  // loaded, so there is nothing to continue a clip from). Longer there means
+  // more frames in the one pass instead: slower per second, and past the
+  // model's own ~5s training length, so untested for coherence beyond that -
+  // but it is what "longer" can mean without a second 56GB model on the GPU.
+  const num_frames = isA14b
+    ? Math.max(81, Math.round(((Number(seconds) || 5) * fps - 1) / 4) * 4 + 1)
+    : 81; // ~5s per clip at 16fps
   const num_clips = Math.min(6, Math.max(1, Math.round((Number(seconds) || 5) / 5)));
 
-  const resp = await fetch(MODAL_WAN_ENDPOINT, {
+  const resp = await fetch(endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
     // fetch follows 303 redirects automatically (and correctly switches to GET,
     // unlike curl -X POST -L which forces POST on the redirect too).
     body: JSON.stringify({
@@ -760,14 +821,17 @@ async function generateModalWanVideo({
       height,
       num_frames,
       fps,
-      num_clips,
+      ...(isA14b ? {} : { num_clips }),
+      ...(Number.isFinite(Number(seed)) ? { seed: Number(seed) } : {}),
+      ...(imageBase64 ? { image: imageBase64 } : {}),
+      ...(Array.isArray(keyframes) && keyframes.length ? { keyframes } : {}),
     }),
   });
 
   const body = await resp.json().catch(() => ({}));
   if (!resp.ok || !body.video_base64) {
     const err = new Error(
-      body.error || `Modal Wan HTTP ${resp.status} calling ${MODAL_WAN_ENDPOINT}`,
+      body.error || `Modal Wan HTTP ${resp.status} calling ${endpoint}`,
     );
     err.status = resp.status || 502;
     throw err;
@@ -776,7 +840,7 @@ async function generateModalWanVideo({
   return {
     kind: 'video',
     provider: 'modal',
-    model: 'wan2.2-5b',
+    model,
     videoUrl: `data:video/mp4;base64,${body.video_base64}`,
     mime: 'video/mp4',
     uncensored: true,
@@ -797,7 +861,7 @@ const MODAL_LTX_ENDPOINT = cleanEndpoint(
   'https://ic4pi--ltx-video-generate.modal.run',
 );
 
-async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds }) {
+async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds, imageBase64, keyframes, seed }) {
   const dims = String(size || '704x480').split(/[x*]/i).map(Number);
   const width = dims[0] || 704;
   const height = dims[1] || 480;
@@ -808,7 +872,7 @@ async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds }) 
 
   const resp = await fetch(MODAL_LTX_ENDPOINT, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
     body: JSON.stringify({
       prompt,
       negative_prompt: negativePrompt || undefined,
@@ -817,6 +881,9 @@ async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds }) 
       num_frames,
       fps,
       num_clips,
+      ...(Number.isFinite(Number(seed)) ? { seed: Number(seed) } : {}),
+      ...(imageBase64 ? { image: imageBase64 } : {}),
+      ...(Array.isArray(keyframes) && keyframes.length ? { keyframes } : {}),
     }),
   });
 
@@ -865,7 +932,7 @@ export default async function handler(req, res) {
       // needs the answer.
       await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
         body: '{}',
         signal: AbortSignal.timeout(5000),
       });
@@ -888,7 +955,7 @@ export default async function handler(req, res) {
     if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
     const {
       model: jm, prompt: jp, negativePrompt: jn, size: js, seconds: jsec, accessKey: jk,
-      video: jv, strength: jstr, keyframes: jkf,
+      video: jv, strength: jstr, keyframes: jkf, imageBase64: jimg, seed: jseed,
     } = req.body || {};
     if (!jp || !String(jp).trim()) return res.status(400).json({ error: 'prompt is required' });
 
@@ -908,17 +975,21 @@ export default async function handler(req, res) {
     const geo = videoGeometry(jm, js);
     const upstream = await fetch(modalEndpoint(jm, 'submit'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
       body: JSON.stringify({
         prompt: String(jp).trim(),
         negative_prompt: jn || undefined,
         ...geo,
         num_clips: clipsForSeconds(jsec),
+        ...(Number.isFinite(Number(jseed)) ? { seed: Number(jseed) } : {}),
         // Restyling an existing clip (Wan) and pinning keyframes to timestamps
         // (LTX) both replace the clip chain rather than adding to it, so
         // num_clips is ignored downstream when either is present.
         ...(jv ? { video: jv, strength: Number(jstr) || 0.6 } : {}),
         ...(Array.isArray(jkf) && jkf.length ? { keyframes: jkf } : {}),
+        // Start-from-an-image. Both video apps take it as `image` and route
+        // clip 0 through their i2v pipeline instead of t2v.
+        ...(jimg ? { image: jimg } : {}),
       }),
     });
     const sub = await upstream.json().catch(() => ({}));
@@ -954,7 +1025,7 @@ export default async function handler(req, res) {
 
     const upstream = await fetch(modalEndpoint(rm, 'result'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
       body: JSON.stringify({ job_id: jobId }),
     });
     const job = await upstream.json().catch(() => ({}));
@@ -1001,6 +1072,123 @@ export default async function handler(req, res) {
     return res.status(200).json({ status: 'done', ...out });
   }
 
+  // Speak a line in a character's voice.
+  //   POST ?op=speak {text, voice?} -> { audioUrl, seconds }
+  //
+  // `voice` is a short reference recording; with one the model clones it, and
+  // the same character sounds like itself across every video. Returned as an
+  // mp3 data URL so it can go straight into the audio slot on ?op=stitch.
+  if (String(req.query?.op || '') === 'speak') {
+    if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+    const { text: vtext, voice, exaggeration, cfgWeight, gapMs, accessKey: vk } = req.body || {};
+    if (!vtext || !String(vtext).trim()) return res.status(400).json({ error: 'text is required' });
+    if (payloadTooLarge({ voice })) {
+      return res.status(413).json({
+        code: 'PAYLOAD_TOO_LARGE',
+        error: 'That voice sample is too large. A few seconds of speech is all the model needs.',
+      });
+    }
+    if (billingEnabled() && !findPerson(vk)) {
+      return res.status(401).json({ error: 'Invalid or missing access key.' });
+    }
+
+    const upstream = await fetch(MODAL_TTS_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
+      body: JSON.stringify({
+        text: String(vtext).trim(),
+        ...(voice ? { voice } : {}),
+        ...(exaggeration != null ? { exaggeration: Number(exaggeration) } : {}),
+        ...(cfgWeight != null ? { cfg_weight: Number(cfgWeight) } : {}),
+        ...(gapMs != null ? { gap_ms: Number(gapMs) } : {}),
+      }),
+    });
+    const spoken = await upstream.json().catch(() => ({}));
+    if (!upstream.ok || spoken.error || !spoken.audio_base64) {
+      return res.status(upstream.ok ? 502 : upstream.status).json({
+        error: spoken.error || `Modal TTS HTTP ${upstream.status} calling ${MODAL_TTS_ENDPOINT}`,
+      });
+    }
+
+    return res.status(200).json({
+      kind: 'audio',
+      audioUrl: `data:${spoken.mime || 'audio/mpeg'};base64,${spoken.audio_base64}`,
+      seconds: spoken.seconds,
+      lines: spoken.lines,
+      cloned: !!spoken.cloned,
+      elapsedSeconds: spoken.elapsed_seconds,
+    });
+  }
+
+  // Join a series of finished clips into one video.
+  //   POST ?op=stitch {clips: [url, ...]} -> { kind:'video', videoUrl }
+  //
+  // Clips are passed by URL wherever storage is configured, so their bytes go
+  // Supabase -> Modal directly and never cross this function. A data: URL is
+  // accepted too, but several inline clips will exceed Vercel's request limit
+  // long before the app's own ceiling — which is the case the size check names
+  // rather than letting it die as an opaque 413.
+  if (String(req.query?.op || '') === 'stitch') {
+    if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+    const { clips, audio, accessKey: sk } = req.body || {};
+    if (!Array.isArray(clips) || !clips.length) {
+      return res.status(400).json({ error: 'Send at least one clip.' });
+    }
+    // One clip alone is a no-op; one clip with audio is a mux, which the app
+    // serves on a copy path that never re-encodes the video.
+    if (clips.length < 2 && !audio) {
+      return res.status(400).json({ error: 'Send at least two clips to join, or one clip with audio.' });
+    }
+    if (payloadTooLarge({ clips, audio })) {
+      return res.status(413).json({
+        code: 'PAYLOAD_TOO_LARGE',
+        error:
+          'These clips (or the audio) are too large to send inline. Set SUPABASE_URL and ' +
+          'SUPABASE_SERVICE_ROLE_KEY so clips are stored as URLs — joining then ' +
+          'passes links instead of bytes and has no practical size limit.',
+      });
+    }
+
+    // Stitching is CPU-only and costs a fraction of a generation, but it is
+    // still the owner's compute, so it sits behind the same key as video.
+    if (billingEnabled() && !findPerson(sk)) {
+      return res.status(401).json({ error: 'Invalid or missing access key.' });
+    }
+
+    const upstream = await fetch(MODAL_STITCH_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
+      body: JSON.stringify({ clips, ...(audio ? { audio } : {}) }),
+    });
+    const joined = await upstream.json().catch(() => ({}));
+    if (!upstream.ok || joined.error || !joined.video_base64) {
+      return res.status(upstream.ok ? 502 : upstream.status).json({
+        error: joined.error || `Modal stitch HTTP ${upstream.status} calling ${MODAL_STITCH_ENDPOINT}`,
+      });
+    }
+
+    let out = {
+      kind: 'video',
+      provider: 'modal',
+      model: 'stitched',
+      videoUrl: `data:video/mp4;base64,${joined.video_base64}`,
+      mime: 'video/mp4',
+      elapsedSeconds: joined.elapsed_seconds,
+      numClips: joined.count,
+      hasAudio: !!joined.has_audio,
+      note:
+        joined.count > 1
+          ? `Joined ${joined.count} clips${joined.has_audio ? ' with audio' : ''}.`
+          : 'Audio added.',
+    };
+    try {
+      out = await persistVideoResult(out);
+    } catch (persistErr) {
+      return res.status(persistErr.status || 502).json({ error: persistErr.message });
+    }
+    return res.status(200).json(out);
+  }
+
   // Admin-only balance management for the Modal video access keys:
   //   GET  /api/media-generate?op=credit             -> list everyone's balance
   //   POST /api/media-generate?op=credit {key, usd}   -> add (or subtract) credit
@@ -1042,6 +1230,8 @@ export default async function handler(req, res) {
     imageBase64,
     mimeType,
     accessKey,
+    keyframes,
+    seed,
   } = req.body || {};
 
   if (typeof prompt !== 'string' || !prompt.trim()) {
@@ -1190,18 +1380,28 @@ export default async function handler(req, res) {
         }
 
         const isLtx = /ltx/i.test(String(model || ''));
+        const isA14b = /a14b/i.test(String(model || ''));
         const out = isLtx
           ? await generateModalLtxVideo({
               prompt: prompt.trim(),
               negativePrompt,
               size: size || '704x480',
               seconds,
+              imageBase64,
+              keyframes,
+              seed,
             })
           : await generateModalWanVideo({
               prompt: prompt.trim(),
               negativePrompt,
               size: size || '832x480',
               seconds,
+              imageBase64,
+              keyframes,
+              seed,
+              ...(isA14b
+                ? { endpoint: MODAL_WAN_A14B_ENDPOINT, model: 'wan2.2-a14b' }
+                : {}),
             });
 
         // Off to storage before billing. If this throws, storage is

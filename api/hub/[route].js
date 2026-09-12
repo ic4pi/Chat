@@ -750,39 +750,50 @@ async function handle_state(req, res) {
   const action = req.query?.action;
 
   if (req.method === 'GET') {
+    // These reads used to destructure `data` only and return `data || []`, so
+    // a database that was gone entirely answered 200 with an empty list. That
+    // is indistinguishable from "nothing filed yet", and `hubReady()` probes
+    // `topics` — so the app concluded memory was working and simply had no
+    // content, every time, with no way for anyone to find out otherwise.
+    // Surfacing the error is what lets the UI say memory is down.
     if (action === 'nudges') {
-      const [{ data: nudges }, { data: facts }] = await Promise.all([
-        db
-          .from('nudges')
-          .select('id, topic_id, message, nudge_type, payload, created_at')
-          .eq('dismissed', false)
-          .order('created_at', { ascending: false })
-          .limit(10),
-        db
-          .from('memory_facts')
-          .select('id, category, content, confidence')
-          .order('confidence', { ascending: false })
-          .limit(15),
-      ]);
+      const [{ data: nudges, error: nudgeErr }, { data: facts, error: factErr }] =
+        await Promise.all([
+          db
+            .from('nudges')
+            .select('id, topic_id, message, nudge_type, payload, created_at')
+            .eq('dismissed', false)
+            .order('created_at', { ascending: false })
+            .limit(10),
+          db
+            .from('memory_facts')
+            .select('id, category, content, confidence')
+            .order('confidence', { ascending: false })
+            .limit(15),
+        ]);
+      const err = nudgeErr || factErr;
+      if (err) return fail(res, 503, 'memory database unreachable', err.message);
       return res.json({ nudges: nudges || [], facts: facts || [] });
     }
 
     if (action === 'topics') {
-      const { data } = await db
+      const { data, error } = await db
         .from('topics')
         .select('id, name, note_count, last_seen_at')
         .order('last_seen_at', { ascending: false })
         .limit(100);
+      if (error) return fail(res, 503, 'memory database unreachable', error.message);
       return res.json({ topics: data || [] });
     }
 
     if (action === 'inbox') {
-      const { data } = await db
+      const { data, error } = await db
         .from('notes')
         .select('id, content, created_at, source_thread_id')
         .is('topic_id', null)
         .order('created_at', { ascending: false })
         .limit(50);
+      if (error) return fail(res, 503, 'memory database unreachable', error.message);
       return res.json({ notes: data || [] });
     }
 
@@ -929,7 +940,53 @@ async function handle_state(req, res) {
       return res.json({ ok: true, inserted: rows.length });
     }
 
-    return fail(res, 400, 'unknown action', ['dismiss', 'register', 'append', 'turn']);
+    if (action === 'sweep-thread') {
+      // The full sweep is a daily cron, so a chat you just had contributed
+      // nothing to Memory until the next morning — which reads as "memory is
+      // broken". This sweeps one thread on demand.
+      // Deliberately scoped to a single thread (and skipped when that thread
+      // has nothing new) so it stays cheap however often it's tapped.
+      const { threadId } = req.body || {};
+      if (!threadId) return fail(res, 400, 'threadId required');
+
+      const { data: thread, error: findErr } = await db
+        .from('threads')
+        .select('id, title, swept_at, last_activity')
+        .eq('id', threadId)
+        .maybeSingle();
+      if (findErr) return fail(res, 500, 'thread lookup failed', findErr.message);
+      if (!thread) return fail(res, 404, 'thread not found');
+
+      let result;
+      try {
+        result = await sweepThread(thread);
+      } catch (e) {
+        return fail(res, 500, 'sweep failed', e.message);
+      }
+
+      // Nudges and the joke-bank document are what make the result visible in
+      // the Memory sheet, so do the same follow-up work the cron does.
+      const nudged = await raiseNudges().catch(() => 0);
+      const groupSuggestionsRaised =
+        await raiseGroupSuggestions(result.topicIds || []).catch(() => 0);
+      let jokeBankDoc = null;
+      if (result.jokes > 0) {
+        jokeBankDoc = await syncJokeBankDocument().catch(() => null);
+      }
+
+      return res.json({
+        ok: true,
+        notesFiled: result.notes,
+        jokesFiled: result.jokes,
+        jokeBankDoc,
+        nudgesRaised: nudged,
+        groupSuggestionsRaised,
+      });
+    }
+
+    return fail(res, 400, 'unknown action', [
+      'dismiss', 'register', 'append', 'turn', 'sweep-thread',
+    ]);
   }
 
   return fail(res, 405, 'GET or POST only');
@@ -937,9 +994,16 @@ async function handle_state(req, res) {
 
 
 /**
- * GET /api/cron/sweep  — runs every 3 days (vercel.json crons)
+ * GET /api/cron/sweep  — runs daily (vercel.json crons)
  *
- * One pass per thread touched since its last sweep:
+ * Daily rather than every third day for two reasons: a conversation should
+ * reach Memory the next day at worst, and Supabase pauses a Free-plan project
+ * that goes a week without a few database requests a day — an every-3-days
+ * cron is under that bar, which is how the notes database went away once
+ * already.
+ *
+ * One pass per thread touched since its last sweep (so a quiet day is a
+ * cheap no-op, not a re-read of everything):
  *   - pulls out side thoughts as notes, filed under auto-created topics
  *   - refreshes memory_facts
  *   - raises nudges for topics that have gone quiet

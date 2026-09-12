@@ -23,9 +23,16 @@ const IMAGE_MODELS = [
 // has no submit endpoint, and the client falls back to one blocking request
 // bounded by the 800s function timeout — where anything past ~10s of Wan will
 // die. The fallback warns rather than silently letting it happen.
+// A14B is single-clip only — T2V-A14B and I2V-A14B are separate 14B models and
+// holding both resident for chaining would need ~110GB of VRAM, so its app has
+// no num_clips at all. Longer than 5s there means more frames in one pass
+// instead of chained clips - slower per second and past the model's own ~5s
+// training length, so untested for coherence beyond that. maxSeconds 20 is a
+// cautious ceiling, not a measured one; dial it back if quality falls apart.
 const VIDEO_MODELS = [
-  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, slow)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', usesRef: false, maxSeconds: 30, modes: ['text', 'restyle'] },
-  { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', usesRef: false, maxSeconds: 30, modes: ['text', 'keyframes'] },
+  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, A10G)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', fps: 16, usesRef: false, maxSeconds: 30, modes: ['text', 'image', 'keyframes', 'restyle'] },
+  { value: 'modal:wan2.2-a14b', label: 'Wan 2.2 A14B · NSFW · Text → Video (best quality, single pass, A100)', kind: 'video', provider: 'modal', model: 'wan2.2-a14b', fps: 16, usesRef: false, maxSeconds: 20, modes: ['text'] },
+  { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', fps: 24, usesRef: false, maxSeconds: 30, modes: ['text', 'image', 'keyframes'] },
   // fal.ai / NVIDIA / Cloudflare video removed - fal and NVIDIA both bill per
   // generation, and Cloudflare's Seedance models are a third-party pass-through
   // (not covered by the Workers AI free Neurons tier, not on Cloudflare's own
@@ -87,6 +94,31 @@ const els = {
   ref: document.getElementById('mediaRef'),
   refWrap: document.getElementById('refWrap'),
   refPreview: document.getElementById('refPreview'),
+  character: document.getElementById('mediaCharacter'),
+  characterWrap: document.getElementById('characterWrap'),
+  charEditor: document.getElementById('charEditor'),
+  charEdit: document.getElementById('charEdit'),
+  charNew: document.getElementById('charNew'),
+  charName: document.getElementById('charName'),
+  charLook: document.getElementById('charLook'),
+  charStyle: document.getElementById('charStyle'),
+  charSeed: document.getElementById('charSeed'),
+  charSave: document.getElementById('charSave'),
+  charDelete: document.getElementById('charDelete'),
+  charReseed: document.getElementById('charReseed'),
+  charImage: document.getElementById('charImage'),
+  charImageState: document.getElementById('charImageState'),
+  charImagePreview: document.getElementById('charImagePreview'),
+  charVoice: document.getElementById('charVoice'),
+  charVoiceState: document.getElementById('charVoiceState'),
+  dialogue: document.getElementById('mediaDialogue'),
+  dialogueWrap: document.getElementById('dialogueWrap'),
+  dialogueState: document.getElementById('dialogueState'),
+  speakBtn: document.getElementById('speakBtn'),
+  audio: document.getElementById('mediaAudio'),
+  audioWrap: document.getElementById('audioWrap'),
+  series: document.getElementById('mediaSeries'),
+  seriesWrap: document.getElementById('seriesWrap'),
   accessKey: document.getElementById('mediaAccessKey'),
   accessKeyWrap: document.getElementById('accessKeyWrap'),
   generate: document.getElementById('mediaGenerate'),
@@ -98,9 +130,13 @@ const els = {
 let kind = 'image';
 let refData = null; // { base64, mimeType }
 let srcVideoData = null; // base64 data URL of a clip to restyle
+let audioData = null; // base64 data URL of an audio track to lay over the result
+let pendingVoice = null; // voice sample staged in the character editor, saved with it
+let pendingImage = null; // reference image staged the same way
 
 const VIDEO_MODE_LABELS = {
   text: 'Text → Video',
+  image: 'Start from an image',
   restyle: 'Restyle a video (keeps the motion)',
   keyframes: 'Timeline keyframes (guide the motion)',
 };
@@ -193,8 +229,9 @@ function modelUsesRef(spec) {
   if (spec.usesRef) return true;
   // Every self-hosted image mode except plain text-to-image works from a
   // source image the user supplies.
-  if (imageMode() !== 'text') return true;
-  return kind === 'video' && /i2v/i.test(spec.model || '');
+  if (kind === 'image' && imageMode() !== 'text') return true;
+  // In video, the upload is the first frame the clip grows out of.
+  return kind === 'video' && videoMode() === 'image';
 }
 
 function syncFields() {
@@ -234,12 +271,149 @@ function syncFields() {
   els.keyframesWrap.classList.toggle('hidden', vm !== 'keyframes');
   // Length is chosen by the source clip when restyling, and by the last
   // keyframe when keyframing — neither reads the picker.
-  els.lengthWrap.classList.toggle('hidden', kind !== 'video' || vm !== 'text');
+  els.lengthWrap.classList.toggle('hidden', kind !== 'video' || (vm !== 'text' && vm !== 'image'));
 
   // Strength means "how far from the source" in both img2img and restyle.
+  // A character and a shot list only make sense for plain text/image video —
+  // restyle takes its subject from the source clip, and keyframes pin it to
+  // supplied images, so injecting a character description into either fights
+  // what the mode is for.
+  const seriesable = selfHostedVideo && (vm === 'text' || vm === 'image');
+  els.audioWrap.classList.toggle('hidden', !selfHostedVideo);
+  els.characterWrap.classList.toggle('hidden', !seriesable);
+  els.dialogueWrap.classList.toggle('hidden', !seriesable);
+  els.seriesWrap.classList.toggle('hidden', !seriesable);
+
   els.strengthWrap.classList.toggle('hidden', m !== 'img2img' && vm !== 'restyle');
   els.expandWrap.classList.toggle('hidden', m !== 'expand');
   els.poseWrap.classList.toggle('hidden', m !== 'pose');
+}
+
+// ---- Characters -----------------------------------------------------------
+// A recurring character is two things the model cannot remember on its own:
+// a description repeated verbatim into every prompt, and a fixed seed. Each
+// generation is an independent call with no memory of the last, so "the same
+// bear as before" means nothing to it — only the same words and the same
+// starting noise reproduce the same character.
+//
+// Kept in localStorage: this is a personal library on one device, not shared
+// state, and it must survive a reload without needing an account.
+const CHARACTERS_KEY = 'mediaStudio.characters';
+
+function loadCharacters() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CHARACTERS_KEY) || '[]');
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCharacters(list) {
+  try {
+    localStorage.setItem(CHARACTERS_KEY, JSON.stringify(list));
+  } catch {
+    // A full or disabled store just means the library does not persist.
+  }
+}
+
+let characters = loadCharacters();
+
+function fillCharacters(selectId) {
+  els.character.innerHTML = '';
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = '— none —';
+  els.character.appendChild(none);
+  for (const c of characters) {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.name || '(unnamed)';
+    els.character.appendChild(opt);
+  }
+  if (selectId) els.character.value = selectId;
+}
+
+function selectedCharacter() {
+  return characters.find((c) => c.id === els.character.value) || null;
+}
+
+function newSeed() {
+  return Math.floor(Math.random() * 2 ** 31);
+}
+
+function showCharacterInEditor(c) {
+  els.charName.value = c?.name || '';
+  els.charLook.value = c?.look || '';
+  els.charStyle.value = c?.style || '';
+  els.charSeed.value = c?.seed ?? newSeed();
+  els.charVoice.value = '';
+  els.charImage.value = '';
+  pendingVoice = null;
+  pendingImage = null;
+  els.charVoiceState.textContent = c?.voice ? 'Voice sample saved.' : 'No voice sample yet.';
+  els.charImageState.textContent = c?.image ? 'Reference image saved.' : 'No reference image yet.';
+  els.charImagePreview.innerHTML = '';
+  els.charImagePreview.classList.toggle('hidden', !c?.image);
+  if (c?.image) {
+    const img = document.createElement('img');
+    img.src = c.image;
+    img.alt = c.name || 'Reference';
+    els.charImagePreview.appendChild(img);
+  }
+}
+
+/** The prompt actually sent: the shot, then the character verbatim, then the
+ *  style. Order matters less than the repetition — every clip has to carry the
+ *  full description or the model re-invents the character. */
+function composePrompt(shot, character) {
+  return [shot, character?.look, character?.style]
+    .map((p) => String(p || '').trim())
+    .filter(Boolean)
+    .join(', ');
+}
+
+/** Offer to join a finished series into one clip.
+ *
+ *  Only URLs are sent: the stitching app fetches them itself, so the bytes go
+ *  storage -> Modal and never pass through the browser or the API function.
+ *  Without storage configured the clips come back as data: URLs instead, and
+ *  several of those exceed the request limit — hence the check rather than a
+ *  button that fails on click. */
+function offerStitch(clipUrls, accessKey, audio) {
+  // One clip is only worth assembling when there is audio to lay over it.
+  if (clipUrls.length < 2 && !audio) return;
+  const joining = clipUrls.length > 1;
+  const label = joining
+    ? `Join ${clipUrls.length} clips${audio ? ' and add audio' : ''}`
+    : 'Add audio to this clip';
+  const { card } = cardShell(joining ? `${clipUrls.length} clips ready` : 'Clip ready', '');
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'text-btn media-generate';
+  btn.textContent = label;
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.textContent = 'Working…';
+    setStatus(joining ? 'Joining clips…' : 'Adding audio…');
+    try {
+      const joined = await runSync({
+        __op: 'stitch',
+        clips: clipUrls,
+        ...(audio ? { audio } : {}),
+        accessKey,
+      });
+      renderVideoResult(joined);
+      card.remove();
+    } catch (err) {
+      console.error(err);
+      setStatus(err.message || 'Assembly failed.', true);
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  });
+  card.appendChild(btn);
+  prependCard(card);
 }
 
 function setStatus(msg, isError = false) {
@@ -320,8 +494,193 @@ els.model.addEventListener('change', () => {
 });
 
 // Switching mode changes which fields apply and whether a source is required.
+els.charEdit.addEventListener('click', () => {
+  const open = els.charEditor.classList.toggle('hidden');
+  if (!open) showCharacterInEditor(selectedCharacter());
+});
+
+els.charNew.addEventListener('click', () => {
+  els.character.value = '';
+  showCharacterInEditor(null);
+  els.charEditor.classList.remove('hidden');
+  els.charName.focus();
+});
+
+els.character.addEventListener('change', () => {
+  if (!els.charEditor.classList.contains('hidden')) showCharacterInEditor(selectedCharacter());
+});
+
+els.charReseed.addEventListener('click', () => {
+  els.charSeed.value = newSeed();
+});
+
+els.charSave.addEventListener('click', () => {
+  const name = (els.charName.value || '').trim();
+  if (!name) {
+    alert('Give the character a name.');
+    els.charName.focus();
+    return;
+  }
+  const existing = selectedCharacter();
+  const record = {
+    id: existing?.id || `c${Date.now()}`,
+    name,
+    look: (els.charLook.value || '').trim(),
+    style: (els.charStyle.value || '').trim(),
+    seed: Number(els.charSeed.value) || newSeed(),
+    // Kept unless a new sample was staged, so editing the look does not
+    // silently drop the voice.
+    voice: pendingVoice ?? existing?.voice ?? '',
+    image: pendingImage ?? existing?.image ?? '',
+  };
+  characters = existing
+    ? characters.map((c) => (c.id === existing.id ? record : c))
+    : [...characters, record];
+  saveCharacters(characters);
+  fillCharacters(record.id);
+  els.charEditor.classList.add('hidden');
+  setStatus(`Saved “${record.name}”.`);
+});
+
+els.charDelete.addEventListener('click', () => {
+  const existing = selectedCharacter();
+  if (!existing) {
+    els.charEditor.classList.add('hidden');
+    return;
+  }
+  if (!confirm(`Delete “${existing.name}”?`)) return;
+  characters = characters.filter((c) => c.id !== existing.id);
+  saveCharacters(characters);
+  fillCharacters('');
+  showCharacterInEditor(null);
+  els.charEditor.classList.add('hidden');
+});
+
 els.mode.addEventListener('change', syncFields);
 els.videoMode.addEventListener('change', syncFields);
+
+// ---- Character voice -----------------------------------------------------
+// A sample is staged here and written onto the character by Save, so an
+// abandoned edit does not modify the stored voice.
+els.charVoice.addEventListener('change', async () => {
+  const file = els.charVoice.files?.[0];
+  pendingVoice = null;
+  if (!file) {
+    els.charVoiceState.textContent = 'No new sample staged.';
+    return;
+  }
+  if (file.size > SRC_VIDEO_MAX_BYTES) {
+    els.charVoice.value = '';
+    els.charVoiceState.textContent = `${(file.size / 1_048_576).toFixed(1)}MB is too big — a few seconds is plenty.`;
+    return;
+  }
+  pendingVoice = await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+  els.charVoiceState.textContent = pendingVoice
+    ? `Staged ${file.name} — press Save to keep it.`
+    : 'Could not read that file.';
+});
+
+els.charImage.addEventListener('change', async () => {
+  const file = els.charImage.files?.[0];
+  pendingImage = null;
+  if (!file) {
+    els.charImageState.textContent = 'No new image staged.';
+    return;
+  }
+  try {
+    const compressed = await compressImageFile(file);
+    pendingImage = compressed.base64;
+    els.charImageState.textContent = `Staged ${file.name} — press Save to keep it.`;
+    els.charImagePreview.innerHTML = '';
+    els.charImagePreview.classList.remove('hidden');
+    const img = document.createElement('img');
+    img.src = pendingImage;
+    img.alt = 'Reference';
+    els.charImagePreview.appendChild(img);
+  } catch (err) {
+    els.charImage.value = '';
+    els.charImageState.textContent = err.message || 'Could not read that image.';
+  }
+});
+
+// Speaking fills the same audio slot an uploaded track would, so the voice
+// is laid over the video by exactly the path that already works.
+els.speakBtn.addEventListener('click', async () => {
+  const text = (els.dialogue.value || '').trim();
+  if (!text) {
+    els.dialogue.focus();
+    return;
+  }
+  const character = selectedCharacter();
+  els.speakBtn.disabled = true;
+  els.speakBtn.textContent = 'Speaking…';
+  els.dialogueState.textContent = '';
+  try {
+    const spoken = await runSync({
+      __op: 'speak',
+      text,
+      ...(character?.voice ? { voice: character.voice } : {}),
+      accessKey: (els.accessKey.value || '').trim(),
+    });
+    audioData = spoken.audioUrl;
+    // Clearing the file input keeps it honest: the audio slot now holds the
+    // generated line, not whatever was picked there earlier.
+    els.audio.value = '';
+    const who = spoken.cloned ? `${character.name}'s voice` : 'the default voice';
+    els.dialogueState.textContent = `${spoken.seconds}s in ${who} — ready to lay over the video.`;
+
+    const { card } = cardShell(`voice · ${spoken.cloned ? character.name : 'default'}`, `${spoken.seconds}s`);
+    const player = document.createElement('audio');
+    player.src = spoken.audioUrl;
+    player.controls = true;
+    card.insertBefore(player, card.firstChild);
+    prependCard(card);
+    setStatus('Voice ready. Generate a clip and it will be offered as the audio track.');
+  } catch (err) {
+    console.error(err);
+    els.dialogueState.textContent = err.message || 'Voice generation failed.';
+    setStatus(err.message || 'Voice generation failed.', true);
+  } finally {
+    els.speakBtn.disabled = false;
+    els.speakBtn.textContent = 'Generate voice';
+  }
+});
+
+// ---- Audio track ---------------------------------------------------------
+// Read once here rather than at generate time: the file has to survive as a
+// data URL across a whole series, and the input itself can be cleared by the
+// browser between clips.
+els.audio.addEventListener('change', async () => {
+  const file = els.audio.files?.[0];
+  audioData = null;
+  if (!file) {
+    setStatus('');
+    return;
+  }
+  if (file.size > SRC_VIDEO_MAX_BYTES) {
+    els.audio.value = '';
+    setStatus(
+      `That track is ${(file.size / 1_048_576).toFixed(1)}MB. It has to fit in a 3MB ` +
+        `request — try a shorter clip or a lower bitrate mp3.`,
+      true,
+    );
+    return;
+  }
+  audioData = await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+  if (audioData) {
+    setStatus(`Loaded ${file.name} — it will be offered once the video is generated.`);
+  }
+});
 
 // ---- Source video for restyling -----------------------------------------
 els.srcVideo.addEventListener('change', async () => {
@@ -520,10 +879,11 @@ function friendlyHttpError(status, data) {
 }
 
 async function runSync(body) {
-  const res = await fetch('/api/media-generate', {
+  const { __op, ...payload } = body;
+  const res = await fetch(`/api/media-generate${__op ? `?op=${__op}` : ''}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(friendlyHttpError(res.status, data));
@@ -634,12 +994,27 @@ async function pollJob(jobId, model, accessKey) {
     const elapsed = Math.round((Date.now() - started) / 1000);
     setStatus(`Generating… ${elapsed}s. Self-hosted video takes minutes — safe to close this tab, come back anytime.`);
 
-    const pollRes = await fetch('/api/media-generate?op=result', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId, model, accessKey }),
-    });
-    const out = await pollRes.json().catch(() => ({}));
+    // A mobile connection dropping momentarily (locking the phone, switching
+    // wifi/cellular, backgrounding the tab) throws here — "Load failed" in
+    // Safari — before there is even a response to read. That is not the job
+    // failing, it is this one HTTP request failing; the generation is still
+    // running on Modal either way. Treated as transient like a "running"
+    // status: retry on the next tick rather than ending the wait.
+    let out;
+    try {
+      const pollRes = await fetch('/api/media-generate?op=result', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId, model, accessKey }),
+      });
+      out = await pollRes.json().catch(() => ({}));
+    } catch {
+      if (Date.now() - started > POLL_CEILING_MS) {
+        clearPendingJob();
+        throw new Error('Gave up waiting after an hour — the job outlived its Modal timeout.');
+      }
+      continue;
+    }
 
     if (out.status === 'done') {
       clearPendingJob();
@@ -702,16 +1077,30 @@ async function resumePendingJobOnLoad() {
 
 els.generate.addEventListener('click', async () => {
   const prompt = (els.prompt.value || '').trim();
-  if (!prompt) {
-    alert('Enter a prompt.');
-    els.prompt.focus();
+  const spec = selectedSpec();
+  const character = els.characterWrap.classList.contains('hidden') ? null : selectedCharacter();
+
+  // A shot list replaces the single prompt: one line per clip, each expanded
+  // with the character and style. The prompt box still works on its own when
+  // the list is empty, so nothing changes for one-off generations.
+  const seriesLines = els.seriesWrap.classList.contains('hidden')
+    ? []
+    : (els.series.value || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const shots = seriesLines.length ? seriesLines : prompt ? [prompt] : [];
+
+  if (!shots.length) {
+    alert(els.seriesWrap.classList.contains('hidden') ? 'Enter a prompt.' : 'Enter a prompt, or one shot per line under Series.');
+    (seriesLines.length ? els.series : els.prompt).focus();
     return;
   }
-  const spec = selectedSpec();
   const usesRef = modelUsesRef(spec);
 
-  if (usesRef && !refData) {
-    alert(kind === 'image' ? 'Venice · Edit needs an uploaded image.' : 'Image → Video needs a reference image.');
+  if (usesRef && !refData && !character?.image) {
+    alert(
+      kind === 'image'
+        ? 'Venice · Edit needs an uploaded image.'
+        : 'Image → Video needs a reference image — upload one, or give the character one.',
+    );
     return;
   }
 
@@ -759,13 +1148,14 @@ els.generate.addEventListener('click', async () => {
         body.video = srcVideoData;
         body.strength = (Number(els.strength.value) || 60) / 100;
       } else if (vm === 'keyframes') {
-        // Frame index, not seconds: the app works in frames, and LTX runs at
-        // 24fps. Doing the conversion here keeps the app's contract numeric.
+        // Frame index, not seconds: the apps work in frames. The rate is the
+        // model's own — LTX runs at 24fps and Wan at 16, so a fixed 24 here
+        // put every Wan keyframe half again too late.
         const ready = keyframeState.filter((kf) => kf.image);
         if (!ready.length) throw new Error('Add at least one keyframe with an image.');
         body.keyframes = ready.map((kf) => ({
           image: kf.image,
-          frame: Math.round(kf.at * 24),
+          frame: Math.round(kf.at * (spec.fps || 24)),
           strength: 1.0,
         }));
       }
@@ -778,60 +1168,106 @@ els.generate.addEventListener('click', async () => {
     if (refData && usesRef) {
       body.imageBase64 = refData.base64;
       body.mimeType = refData.mimeType;
+    } else if (usesRef && character?.image) {
+      // The character's own reference, so a saved character starts every shot
+      // from the same picture without re-uploading it each time. A manual
+      // upload still wins — it is the more specific choice.
+      body.imageBase64 = character.image;
+      body.mimeType = 'image/jpeg';
     }
 
-    // Self-hosted video goes through the async job API. One blocking request
-    // would be bounded by the API's 800s function timeout, which is what caps
-    // clip length — polling moves the ceiling to the Modal app's own timeout
-    // and lets the UI show progress instead of hanging.
-    const data =
-      kind === 'video' && spec.provider === 'modal'
-        ? await runVideoJob(body)
-        : await runSync(body);
+    // Shots run one after another rather than in parallel: they share a single
+    // Modal container, and the cold start plus the app's idle window is paid
+    // once for the whole list instead of once per clip. Firing them together
+    // would start a container each and cost the overhead every time.
+    const seriesClips = [];
+    for (const [i, shot] of shots.entries()) {
+      const perShot = { ...body, prompt: composePrompt(shot, character) };
+      // One seed across the series is half of what keeps a character stable;
+      // the repeated description in composePrompt() is the other half.
+      if (character && Number.isFinite(Number(character.seed))) perShot.seed = Number(character.seed);
+      if (shots.length > 1) setStatus(`Shot ${i + 1} of ${shots.length}… ${shot}`);
 
-    if (data.kind === 'image') {
-      if (data.note) setStatus(data.note);
-      else if (data.fallbackNote) setStatus(data.fallbackNote);
-      else setStatus('Done.');
-      for (const img of data.images || []) {
-        const { card, meta } = cardShell(
-          `${data.provider} · ${data.model}${data.uncensored === false ? '' : data.provider === 'venice' ? ' · uncensored' : ''}${data.fallbackFrom ? ' (fallback)' : ''}`,
-          new Date().toLocaleTimeString(),
-        );
-        const el = document.createElement('img');
-        if (img.url) {
-          el.src = img.url;
-          const a = document.createElement('a');
-          a.href = img.url;
-          a.target = '_blank';
-          a.rel = 'noopener';
-          a.textContent = 'Open';
-          meta.lastChild.replaceWith(a);
-        } else if (img.base64) {
-          el.src = `data:${img.mimeType || 'image/webp'};base64,${img.base64}`;
-          const a = document.createElement('a');
-          a.href = el.src;
-          a.download = `media-${Date.now()}.webp`;
-          a.textContent = 'Download';
-          meta.lastChild.replaceWith(a);
-        }
-        card.insertBefore(el, card.firstChild);
-        prependCard(card);
+      // Self-hosted video goes through the async job API. One blocking request
+      // would be bounded by the API's 800s function timeout, which is what caps
+      // clip length — polling moves the ceiling to the Modal app's own timeout
+      // and lets the UI show progress instead of hanging.
+      let data;
+      try {
+        data =
+          kind === 'video' && spec.provider === 'modal'
+            ? await runVideoJob(perShot)
+            : await runSync(perShot);
+      } catch (shotErr) {
+        // One failed shot must not discard the clips already generated and
+        // paid for, so the run continues and reports at the end.
+        if (shots.length === 1) throw shotErr;
+        console.error(shotErr);
+        setStatus(`Shot ${i + 1} failed: ${shotErr.message}`, true);
+        continue;
       }
-      if (!data.note && !data.fallbackNote) setStatus('Done.');
-    } else if (data.kind === 'video') {
-      renderVideoResult(data);
-    } else {
-      // "Unexpected response" alone gives nothing to act on. The keys say
-      // whether this is an error body, a stale API shape, or a cached client
-      // talking to a newer server.
-      const keys = Object.keys(data || {}).join(', ') || '(empty body)';
+
+      if (data.kind === 'image') {
+        if (data.note) setStatus(data.note);
+        else if (data.fallbackNote) setStatus(data.fallbackNote);
+        else setStatus('Done.');
+        for (const img of data.images || []) {
+          const { card, meta } = cardShell(
+            `${data.provider} · ${data.model}${data.uncensored === false ? '' : data.provider === 'venice' ? ' · uncensored' : ''}${data.fallbackFrom ? ' (fallback)' : ''}`,
+            new Date().toLocaleTimeString(),
+          );
+          const el = document.createElement('img');
+          if (img.url) {
+            el.src = img.url;
+            const a = document.createElement('a');
+            a.href = img.url;
+            a.target = '_blank';
+            a.rel = 'noopener';
+            a.textContent = 'Open';
+            meta.lastChild.replaceWith(a);
+          } else if (img.base64) {
+            el.src = `data:${img.mimeType || 'image/webp'};base64,${img.base64}`;
+            const a = document.createElement('a');
+            a.href = el.src;
+            a.download = `media-${Date.now()}.webp`;
+            a.textContent = 'Download';
+            meta.lastChild.replaceWith(a);
+          }
+          card.insertBefore(el, card.firstChild);
+          prependCard(card);
+        }
+        if (!data.note && !data.fallbackNote) setStatus('Done.');
+      } else if (data.kind === 'video') {
+        renderVideoResult(data);
+        if (data.videoUrl) seriesClips.push(data.videoUrl);
+      } else {
+        // "Unexpected response" alone gives nothing to act on. The keys say
+        // whether this is an error body, a stale API shape, or a cached client
+        // talking to a newer server.
+        const keys = Object.keys(data || {}).join(', ') || '(empty body)';
+        setStatus(
+          `Unexpected response — kind=${data?.kind ?? 'missing'}; keys: ${keys}` +
+            (data?.error ? ` — ${data.error}` : ''),
+          true,
+        );
+        console.error('media-generate returned:', data);
+      }
+    }
+
+    if (shots.length > 1) setStatus(`Done — ${shots.length} shots.`);
+
+    // Assembly passes links, not bytes. Inline clips (no storage configured)
+    // would blow the request limit, so the offer is only made when there is
+    // something linkable to send. A lone clip is only worth assembling when
+    // there is audio to lay over it.
+    const linkable = seriesClips.filter((u) => !String(u).startsWith('data:'));
+    if (linkable.length > 1 || (linkable.length === 1 && audioData)) {
+      offerStitch(linkable, body.accessKey || '', audioData);
+    } else if (seriesClips.length > 1 || (seriesClips.length === 1 && audioData)) {
       setStatus(
-        `Unexpected response — kind=${data?.kind ?? 'missing'}; keys: ${keys}` +
-          (data?.error ? ` — ${data.error}` : ''),
-        true,
+        `Done. Joining and adding audio need storage configured ` +
+          `(SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY) so clips come back as URLs rather than inline data.`,
       );
-      console.error('media-generate returned:', data);
     }
   } catch (err) {
     console.error(err);
@@ -843,6 +1279,11 @@ els.generate.addEventListener('click', async () => {
   }
 });
 
+const BUILD = 'b7';
+const hint = document.querySelector('.media-top-hint');
+if (hint) hint.textContent = `Image · Video · ${BUILD}`;
+
+fillCharacters();
 fillModels();
 fillSizes();
 fillLengths();

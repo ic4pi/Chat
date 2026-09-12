@@ -103,7 +103,13 @@ body::before {
 
 #app {
   position: relative; z-index: 1;
-  height: 100dvh;
+  /* --app-h is kept in sync with visualViewport.height by app.js. On iOS the
+     keyboard does NOT shrink 100dvh — Safari scrolls the whole page up
+     instead, which slid the topbar and module nav clean off screen and left
+     you trapped in the composer with no way out but dismissing the keyboard.
+     Sizing to the visual viewport makes the layout SHRINK instead, so the
+     nav stays tappable the entire time you're typing. */
+  height: var(--app-h, 100dvh);
   display: grid;
   grid-template-columns: 0 1fr 0;
   transition: grid-template-columns .32s var(--ease);
@@ -674,6 +680,12 @@ body::before {
 }
 
 .voice-hint { margin-top: 7px; font-size: 10.5px; color: var(--muted-2); line-height: 1.5; }
+/* While the keyboard is up, screen space is the scarce thing: drop the
+   four-line cheat sheet and the chat title so the conversation and the
+   module nav both stay visible instead of being squeezed out. */
+body.kb-open .voice-hint,
+body.kb-open .chat-title-row { display: none; }
+body.kb-open .status-row { padding: 4px 12px; }
 
 .smart-reply-chips { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 4px 8px; }
 .reply-chip {

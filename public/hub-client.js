@@ -4,7 +4,7 @@
  * Chats live in localStorage as the source of truth; the hub is a synced
  * copy, not the other way around. `syncChat()` registers a chat's thread on
  * first send and keeps appending new messages every turn after that, so the
- * 3-day sweep (jokes, notes, project-grouping suggestions) can see ordinary
+ * daily sweep (jokes, notes, project-grouping suggestions) can see ordinary
  * chatting, not just chats explicitly promoted to Workspace/Media/a group
  * discussion — that handoff path (`ensureThread`/`promote`) is unchanged and
  * still registers lazily for those other thread types.
@@ -136,6 +136,17 @@ export function buildDocument(type, topicIds, opts = {}) {
     body: JSON.stringify({ type, topicIds, ...opts }),
   });
 }
+
+/**
+ * Sweeps one thread right now instead of waiting for the daily cron. This is
+ * what makes Memory fill up right after a conversation rather than looking
+ * empty until tomorrow.
+ */
+export const sweepThreadNow = (threadId) =>
+  hubFetch('/api/hub/state?route=state&action=sweep-thread', {
+    method: 'POST',
+    body: JSON.stringify({ threadId }),
+  });
 
 export const getNudges = () => hubFetch('/api/hub/state?route=state&action=nudges');
 export const getTopics = () => hubFetch('/api/hub/state?route=state&action=topics');

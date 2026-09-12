@@ -23,7 +23,7 @@ on:
         required: true
         default: 'all'
         type: choice
-        options: [all, sdxl, ltx, wan]
+        options: [all, sdxl, ltx, wan, wan-a14b, stitch, tts]
 
 jobs:
   deploy:
@@ -36,7 +36,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install Modal
-        run: pip install modal
+        run: pip install modal fastapi
 
       # "Token validation failed" says nothing about which half is wrong. The
       # prefixes (ak- / as-) are structural, not secret, so checking them and
@@ -92,10 +92,16 @@ jobs:
           case "$APPS" in
             all)  deploy sdxl-nsfw modal/sdxl_app.py
                   deploy ltx-video modal/ltx_app.py
-                  deploy wan-video modal/wan_app.py ;;
+                  deploy wan-video modal/wan_app.py
+                  deploy wan-video-a14b modal/wan_a14b_app.py
+                  deploy video-stitch modal/stitch_app.py
+                  deploy voice-tts modal/tts_app.py ;;
             sdxl) deploy sdxl-nsfw modal/sdxl_app.py ;;
             ltx)  deploy ltx-video modal/ltx_app.py ;;
             wan)  deploy wan-video modal/wan_app.py ;;
+            wan-a14b) deploy wan-video-a14b modal/wan_a14b_app.py ;;
+            stitch) deploy video-stitch modal/stitch_app.py ;;
+            tts)  deploy voice-tts modal/tts_app.py ;;
           esac
 
           {

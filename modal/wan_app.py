@@ -24,6 +24,7 @@ import subprocess
 import tempfile
 import time
 
+import fastapi
 import modal
 
 MODEL_ID = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
@@ -60,6 +61,18 @@ FAST_GUIDANCE = 1.0
 FULL_STEPS = 40      # measured: 832x480, ~6m20s for one 5s clip
 FULL_GUIDANCE = 5.0
 
+# Optional shared-secret gate on every web endpoint below. Unset by default —
+# same "unset = open, single-owner use" convention as VIDEO_ACCESS_KEYS in
+# api/media-generate.js. Set this (and MODAL_SHARED_SECRET in Vercel's env,
+# same name) to require the header on every call; leave both unset and the
+# app stays exactly as open as it is today.
+SHARED_SECRET = os.environ.get("MODAL_SHARED_SECRET", "")
+
+
+def _check_secret(x_modal_secret: str) -> None:
+    if SHARED_SECRET and x_modal_secret != SHARED_SECRET:
+        raise fastapi.HTTPException(status_code=401, detail="Invalid or missing X-Modal-Secret header.")
+
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg")
@@ -85,6 +98,22 @@ image = (
 # deleting an env var rather than redeploying.
 app = modal.App(os.environ.get("MODAL_APP_NAME", "wan-video"))
 cache = modal.Volume.from_name("wan-model-cache", create_if_missing=True)
+
+
+def _decode_image(data: str):
+    """Accept a bare base64 string or a full data: URL."""
+    from PIL import Image
+
+    if not data:
+        return None
+    if data.startswith("data:"):
+        data = data.split(",", 1)[-1]
+    return Image.open(io.BytesIO(base64.b64decode(data))).convert("RGB")
+
+
+def _wan_frames(n: int) -> int:
+    """Wan's temporal patching needs 4k+1 frames; anything else is rejected."""
+    return max(5, ((int(n) - 1) // 4) * 4 + 1)
 
 
 def _video_to_frames(data: str, width: int, height: int, max_frames: int):
@@ -153,7 +182,7 @@ def _export_polished(frames, path: str, fps: int, upscale: int = 2) -> int:
 
 
 @app.cls(
-    gpu="L4",
+    gpu="A10G",
     image=image,
     volumes={"/cache": cache},
     # Weights are ~10GB off a cold volume; a short window makes every request
@@ -247,6 +276,41 @@ class Wan:
         return {"ready": True}
 
     @modal.method()
+    def generate(
+        self,
+        prompt: str,
+        negative_prompt: str = "",
+        height: int = 480,
+        width: int = 832,
+        num_frames: int = FRAMES_PER_CLIP,
+        fps: int = DEFAULT_FPS,
+        guidance_scale: float = FULL_GUIDANCE,
+    ) -> str:
+        """Minimal single-clip text-to-video entry point: one call into
+        self.t2v, no clip-chaining/i2v/restyle/Lightning branching that run()
+        does. Kept separate so the simple contract can't be perturbed by
+        run()'s other modes. Returns a base64-encoded mp4."""
+        import torch
+        from diffusers.utils import export_to_video
+
+        frames = self.t2v(
+            prompt=prompt,
+            negative_prompt=negative_prompt or None,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            num_inference_steps=FULL_STEPS,
+            guidance_scale=guidance_scale,
+            generator=torch.Generator("cpu").manual_seed(random.randint(1, 2**31 - 1)),
+            output_type="pil",
+        ).frames[0]
+
+        path = "/tmp/out_t2v.mp4"
+        export_to_video(frames, path, fps=fps)
+        with open(path, "rb") as fh:
+            return base64.b64encode(fh.read()).decode()
+
+    @modal.method()
     def run(
         self,
         prompt: str,
@@ -261,6 +325,8 @@ class Wan:
         guidance_scale: float | None = None,
         video: str = "",
         strength: float = 0.6,
+        image: str = "",     # start the clip from this frame (image-to-video)
+        keyframes: list | None = None,  # [{image, frame}] — see the block below
         polish: bool = True,  # ffmpeg interpolation + upscale pass; see _export_polished
     ) -> dict:
         import torch
@@ -316,8 +382,71 @@ class Wan:
                 "polished": polish,
             }
 
+        # Timeline keyframes. TI2V-5B has no conditioning pipeline that pins an
+        # image to an arbitrary frame index the way LTXConditionPipeline does —
+        # VACE is a different checkpoint family and there is no TI2V-5B build of
+        # it. What this model does have is i2v, so a keyframe starts a segment
+        # rather than being interpolated toward: each image appears at its own
+        # mark and the model invents motion forward from it until the next one.
+        # That means a cut at every mark, not a morph between them, which is the
+        # honest limit of these weights rather than something more code fixes.
+        if keyframes:
+            marks = []
+            for kf in keyframes[:8]:
+                img = _decode_image(kf.get("image"))
+                if img is None:
+                    continue
+                marks.append(
+                    (max(0, int(kf.get("frame", 0))), img.resize((width, height)))
+                )
+            if not marks:
+                raise ValueError("keyframes were supplied but none carried an image.")
+            marks.sort(key=lambda m: m[0])
+
+            frames = []
+            for i, (start, img) in enumerate(marks):
+                # A segment runs to the next mark; the last one gets a full clip.
+                end = marks[i + 1][0] if i + 1 < len(marks) else start + num_frames
+                seg_frames = _wan_frames(max(5, end - start))
+                out = self.i2v(
+                    image=img,
+                    prompt=prompt,
+                    negative_prompt=negative_prompt or None,
+                    height=height,
+                    width=width,
+                    num_frames=seg_frames,
+                    num_inference_steps=steps,
+                    guidance_scale=guidance_scale,
+                    generator=torch.Generator("cpu").manual_seed(seed + i),
+                    output_type="pil",
+                ).frames[0]
+                frames.extend(out)
+
+            path = "/tmp/out.mp4"
+            out_fps = _export_polished(frames, path, fps) if polish else fps
+            if not polish:
+                export_to_video(frames, path, fps=fps)
+            with open(path, "rb") as fh:
+                video_b64 = base64.b64encode(fh.read()).decode()
+            return {
+                "video_base64": video_b64,
+                "elapsed_seconds": round(time.time() - started, 2),
+                "num_clips": len(marks),
+                "num_frames": len(frames),
+                "fps": out_fps,
+                "mode": "keyframes",
+                "keyframe_count": len(marks),
+                "fast": self.fast,
+                "steps": steps,
+                "polished": polish,
+            }
+
         frames: list = []
-        seed_frame = None
+        # A supplied start image makes clip 0 take the i2v branch below instead
+        # of t2v, which is the whole of "start the video from this picture".
+        seed_frame = _decode_image(image)
+        if seed_frame is not None:
+            seed_frame = seed_frame.resize((width, height))
 
         for clip in range(num_clips):
             generator = torch.Generator("cpu").manual_seed(seed + clip)
@@ -364,9 +493,13 @@ class Wan:
 
 @app.function(image=image, timeout=3600)
 @modal.fastapi_endpoint(method="POST")
-def generate(payload: dict) -> dict:
+def generate(
+    payload: dict,
+    x_modal_secret: str = fastapi.Header(default="", alias="X-Modal-Secret"),
+) -> dict:
     """Thin CPU front door. Named `generate` because the deployed URL that
     api/media-generate.js targets is ic4pi--wan-video-generate.modal.run."""
+    _check_secret(x_modal_secret)
     prompt = (payload.get("prompt") or "").strip()
     if not prompt:
         return {"error": "Missing 'prompt'."}
@@ -383,6 +516,8 @@ def generate(payload: dict) -> dict:
             seed=int(payload["seed"]) if payload.get("seed") else random.randint(1, 2**31 - 1),
             video=payload.get("video") or "",
             strength=float(payload.get("strength") or 0.6),
+            image=payload.get("image") or "",
+            keyframes=payload.get("keyframes"),
             **({"polish": payload["polish"]} if "polish" in payload else {}),
         )
     except Exception as exc:  # surfaced verbatim; the client reads body.error
@@ -391,18 +526,51 @@ def generate(payload: dict) -> dict:
 
 @app.function(image=image, timeout=60)
 @modal.fastapi_endpoint(method="POST")
-def warm() -> dict:
+def warm(
+    x_modal_secret: str = fastapi.Header(default="", alias="X-Modal-Secret"),
+) -> dict:
     """Kick a container into existence so @modal.enter() loads the weights.
 
     The browser calls this the moment someone focuses the prompt box, which
     buys ~60s of cold start back against time they were going to spend typing
     anyway. spawn() rather than remote() so it returns immediately instead of
     blocking the page for the whole load."""
+    _check_secret(x_modal_secret)
     try:
         Wan().ping.spawn()
         return {"warming": True}
     except Exception as exc:
         return {"warming": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+@app.function(image=image, timeout=3600)
+@modal.fastapi_endpoint(method="POST")
+def t2v(
+    payload: dict,
+    x_modal_secret: str = fastapi.Header(default="", alias="X-Modal-Secret"),
+) -> dict:
+    """Minimal text-to-video front door for Wan().generate() — single clip,
+    fixed shape (prompt, negative_prompt, height, width, num_frames, fps,
+    guidance_scale), no clip-chaining/i2v/restyle. URL:
+    ic4pi--wan-video-t2v.modal.run. Response: {video_base64}."""
+    _check_secret(x_modal_secret)
+    prompt = (payload.get("prompt") or "").strip()
+    if not prompt:
+        return {"error": "Missing 'prompt'."}
+
+    try:
+        video_b64 = Wan().generate.remote(
+            prompt=prompt,
+            negative_prompt=payload.get("negative_prompt") or "",
+            height=int(payload.get("height") or 480),
+            width=int(payload.get("width") or 832),
+            num_frames=int(payload.get("num_frames") or FRAMES_PER_CLIP),
+            fps=int(payload.get("fps") or DEFAULT_FPS),
+            guidance_scale=float(payload.get("guidance_scale") or FULL_GUIDANCE),
+        )
+        return {"video_base64": video_b64}
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
 
 
 # ---- Async job API -------------------------------------------------------
@@ -417,8 +585,12 @@ def warm() -> dict:
 
 @app.function(image=image, timeout=60)
 @modal.fastapi_endpoint(method="POST")
-def submit(payload: dict) -> dict:
+def submit(
+    payload: dict,
+    x_modal_secret: str = fastapi.Header(default="", alias="X-Modal-Secret"),
+) -> dict:
     """Start a generation and return immediately with its job id."""
+    _check_secret(x_modal_secret)
     prompt = (payload.get("prompt") or "").strip()
     if not prompt:
         return {"error": "Missing 'prompt'."}
@@ -435,6 +607,8 @@ def submit(payload: dict) -> dict:
             seed=int(payload["seed"]) if payload.get("seed") else random.randint(1, 2**31 - 1),
             video=payload.get("video") or "",
             strength=float(payload.get("strength") or 0.6),
+            image=payload.get("image") or "",
+            keyframes=payload.get("keyframes"),
             **({"polish": payload["polish"]} if "polish" in payload else {}),
         )
         return {"job_id": call.object_id, "status": "running"}
@@ -444,12 +618,16 @@ def submit(payload: dict) -> dict:
 
 @app.function(image=image, timeout=60)
 @modal.fastapi_endpoint(method="POST")
-def result(payload: dict) -> dict:
+def result(
+    payload: dict,
+    x_modal_secret: str = fastapi.Header(default="", alias="X-Modal-Secret"),
+) -> dict:
     """Poll a job. Returns status "running" until the clip is ready.
 
     timeout=0 makes this a non-blocking check: Modal raises rather than
     holding the connection open, which is the whole point — a polling request
     that blocked would just move the timeout problem instead of solving it."""
+    _check_secret(x_modal_secret)
     job_id = (payload.get("job_id") or "").strip()
     if not job_id:
         return {"error": "Missing 'job_id'."}

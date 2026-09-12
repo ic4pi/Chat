@@ -73,6 +73,13 @@ FULL_GUIDANCE = 4.0  # A14B's own recommended default, not the 5B app's 5.0
 
 DEFAULT_FPS = 16
 FRAMES_PER_CLIP = 81  # ~5s at 16fps, matching the 5B app's convention
+# No I2V-A14B pipeline is loaded (see module docstring — a second 56GB model
+# would not fit alongside this one on the same 80GB card), so there is no
+# frame-to-frame chaining path here. Longer output instead means more frames
+# in the one pass: slower and past the model's ~5s training length, so
+# coherence is unproven past that, but nothing stops the pipeline from
+# accepting it. 321 = 4*80+1, ~20s at 16fps.
+MAX_FRAMES = 321
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -229,6 +236,8 @@ class WanA14B:
         from diffusers.utils import export_to_video
 
         started = time.time()
+        # Wan rejects frame counts that are not 4k+1.
+        num_frames = max(5, min(MAX_FRAMES, ((int(num_frames) - 1) // 4) * 4 + 1))
         if steps is None:
             steps = FAST_STEPS if self.fast else FULL_STEPS
         if guidance_scale is None:
