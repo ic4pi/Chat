@@ -5910,8 +5910,8 @@ async function openMemory() {
   }
 }
 
-// Sweeps the chat you're in right now rather than waiting for the 3-day cron.
-// Without this, Memory is empty for days after a conversation and looks dead.
+// Sweeps the chat you're in right now rather than waiting for the daily cron.
+// Without this, Memory stays empty until tomorrow and looks dead.
 document.getElementById('sweepNowBtn')?.addEventListener('click', async (e) => {
   const btn = e.currentTarget;
   if (!hubOn) return;
