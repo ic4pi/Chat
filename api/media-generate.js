@@ -34,8 +34,9 @@
  *   VENICE_API_KEY         — uncensored images + Edit (safe_mode:false)
  *   CLOUDFLARE_ACCOUNT_ID  — Workers AI account id (filtered images)
  *   CLOUDFLARE_API_TOKEN   — API token with Workers AI permission
- *   SUPABASE_URL           — generated video is uploaded here and returned as a
- *   SUPABASE_SERVICE_ROLE_KEY  URL; without these, any clip over ~3MB is
+ *   SUPABASE_SERVICE_ROLE_KEY — generated video is uploaded to the Supabase
+ *                               project named in lib/hub.js and returned as a
+ *                               URL; without this key, any clip over ~3MB is
  *                            rejected rather than dying as an opaque 413
  *   MODAL_WAN_ENDPOINT     — self-hosted Wan 2.2 TI2V-5B video on Modal (A10G),
  *                            scale-to-zero, no external content filter
@@ -232,7 +233,7 @@ async function persistVideoResult(out) {
     const mb = (decoded.bytes.length / 1_048_576).toFixed(1);
     const err = new Error(
       `Generated video is ${mb}MB — too large to return through Vercel (4.5MB limit / HTTP 413). ` +
-        `Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY so video can be stored and returned as a URL, ` +
+        `Set SUPABASE_SERVICE_ROLE_KEY so video can be stored and returned as a URL, ` +
         `or request a shorter clip.`,
     );
     err.status = 413;
@@ -1143,7 +1144,7 @@ export default async function handler(req, res) {
       return res.status(413).json({
         code: 'PAYLOAD_TOO_LARGE',
         error:
-          'These clips (or the audio) are too large to send inline. Set SUPABASE_URL and ' +
+          'These clips (or the audio) are too large to send inline. Set ' +
           'SUPABASE_SERVICE_ROLE_KEY so clips are stored as URLs — joining then ' +
           'passes links instead of bytes and has no practical size limit.',
       });

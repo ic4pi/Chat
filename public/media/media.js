@@ -1266,7 +1266,7 @@ els.generate.addEventListener('click', async () => {
     } else if (seriesClips.length > 1 || (seriesClips.length === 1 && audioData)) {
       setStatus(
         `Done. Joining and adding audio need storage configured ` +
-          `(SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY) so clips come back as URLs rather than inline data.`,
+          `(SUPABASE_SERVICE_ROLE_KEY) so clips come back as URLs rather than inline data.`,
       );
     }
   } catch (err) {

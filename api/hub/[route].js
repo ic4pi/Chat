@@ -23,6 +23,9 @@ import {
   gatherIncoming,
   memoryContext,
   resolveOwner,
+  SUPABASE_PROJECT_REF,
+  SUPABASE_KEY_REF,
+  SUPABASE_KEY_MISMATCH,
   UTILITY_MODEL,
   WRITER_MODEL,
   requireHub,
@@ -1087,13 +1090,21 @@ async function handle_state(req, res) {
  * echoed, not even in part.
  */
 async function diagnose(res) {
-  let projectRef = null;
-  let apiHost = null;
-  try {
-    apiHost = new URL(process.env.SUPABASE_URL).host;
-    projectRef = apiHost.split('.')[0];
-  } catch {
-    apiHost = '(SUPABASE_URL is not a valid URL)';
+  const projectRef = SUPABASE_PROJECT_REF;
+  const keyRef = SUPABASE_KEY_REF;
+
+  // Reported before anything is queried: if the key is for another project,
+  // every table below fails auth and the table list explains nothing.
+  if (SUPABASE_KEY_MISMATCH) {
+    return res.json({
+      projectRef,
+      keyProjectRef: keyRef,
+      ok: false,
+      problem:
+        `The service-role key in the environment was issued for project ${keyRef}, but this ` +
+        `app reads project ${projectRef} (set in lib/hub.js). Replace ` +
+        `SUPABASE_SERVICE_ROLE_KEY with ${projectRef}'s service_role key.`,
+    });
   }
 
   const TABLES = [
@@ -1128,7 +1139,11 @@ async function diagnose(res) {
         : 'ok (exists; rejected the null probe args, as expected)';
   }
 
-  return res.json({ apiHost, projectRef, tables, functions: fns });
+  const allOk =
+    Object.values(tables).every((v) => v.startsWith('ok')) &&
+    Object.values(fns).every((v) => v.startsWith('ok'));
+
+  return res.json({ projectRef, keyProjectRef: keyRef, ok: allOk, tables, functions: fns });
 }
 
 /**
