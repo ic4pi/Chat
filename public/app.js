@@ -5544,14 +5544,53 @@ function showBootError(msg) {
   el.textContent = 'Boot error: ' + msg + '\n\nTry a hard refresh, or open Chats → Clear chats / Reset settings.';
 }
 
+// ---------------------------------------------------------------------------
+// Keyboard-safe viewport
+// ---------------------------------------------------------------------------
+// iOS Safari does not shrink 100dvh when the on-screen keyboard appears — it
+// scrolls the whole page up to reveal the focused field. That pushed the
+// topbar and the module nav off the top of the screen, so once you tapped the
+// composer the only way to reach Workspace / Group / Media was to dismiss the
+// keyboard first. Sizing #app to visualViewport.height makes the layout
+// shrink instead, so the nav never leaves the screen.
+(function keepViewportSane() {
+  const vv = window.visualViewport;
+  const root = document.documentElement;
+
+  function sync() {
+    const h = vv ? vv.height : window.innerHeight;
+    root.style.setProperty('--app-h', h + 'px');
+    // Undo any scroll Safari applied to the document itself; #app is fixed
+    // height now, so document scroll can only ever be damage.
+    if (window.scrollY !== 0) window.scrollTo(0, 0);
+    document.body.classList.toggle('kb-open', !!vv && vv.height < window.innerHeight - 80);
+  }
+
+  sync();
+  if (vv) {
+    vv.addEventListener('resize', sync);
+    vv.addEventListener('scroll', sync);
+  }
+  window.addEventListener('orientationchange', () => setTimeout(sync, 120));
+  window.addEventListener('resize', sync);
+})();
+
 // "Welcome back" prompt — only when there's something to resume AND it's
 // been a while (2 hours) since this device last had the app open. Not shown
 // on every load; `lastSeenAt` is stamped once the decision is made either way.
 const RESUME_IDLE_MS = 2 * 60 * 60 * 1000;
 
+// Only a chat with real messages in it is worth resuming. An empty "New
+// chat" placeholder was still triggering the prompt, so answering Yes landed
+// you on a blank screen — a dialog that cost a tap and gave nothing back.
+function isResumable(chat) {
+  return !!chat && Array.isArray(chat.messages) && chat.messages.length > 0;
+}
+
 function mostRecentChat() {
-  if (!state.chats.length) return null;
-  return state.chats.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
+  const resumable = state.chats.filter(isResumable);
+  if (!resumable.length) return null;
+  return resumable.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
 }
 
 function maybeShowResumePrompt() {
@@ -5567,16 +5606,29 @@ function maybeShowResumePrompt() {
     saveState();
     return;
   }
+  // If we're already sitting in the chat we'd be resuming, there is nothing
+  // to ask about — don't spend a tap confirming the status quo.
+  if (state.activeChatId === last.id) {
+    state.lastSeenAt = Date.now();
+    saveState();
+    return;
+  }
   if (els.resumeModalText) {
-    els.resumeModalText.textContent =
-      `Pick up "${last.name || 'Untitled'}" where you left off, or start something new?`;
+    els.resumeModalText.textContent = `Pick up "${last.name || 'Untitled'}"?`;
   }
   els.resumeModal?.classList.remove('hidden');
 }
 
 els.resumeContinueBtn?.addEventListener('click', () => {
   const last = mostRecentChat();
-  if (last) state.activeChatId = last.id;
+  if (last) {
+    state.activeChatId = last.id;
+    // Boot auto-created an empty chat before we got here; leaving it behind
+    // clutters the list and re-arms the same useless prompt next time.
+    state.chats = state.chats.filter(
+      (c) => c.id === last.id || isResumable(c) || c.kind !== 'chat' || c.name !== 'New chat',
+    );
+  }
   state.lastSeenAt = Date.now();
   saveState();
   els.resumeModal?.classList.add('hidden');
@@ -5588,6 +5640,15 @@ els.resumeStartNewBtn?.addEventListener('click', () => {
   saveState();
   els.resumeModal?.classList.add('hidden');
   handleNewChat();
+});
+
+// Tapping outside is a third answer nobody should have to look for: it just
+// leaves you where you already were instead of trapping you in the dialog.
+els.resumeModal?.addEventListener('click', (e) => {
+  if (e.target !== els.resumeModal) return;
+  state.lastSeenAt = Date.now();
+  saveState();
+  els.resumeModal.classList.add('hidden');
 });
 
 setArtifactsTab(state.artifactsActiveTab || 'artifacts');
@@ -5958,14 +6019,56 @@ setTimeout(syncStatusRow, 300);
 // Real navigation instead of a button that opens a menu that has to be
 // searched. Every module reachable from every screen, always visible.
 
+// Everything the nav opens is a sheet or a modal, and each one used to need
+// its own close button found and tapped before you could go anywhere else.
+// Closing whatever is open is now part of navigating, so getting out of a
+// module is the same one tap as getting into it.
+function closeEverythingOpen() {
+  document.querySelectorAll('.sheet.open, .sheet-scrim.open')
+    .forEach((el) => el.classList.remove('open'));
+  document.querySelectorAll('.modal-overlay:not(.hidden)')
+    .forEach((el) => el.classList.add('hidden'));
+  document.getElementById('app')?.classList.remove('chats-open', 'artifacts-open');
+}
+
+function setActiveMod(mod) {
+  document.querySelectorAll('#modNav .mod-nav-btn').forEach((btn) => {
+    const on = btn.dataset.mod === mod;
+    btn.classList.toggle('active', on);
+    if (on) btn.setAttribute('aria-current', 'page');
+    else btn.removeAttribute('aria-current');
+  });
+}
+
+// Tapping Chat is the way back to the conversation from anywhere, without
+// hunting for the × on whatever happens to be covering it.
+document.querySelector('#modNav .mod-nav-btn[data-mod="chat"]')
+  ?.addEventListener('click', () => {
+    closeEverythingOpen();
+    setActiveMod('chat');
+    document.getElementById('chat')?.scrollIntoView({ block: 'end' });
+  });
+
 document.getElementById('navWorkspace')?.addEventListener('click', () => {
+  closeEverythingOpen();
+  setActiveMod('workspace');
   els.workspaceBtn?.click(); // reuses the existing openInWorkspace() handler
 });
 document.getElementById('navGroup')?.addEventListener('click', () => {
+  closeEverythingOpen();
+  setActiveMod('group');
   els.groupBtn?.click(); // reuses the existing openGroupModal() handler
 });
 document.getElementById('navMemory')?.addEventListener('click', () => {
+  closeEverythingOpen();
+  setActiveMod('memory');
   document.getElementById('memoryBtn')?.click();
+});
+
+// Any sheet dismissed by its own scrim / × puts us back in Chat, so the nav
+// never claims you're somewhere you aren't.
+document.querySelectorAll('.sheet-scrim').forEach((scrim) => {
+  scrim.addEventListener('click', () => setActiveMod('chat'));
 });
 
 // Keep the nav's memory badge in sync with the sheet's badge.
