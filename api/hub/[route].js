@@ -929,7 +929,53 @@ async function handle_state(req, res) {
       return res.json({ ok: true, inserted: rows.length });
     }
 
-    return fail(res, 400, 'unknown action', ['dismiss', 'register', 'append', 'turn']);
+    if (action === 'sweep-thread') {
+      // The full sweep is a cron on a 3-day schedule, so a chat you just had
+      // contributed nothing to Memory until up to three days later — which
+      // reads as "memory is broken". This sweeps one thread on demand.
+      // Deliberately scoped to a single thread (and skipped when that thread
+      // has nothing new) so it stays cheap however often it's tapped.
+      const { threadId } = req.body || {};
+      if (!threadId) return fail(res, 400, 'threadId required');
+
+      const { data: thread, error: findErr } = await db
+        .from('threads')
+        .select('id, title, swept_at, last_activity')
+        .eq('id', threadId)
+        .maybeSingle();
+      if (findErr) return fail(res, 500, 'thread lookup failed', findErr.message);
+      if (!thread) return fail(res, 404, 'thread not found');
+
+      let result;
+      try {
+        result = await sweepThread(thread);
+      } catch (e) {
+        return fail(res, 500, 'sweep failed', e.message);
+      }
+
+      // Nudges and the joke-bank document are what make the result visible in
+      // the Memory sheet, so do the same follow-up work the cron does.
+      const nudged = await raiseNudges().catch(() => 0);
+      const groupSuggestionsRaised =
+        await raiseGroupSuggestions(result.topicIds || []).catch(() => 0);
+      let jokeBankDoc = null;
+      if (result.jokes > 0) {
+        jokeBankDoc = await syncJokeBankDocument().catch(() => null);
+      }
+
+      return res.json({
+        ok: true,
+        notesFiled: result.notes,
+        jokesFiled: result.jokes,
+        jokeBankDoc,
+        nudgesRaised: nudged,
+        groupSuggestionsRaised,
+      });
+    }
+
+    return fail(res, 400, 'unknown action', [
+      'dismiss', 'register', 'append', 'turn', 'sweep-thread',
+    ]);
   }
 
   return fail(res, 405, 'GET or POST only');

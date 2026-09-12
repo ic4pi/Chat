@@ -137,6 +137,17 @@ export function buildDocument(type, topicIds, opts = {}) {
   });
 }
 
+/**
+ * Sweeps one thread right now instead of waiting for the 3-day cron. This is
+ * what makes Memory fill up after a conversation rather than looking empty
+ * and broken for days.
+ */
+export const sweepThreadNow = (threadId) =>
+  hubFetch('/api/hub/state?route=state&action=sweep-thread', {
+    method: 'POST',
+    body: JSON.stringify({ threadId }),
+  });
+
 export const getNudges = () => hubFetch('/api/hub/state?route=state&action=nudges');
 export const getTopics = () => hubFetch('/api/hub/state?route=state&action=topics');
 export const getInbox = () => hubFetch('/api/hub/state?route=state&action=inbox');

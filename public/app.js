@@ -5854,8 +5854,24 @@ function renderNudgeRows(container, nudges, onDismissed) {
 }
 
 async function openMemory() {
-  if (!hubOn) return;
   closeAppMenu();
+  // The Memory tile is always in the nav, so a bare `return` here made it a
+  // dead button: tap, nothing happens, no reason given. Open the sheet and
+  // say what's actually wrong instead.
+  if (!hubOn) {
+    hubUI.memorySheet?.classList.add('open');
+    hubUI.memoryScrim?.classList.add('open');
+    if (hubUI.nudgeList) {
+      hubUI.nudgeList.innerHTML =
+        '<p class="empty-note">Memory is switched off — the notes database is'
+        + ' unreachable. It needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY set,'
+        + ' and the Supabase project running (a paused project looks exactly like'
+        + ' this). Nothing is lost meanwhile: chats stay on this device and sync'
+        + ' once memory is back.</p>';
+    }
+    if (hubUI.topicList) hubUI.topicList.innerHTML = '';
+    return;
+  }
   hubUI.memorySheet?.classList.add('open');
   hubUI.memoryScrim?.classList.add('open');
 
@@ -5893,6 +5909,40 @@ async function openMemory() {
     if (hubUI.nudgeList) hubUI.nudgeList.innerHTML = `<p class="empty-note">${err.message}</p>`;
   }
 }
+
+// Sweeps the chat you're in right now rather than waiting for the 3-day cron.
+// Without this, Memory is empty for days after a conversation and looks dead.
+document.getElementById('sweepNowBtn')?.addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  if (!hubOn) return;
+  const chat = activeChat();
+  if (!chat) return;
+
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Reading…';
+  try {
+    // A chat that was never synced has no thread yet, so sweep would find
+    // nothing to read — register and push anything pending first.
+    await window.hub.syncChat(chat);
+    saveState();
+    if (!chat.hubThreadId) throw new Error('this chat has not synced yet');
+
+    const r = await window.hub.sweepThreadNow(chat.hubThreadId);
+    const filed = (r.notesFiled || 0) + (r.jokesFiled || 0);
+    btn.textContent = filed
+      ? `Filed ${filed}`
+      : 'Nothing new to keep';
+    await openMemory(); // re-render with whatever just landed
+  } catch (err) {
+    btn.textContent = err.message || 'Failed';
+  } finally {
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.textContent = label;
+    }, 2600);
+  }
+});
 
 document.getElementById('buildDocBtn')?.addEventListener('click', async () => {
   const picked = [...document.querySelectorAll('.topic-chip.selected')].map(
