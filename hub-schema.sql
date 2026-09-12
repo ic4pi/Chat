@@ -50,6 +50,11 @@ create table threads (
   -- seed_prompt is the clean carried-over text, kept OUT of messages so it can
   -- be handed to an image model verbatim with no wrapper prose.
   seed_prompt   text,
+  -- The id this chat has in the browser's localStorage. Lets continuous sync
+  -- call register() on every turn idempotently instead of creating a thread
+  -- each time, and lets a group-suggestion nudge name chats the client can
+  -- actually find.
+  local_id      text,
   metadata      jsonb not null default '{}'::jsonb,
   created_at    timestamptz not null default now(),
   last_activity timestamptz not null default now(),
@@ -60,6 +65,12 @@ create index threads_activity_idx on threads (last_activity desc);
 create index threads_sweep_idx on threads (swept_at nulls first, last_activity);
 create index threads_owner_idx on threads (owner_id, last_activity desc);
 create index threads_owner_sweep_idx on threads (owner_id, swept_at nulls first, last_activity);
+
+-- local_id comes from a browser's localStorage, so it is only ever unique to
+-- one device. Unique per OWNER, not globally: a collision between two people
+-- would otherwise hand one of them the other's thread.
+create unique index threads_owner_local_id_idx
+  on threads (owner_id, local_id) where local_id is not null;
 
 create table personas (
   id            uuid primary key default gen_random_uuid(),
@@ -243,11 +254,17 @@ create table document_topics (
 create index documents_updated_idx on documents (updated_at desc);
 create index documents_owner_idx on documents (owner_id, type);
 
+-- Typed nudges let the sweep suggest grouping related chats into a project
+-- without the server needing a "project" concept at all — projects stay
+-- client-side, same as chats themselves. payload carries the local chat ids
+-- for the client to resolve against its own localStorage.
 create table nudges (
   id         uuid primary key default gen_random_uuid(),
   owner_id   uuid not null references owners(id) on delete cascade,
   topic_id   uuid references topics(id) on delete cascade,
   message    text not null,
+  nudge_type text not null default 'stale_topic',
+  payload    jsonb not null default '{}'::jsonb,
   dismissed  boolean not null default false,
   created_at timestamptz not null default now()
 );
@@ -302,25 +319,6 @@ create or replace function match_facts(
   order by f.embedding <=> p_embedding
   limit p_limit;
 $$ language sql stable;
-
--- ---------------------------------------------------------------
--- PROJECTS support (additive) — client-side chat folders backed by:
---  1) idempotent thread registration, so continuous sync can call
---     register on every chat without creating duplicate threads
---  2) typed nudges, so the sweep can suggest grouping related chats
---     into a project without any new server-side "project" concept —
---     projects stay client-only, same as chats themselves.
--- ---------------------------------------------------------------
-
--- local_id comes from a browser's localStorage, so it is only ever unique to
--- one device. Unique per OWNER, not globally: a collision between two people
--- would otherwise hand one of them the other's thread.
-alter table threads add column if not exists local_id text;
-create unique index if not exists threads_owner_local_id_idx
-  on threads (owner_id, local_id) where local_id is not null;
-
-alter table nudges add column if not exists nudge_type text not null default 'stale_topic';
-alter table nudges add column if not exists payload jsonb not null default '{}'::jsonb;
 
 -- ---------------------------------------------------------------
 -- ROW LEVEL SECURITY

@@ -798,6 +798,14 @@ function extractAsset(result) {
 async function handle_state(req, res) {
   if (!requireHub(res)) return;
   const action = req.query?.action;
+
+  // Deliberately before resolveOwner: this is the endpoint you reach for when
+  // the hub is broken, so it must not depend on the hub working. Answers the
+  // question the code otherwise cannot — WHICH database is this deployment
+  // actually talking to, and what can it see in there? Reports the project
+  // ref only, which is already public in the API URL, never the keys.
+  if (action === 'diag') return diagnose(res);
+
   const ownerId = await resolveOwner(req, res);
 
   if (req.method === 'GET') {
@@ -1061,6 +1069,66 @@ async function handle_state(req, res) {
   }
 
   return fail(res, 405, 'GET or POST only');
+}
+
+/**
+ * Reports which Supabase project this deployment is pointed at and which hub
+ * tables it can actually reach.
+ *
+ * This exists because a whole afternoon went into a memory failure that no
+ * amount of reading the code could explain: SUPABASE_URL is an environment
+ * variable, so the repo cannot say which database is in use, and every read
+ * was swallowing its error and answering 200 with an empty list. Nothing in
+ * the app or its logs could distinguish "no notes yet" from "pointed at the
+ * wrong project entirely".
+ *
+ * Only the project ref is returned — the leading label of the API hostname,
+ * which is already public in every request the browser makes. Keys are never
+ * echoed, not even in part.
+ */
+async function diagnose(res) {
+  let projectRef = null;
+  let apiHost = null;
+  try {
+    apiHost = new URL(process.env.SUPABASE_URL).host;
+    projectRef = apiHost.split('.')[0];
+  } catch {
+    apiHost = '(SUPABASE_URL is not a valid URL)';
+  }
+
+  const TABLES = [
+    'owners', 'threads', 'personas', 'messages', 'links', 'topics',
+    'notes', 'memory_facts', 'resolutions', 'documents', 'document_topics', 'nudges',
+  ];
+
+  const tables = {};
+  for (const t of TABLES) {
+    const { error, count } = await db
+      .from(t)
+      .select('*', { count: 'exact', head: true });
+    tables[t] = error ? `ERROR: ${error.message}` : `ok (${count ?? 0} rows)`;
+  }
+
+  // The owner-scoped vector helpers are a separate failure mode: the table can
+  // exist while the function is missing or still has its old unscoped shape.
+  const fns = {};
+  for (const [name, args] of [
+    ['match_topics', { p_owner_id: null, p_embedding: null, p_threshold: 0, p_limit: 1 }],
+    ['match_notes', { p_owner_id: null, p_topic_id: null, p_embedding: null, p_threshold: 0, p_limit: 1 }],
+    ['match_facts', { p_owner_id: null, p_category: 'x', p_embedding: null, p_threshold: 0, p_limit: 1 }],
+  ]) {
+    const { error } = await db.rpc(name, args);
+    // A null embedding is not valid input, so an argument complaint still
+    // proves the function exists with the owner-scoped signature. Only a
+    // "could not find the function" answer means it is actually missing.
+    fns[name] = !error
+      ? 'ok'
+      : /could not find|does not exist/i.test(error.message)
+        ? `MISSING: ${error.message}`
+        : 'ok (exists; rejected the null probe args, as expected)';
+  }
+
+  return res.json({ apiHost, projectRef, tables, functions: fns });
 }
 
 /**
