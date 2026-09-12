@@ -396,6 +396,10 @@ function migrate(s) {
     groupMode: c.groupMode || null,
     topic: c.topic || null,
     groupSummary: c.groupSummary || '',
+    // The last verdict this table reached. The post itself lives in messages;
+    // this is the structured copy, so "where did we land" survives a reload
+    // without re-reading the transcript.
+    groupVerdict: (c.groupVerdict && typeof c.groupVerdict === 'object') ? c.groupVerdict : null,
     groupRounds: typeof c.groupRounds === 'number' ? c.groupRounds : 3,
     personaModels: (c.personaModels && typeof c.personaModels === 'object')
       ? c.personaModels
@@ -467,6 +471,7 @@ function createChat(opts = {}) {
     groupMode: opts.groupMode || null,
     topic: opts.topic || null,
     groupSummary: opts.groupSummary || '',
+    groupVerdict: null,
     groupRounds: typeof opts.groupRounds === 'number' ? opts.groupRounds : 3,
     personaModels: (opts.personaModels && typeof opts.personaModels === 'object')
       ? opts.personaModels
@@ -3288,9 +3293,10 @@ async function sendMessage(text) {
 }
 
 /**
- * Stream a group round. onEvent for status/speaker/token/turn/summary/done/error.
+ * Stream a group round, or a verdict poll when `phase` is 'verdict'.
+ * onEvent for status/speaker/token/turn/summary/position/verdict/done/error.
  */
-async function callGroupStream(chat, apiMessages, onEvent) {
+async function callGroupStream(chat, apiMessages, onEvent, { phase = 'round' } = {}) {
   const controller = new AbortController();
   activeChatAbort = controller;
   const timer = setTimeout(() => controller.abort(), Math.max(timeoutFor(state.activeProvider, state.activeModel), 240_000));
@@ -3317,6 +3323,7 @@ async function callGroupStream(chat, apiMessages, onEvent) {
         paidPassword: loadPaidPassword() || undefined,
         personaModels: personaModelMap,
         providerKeys,
+        phase,
       }),
       signal: controller.signal,
     });
@@ -3413,7 +3420,8 @@ function showMoreRoundsPrompt(chat) {
 
   const label = document.createElement('span');
   label.className = 'rounds-prompt-label';
-  label.textContent = 'Done for now. Talk more (+ rounds) or finish and save the MP3.';
+  label.textContent =
+    'Done for now. Talk more (+ rounds), call the question for a verdict, or finish and save the MP3.';
   div.appendChild(label);
 
   const actions = document.createElement('div');
@@ -3431,6 +3439,20 @@ function showMoreRoundsPrompt(chat) {
     });
     actions.appendChild(btn);
   });
+
+  // Between "keep talking" and "we're done": ask the table where it actually
+  // landed. A round only ever produces more speeches, so without this there is
+  // no point at which the discussion resolves into anything.
+  const verdictBtn = document.createElement('button');
+  verdictBtn.type = 'button';
+  verdictBtn.className = 'text-btn';
+  verdictBtn.textContent = 'Call the question';
+  verdictBtn.title = 'Every persona files a position, then a chair reports what they add up to';
+  verdictBtn.addEventListener('click', () => {
+    div.remove();
+    void runVerdict(chat);
+  });
+  actions.appendChild(verdictBtn);
 
   const finishBtn = document.createElement('button');
   finishBtn.type = 'button';
@@ -3591,6 +3613,156 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
     saveState();
     renderMessages({ scroll: groupScrollMode('bottom') });
     return false;
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// Calling the question — poll the table, then report what the positions say
+// ---------------------------------------------------------------------------
+
+/** The verdict as one markdown post, so it renders and exports like any turn.
+ *
+ *  The filed positions are kept underneath the conclusion rather than thrown
+ *  away: a reader who does not believe "strong majority" can check it against
+ *  who actually said what, which is the whole reason the poll runs before the
+ *  chair instead of after. */
+function formatVerdict(v) {
+  const lines = [];
+  const counted =
+    v.filed === v.polled
+      ? `${v.filed} position${v.filed === 1 ? '' : 's'} filed`
+      : `${v.filed} of ${v.polled} positions filed`;
+  lines.push(`**${v.consensusLabel}** · ${counted}`, '', v.decision);
+
+  if (v.agreed?.length) {
+    lines.push('', '**Agreed**', ...v.agreed.map((a) => `- ${a}`));
+  }
+  if (v.disagreed?.length) {
+    lines.push('', '**Still contested**', ...v.disagreed.map((d) => `- ${d}`));
+  }
+  if (v.nextStep) {
+    lines.push('', '**Next step**', v.nextStep);
+  }
+
+  if (v.positions?.length) {
+    lines.push('', '---', '', '**Positions as filed**');
+    for (const p of v.positions) {
+      const conf = p.confidence == null ? '' : ` *(confidence ${p.confidence})*`;
+      lines.push(`- **${p.personaName}**${conf} — ${p.stance}`);
+      if (p.blocker) lines.push(`    - blocker: ${p.blocker}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+async function runVerdict(chat) {
+  const startedAt = Date.now();
+  setGeneratingUi(true);
+  activeChatUserStopped = false;
+
+  const updateStatusClock = (base) => {
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    setTypingActive(true, `${base} · ${secs}s`);
+  };
+  setTypingActive(true, 'Calling the question…');
+  const tickTimer = setInterval(() => {
+    const cur = els.typingStatus?.textContent || 'Waiting…';
+    updateStatusClock(cur.replace(/\s·\s\d+s$/, ''));
+  }, 1000);
+
+  const apiMessages = chat.messages
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({
+      role: m.role,
+      content: m.content,
+      personaId: m.personaId,
+      personaName: m.personaName,
+    }));
+
+  try {
+    let verdict = null;
+    let filedCount = 0;
+    const failures = [];
+
+    const attempt = await callGroupStream(
+      chat,
+      apiMessages,
+      (evt) => {
+        if (evt.type === 'status') {
+          updateStatusClock(evt.message || 'Working…');
+        } else if (evt.type === 'summary' && typeof evt.summary === 'string') {
+          chat.groupSummary = evt.summary;
+        } else if (evt.type === 'position') {
+          filedCount += 1;
+          updateStatusClock(`${evt.personaName || 'Persona'} filed — ${filedCount} in`);
+        } else if (evt.type === 'verdict') {
+          verdict = evt;
+        } else if (evt.type === 'error' && evt.personaName) {
+          // A persona that could not file is noted but never stops the tally;
+          // the count in the verdict header is what keeps that visible.
+          failures.push(evt.error || `${evt.personaName} could not file a position.`);
+        }
+      },
+      { phase: 'verdict' },
+    );
+
+    if (!attempt.ok) {
+      const rawErr = attempt.data?.error || attempt.errText || 'Could not call the question';
+      chat.messages.push({
+        role: 'error',
+        content: friendlyNetworkError({ message: String(rawErr) }),
+        ts: Date.now(),
+      });
+      renderMessages({ scroll: groupScrollMode('bottom') });
+      return;
+    }
+
+    verdict = verdict || attempt.data?.verdict || null;
+    if (!verdict) {
+      chat.messages.push({
+        role: 'error',
+        content: 'The table was polled but no verdict came back.',
+        ts: Date.now(),
+      });
+      renderMessages({ scroll: groupScrollMode('bottom') });
+      return;
+    }
+
+    if (failures.length) {
+      chat.messages.push({
+        role: 'info',
+        content: failures.join(' '),
+        ts: Date.now(),
+      });
+    }
+
+    chat.messages.push({
+      role: 'assistant',
+      content: formatVerdict(verdict),
+      ts: Date.now(),
+      // No personaId: the chair is not a persona at the table and must not be
+      // mistaken for one — it has no vote and files no position.
+      personaName: 'Verdict',
+      provider: attempt.data?.provider,
+      model: attempt.data?.model,
+    });
+    chat.groupVerdict = verdict;
+    chat.updatedAt = Date.now();
+    saveState();
+    renderMessages({ scroll: groupScrollMode('bottom') });
+  } catch (err) {
+    chat.messages.push({ role: 'error', content: err.message || 'Network error', ts: Date.now() });
+    saveState();
+    renderMessages({ scroll: groupScrollMode('bottom') });
+  } finally {
+    clearInterval(tickTimer);
+    setGeneratingUi(false);
+    activeChatUserStopped = false;
+    setTypingActive(false);
+    els.input?.focus();
+    showMoreRoundsPrompt(chat);
+    void window.hub?.syncChat?.(chat);
   }
 }
 
