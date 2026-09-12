@@ -1,10 +1,40 @@
 -- Context Hub schema for ic4pi/Chat
--- Single-owner app: no user_id, no RLS. Only serverless functions touch this
--- (service-role key). The browser never connects to Postgres directly.
+--
+-- Multi-owner. Every row belongs to an owner; an owner is minted server-side
+-- on first contact and carried in an HttpOnly cookie (see resolveOwner() in
+-- lib/hub.js), so there is no login screen and no accounts to manage. Only
+-- the SHA-256 of the cookie secret is stored, so a database dump never
+-- yields a usable session token.
+--
+-- Only serverless functions touch this database, using the service-role key,
+-- which bypasses RLS. RLS is still enabled with no policies so that the
+-- anon/publishable key can read nothing at all if it is ever exposed in a
+-- browser.
+--
 -- Embeddings are 768-dim (Cloudflare @cf/baai/bge-base-en-v1.5).
 
 create extension if not exists vector;
 create extension if not exists pgcrypto;
+
+-- ---------------------------------------------------------------
+-- OWNERS
+-- ---------------------------------------------------------------
+
+create table owners (
+  id           uuid primary key default gen_random_uuid(),
+  token_hash   text not null unique,   -- sha256 of the cookie secret
+  label        text,
+  created_at   timestamptz not null default now(),
+  last_seen_at timestamptz not null default now()
+);
+
+create index owners_seen_idx on owners (last_seen_at desc);
+
+-- owner_id is NOT NULL on every table below on purpose: a query that forgets
+-- to scope should fail loudly on insert rather than quietly write a row that
+-- leaks into everyone's memory. `personas` is exempt (an admin-defined shared
+-- catalog matched by slug, not user data) and `document_topics` is a pure
+-- join guarded by both its foreign keys.
 
 -- ---------------------------------------------------------------
 -- THREADS + MESSAGES
@@ -14,6 +44,7 @@ create type thread_type as enum ('chat', 'group', 'workspace', 'media');
 
 create table threads (
   id            uuid primary key default gen_random_uuid(),
+  owner_id      uuid not null references owners(id) on delete cascade,
   type          thread_type not null,
   title         text,
   -- seed_prompt is the clean carried-over text, kept OUT of messages so it can
@@ -27,6 +58,8 @@ create table threads (
 
 create index threads_activity_idx on threads (last_activity desc);
 create index threads_sweep_idx on threads (swept_at nulls first, last_activity);
+create index threads_owner_idx on threads (owner_id, last_activity desc);
+create index threads_owner_sweep_idx on threads (owner_id, swept_at nulls first, last_activity);
 
 create table personas (
   id            uuid primary key default gen_random_uuid(),
@@ -41,6 +74,7 @@ create table personas (
 
 create table messages (
   id         uuid primary key default gen_random_uuid(),
+  owner_id   uuid not null references owners(id) on delete cascade,
   thread_id  uuid not null references threads(id) on delete cascade,
   role       text not null,             -- user | assistant | resolution
   persona_id uuid references personas(id) on delete set null,
@@ -51,6 +85,7 @@ create table messages (
 );
 
 create index messages_thread_idx on messages (thread_id, created_at);
+create index messages_owner_idx on messages (owner_id);
 
 create or replace function bump_thread_activity() returns trigger as $$
 begin
@@ -76,6 +111,7 @@ create type link_relation as enum (
 
 create table links (
   id              uuid primary key default gen_random_uuid(),
+  owner_id        uuid not null references owners(id) on delete cascade,
   from_thread_id  uuid not null references threads(id) on delete cascade,
   to_thread_id    uuid not null references threads(id) on delete cascade,
   relation        link_relation not null,
@@ -86,6 +122,7 @@ create table links (
 
 create index links_to_idx   on links (to_thread_id);
 create index links_from_idx on links (from_thread_id);
+create index links_owner_idx on links (owner_id);
 
 -- ---------------------------------------------------------------
 -- MEMORY
@@ -93,6 +130,7 @@ create index links_from_idx on links (from_thread_id);
 
 create table topics (
   id           uuid primary key default gen_random_uuid(),
+  owner_id     uuid not null references owners(id) on delete cascade,
   name         text not null,
   summary      text,
   embedding    vector(768),
@@ -106,9 +144,11 @@ create table topics (
 create index topics_embedding_idx on topics
   using hnsw (embedding vector_cosine_ops);
 create index topics_seen_idx on topics (last_seen_at desc);
+create index topics_owner_idx on topics (owner_id, last_seen_at desc);
 
 create table notes (
   id                uuid primary key default gen_random_uuid(),
+  owner_id          uuid not null references owners(id) on delete cascade,
   topic_id          uuid references topics(id) on delete set null,  -- null = inbox
   content           text not null,
   source_thread_id  uuid references threads(id) on delete set null,
@@ -121,6 +161,7 @@ create index notes_topic_idx on notes (topic_id, created_at desc);
 create index notes_inbox_idx on notes (created_at desc) where topic_id is null;
 create index notes_embedding_idx on notes
   using hnsw (embedding vector_cosine_ops);
+create index notes_owner_idx on notes (owner_id, topic_id, created_at desc);
 
 -- Keeps topics.note_count accurate. Without this the nudge job's
 -- note_count filter never matches and nudges silently never fire.
@@ -141,6 +182,7 @@ create trigger notes_count_topics
 
 create table memory_facts (
   id         uuid primary key default gen_random_uuid(),
+  owner_id   uuid not null references owners(id) on delete cascade,
   category   text not null,             -- style | preference | project | person
   content    text not null,
   embedding  vector(768),
@@ -153,6 +195,7 @@ create table memory_facts (
 create index memory_facts_cat_idx on memory_facts (category, confidence desc);
 create index memory_facts_embedding_idx on memory_facts
   using hnsw (embedding vector_cosine_ops);
+create index memory_facts_owner_idx on memory_facts (owner_id, category, confidence desc);
 
 -- ---------------------------------------------------------------
 -- RESOLUTIONS + DOCUMENTS + NUDGES
@@ -160,6 +203,7 @@ create index memory_facts_embedding_idx on memory_facts
 
 create table resolutions (
   id         uuid primary key default gen_random_uuid(),
+  owner_id   uuid not null references owners(id) on delete cascade,
   thread_id  uuid not null references threads(id) on delete cascade,
   summary    text not null,
   positions  jsonb not null default '[]'::jsonb,
@@ -170,6 +214,7 @@ create table resolutions (
 );
 
 create index resolutions_thread_idx on resolutions (thread_id);
+create index resolutions_owner_idx on resolutions (owner_id);
 
 create type document_type as enum (
   'story_bible', 'outline', 'manuscript', 'memoir', 'mock_textbook',
@@ -178,6 +223,7 @@ create type document_type as enum (
 
 create table documents (
   id            uuid primary key default gen_random_uuid(),
+  owner_id      uuid not null references owners(id) on delete cascade,
   type          document_type not null,
   title         text not null,
   outline       jsonb not null default '{}'::jsonb,
@@ -195,9 +241,11 @@ create table document_topics (
 );
 
 create index documents_updated_idx on documents (updated_at desc);
+create index documents_owner_idx on documents (owner_id, type);
 
 create table nudges (
   id         uuid primary key default gen_random_uuid(),
+  owner_id   uuid not null references owners(id) on delete cascade,
   topic_id   uuid references topics(id) on delete cascade,
   message    text not null,
   dismissed  boolean not null default false,
@@ -205,28 +253,34 @@ create table nudges (
 );
 
 create index nudges_open_idx on nudges (created_at desc) where not dismissed;
+create index nudges_owner_idx on nudges (owner_id, created_at desc) where not dismissed;
 
 -- ---------------------------------------------------------------
 -- Vector match helpers
 -- ---------------------------------------------------------------
 
+-- Owner-scoped. Unscoped, a note from one user matched and attached to
+-- another user's topic, and fact dedup merged two different people into one
+-- row — the deepest of the cross-user leaks.
 create or replace function match_topics(
-  p_embedding vector(768), p_threshold real, p_limit int
+  p_owner_id uuid, p_embedding vector(768), p_threshold real, p_limit int
 ) returns table (id uuid, name text, similarity real) as $$
   select t.id, t.name, (1 - (t.embedding <=> p_embedding))::real
   from topics t
-  where t.embedding is not null
+  where t.owner_id = p_owner_id
+    and t.embedding is not null
     and 1 - (t.embedding <=> p_embedding) > p_threshold
   order by t.embedding <=> p_embedding
   limit p_limit;
 $$ language sql stable;
 
 create or replace function match_notes(
-  p_topic_id uuid, p_embedding vector(768), p_threshold real, p_limit int
+  p_owner_id uuid, p_topic_id uuid, p_embedding vector(768), p_threshold real, p_limit int
 ) returns table (id uuid, content text, similarity real) as $$
   select n.id, n.content, (1 - (n.embedding <=> p_embedding))::real
   from notes n
-  where n.topic_id = p_topic_id
+  where n.owner_id = p_owner_id
+    and n.topic_id = p_topic_id
     and n.embedding is not null
     and 1 - (n.embedding <=> p_embedding) > p_threshold
   order by n.embedding <=> p_embedding
@@ -236,12 +290,13 @@ $$ language sql stable;
 -- Used for fact dedup. The previous version used Postgres full-text search
 -- against a column with no tsvector index, which silently matched nothing.
 create or replace function match_facts(
-  p_category text, p_embedding vector(768), p_threshold real, p_limit int
+  p_owner_id uuid, p_category text, p_embedding vector(768), p_threshold real, p_limit int
 ) returns table (id uuid, content text, times_seen int, confidence real, similarity real) as $$
   select f.id, f.content, f.times_seen, f.confidence,
          (1 - (f.embedding <=> p_embedding))::real
   from memory_facts f
-  where f.category = p_category
+  where f.owner_id = p_owner_id
+    and f.category = p_category
     and f.embedding is not null
     and 1 - (f.embedding <=> p_embedding) > p_threshold
   order by f.embedding <=> p_embedding
@@ -257,9 +312,34 @@ $$ language sql stable;
 --     projects stay client-only, same as chats themselves.
 -- ---------------------------------------------------------------
 
+-- local_id comes from a browser's localStorage, so it is only ever unique to
+-- one device. Unique per OWNER, not globally: a collision between two people
+-- would otherwise hand one of them the other's thread.
 alter table threads add column if not exists local_id text;
-create unique index if not exists threads_local_id_idx
-  on threads (local_id) where local_id is not null;
+create unique index if not exists threads_owner_local_id_idx
+  on threads (owner_id, local_id) where local_id is not null;
 
 alter table nudges add column if not exists nudge_type text not null default 'stale_topic';
 alter table nudges add column if not exists payload jsonb not null default '{}'::jsonb;
+
+-- ---------------------------------------------------------------
+-- ROW LEVEL SECURITY
+-- ---------------------------------------------------------------
+-- Enabled with NO policies, deliberately. Only serverless functions touch
+-- this database and they use the service-role key, which bypasses RLS — so
+-- this changes nothing for the app, while guaranteeing the anon and
+-- authenticated roles can read nothing at all if the publishable key is ever
+-- exposed in a browser.
+
+alter table owners          enable row level security;
+alter table threads         enable row level security;
+alter table personas        enable row level security;
+alter table messages        enable row level security;
+alter table links           enable row level security;
+alter table topics          enable row level security;
+alter table notes           enable row level security;
+alter table memory_facts    enable row level security;
+alter table resolutions     enable row level security;
+alter table documents       enable row level security;
+alter table document_topics enable row level security;
+alter table nudges          enable row level security;

@@ -22,6 +22,7 @@ import {
   promote,
   gatherIncoming,
   memoryContext,
+  resolveOwner,
   UTILITY_MODEL,
   WRITER_MODEL,
   requireHub,
@@ -45,6 +46,7 @@ async function handle_initiate(req, res) {
   if (!requireHub(res)) return;
   if (req.method !== 'POST') return fail(res, 405, 'POST only');
 
+  const ownerId = await resolveOwner(req, res);
   const action = req.query?.action;
   const { fromThreadId, seedContent, title, messageId, personaIds, mode, rounds } = req.body || {};
 
@@ -52,13 +54,20 @@ async function handle_initiate(req, res) {
   if (!seedContent || !String(seedContent).trim()) return fail(res, 400, 'seedContent required');
 
   // The source thread must already exist in the hub, otherwise the foreign key
-  // on links rejects the insert with an opaque error.
-  const { data: source } = await db.from('threads').select('id').eq('id', fromThreadId).single();
+  // on links rejects the insert with an opaque error. Scoped by owner, so a
+  // thread id belonging to someone else reads as simply not found.
+  const { data: source } = await db
+    .from('threads')
+    .select('id')
+    .eq('owner_id', ownerId)
+    .eq('id', fromThreadId)
+    .maybeSingle();
   if (!source) return fail(res, 404, 'fromThreadId not found in hub — create the thread first');
 
   try {
     if (action === 'workspace') {
       const id = await promote({
+        ownerId,
         fromThreadId,
         toType: 'workspace',
         relation: 'promoted_to_workspace',
@@ -74,6 +83,7 @@ async function handle_initiate(req, res) {
         return fail(res, 400, 'personaIds must contain at least 2 personas');
 
       const id = await promote({
+        ownerId,
         fromThreadId,
         toType: 'group',
         relation: 'spawned_group_discussion',
@@ -91,6 +101,7 @@ async function handle_initiate(req, res) {
 
     if (action === 'media') {
       const id = await promote({
+        ownerId,
         fromThreadId,
         toType: 'media',
         relation: 'sent_to_media',
@@ -125,6 +136,7 @@ async function handle_moderate(req, res) {
   if (!requireHub(res)) return;
   if (req.method !== 'POST') return fail(res, 405, 'POST only');
 
+  const ownerId = await resolveOwner(req, res);
   const { threadId, moderatorPersonaId, routeTo } = req.body || {};
   if (!threadId) return fail(res, 400, 'threadId required');
   if (routeTo && !['workspace', 'media'].includes(routeTo))
@@ -133,14 +145,16 @@ async function handle_moderate(req, res) {
   const { data: thread } = await db
     .from('threads')
     .select('id, title, type')
+    .eq('owner_id', ownerId)
     .eq('id', threadId)
-    .single();
+    .maybeSingle();
   if (!thread) return fail(res, 404, 'thread not found');
   if (thread.type !== 'group') return fail(res, 400, 'not a group thread');
 
   const { data: msgs } = await db
     .from('messages')
     .select('persona_id, content, round, role')
+    .eq('owner_id', ownerId)
     .eq('thread_id', threadId)
     .order('created_at');
 
@@ -266,6 +280,7 @@ Return JSON: {"summary":"...","decision":null,"forks":[]}`,
   const { data: resolution, error: resErr } = await db
     .from('resolutions')
     .insert({
+      owner_id: ownerId,
       thread_id: threadId,
       summary: final?.summary || '',
       positions,
@@ -278,6 +293,7 @@ Return JSON: {"summary":"...","decision":null,"forks":[]}`,
   if (resErr) return fail(res, 500, 'failed to save resolution', resErr.message);
 
   await db.from('messages').insert({
+    owner_id: ownerId,
     thread_id: threadId,
     role: 'resolution',
     model_used: moderatorModel,
@@ -293,6 +309,7 @@ Return JSON: {"summary":"...","decision":null,"forks":[]}`,
   if (routeTo && decision) {
     try {
       routedThreadId = await promote({
+        ownerId,
         fromThreadId: threadId,
         toType: routeTo,
         relation: routeTo === 'workspace' ? 'promoted_to_workspace' : 'sent_to_media',
@@ -389,12 +406,24 @@ async function handle_document(req, res) {
   if (!requireHub(res)) return;
   if (req.method !== 'POST') return fail(res, 405, 'POST only');
 
+  const ownerId = await resolveOwner(req, res);
   const { type, title, topicIds, documentId } = req.body || {};
   if (!type || !Array.isArray(topicIds) || !topicIds.length)
     return fail(res, 400, 'type and topicIds[] required');
   if (!TEMPLATES[type]) return fail(res, 400, `unknown type: ${type}`, Object.keys(TEMPLATES));
 
-  const result = await buildDocumentInternal({ type, title, topicIds, documentId });
+  // Topic ids arrive from the client, so they are claims, not credentials:
+  // confirm every one belongs to this owner before any of them reaches a
+  // query, or a guessed id would pull someone else's notes into a document.
+  const { data: owned } = await db
+    .from('topics')
+    .select('id')
+    .eq('owner_id', ownerId)
+    .in('id', topicIds);
+  if ((owned?.length || 0) !== topicIds.length)
+    return fail(res, 404, 'one or more topicIds not found');
+
+  const result = await buildDocumentInternal({ ownerId, type, title, topicIds, documentId });
   if (result.error) return fail(res, result.status || 500, result.error, result.details);
   return res.json(result);
 }
@@ -404,8 +433,9 @@ async function handle_document(req, res) {
  * after sweep). Returns a plain result object instead of writing to `res`,
  * so it works the same either way.
  */
-async function buildDocumentInternal({ type, title, topicIds, documentId }) {
+async function buildDocumentInternal({ ownerId, type, title, topicIds, documentId }) {
   if (!TEMPLATES[type]) return { error: `unknown type: ${type}`, status: 400 };
+  if (!ownerId) return { error: 'ownerId required', status: 500 };
 
   let watermark = '1970-01-01T00:00:00Z';
   let existing = null;
@@ -413,8 +443,9 @@ async function buildDocumentInternal({ type, title, topicIds, documentId }) {
     const { data } = await db
       .from('documents')
       .select('id, sections, outline, built_from_at')
+      .eq('owner_id', ownerId)
       .eq('id', documentId)
-      .single();
+      .maybeSingle();
     if (!data) return { error: 'documentId not found', status: 404 };
     existing = data;
     watermark = data.built_from_at || watermark;
@@ -425,12 +456,17 @@ async function buildDocumentInternal({ type, title, topicIds, documentId }) {
   const { data: notes } = await db
     .from('notes')
     .select('content, created_at, source_thread_id')
+    .eq('owner_id', ownerId)
     .in('topic_id', topicIds)
     .gt('created_at', watermark)
     .lte('created_at', buildStart)
     .order('created_at');
 
-  const { data: topics } = await db.from('topics').select('id, name').in('id', topicIds);
+  const { data: topics } = await db
+    .from('topics')
+    .select('id, name')
+    .eq('owner_id', ownerId)
+    .in('id', topicIds);
 
   const threadIds = [...new Set((notes || []).map((n) => n.source_thread_id).filter(Boolean))];
   let resolutions = [];
@@ -438,13 +474,17 @@ async function buildDocumentInternal({ type, title, topicIds, documentId }) {
     const { data } = await db
       .from('resolutions')
       .select('summary, decision')
+      .eq('owner_id', ownerId)
       .in('thread_id', threadIds);
     resolutions = data || [];
   }
 
+  // This is the user's own writing voice going into the prompt — unscoped it
+  // would have the document written in a stranger's style.
   const { data: facts } = await db
     .from('memory_facts')
     .select('content')
+    .eq('owner_id', ownerId)
     .in('category', ['style', 'preference'])
     .order('confidence', { ascending: false })
     .limit(20);
@@ -498,6 +538,7 @@ Return JSON: {"title":"...","outline":{},"sections":[{"heading":"...","body":"..
     return { error: 'model returned no sections', status: 502 };
 
   const row = {
+    owner_id: ownerId,
     type,
     title: title || built.title || 'Untitled',
     outline: built.outline || {},
@@ -507,7 +548,13 @@ Return JSON: {"title":"...","outline":{},"sections":[{"heading":"...","body":"..
   };
 
   const { data: doc, error } = documentId
-    ? await db.from('documents').update(row).eq('id', documentId).select('id').single()
+    ? await db
+        .from('documents')
+        .update(row)
+        .eq('owner_id', ownerId)
+        .eq('id', documentId)
+        .select('id')
+        .single()
     : await db.from('documents').insert(row).select('id').single();
 
   if (error) return { error: 'failed to save document', status: 500, details: error.message };
@@ -574,6 +621,7 @@ async function handle_media(req, res) {
   if (!requireHub(res)) return;
   if (req.method !== 'POST') return fail(res, 405, 'POST only');
 
+  const ownerId = await resolveOwner(req, res);
   const { threadId, kind = 'image', size, negativePrompt, model, seconds, accessKey } =
     req.body || {};
   if (!threadId) return fail(res, 400, 'threadId required');
@@ -582,8 +630,9 @@ async function handle_media(req, res) {
   const { data: thread } = await db
     .from('threads')
     .select('id, type, title, seed_prompt')
+    .eq('owner_id', ownerId)
     .eq('id', threadId)
-    .single();
+    .maybeSingle();
 
   if (!thread) return fail(res, 404, 'thread not found');
   if (thread.type !== 'media') return fail(res, 400, 'not a media thread');
@@ -674,6 +723,7 @@ async function handle_media(req, res) {
     success.kind === 'video' ? `[${title} (video)](${url})` : `![${title}](${url})`;
 
   await db.from('messages').insert({
+    owner_id: ownerId,
     thread_id: threadId,
     role: 'assistant',
     model_used: `${success.provider}/${success.model}`,
@@ -748,6 +798,7 @@ function extractAsset(result) {
 async function handle_state(req, res) {
   if (!requireHub(res)) return;
   const action = req.query?.action;
+  const ownerId = await resolveOwner(req, res);
 
   if (req.method === 'GET') {
     // These reads used to destructure `data` only and return `data || []`, so
@@ -762,12 +813,14 @@ async function handle_state(req, res) {
           db
             .from('nudges')
             .select('id, topic_id, message, nudge_type, payload, created_at')
+            .eq('owner_id', ownerId)
             .eq('dismissed', false)
             .order('created_at', { ascending: false })
             .limit(10),
           db
             .from('memory_facts')
             .select('id, category, content, confidence')
+            .eq('owner_id', ownerId)
             .order('confidence', { ascending: false })
             .limit(15),
         ]);
@@ -780,6 +833,7 @@ async function handle_state(req, res) {
       const { data, error } = await db
         .from('topics')
         .select('id, name, note_count, last_seen_at')
+        .eq('owner_id', ownerId)
         .order('last_seen_at', { ascending: false })
         .limit(100);
       if (error) return fail(res, 503, 'memory database unreachable', error.message);
@@ -790,6 +844,7 @@ async function handle_state(req, res) {
       const { data, error } = await db
         .from('notes')
         .select('id, content, created_at, source_thread_id')
+        .eq('owner_id', ownerId)
         .is('topic_id', null)
         .order('created_at', { ascending: false })
         .limit(50);
@@ -803,6 +858,7 @@ async function handle_state(req, res) {
       const { data: doc } = await db
         .from('documents')
         .select('title, sections, updated_at')
+        .eq('owner_id', ownerId)
         .eq('type', 'joke_bank')
         .limit(1)
         .maybeSingle();
@@ -827,7 +883,11 @@ async function handle_state(req, res) {
     if (action === 'dismiss') {
       const { nudgeId } = req.body || {};
       if (!nudgeId) return fail(res, 400, 'nudgeId required');
-      const { error } = await db.from('nudges').update({ dismissed: true }).eq('id', nudgeId);
+      const { error } = await db
+        .from('nudges')
+        .update({ dismissed: true })
+        .eq('owner_id', ownerId)
+        .eq('id', nudgeId);
       if (error) return fail(res, 500, 'dismiss failed', error.message);
       return res.json({ ok: true });
     }
@@ -837,8 +897,10 @@ async function handle_state(req, res) {
       // moderator has an empty transcript to work from.
       const { threadId, personaId, name, model, content, round } = req.body || {};
       if (!threadId || !content) return fail(res, 400, 'threadId and content required');
+      if (!(await ownsThread(ownerId, threadId))) return fail(res, 404, 'thread not found');
 
-      // Personas are matched by slug so the client can send its local id.
+      // Personas are a shared, admin-defined catalog matched by slug, not
+      // per-owner data — so this lookup is deliberately not owner-scoped.
       let pid = null;
       if (personaId) {
         const { data: p } = await db
@@ -862,6 +924,7 @@ async function handle_state(req, res) {
       }
 
       const { error } = await db.from('messages').insert({
+        owner_id: ownerId,
         thread_id: threadId,
         persona_id: pid,
         role: 'assistant',
@@ -878,11 +941,14 @@ async function handle_state(req, res) {
 
       // Idempotent: continuous sync calls this on every chat, every turn, so
       // a repeat call for the same local chat must reuse the existing thread
-      // instead of creating a duplicate every time.
+      // instead of creating a duplicate every time. Scoped by owner — local
+      // ids come from another device's localStorage, so globally they are not
+      // unique and a collision would have handed over someone else's thread.
       if (localId) {
         const { data: found } = await db
           .from('threads')
           .select('id')
+          .eq('owner_id', ownerId)
           .eq('local_id', localId)
           .maybeSingle();
         if (found) return res.json({ ok: true, threadId: found.id });
@@ -891,6 +957,7 @@ async function handle_state(req, res) {
       const { data: thread, error } = await db
         .from('threads')
         .insert({
+          owner_id: ownerId,
           type,
           title: title || 'Untitled',
           local_id: localId || null,
@@ -907,6 +974,7 @@ async function handle_state(req, res) {
           .filter((m) => m?.content)
           .slice(-200)
           .map((m) => ({
+            owner_id: ownerId,
             thread_id: thread.id,
             role: m.role === 'user' ? 'user' : 'assistant',
             content: String(m.content).slice(0, 20000),
@@ -923,12 +991,14 @@ async function handle_state(req, res) {
       // group-discussion turn) and `register`'s one-time backfill.
       const { threadId, messages } = req.body || {};
       if (!threadId) return fail(res, 400, 'threadId required');
+      if (!(await ownsThread(ownerId, threadId))) return fail(res, 404, 'thread not found');
       if (!Array.isArray(messages) || !messages.length) return res.json({ ok: true, inserted: 0 });
 
       const rows = messages
         .filter((m) => m?.content)
         .slice(-200)
         .map((m) => ({
+          owner_id: ownerId,
           thread_id: threadId,
           role: m.role === 'user' ? 'user' : 'assistant',
           content: String(m.content).slice(0, 20000),
@@ -951,7 +1021,8 @@ async function handle_state(req, res) {
 
       const { data: thread, error: findErr } = await db
         .from('threads')
-        .select('id, title, swept_at, last_activity')
+        .select('id, owner_id, title, swept_at, last_activity')
+        .eq('owner_id', ownerId)
         .eq('id', threadId)
         .maybeSingle();
       if (findErr) return fail(res, 500, 'thread lookup failed', findErr.message);
@@ -966,12 +1037,12 @@ async function handle_state(req, res) {
 
       // Nudges and the joke-bank document are what make the result visible in
       // the Memory sheet, so do the same follow-up work the cron does.
-      const nudged = await raiseNudges().catch(() => 0);
+      const nudged = await raiseNudges(ownerId).catch(() => 0);
       const groupSuggestionsRaised =
-        await raiseGroupSuggestions(result.topicIds || []).catch(() => 0);
+        await raiseGroupSuggestions(ownerId, result.topicIds || []).catch(() => 0);
       let jokeBankDoc = null;
       if (result.jokes > 0) {
-        jokeBankDoc = await syncJokeBankDocument().catch(() => null);
+        jokeBankDoc = await syncJokeBankDocument(ownerId).catch(() => null);
       }
 
       return res.json({
@@ -990,6 +1061,27 @@ async function handle_state(req, res) {
   }
 
   return fail(res, 405, 'GET or POST only');
+}
+
+/**
+ * True when this thread belongs to this owner.
+ *
+ * Thread ids arrive in request bodies, so they are claims the caller makes,
+ * not proof of anything. Reads are naturally safe because every query filters
+ * on owner_id, but a write keyed only on thread_id would happily append to
+ * someone else's conversation — so every write that takes a client-supplied
+ * threadId checks here first, and a thread belonging to another owner reads
+ * back as simply not found.
+ */
+async function ownsThread(ownerId, threadId) {
+  if (!ownerId || !threadId) return false;
+  const { data } = await db
+    .from('threads')
+    .select('id')
+    .eq('owner_id', ownerId)
+    .eq('id', threadId)
+    .maybeSingle();
+  return !!data?.id;
 }
 
 
@@ -1056,9 +1148,13 @@ async function handle_sweep(req, res) {
     return fail(res, 401, 'unauthorized');
   }
 
+  // owner_id comes along so the per-owner follow-up work below can be grouped
+  // by it. The cron has no cookie and therefore no single owner of its own —
+  // it sweeps everyone's threads, but each thread's own owner scopes every
+  // topic match, fact dedup and nudge it produces.
   const { data: threads, error } = await db
     .from('threads')
-    .select('id, title, swept_at, last_activity')
+    .select('id, owner_id, title, swept_at, last_activity')
     .or('swept_at.is.null,swept_at.lt.last_activity')
     .order('last_activity', { ascending: false })
     .limit(MAX_THREADS_PER_RUN);
@@ -1067,40 +1163,57 @@ async function handle_sweep(req, res) {
 
   let notesFiled = 0;
   let jokesFiled = 0;
-  const touchedTopicIds = new Set();
   const errors = [];
+  // owner id -> { topicIds: Set, jokes: number }
+  const perOwner = new Map();
 
   for (const thread of threads || []) {
     try {
       const result = await sweepThread(thread);
       notesFiled += result.notes;
       jokesFiled += result.jokes;
-      for (const id of result.topicIds || []) touchedTopicIds.add(id);
+
+      if (!perOwner.has(thread.owner_id)) {
+        perOwner.set(thread.owner_id, { topicIds: new Set(), jokes: 0 });
+      }
+      const bucket = perOwner.get(thread.owner_id);
+      bucket.jokes += result.jokes;
+      for (const id of result.topicIds || []) bucket.topicIds.add(id);
     } catch (e) {
       errors.push(`${thread.id}: ${e.message}`);
     }
   }
 
-  const nudged = await raiseNudges();
-  const groupSuggestionsRaised = await raiseGroupSuggestions([...touchedTopicIds]);
+  // Nudges, group suggestions and the joke-bank document are all per-owner:
+  // run once for each owner whose threads were actually touched, rather than
+  // once globally over a merged pool.
+  let nudged = 0;
+  let groupSuggestionsRaised = 0;
+  const jokeBankDocs = [];
 
-  // Keep the running joke-bank document in sync whenever new jokes landed —
-  // no manual "build document" step. Regeneration only pulls what's new
-  // since the last build, so this stays cheap even with nothing to do.
-  let jokeBankDoc = null;
-  if (jokesFiled > 0) {
+  for (const [ownerId, bucket] of perOwner) {
     try {
-      jokeBankDoc = await syncJokeBankDocument();
+      nudged += await raiseNudges(ownerId);
+      groupSuggestionsRaised += await raiseGroupSuggestions(ownerId, [...bucket.topicIds]);
+
+      // Keep the running joke-bank document in sync whenever new jokes landed
+      // — no manual "build document" step. Regeneration only pulls what's new
+      // since the last build, so this stays cheap even with nothing to do.
+      if (bucket.jokes > 0) {
+        const doc = await syncJokeBankDocument(ownerId);
+        if (doc) jokeBankDocs.push(doc);
+      }
     } catch (e) {
-      errors.push(`joke-bank-doc: ${e.message}`);
+      errors.push(`owner ${ownerId}: ${e.message}`);
     }
   }
 
   return res.json({
     threadsScanned: threads?.length || 0,
+    ownersSwept: perOwner.size,
     notesFiled,
     jokesFiled,
-    jokeBankDoc,
+    jokeBankDocs,
     nudgesRaised: nudged,
     groupSuggestionsRaised,
     errors,
@@ -1108,6 +1221,12 @@ async function handle_sweep(req, res) {
 }
 
 async function sweepThread(thread) {
+  // thread.owner_id scopes everything this pass writes or matches against.
+  // Callers select it; a thread row without it is a programming error, not
+  // something to guess a default for.
+  const ownerId = thread.owner_id;
+  if (!ownerId) throw new Error('sweepThread requires thread.owner_id');
+
   // Freeze the window BEFORE reading. Anything that lands mid-sweep stays
   // unswept and gets picked up next run instead of being skipped forever.
   const windowEnd = new Date().toISOString();
@@ -1116,13 +1235,21 @@ async function sweepThread(thread) {
   const { data: msgs } = await db
     .from('messages')
     .select('id, role, content, created_at')
+    .eq('owner_id', ownerId)
     .eq('thread_id', thread.id)
     .gt('created_at', since)
     .lte('created_at', windowEnd)
     .order('created_at');
 
+  // Filtered on owner as well as id. Redundant given callers already scoped
+  // the thread, but it keeps the invariant local to this function rather than
+  // resting on every future caller remembering it.
   const markSwept = () =>
-    db.from('threads').update({ swept_at: windowEnd }).eq('id', thread.id);
+    db
+      .from('threads')
+      .update({ swept_at: windowEnd })
+      .eq('owner_id', ownerId)
+      .eq('id', thread.id);
 
   if (!msgs || msgs.length < MIN_MESSAGES) {
     await markSwept();
@@ -1141,7 +1268,7 @@ async function sweepThread(thread) {
     maxTokens: 3000,
   });
 
-  await upsertFacts(Array.isArray(out?.facts) ? out.facts : []);
+  await upsertFacts(ownerId, Array.isArray(out?.facts) ? out.facts : []);
 
   const candidates = (Array.isArray(out?.notes) ? out.notes : []).filter((n) =>
     String(n?.content || '').trim()
@@ -1158,6 +1285,7 @@ async function sweepThread(thread) {
       if (!vec) continue;
 
       const { data: matches } = await db.rpc('match_topics', {
+        p_owner_id: ownerId,
         p_embedding: vec,
         p_threshold: TOPIC_MATCH_THRESHOLD,
         p_limit: 1,
@@ -1167,6 +1295,7 @@ async function sweepThread(thread) {
 
       if (topicId) {
         const { data: dupes } = await db.rpc('match_notes', {
+          p_owner_id: ownerId,
           p_topic_id: topicId,
           p_embedding: vec,
           p_threshold: NOTE_DUPE_THRESHOLD,
@@ -1174,11 +1303,12 @@ async function sweepThread(thread) {
         });
         if (dupes?.length) continue; // already captured
       } else {
-        topicId = await createTopic(note.content, vec);
+        topicId = await createTopic(ownerId, note.content, vec);
       }
 
       // note_count and last_seen_at are maintained by the DB trigger.
       const { error: insErr } = await db.from('notes').insert({
+        owner_id: ownerId,
         topic_id: topicId,
         content: note.content,
         source_thread_id: thread.id,
@@ -1198,12 +1328,17 @@ async function sweepThread(thread) {
   return { notes: filed, jokes: jokesFiled, topicIds: [...touchedTopicIds] };
 }
 
-/** Every joke goes into the same fixed topic — never fuzzy-matched, never split. */
+/**
+ * Every joke goes into the same fixed topic — never fuzzy-matched, never
+ * split. Fixed by name, but one such topic PER OWNER: a single shared Joke
+ * Bank would pile everyone's material into one list.
+ */
 async function fileJokes(thread, jokes) {
+  const ownerId = thread.owner_id;
   const candidates = jokes.filter((j) => String(j?.text || '').trim());
   if (!candidates.length) return 0;
 
-  const topicId = await getOrCreateJokeBankTopic();
+  const topicId = await getOrCreateJokeBankTopic(ownerId);
   const vectors = await embed(candidates.map((c) => c.text));
 
   let filed = 0;
@@ -1213,6 +1348,7 @@ async function fileJokes(thread, jokes) {
     if (!vec) continue;
 
     const { data: dupes } = await db.rpc('match_notes', {
+      p_owner_id: ownerId,
       p_topic_id: topicId,
       p_embedding: vec,
       p_threshold: NOTE_DUPE_THRESHOLD,
@@ -1221,6 +1357,7 @@ async function fileJokes(thread, jokes) {
     if (dupes?.length) continue; // already have this one, word for word
 
     const { error: insErr } = await db.from('notes').insert({
+      owner_id: ownerId,
       topic_id: topicId,
       content: joke.text,
       source_thread_id: thread.id,
@@ -1232,10 +1369,11 @@ async function fileJokes(thread, jokes) {
   return filed;
 }
 
-async function getOrCreateJokeBankTopic() {
+async function getOrCreateJokeBankTopic(ownerId) {
   const { data: existing } = await db
     .from('topics')
     .select('id')
+    .eq('owner_id', ownerId)
     .eq('name', JOKE_BANK_TOPIC)
     .limit(1)
     .maybeSingle();
@@ -1244,7 +1382,12 @@ async function getOrCreateJokeBankTopic() {
   const vec = await embedOne(JOKE_BANK_TOPIC);
   const { data, error } = await db
     .from('topics')
-    .insert({ name: JOKE_BANK_TOPIC, embedding: vec, summary: "The user's own jokes and bits, kept word for word." })
+    .insert({
+      owner_id: ownerId,
+      name: JOKE_BANK_TOPIC,
+      embedding: vec,
+      summary: "The user's own jokes and bits, kept word for word.",
+    })
     .select('id')
     .single();
   if (error) throw error;
@@ -1255,17 +1398,19 @@ async function getOrCreateJokeBankTopic() {
  * Regenerates the running joke-bank document from whatever is new. Finds
  * the existing doc (there's only ever one) or creates it on first run.
  */
-async function syncJokeBankDocument() {
-  const topicId = await getOrCreateJokeBankTopic();
+async function syncJokeBankDocument(ownerId) {
+  const topicId = await getOrCreateJokeBankTopic(ownerId);
 
   const { data: existingDoc } = await db
     .from('documents')
     .select('id')
+    .eq('owner_id', ownerId)
     .eq('type', 'joke_bank')
     .limit(1)
     .maybeSingle();
 
   return buildDocumentInternal({
+    ownerId,
     type: 'joke_bank',
     title: 'Joke Bank',
     topicIds: [topicId],
@@ -1273,7 +1418,7 @@ async function syncJokeBankDocument() {
   });
 }
 
-async function createTopic(seed, vec) {
+async function createTopic(ownerId, seed, vec) {
   let name = seed.split(/[.!?\n]/)[0].slice(0, 60);
   try {
     const named = await llmJSON({
@@ -1289,14 +1434,14 @@ async function createTopic(seed, vec) {
 
   const { data, error } = await db
     .from('topics')
-    .insert({ name, embedding: vec })
+    .insert({ owner_id: ownerId, name, embedding: vec })
     .select('id')
     .single();
   if (error) throw error;
   return data.id;
 }
 
-async function upsertFacts(facts) {
+async function upsertFacts(ownerId, facts) {
   const clean = facts.filter((f) => String(f?.content || '').trim());
   if (!clean.length) return;
 
@@ -1309,8 +1454,11 @@ async function upsertFacts(facts) {
 
     // Vector dedup. The previous version used full-text search against a
     // column with no tsvector index, so it never matched and every sweep
-    // re-inserted the same facts.
+    // re-inserted the same facts. Scoped by owner: unscoped, two different
+    // people saying something similar about themselves would dedup into one
+    // shared row that then described neither of them.
     const { data: existing } = await db.rpc('match_facts', {
+      p_owner_id: ownerId,
       p_category: f.category || 'preference',
       p_embedding: vec,
       p_threshold: FACT_DUPE_THRESHOLD,
@@ -1326,9 +1474,11 @@ async function upsertFacts(facts) {
           confidence: Math.min(1, hit.confidence + 0.15),
           updated_at: new Date().toISOString(),
         })
+        .eq('owner_id', ownerId)
         .eq('id', hit.id);
     } else {
       await db.from('memory_facts').insert({
+        owner_id: ownerId,
         category: f.category || 'preference',
         content: f.content,
         embedding: vec,
@@ -1337,11 +1487,12 @@ async function upsertFacts(facts) {
   }
 }
 
-async function raiseNudges() {
+async function raiseNudges(ownerId) {
   const cutoff = new Date(Date.now() - STALE_DAYS * 864e5).toISOString();
   const { data: stale } = await db
     .from('topics')
     .select('id, name, note_count, last_seen_at')
+    .eq('owner_id', ownerId)
     .lt('last_seen_at', cutoff)
     .gt('note_count', 2)
     .limit(5);
@@ -1351,6 +1502,7 @@ async function raiseNudges() {
     const { data: open } = await db
       .from('nudges')
       .select('id')
+      .eq('owner_id', ownerId)
       .eq('topic_id', t.id)
       .eq('dismissed', false)
       .limit(1);
@@ -1358,6 +1510,7 @@ async function raiseNudges() {
 
     const days = Math.floor((Date.now() - new Date(t.last_seen_at).getTime()) / 864e5);
     const { error } = await db.from('nudges').insert({
+      owner_id: ownerId,
       topic_id: t.id,
       message: `${t.note_count} thoughts filed under "${t.name}" — nothing new in ${days} days.`,
     });
@@ -1376,12 +1529,13 @@ async function raiseNudges() {
  * topic — every joke lands there regardless of subject, so sharing it says
  * nothing about the threads actually being related.
  */
-async function raiseGroupSuggestions(topicIds) {
+async function raiseGroupSuggestions(ownerId, topicIds) {
   let raised = 0;
   for (const topicId of topicIds) {
     const { data: topic } = await db
       .from('topics')
       .select('id, name')
+      .eq('owner_id', ownerId)
       .eq('id', topicId)
       .maybeSingle();
     if (!topic || topic.name === JOKE_BANK_TOPIC) continue;
@@ -1389,14 +1543,19 @@ async function raiseGroupSuggestions(topicIds) {
     const { data: notes } = await db
       .from('notes')
       .select('source_thread_id')
+      .eq('owner_id', ownerId)
       .eq('topic_id', topicId)
       .not('source_thread_id', 'is', null);
     const threadIds = [...new Set((notes || []).map((n) => n.source_thread_id))];
     if (threadIds.length < 2) continue;
 
+    // The local ids in this payload go back to the client, which looks them up
+    // in its own localStorage — so they must be this owner's chats or the
+    // nudge would name chats the recipient has never seen.
     const { data: threads } = await db
       .from('threads')
       .select('local_id')
+      .eq('owner_id', ownerId)
       .in('id', threadIds)
       .not('local_id', 'is', null);
     const localIds = [...new Set((threads || []).map((t) => t.local_id))];
@@ -1405,6 +1564,7 @@ async function raiseGroupSuggestions(topicIds) {
     const { data: open } = await db
       .from('nudges')
       .select('id')
+      .eq('owner_id', ownerId)
       .eq('topic_id', topicId)
       .eq('nudge_type', 'group_suggestion')
       .eq('dismissed', false)
@@ -1412,6 +1572,7 @@ async function raiseGroupSuggestions(topicIds) {
     if (open?.length) continue; // don't nag twice
 
     const { error } = await db.from('nudges').insert({
+      owner_id: ownerId,
       topic_id: topicId,
       nudge_type: 'group_suggestion',
       message: `${localIds.length} chats look related to "${topic.name}" — group them into a project?`,
