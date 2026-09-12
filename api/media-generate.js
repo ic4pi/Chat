@@ -21,6 +21,8 @@
  *     controlScale?: number,  // pose: how strictly to follow the skeleton
  *     detectPose?: boolean,   // pose: extract a skeleton from a photo (else
  *                             //       the image IS the skeleton)
+ *     seed?: number,          // locked seed from a saved character — honoured
+ *                             // by both the video apps and the image app
  *     accessKey?: string,     // required for provider:'modal' only if VIDEO_ACCESS_KEYS is set
  *   }
  *
@@ -672,7 +674,7 @@ const MODAL_IMAGE_MODES = new Set(['text', 'img2img', 'expand', 'outpaint', 'pos
 
 async function generateModalSdxlImage({
   prompt, negativePrompt, model, size, count,
-  mode, imageBase64, strength, expand, controlScale, detectPose,
+  mode, imageBase64, strength, expand, controlScale, detectPose, seed,
 }) {
   const dims = String(size || '1024x1024').split(/[x*]/i).map(Number);
   const width = dims[0] || 1024;
@@ -695,6 +697,11 @@ async function generateModalSdxlImage({
       width,
       height,
       n: Math.max(1, Math.min(4, Number(count) || 1)),
+      // A saved character locks a seed, and it has to reach the image apps the
+      // same way it reaches the video ones or the character is only half
+      // pinned. sdxl_app.py offsets it per image in the batch (seed + i), so a
+      // count > 1 still returns distinct images rather than four copies.
+      ...(Number.isFinite(Number(seed)) ? { seed: Number(seed) } : {}),
       ...(imageMode !== 'text'
         ? {
             mode: imageMode,
@@ -1302,6 +1309,7 @@ export default async function handler(req, res) {
           expand,
           controlScale,
           detectPose,
+          seed,
         });
 
         if (person) {

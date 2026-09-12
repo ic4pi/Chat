@@ -274,13 +274,17 @@ function syncFields() {
   els.lengthWrap.classList.toggle('hidden', kind !== 'video' || (vm !== 'text' && vm !== 'image'));
 
   // Strength means "how far from the source" in both img2img and restyle.
-  // A character and a shot list only make sense for plain text/image video —
-  // restyle takes its subject from the source clip, and keyframes pin it to
-  // supplied images, so injecting a character description into either fights
-  // what the mode is for.
+  // A shot list only makes sense for plain text/image video — restyle takes
+  // its length and subject from the source clip, and keyframes pin it to
+  // supplied images, so neither can run a list of shots.
   const seriesable = selfHostedVideo && (vm === 'text' || vm === 'image');
   els.audioWrap.classList.toggle('hidden', !selfHostedVideo);
-  els.characterWrap.classList.toggle('hidden', !seriesable);
+  // The character is never hidden: a saved character is injected into every
+  // generation, in every mode and both kinds. Even where the picture comes
+  // from somewhere else — a source clip to restyle, supplied keyframes, an
+  // uploaded still — the description still names who is in the frame, and
+  // that is the only thing keeping them the same person shot to shot.
+  els.characterWrap.classList.remove('hidden');
   els.dialogueWrap.classList.toggle('hidden', !seriesable);
   els.seriesWrap.classList.toggle('hidden', !seriesable);
 
@@ -1078,7 +1082,9 @@ async function resumePendingJobOnLoad() {
 els.generate.addEventListener('click', async () => {
   const prompt = (els.prompt.value || '').trim();
   const spec = selectedSpec();
-  const character = els.characterWrap.classList.contains('hidden') ? null : selectedCharacter();
+  // Always read: the character rides along with every generation now, so
+  // there is no mode in which the selection is silently dropped.
+  const character = selectedCharacter();
 
   // A shot list replaces the single prompt: one line per clip, each expanded
   // with the character and style. The prompt box still works on its own when
@@ -1098,7 +1104,7 @@ els.generate.addEventListener('click', async () => {
   if (usesRef && !refData && !character?.image) {
     alert(
       kind === 'image'
-        ? 'Venice · Edit needs an uploaded image.'
+        ? 'This mode needs a source image — upload one, or give the character one.'
         : 'Image → Video needs a reference image — upload one, or give the character one.',
     );
     return;
@@ -1170,8 +1176,13 @@ els.generate.addEventListener('click', async () => {
       body.mimeType = refData.mimeType;
     } else if (usesRef && character?.image) {
       // The character's own reference, so a saved character starts every shot
-      // from the same picture without re-uploading it each time. A manual
-      // upload still wins — it is the more specific choice.
+      // from the same picture without re-uploading it each time — for image
+      // modes (edit, img2img, expand, pose) as well as image→video. A manual
+      // upload still wins: it is the more specific choice. Modes that take
+      // their picture from elsewhere (restyle, keyframes, plain text→image)
+      // report usesRef false and are left alone — only the description and
+      // seed reach those.
+      // compressImageFile() always re-encodes to JPEG, so the type is known.
       body.imageBase64 = character.image;
       body.mimeType = 'image/jpeg';
     }
@@ -1184,7 +1195,8 @@ els.generate.addEventListener('click', async () => {
     for (const [i, shot] of shots.entries()) {
       const perShot = { ...body, prompt: composePrompt(shot, character) };
       // One seed across the series is half of what keeps a character stable;
-      // the repeated description in composePrompt() is the other half.
+      // the repeated description in composePrompt() is the other half. Both
+      // now apply to images too, not just video.
       if (character && Number.isFinite(Number(character.seed))) perShot.seed = Number(character.seed);
       if (shots.length > 1) setStatus(`Shot ${i + 1} of ${shots.length}… ${shot}`);
 
@@ -1279,7 +1291,7 @@ els.generate.addEventListener('click', async () => {
   }
 });
 
-const BUILD = 'b7';
+const BUILD = 'b8';
 const hint = document.querySelector('.media-top-hint');
 if (hint) hint.textContent = `Image · Video · ${BUILD}`;
 
