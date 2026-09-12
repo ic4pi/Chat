@@ -105,7 +105,12 @@ ${i}`}async function Dg(e,t){if(!(e.headers.get("content-type")||"").toLowerCase
 
 ROLE=PLAN: architecture and steps only. No File: blocks, no fenced code, no scripts until the user says to apply/implement.`:fr?Ce+=`
 
-SUGGEST-ONLY this turn: plain advice, real paths, no File: blocks, no placeholders.`:In&&(Ce+=`
+SUGGEST-ONLY this turn (audit/review/advice) — no File: blocks, no placeholders.
+This class of reply is where generic filler is most tempting and least forgivable. Hard rules:
+- Start by naming exactly which files you were given full content for, right now, in this context. If that list is short, say the review only covers those files — do not pad the rest with generic advice.
+- Every point must trace to something you can actually point at in that content — a real function, line, config value, or its absence. "Ensure passwords are hashed" is not a finding unless you looked at the code that handles passwords and can say what it currently does.
+- Never restate the standard security/performance/scalability/maintainability checklist (bcrypt, HTTPS, rate limiting, caching, microservices, CI/CD, monitoring, code splitting) as if it were specific to this app unless you read the code that has that exact problem. A generic checklist is indistinguishable from not having looked at all, and the user will notice.
+- If the user says you are not actually looking at their app, they are right to call that out — say so plainly and name the files you need, instead of rewording the same answer with different headers.`:In&&(Ce+=`
 
 APPLY this turn: output complete File: blocks only (FULL files). Stubs are rejected and will not save. You DO have the ability to write real, runnable source code via File:/Edit: blocks — it saves directly into the user's actual project in this sandbox, it is not a hypothetical or a described interface. Do not say you are "just a text-based AI" or that you cannot provide code/an interface "directly" — that is false here. Do not hand back a design blueprint, description, or plan instead of code. Write the File:/Edit: blocks now.`);let Ne=await ot(Hr,Ce,Ve,Ae,ke,Pe);ce&&(Ne+=`
 

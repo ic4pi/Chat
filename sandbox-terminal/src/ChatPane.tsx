@@ -1110,7 +1110,19 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           '\n\nROLE=PLAN: architecture and steps only. No File: blocks, no fenced code, no scripts until the user says to apply/implement.';
       } else if (suggestTurn) {
         systemPrompt +=
-          '\n\nSUGGEST-ONLY this turn: plain advice, real paths, no File: blocks, no placeholders.';
+          '\n\nSUGGEST-ONLY this turn (audit/review/advice) — no File: blocks, no placeholders.\n' +
+          'This class of reply is where generic filler is most tempting and least forgivable. Hard rules:\n' +
+          '- Start by naming exactly which files you were given full content for, right now, in this context. ' +
+          'If that list is short, say the review only covers those files — do not pad the rest with generic advice.\n' +
+          '- Every point must trace to something you can actually point at in that content — a real function, ' +
+          'line, config value, or its absence. "Ensure passwords are hashed" is not a finding unless you looked ' +
+          'at the code that handles passwords and can say what it currently does.\n' +
+          '- Never restate the standard security/performance/scalability/maintainability checklist (bcrypt, ' +
+          'HTTPS, rate limiting, caching, microservices, CI/CD, monitoring, code splitting) as if it were specific ' +
+          'to this app unless you read the code that has that exact problem. A generic checklist is indistinguishable ' +
+          'from not having looked at all, and the user will notice.\n' +
+          '- If the user says you are not actually looking at their app, they are right to call that out — say so ' +
+          'plainly and name the files you need, instead of rewording the same answer with different headers.';
       } else if (applyTurn) {
         systemPrompt +=
           '\n\nAPPLY this turn: output complete File: blocks only (FULL files). Stubs are rejected and will not save. '
