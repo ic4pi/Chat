@@ -215,11 +215,17 @@ export function looksLikeSuggestRequest(text: string): boolean {
 export function looksLikeApplyRequest(text: string): boolean {
   const t = text.toLowerCase();
   if (t.length < 4) return false;
-  // Suggest/review language wins — never treat as apply.
+  // Suggest/review language wins — never treat as apply — UNLESS this message
+  // is clearly "now go do that", the natural follow-up to an audit/review.
+  // The old version only caught a handful of exact phrasings ("apply the
+  // changes", "fix it") and missed everyday ones like "fix those issues",
+  // "correct these", "go fix what you found" — so a real "now fix it" request
+  // silently fell back to chat-only advice with nothing ever written.
   if (looksLikeSuggestRequest(t)) {
-    return /\b(apply (it|them|this|the changes)|implement (it|them|this|now)|go ahead and (fix|change|write)|do it now|write the (fix|code|files)|save (it|them|the fix))\b/.test(t);
+    return /\b(apply|implement|fix|correct|resolve|address|patch|write|save|ship)\b[\s\S]{0,20}\b(it|this|that|them|those|these|everything|all|now|the\s+\w+|what you found|what('?s)? (wrong|broken|missing))\b/.test(t)
+      || /\b(go ahead|do it|do that|do those|yes,?\s*(please|do it|go ahead|fix)|please (do|fix|apply|correct)|make the (correction|fix|change)s?)\b/.test(t);
   }
-  return /\b(apply|implement|write the|do it|go ahead|ship it|save (it|the)|patch it|fix (it|this|my|the)|build|create|add|update|refactor|rewrite|replace|delete|remove|rename|make the)\b/.test(t);
+  return /\b(apply|implement|write the|do it|go ahead|ship it|save (it|the)|patch it|fix|correct|resolve|address|build|create|add|update|refactor|rewrite|replace|delete|remove|rename|make the)\b/.test(t);
 }
 
 /** @deprecated use looksLikeSuggestRequest */
