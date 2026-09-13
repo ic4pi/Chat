@@ -718,6 +718,10 @@ export interface Message {
   kind?:       'user' | 'retry-inject' | 'welcome' | 'imported';
   segments?:   Segment[];
   fileChanges?: PendingChange[];
+  /** Set on audit/review replies: the exact file paths whose real content was
+   *  sent to the model for this turn — computed by the client, not claimed by
+   *  the model, so it can't be wrong the way the model's own words can be. */
+  contextFilesUsed?: string[];
 }
 
 let _id = 0;
@@ -1089,6 +1093,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       // Light chat ("hey", "thanks"): don't paste tree/files into the model.
       const lightTurn = !needsCodeContext(text);
+      // Ground truth for what this turn actually saw — computed here, from the
+      // same ctx map that gets packed into the prompt below, not from
+      // anything the model says about itself afterward.
+      const ctxFilesUsed = suggestTurn && !lightTurn ? [...ctx.keys()] : undefined;
       let systemPrompt = buildSystemPrompt(
         root,
         lightTurn ? [] : tr,
@@ -1162,6 +1170,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       setMessages(m => [...m, {
         id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
+        contextFilesUsed: ctxFilesUsed,
       }]);
       if (speakOnRef.current && kind === 'user' && cleanForSpeech(reply)) {
         void speakReply(reply);
@@ -1478,6 +1487,18 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 }}>
                   Agent
                 </div>
+                {msg.contextFilesUsed !== undefined && (
+                  <div style={{
+                    fontSize: 15, lineHeight: 1.4, marginBottom: 6, padding: '4px 8px',
+                    borderRadius: 4, border: '1px solid #232838',
+                    background: msg.contextFilesUsed.length === 0 ? '#3a1010' : '#12151D',
+                    color: msg.contextFilesUsed.length === 0 ? '#ffb4b4' : '#9198AA',
+                  }}>
+                    {msg.contextFilesUsed.length === 0
+                      ? "⚠ Read 0 files from your project for this — the answer below is generic, not based on your code."
+                      : `Read ${msg.contextFilesUsed.length} file${msg.contextFilesUsed.length === 1 ? '' : 's'}: ${msg.contextFilesUsed.map(p => p.split('/').pop()).join(', ')}`}
+                  </div>
+                )}
                 <AssistantBody msg={msg} appliedPaths={appliedPaths} onRunCode={onRunCode} />
               </div>
             )}
