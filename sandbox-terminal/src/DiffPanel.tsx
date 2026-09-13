@@ -63,24 +63,24 @@ function FileDiff({ change, onDismiss }: {
         borderBottom: open ? '1px solid #191D27' : 'none', flexWrap: 'wrap' }}>
         <button type="button" onClick={() => setOpen(o => !o)}
           style={{ background: 'transparent', border: 'none',
-            color: '#9198AA', cursor: 'pointer', fontSize: 11, padding: 0 }}>
+            color: '#9198AA', cursor: 'pointer', fontSize: 21, padding: 0 }}>
           {open ? '▾' : '▸'}
         </button>
-        <span style={{ fontSize: 11, color: '#ECEEF3', flex: 1, minWidth: 80,
+        <span style={{ fontSize: 21, color: '#ECEEF3', flex: 1, minWidth: 80,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
           title={change.path}>
           {change.path}
         </span>
-        {isNew && <span style={{ fontSize: 10, color: '#FF3D8E', border: '1px solid #FF3D8E',
+        {isNew && <span style={{ fontSize: 20, color: '#FF3D8E', border: '1px solid #FF3D8E',
           borderRadius: 3, padding: '1px 5px' }}>new</span>}
-        <span style={{ fontSize: 10, color: '#656C7E' }}>{lines} lines</span>
-        <span style={{ fontSize: 10, color: '#34D399' }}>+{added}</span>
-        {removed > 0 && <span style={{ fontSize: 10, color: '#ff6a6a' }}>−{removed}</span>}
+        <span style={{ fontSize: 20, color: '#656C7E' }}>{lines} lines</span>
+        <span style={{ fontSize: 20, color: '#34D399' }}>+{added}</span>
+        {removed > 0 && <span style={{ fontSize: 20, color: '#ff6a6a' }}>−{removed}</span>}
         <button type="button"
           onClick={() => downloadTextFile(change.path, change.content)}
           style={{ background: 'rgba(52,211,153,.16)', color: '#34D399', border: '1px solid rgba(52,211,153,.16)',
             borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
-            fontFamily: 'inherit', fontSize: 10, fontWeight: 700 }}>
+            fontFamily: 'inherit', fontSize: 20, fontWeight: 700 }}>
           Download
         </button>
         <button type="button"
@@ -90,17 +90,17 @@ function FileDiff({ change, onDismiss }: {
           }}
           style={{ background: 'transparent', color: copied ? '#FF3D8E' : '#9198AA',
             border: '1px solid #232838', borderRadius: 4, padding: '2px 8px',
-            cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
+            cursor: 'pointer', fontFamily: 'inherit', fontSize: 20 }}>
           {copied ? 'Copied' : 'Copy'}
         </button>
         <button type="button" onClick={onDismiss}
           style={{ background: 'transparent', border: 'none', color: '#656C7E',
-            cursor: 'pointer', fontSize: 13, padding: 0, lineHeight: 1 }}>×</button>
+            cursor: 'pointer', fontSize: 23, padding: 0, lineHeight: 1 }}>×</button>
       </div>
 
       {open && (
         <pre style={{ margin: 0, maxHeight: 140, overflowY: 'auto',
-          fontSize: 11.5, lineHeight: 1.5, fontFamily: 'inherit' }}>
+          fontSize: 21.5, lineHeight: 1.5, fontFamily: 'inherit' }}>
           {diff.map((line, i) => (
             <div key={i} style={{
               padding: '0 10px',
@@ -140,7 +140,7 @@ interface Props {
 
 const btnBase: React.CSSProperties = {
   borderRadius: 4, padding: '4px 10px', cursor: 'pointer',
-  fontFamily: 'inherit', fontSize: 11, border: '1px solid #232838',
+  fontFamily: 'inherit', fontSize: 21, border: '1px solid #232838',
 };
 
 export function DiffPanel({
@@ -190,7 +190,7 @@ export function DiffPanel({
               color: '#FF3D8E', borderColor: 'rgba(52,211,153,.16)', fontWeight: 700, padding: '4px 8px' }}>
             {expanded ? '▾' : '▸'} {changes.length} file{changes.length !== 1 ? 's' : ''}
           </button>
-          <span style={{ fontSize: 10, color: '#656C7E', flex: 1, minWidth: 0,
+          <span style={{ fontSize: 20, color: '#656C7E', flex: 1, minWidth: 0,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
             title={changes.map(c => c.path).join(', ')}>
             {names}{more}
@@ -219,17 +219,17 @@ export function DiffPanel({
               data-testid="push-toggle-btn"
               style={{ ...btnBase, background: '#FF3D8E', color: '#0B0D12',
                 border: 'none', fontWeight: 700, padding: '4px 12px' }}>
-              {showPush ? 'Hide push' : 'Push'}
+              {showPush ? 'Hide' : 'Publish to GitHub'}
             </button>
           ) : (
-            <span style={{ fontSize: 10, color: '#323A50', whiteSpace: 'nowrap' }}
-              title={pushBlockedReason || 'Verify sandbox first'}>
-              Push locked
+            <span style={{ fontSize: 20, color: '#323A50', whiteSpace: 'nowrap' }}
+              title={pushBlockedReason || 'Checking your app first'}>
+              Not ready yet
             </span>
           )}
         </div>
         {!canPush && pushBlockedReason && (
-          <div style={{ marginTop: 4, fontSize: 10, color: '#ffb4b4', lineHeight: 1.35 }}
+          <div style={{ marginTop: 4, fontSize: 20, color: '#ffb4b4', lineHeight: 1.35 }}
             data-testid="push-blocked-reason">
             {pushBlockedReason}
           </div>
@@ -241,9 +241,13 @@ export function DiffPanel({
           {showPush && canPush && (
             <div style={{ margin: '8px 10px', padding: '8px 10px', background: '#0B0D12',
               border: '1px solid #232838', borderRadius: 6 }}>
-              <div style={{ fontSize: 10, color: '#9198AA', marginBottom: 6, lineHeight: 1.4 }}>
-                GitHub token with <code style={{ color: '#FF3D8E' }}>repo</code> scope.
-                Push re-runs sandbox checks and refuses on failure.
+              <div style={{ fontSize: 20, color: '#9198AA', marginBottom: 6, lineHeight: 1.4 }}>
+                Paste a GitHub token so this can save to your account. No repo yet? One gets
+                created for you automatically. Don't have a token —{' '}
+                <a href="https://github.com/settings/tokens/new?scopes=repo&description=Workspace"
+                  target="_blank" rel="noreferrer" style={{ color: '#FF3D8E' }}>
+                  get one here
+                </a>.
               </div>
               <input
                 type="password"
@@ -261,7 +265,7 @@ export function DiffPanel({
                 autoComplete="off"
                 style={{ width: '100%', boxSizing: 'border-box', marginBottom: 6,
                   background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
-                  borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 12 }}
+                  borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 22 }}
               />
               <input
                 value={commitMsg}
@@ -269,7 +273,7 @@ export function DiffPanel({
                 placeholder="Commit message"
                 style={{ width: '100%', boxSizing: 'border-box', marginBottom: 8,
                   background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
-                  borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 12 }}
+                  borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 22 }}
               />
               <div style={{ display: 'flex', gap: 8, marginBottom: pushError || pushOk ? 8 : 0 }}>
                 <button type="button"
@@ -285,8 +289,8 @@ export function DiffPanel({
                     color: token.trim() && !pushing ? '#0B0D12' : '#656C7E',
                     border: 'none', borderRadius: 4, padding: '7px 14px',
                     cursor: token.trim() && !pushing ? 'pointer' : 'default',
-                    fontFamily: 'inherit', fontSize: 12, fontWeight: 700 }}>
-                  {pushing ? 'Pushing…' : 'Commit & push'}
+                    fontFamily: 'inherit', fontSize: 22, fontWeight: 700 }}>
+                  {pushing ? 'Publishing…' : 'Publish'}
                 </button>
                 {onCopyGitCommands && (
                   <button type="button" onClick={onCopyGitCommands}
@@ -310,10 +314,10 @@ export function DiffPanel({
                 )}
               </div>
               {pushError && (
-                <div style={{ fontSize: 11, color: '#ff6a6a', lineHeight: 1.4 }}>{pushError}</div>
+                <div style={{ fontSize: 21, color: '#ff6a6a', lineHeight: 1.4 }}>{pushError}</div>
               )}
               {pushOk && (
-                <div style={{ fontSize: 11, color: '#34D399', lineHeight: 1.4 }}>{pushOk}</div>
+                <div style={{ fontSize: 21, color: '#34D399', lineHeight: 1.4 }}>{pushOk}</div>
               )}
             </div>
           )}
@@ -329,7 +333,7 @@ export function DiffPanel({
 
       {/* Surface push result even when collapsed */}
       {!expanded && (pushError || pushOk) && (
-        <div style={{ padding: '4px 10px 6px', fontSize: 11, lineHeight: 1.35,
+        <div style={{ padding: '4px 10px 6px', fontSize: 21, lineHeight: 1.35,
           color: pushError ? '#ff6a6a' : '#34D399' }}>
           {pushError || pushOk}
         </div>

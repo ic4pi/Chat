@@ -6,6 +6,7 @@ import { DiffPanel }        from './DiffPanel.js';
 import { SandboxTerminal }  from './Terminal.js';
 import type { TerminalHandle } from './Terminal.js';
 import { PreviewPanel }     from './PreviewPanel.js';
+import type { PreviewHandle } from './PreviewPanel.js';
 import { useRepoContext }   from './useRepoContext.js';
 import { useAutoVerify }    from './useAutoVerify.js';
 import type { PendingChange } from './useRepoContext.js';
@@ -170,7 +171,7 @@ type MobileTab = 'files' | 'chat' | 'terminal' | 'preview';
 // ---------------------------------------------------------------------------
 // VerifyBanner
 // ---------------------------------------------------------------------------
-function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, onSetCommand, onDismiss }: {
+function VerifyBanner({ verifyState, attempt, askCommand, onRun, onSetCommand, onDismiss }: {
   verifyState: string; attempt: number; testCommand: string | null; askCommand: boolean;
   onRun: () => void; onSetCommand: (c: string) => void; onDismiss: () => void;
 }) {
@@ -182,23 +183,22 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
     || String(verifyState).startsWith('retry');
   const color = passed ? '#0B0D12' : failed ? '#fff' : '#0B0D12';
   const bg = passed ? '#34D399' : failed ? '#8a1f1f' : '#FF3D8E';
-  const shortCmd = testCommand
-    ? (testCommand.length > 64 ? `${testCommand.slice(0, 64)}…` : testCommand)
-    : '…';
-  const label = verifyState === 'detecting' ? 'SANDBOX CHECK — detecting test / smoke…' :
-    verifyState === 'running' ? `SANDBOX CHECK RUNNING — ${shortCmd}` :
-    passed ? 'SANDBOX VERIFIED — Push unlocked. Incomplete stubs never get this far.' :
-    failed ? `SANDBOX FAILED — Push LOCKED after ${attempt} attempts. Fix until green.` :
-    `SANDBOX AUTO-FIX — attempt ${attempt}/5 (do not push yet)`;
+  const label = verifyState === 'detecting' ? 'Checking your app…' :
+    verifyState === 'running' ? 'Testing your app…' :
+    passed ? '✓ It works — ready to save' :
+    failed ? `Couldn't fix it automatically after ${attempt} tries.` :
+    `Found a problem — fixing it (try ${attempt} of 5)…`;
   if (askCommand) return (
     <div data-testid="verify-banner" style={{ padding: '10px 12px', background: '#5a1010',
       borderTop: '2px solid #ff6a6a', flexShrink: 0 }}>
-      <div style={{ fontSize: 13, fontWeight: 800, color: '#ffb4b4', marginBottom: 4,
+      <div style={{ fontSize: 23, fontWeight: 800, color: '#ffb4b4', marginBottom: 4,
         letterSpacing: '0.04em' }}>
-        PUSH LOCKED — no sandbox check found
+        Couldn't check this project automatically
       </div>
-      <div style={{ fontSize: 11, color: '#ffd0d0', marginBottom: 6, lineHeight: 1.45 }}>
-        Enter <code style={{ color: '#FF3D8E' }}>npm test</code> / your command, or add{' '}
+      <div style={{ fontSize: 21, color: '#ffd0d0', marginBottom: 6, lineHeight: 1.45 }}>
+        If you're just building a webpage, ask for an <code style={{ color: '#FF3D8E' }}>index.html</code>{' '}
+        and this goes away on its own. Otherwise enter{' '}
+        <code style={{ color: '#FF3D8E' }}>npm test</code> / your command, or add{' '}
         <code style={{ color: '#FF3D8E' }}>index.html</code> for built-in smoke. Nothing ships unproven.
       </div>
       <div style={{ display: 'flex', gap: 6 }}>
@@ -206,14 +206,14 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
           onKeyDown={e => e.key === 'Enter' && cmd.trim() && onSetCommand(cmd.trim())}
           placeholder="e.g. npm test"
           style={{ flex: 1, background: '#171B26', color: '#ECEEF3', border: '1px solid #232838',
-            borderRadius: 4, padding: '4px 8px', fontFamily: 'inherit', fontSize: 12, outline: 'none' }} />
+            borderRadius: 4, padding: '4px 8px', fontFamily: 'inherit', fontSize: 22, outline: 'none' }} />
         <button onClick={() => cmd.trim() && onSetCommand(cmd.trim())}
           style={{ background: '#FF3D8E', color: '#0B0D12', border: 'none', borderRadius: 4,
-            padding: '4px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
+            padding: '4px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 21, fontWeight: 700 }}>
           Set & Run</button>
         <button onClick={onDismiss}
           style={{ background: '#191D27', color: '#9198AA', border: '1px solid #232838',
-            borderRadius: 4, padding: '4px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11 }}>
+            borderRadius: 4, padding: '4px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 21 }}>
           Later</button>
       </div>
     </div>
@@ -224,12 +224,12 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
       flexShrink: 0 }}>
       <div style={{ width: 10, height: 10, borderRadius: '50%',
         background: passed || running ? '#0B0D12' : '#fff', flexShrink: 0 }} />
-      <span style={{ fontSize: 13, fontWeight: 800, color, flex: 1, lineHeight: 1.35,
+      <span style={{ fontSize: 23, fontWeight: 800, color, flex: 1, lineHeight: 1.35,
         letterSpacing: '0.02em' }}>{label}</span>
       {(passed || failed) && (
         <button onClick={failed ? onRun : onDismiss}
           style={{ background: passed ? 'rgba(0,0,0,0.15)' : 'rgba(0,0,0,0.35)',
-            color, border: 'none', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+            color, border: 'none', fontSize: 22, fontWeight: 700, cursor: 'pointer',
             padding: '4px 10px', borderRadius: 4 }}>
           {failed ? 'Retry check' : 'Dismiss'}</button>
       )}
@@ -243,6 +243,8 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
 export function App() {
   const termRef = useRef<TerminalHandle>(null);
   const chatRef = useRef<ChatHandle>(null);
+  const previewRef = useRef<PreviewHandle>(null);
+  const autoPreviewedRef = useRef(false);
   const repo    = useRepoContext();
 
   // Keep the sandbox alive purely from the tab being open — even backgrounded
@@ -328,6 +330,19 @@ export function App() {
   const [coderBrands,  setCoderBrands]  = useState<ResolvedCoderBrand[]>([]);
   const [keys,         setKeys]         = useState(() => loadProviderKeys());
   const [showKeys,     setShowKeys]     = useState(false);
+  // Model pickers, roles, slices, keys — all dev-only config with working
+  // defaults already. Tucked away so the default screen is just "what do you
+  // want to build" instead of a wall of dropdowns nobody asked for.
+  const [showAdvanced, setShowAdvanced] = useState(
+    () => localStorage.getItem('workspace_show_advanced_v1') === '1',
+  );
+  const toggleAdvanced = () => {
+    setShowAdvanced(s => {
+      const next = !s;
+      try { localStorage.setItem('workspace_show_advanced_v1', next ? '1' : '0'); } catch { /* ignore */ }
+      return next;
+    });
+  };
   const [showRoles,    setShowRoles]    = useState(false);
   const [showSlices,   setShowSlices]   = useState(false);
   const [roleModels,   setRoleModels]   = useState(() => loadRoleModels());
@@ -581,6 +596,16 @@ export function App() {
       const results = await repo.applyChanges(files);
       setApplyResults(results);
       setAppliedPaths(new Set(results.filter(r => r.ok).map(r => r.path)));
+      // First time anything saves successfully, show it running — don't make
+      // the user find a Preview tab and a Start button to see their own app.
+      if (!autoPreviewedRef.current && results.some(r => r.ok)) {
+        autoPreviewedRef.current = true;
+        setDesktopRightTab('preview');
+        setMobileTab('preview');
+        // Sandbox needs a beat to have the file on disk before the preview
+        // server can serve it.
+        setTimeout(() => previewRef.current?.start(), 400);
+      }
       return results;
     } finally { setApplying(false); }
   }, [repo]);
@@ -813,7 +838,7 @@ export function App() {
 
   const handlePush = useCallback(async (token: string, message: string) => {
     if (!repo.sandboxId) {
-      setPushError('Open a GitHub repo first (blank projects have no remote yet).');
+      setPushError('Nothing to push yet — start a project first.');
       return;
     }
     setPushing(true);
@@ -857,14 +882,17 @@ export function App() {
       const data = await res.json() as {
         ok?: boolean; pushed?: boolean; branch?: string;
         message?: string; error?: string; detail?: string; checkFailed?: boolean;
+        createdRepoUrl?: string; pullRequestUrl?: string;
       };
       if (!res.ok) {
         throw new Error(data.error ?? `HTTP ${res.status}`);
       }
       if (data.pushed) {
         setPushOk(
-          `Pushed to GitHub${data.branch ? ` (${data.branch})` : ''} after checks passed. ` +
-          'Open the repo on github.com to see the new commit.',
+          data.createdRepoUrl
+            ? `Created a new GitHub repo and pushed your app: ${data.createdRepoUrl}`
+            : `Pushed to GitHub${data.branch ? ` (${data.branch})` : ''} after checks passed. ` +
+              (data.pullRequestUrl ? `Review + merge: ${data.pullRequestUrl}` : 'Open the repo on github.com to see the new commit.'),
         );
       } else {
         setPushOk(data.message ?? 'Nothing new to push.');
@@ -882,30 +910,30 @@ export function App() {
       borderBottom: '1px solid #191D27', background: '#0B0D12' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
         padding: '6px 12px' }}>
-        <a href="/" style={{ color: '#FF3D8E', fontSize: 12, textDecoration: 'none',
+        <a href="/" style={{ color: '#FF3D8E', fontSize: 22, textDecoration: 'none',
           whiteSpace: 'nowrap', padding: '2px 0', fontWeight: 700 }}>← Chat</a>
         <button type="button" onClick={() => { setHomeList(listSessions()); setShowHome(true); }}
           title="Browse saved workspace conversations"
           style={{ background: showHome ? 'rgba(212,255,63,0.16)' : 'transparent',
             color: '#FF3D8E', border: '1px solid #C81F6B', borderRadius: 4,
-            padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 10,
+            padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 20,
             fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
           Home
         </button>
-        <span style={{ color: '#FF3D8E', fontSize: 11, whiteSpace: 'nowrap',
+        <span style={{ color: '#FF3D8E', fontSize: 21, whiteSpace: 'nowrap',
           overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 }}
           title={sessionTitle}>
           {sessionTitle}
         </span>
         {fromChat && (
-          <span style={{ fontSize: 10, color: '#C81F6B', whiteSpace: 'nowrap' }}>
+          <span style={{ fontSize: 20, color: '#C81F6B', whiteSpace: 'nowrap' }}>
             from chat
           </span>
         )}
         <button type="button" onClick={startFreshHome}
           style={{ background: 'transparent', color: '#9198AA', border: '1px solid #232838',
             borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
-            fontFamily: 'inherit', fontSize: 10 }}>
+            fontFamily: 'inherit', fontSize: 20 }}>
           New
         </button>
         {(repo.repoUrl || chatMessages.length > 0) && (
@@ -919,27 +947,36 @@ export function App() {
             }}
             style={{ background: 'transparent', color: '#656C7E', border: '1px solid #232838',
               borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
-              fontFamily: 'inherit', fontSize: 10 }}>
+              fontFamily: 'inherit', fontSize: 20 }}>
             Delete
           </button>
         )}
+        <button type="button" onClick={toggleAdvanced}
+          title="Model choice, roles, slices, API keys — advanced/developer options"
+          style={{ background: showAdvanced ? 'rgba(52,211,153,.16)' : 'transparent',
+            color: showAdvanced ? '#34D399' : '#656C7E', border: '1px solid #232838',
+            borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
+            fontFamily: 'inherit', fontSize: 20 }}>
+          {showAdvanced ? '▾ Advanced' : '▸ Advanced'}
+        </button>
+        {showAdvanced && <>
         <select value={role} onChange={e => handleRoleChange(e.target.value as RoleId)}
           title="Role — uses the model you assigned for write / review / plan"
           style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
-            borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11, cursor: 'pointer' }}>
+            borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 21, cursor: 'pointer' }}>
           {ROLE_LIST.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
         </select>
         <select value={modelScope} onChange={e => handleScopeChange(e.target.value as 'coders' | 'provider')}
           title="Coders shows the coding models across every provider; All models shows one provider's full catalog"
           style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
-            borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11, cursor: 'pointer' }}>
+            borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 21, cursor: 'pointer' }}>
           <option value="coders">Coders</option>
           <option value="provider">All models</option>
         </select>
         {modelScope === 'provider' && (
           <select value={provider} onChange={e => handleProviderChange(e.target.value)}
             style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
-              borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11, cursor: 'pointer' }}>
+              borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 21, cursor: 'pointer' }}>
             {PROVIDER_LIST.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
           </select>
         )}
@@ -948,7 +985,7 @@ export function App() {
             disabled={modelsLoading}
             title="Coding models — free ones run without a password, paid ones need the unlock"
             style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
-              borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11,
+              borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 21,
               cursor: 'pointer', maxWidth: 260, flex: 1, minWidth: 0 }}>
             {coderBrands.map(brand => (
               <optgroup key={brand.id} label={brand.paidOnly ? `${brand.label} · unlock to use` : brand.label}>
@@ -974,7 +1011,7 @@ export function App() {
           <select value={model} onChange={e => handleModelChange(e.target.value)}
             disabled={modelsLoading}
             style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
-              borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 11,
+              borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 21,
               cursor: 'pointer', maxWidth: 220, flex: 1, minWidth: 0 }}>
             {models.map(m => {
               const locked = m.free === false && !paidUnlocked();
@@ -1015,21 +1052,21 @@ export function App() {
           style={{ background: paidUnlocked() ? 'rgba(52,211,153,.16)' : '#171B26',
             color: paidUnlocked() ? '#34D399' : '#9198AA',
             border: '1px solid #232838', borderRadius: 4, padding: '3px 8px',
-            cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
+            cursor: 'pointer', fontFamily: 'inherit', fontSize: 20 }}>
           {paidUnlocked() ? 'Paid ✓' : 'Unlock'}
         </button>
         <button type="button" onClick={() => setShowKeys(s => !s)}
           title="Bring your own API keys"
           style={{ background: activeApiKey ? 'rgba(52,211,153,.16)' : '#171B26', color: activeApiKey ? '#34D399' : '#9198AA',
             border: '1px solid #232838', borderRadius: 4, padding: '3px 8px',
-            cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
+            cursor: 'pointer', fontFamily: 'inherit', fontSize: 20 }}>
           Keys
         </button>
         <button type="button" onClick={() => { setShowRoles(s => !s); setShowSlices(false); }}
           title="Assign models per role"
           style={{ background: showRoles ? 'rgba(52,211,153,.16)' : '#171B26', color: '#9198AA',
             border: '1px solid #232838', borderRadius: 4, padding: '3px 8px',
-            cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
+            cursor: 'pointer', fontFamily: 'inherit', fontSize: 20 }}>
           Roles
         </button>
         <button type="button"
@@ -1040,56 +1077,57 @@ export function App() {
           style={{ background: showSlices ? 'rgba(52,211,153,.16)' : '#171B26',
             color: showSlices ? '#FF3D8E' : '#9198AA',
             border: '1px solid #232838', borderRadius: 4, padding: '3px 8px',
-            cursor: 'pointer', fontFamily: 'inherit', fontSize: 10 }}>
+            cursor: 'pointer', fontFamily: 'inherit', fontSize: 20 }}>
           Slices
         </button>
         {repo.sandboxId && (
-          <span style={{ fontSize: 9, color: '#323A50', whiteSpace: 'nowrap',
+          <span style={{ fontSize: 18, color: '#323A50', whiteSpace: 'nowrap',
             overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 120 }}
             title={repo.sandboxId}>● {repo.sandboxId.slice(0, 20)}</span>
         )}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <label title="Off by default. When on, suggested file changes save to the cloud sandbox only — not GitHub, not your phone."
             style={{ display: 'flex', alignItems: 'center', gap: 4,
-            fontSize: 10, color: '#656C7E', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+            fontSize: 20, color: '#656C7E', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
             Auto-save <input type="checkbox" checked={autoApplyOn} onChange={e => setAutoApplyOn(e.target.checked)}
               style={{ accentColor: '#FF3D8E' }} />
           </label>
           <label title="Off by default. When on, code snippets run in the sandbox terminal."
             style={{ display: 'flex', alignItems: 'center', gap: 4,
-            fontSize: 10, color: '#656C7E', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+            fontSize: 20, color: '#656C7E', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
             Auto-run <input type="checkbox" checked={autoRun} onChange={e => setAutoRun(e.target.checked)}
               style={{ accentColor: '#FF3D8E' }} />
           </label>
           <label title="On by default. Runs npm run check / project tests after saves so bad edits get fixed before you push."
             style={{ display: 'flex', alignItems: 'center', gap: 4,
-            fontSize: 10, color: '#656C7E', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+            fontSize: 20, color: '#656C7E', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
             Auto-test <input type="checkbox" checked={autoVerifyOn} onChange={e => setAutoVerifyOn(e.target.checked)}
               style={{ accentColor: '#FF3D8E' }} />
           </label>
         </div>
+        </>}
       </div>
-      {showKeys && (
+      {showAdvanced && showKeys && (
         <div style={{ padding: '8px 12px', borderTop: '1px solid #191D27',
           display: 'grid', gap: 6, gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
-          <div style={{ gridColumn: '1 / -1', fontSize: 10, color: '#656C7E', lineHeight: 1.4 }}>
+          <div style={{ gridColumn: '1 / -1', fontSize: 20, color: '#656C7E', lineHeight: 1.4 }}>
             Keys stay in this browser only. Used when set; otherwise the server env key is used.
           </div>
           {PROVIDER_LIST.map(p => (
-            <label key={p.id} style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 10, color: '#9198AA' }}>
+            <label key={p.id} style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 20, color: '#9198AA' }}>
               {p.label}
               <input type="password" autoComplete="off"
                 value={keys[p.id] || ''}
                 placeholder={`${p.label} API key`}
                 onChange={e => handleKeySave(p.id, e.target.value)}
                 style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
-                  borderRadius: 4, padding: '4px 8px', fontFamily: 'inherit', fontSize: 11 }} />
+                  borderRadius: 4, padding: '4px 8px', fontFamily: 'inherit', fontSize: 21 }} />
             </label>
           ))}
         </div>
       )}
-      {showRoles && (
-        <div style={{ padding: '8px 12px', borderTop: '1px solid #191D27', fontSize: 10, color: '#9198AA', lineHeight: 1.5 }}>
+      {showAdvanced && showRoles && (
+        <div style={{ padding: '8px 12px', borderTop: '1px solid #191D27', fontSize: 20, color: '#9198AA', lineHeight: 1.5 }}>
           Switch the role dropdown to use a different model for writing, reviewing, or planning.
           Changing provider/model while a role is selected saves that assignment.
           Current: write={roleModels.write.model.split('/').pop()} ·
@@ -1097,7 +1135,7 @@ export function App() {
           plan={roleModels.plan.model.split('/').pop()}
         </div>
       )}
-      {showSlices && (
+      {showAdvanced && showSlices && (
         <div id="chunk-model-panel">
           <ChunkModelPanel
             sandboxReady={!!repo.sandboxId && !!repo.root}
@@ -1124,15 +1162,15 @@ export function App() {
       padding: '8px 12px',
       background: applyFailed.length ? '#3a1010' : 'rgba(52,211,153,.16)',
       borderBottom: `2px solid ${applyFailed.length ? '#ff6a6a' : 'rgba(52,211,153,.16)'}`,
-      flexShrink: 0, fontSize: 12, lineHeight: 1.45,
+      flexShrink: 0, fontSize: 22, lineHeight: 1.45,
     }}>
       {applyFailed.length > 0 ? (
         <div style={{ color: '#ffb4b4', fontWeight: 800, marginBottom: 4, letterSpacing: '0.03em' }}>
-          ⛔ SANDBOX PROTECTED — {applyFailed.length} write{applyFailed.length === 1 ? '' : 's'} blocked
+          ⛔ {applyFailed.length} file{applyFailed.length === 1 ? '' : 's'} couldn't save
         </div>
       ) : (
         <div style={{ color: '#34D399', fontWeight: 700, marginBottom: 4 }}>
-          Saved to sandbox — not GitHub yet. Push stays locked until Auto-test is green.
+          Saved. Checking it works, then you can publish it.
         </div>
       )}
       {applyOk.map(r => (
@@ -1186,17 +1224,17 @@ export function App() {
       <DiffPanel
         changes={repo.pendingChanges} applying={applying}
         appliedPaths={appliedPaths}
-        canPush={!!repo.sandboxId && !!repo.repoUrl && autoVerify.pushAllowed}
+        canPush={!!repo.sandboxId && autoVerify.pushAllowed}
         pushBlockedReason={
-          !repo.sandboxId || !repo.repoUrl
+          !repo.sandboxId
             ? null
             : autoVerify.pushAllowed
               ? null
               : autoVerify.verifyState === 'failed'
-                ? 'Push locked — tests/smoke failed. Retry Auto-test until verified.'
+                ? "Can't save yet — still fixing an issue. Hang on."
                 : autoVerify.verifyState === 'running' || autoVerify.verifyState === 'detecting' || String(autoVerify.verifyState).startsWith('retry')
-                  ? 'Push locked — sandbox is still verifying…'
-                  : 'Push locked until Auto-test passes in the sandbox.'
+                  ? 'Checking your app works…'
+                  : 'Checking your app works before you can save.'
         }
         pushing={pushing}
         pushError={pushError}
@@ -1209,7 +1247,7 @@ export function App() {
           const cmd = buildPushShellCommands({ commitMessage: 'Apply agent changes' });
           const ok = await copyText(cmd);
           if (ok) {
-            setPushOk('Git commands copied — paste into Terminal. For push with auth, use Push to GitHub (only after verified).');
+            setPushOk('Git commands copied — paste into Terminal. Or just use "Publish to GitHub" above once it\'s verified.');
             setMobileTab('terminal');
           }
         }}
@@ -1256,23 +1294,23 @@ export function App() {
             style={{ width: 'min(520px, 100%)', maxHeight: 'min(80dvh, 640px)', overflow: 'auto',
               background: '#12151D', border: '1px solid #FF3D8E', borderRadius: 8, padding: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-              <h2 style={{ margin: 0, flex: 1, fontSize: 13, letterSpacing: '0.08em',
+              <h2 style={{ margin: 0, flex: 1, fontSize: 23, letterSpacing: '0.08em',
                 textTransform: 'uppercase', color: '#FF3D8E' }}>Home · Workspaces</h2>
               <button type="button" onClick={startFreshHome}
                 style={{ background: 'rgba(212,255,63,0.12)', color: '#FF3D8E', border: '1px solid #C81F6B',
                   borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
-                  fontSize: 11, fontWeight: 700 }}>New</button>
+                  fontSize: 21, fontWeight: 700 }}>New</button>
               <button type="button" onClick={() => setShowHome(false)}
                 style={{ background: 'transparent', color: '#9198AA', border: '1px solid #232838',
                   borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
-                  fontSize: 11 }}>Close</button>
+                  fontSize: 21 }}>Close</button>
             </div>
-            <p style={{ margin: '0 0 12px', fontSize: 12, color: '#9198AA', lineHeight: 1.4 }}>
+            <p style={{ margin: '0 0 12px', fontSize: 22, color: '#9198AA', lineHeight: 1.4 }}>
               Open a saved workspace conversation, or start a fresh Home workspace.
               Opening <b style={{ color: '#FF3D8E' }}>Workspace</b> from Chat always loads that chat here.
             </p>
             {homeList.length === 0 ? (
-              <p style={{ color: '#656C7E', fontSize: 12 }}>No saved workspaces yet.</p>
+              <p style={{ color: '#656C7E', fontSize: 22 }}>No saved workspaces yet.</p>
             ) : (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 8 }}>
                 {homeList.map(s => (
@@ -1281,11 +1319,11 @@ export function App() {
                       style={{ width: '100%', textAlign: 'left', background: s.id === sessionId ? 'rgba(212,255,63,0.1)' : '#0B0D12',
                         border: `1px solid ${s.id === sessionId ? '#FF3D8E' : '#232838'}`, borderRadius: 6,
                         padding: '10px 12px', cursor: 'pointer', fontFamily: 'inherit' }}>
-                      <div style={{ color: '#FF3D8E', fontSize: 13, fontWeight: 700,
+                      <div style={{ color: '#FF3D8E', fontSize: 23, fontWeight: 700,
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {s.title || 'Workspace'}
                       </div>
-                      <div style={{ color: '#656C7E', fontSize: 11, marginTop: 4 }}>
+                      <div style={{ color: '#656C7E', fontSize: 21, marginTop: 4 }}>
                         {(s.messages || []).length} messages
                         {s.fromChat ? ' · from chat' : ''}
                         {' · '}
@@ -1319,7 +1357,7 @@ export function App() {
                   style={{ flex: 1, padding: '8px 0', background: desktopRightTab === t ? '#12151D' : 'transparent',
                     color: desktopRightTab === t ? '#FF3D8E' : '#9198AA', border: 'none',
                     borderBottom: desktopRightTab === t ? '2px solid #FF3D8E' : '2px solid transparent',
-                    fontFamily: 'inherit', fontSize: 11, fontWeight: desktopRightTab === t ? 700 : 500,
+                    fontFamily: 'inherit', fontSize: 21, fontWeight: desktopRightTab === t ? 700 : 500,
                     cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                   {t === 'terminal' ? 'Terminal' : 'Preview'}
                 </button>
@@ -1332,7 +1370,7 @@ export function App() {
               </div>
               <div style={{ position: 'absolute', inset: 0, overflow: 'hidden',
                 display: desktopRightTab === 'preview' ? 'flex' : 'none', flexDirection: 'column' }}>
-                <PreviewPanel sandboxId={repo.sandboxId} detectedPort={previewPort} />
+                <PreviewPanel ref={previewRef} sandboxId={repo.sandboxId} detectedPort={previewPort} />
               </div>
             </div>
           </div>
@@ -1356,7 +1394,7 @@ export function App() {
             </div>
             <div style={{ position: 'absolute', inset: 0, overflow: 'hidden',
               display: mobileTab === 'preview' ? 'flex' : 'none', flexDirection: 'column' }}>
-              <PreviewPanel sandboxId={repo.sandboxId} detectedPort={previewPort} />
+              <PreviewPanel ref={previewRef} sandboxId={repo.sandboxId} detectedPort={previewPort} />
             </div>
           </div>
           <div style={{ display: 'flex', flexShrink: 0, borderTop: '1px solid #191D27',
@@ -1375,7 +1413,7 @@ export function App() {
                   background: mobileTab === t.id ? '#12151D' : 'transparent',
                   color: mobileTab === t.id ? '#FF3D8E' : '#9198AA', border: 'none',
                   borderTop: mobileTab === t.id ? '2px solid #FF3D8E' : '2px solid transparent',
-                  fontFamily: 'inherit', fontSize: 12, fontWeight: mobileTab === t.id ? 700 : 500,
+                  fontFamily: 'inherit', fontSize: 22, fontWeight: mobileTab === t.id ? 700 : 500,
                   cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.08em',
                   WebkitTapHighlightColor: 'transparent' }}>
                 {t.label}

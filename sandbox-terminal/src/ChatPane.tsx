@@ -43,7 +43,7 @@ import {
   type SearchHit,
 } from './contextBudget.js';
 import { copyText, downloadTextFile } from './downloadFile.js';
-import { loadPaidPassword } from './providerPrefs.js';
+import { loadPaidPassword, FALLBACK_MODELS } from './providerPrefs.js';
 import {
   cleanForSpeech,
   getSpeechRecognition,
@@ -386,8 +386,25 @@ function isTransientNetworkError(raw: string): boolean {
   return lower === 'load failed' || lower === 'failed to fetch' || lower.includes('networkerror');
 }
 
+/** OpenRouter's free tier for a popular model runs out and 404s — always
+ *  fixable by trying a different free model, never by the user reading a
+ *  provider stack trace. */
+function isFreeModelUnavailableError(msg: string): boolean {
+  return /unavailable for free/i.test(msg);
+}
+
+/** Free OpenRouter models to rotate through when one 404s as exhausted.
+ *  'openrouter/free' is a routing placeholder, not a real completions model
+ *  — excluded so the fallback always lands on something that can answer. */
+const OPENROUTER_FREE_FALLBACK_CHAIN = FALLBACK_MODELS.openrouter
+  .map(m => m.id)
+  .filter(id => id !== 'openrouter/free');
+
 function friendlyError(raw: string): string {
   const lower = raw.toLowerCase();
+  if (isFreeModelUnavailableError(raw)) {
+    return "The free AI model is temporarily full and a backup didn't work either. Try again in a minute.";
+  }
   if (isTransientNetworkError(raw)) {
     return 'Connection dropped before the model replied (often a timeout). Try again or a faster model.';
   }
@@ -542,18 +559,18 @@ function FileChangeBlock({ path, content, isApplied }: {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '5px 10px', borderBottom: '1px solid rgba(52,211,153,.16)', gap: 8, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-          <span style={{ fontSize: 10, color: '#34D399', fontWeight: 700 }}>FILE</span>
-          <span style={{ fontSize: 11, color: '#ECEEF3', overflow: 'hidden',
+          <span style={{ fontSize: 20, color: '#34D399', fontWeight: 700 }}>FILE</span>
+          <span style={{ fontSize: 21, color: '#ECEEF3', overflow: 'hidden',
             textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{path}</span>
-          <span style={{ fontSize: 10, color: '#656C7E' }}>{lines} lines</span>
-          {isApplied && <span style={{ fontSize: 10, color: '#FF3D8E' }}>✓ saved</span>}
+          <span style={{ fontSize: 20, color: '#656C7E' }}>{lines} lines</span>
+          {isApplied && <span style={{ fontSize: 20, color: '#FF3D8E' }}>✓ saved</span>}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <button type="button"
             onClick={() => downloadTextFile(path, content)}
             style={{ background: '#FF3D8E', color: '#0B0D12', border: 'none',
               borderRadius: 4, padding: '3px 10px', cursor: 'pointer',
-              fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
+              fontFamily: 'inherit', fontSize: 21, fontWeight: 700 }}>
             Download
           </button>
           <button type="button"
@@ -563,19 +580,19 @@ function FileChangeBlock({ path, content, isApplied }: {
             }}
             style={{ background: 'transparent', color: copied ? '#FF3D8E' : '#34D399',
               border: '1px solid rgba(52,211,153,.16)', borderRadius: 4, padding: '3px 8px',
-              cursor: 'pointer', fontFamily: 'inherit', fontSize: 11 }}>
+              cursor: 'pointer', fontFamily: 'inherit', fontSize: 21 }}>
             {copied ? 'Copied' : 'Copy'}
           </button>
           <button onClick={() => setShowCode(s => !s)}
             style={{ background: 'transparent', color: '#656C7E', border: 'none',
-              fontSize: 11, cursor: 'pointer', padding: 0 }}>
+              fontSize: 21, cursor: 'pointer', padding: 0 }}>
             {showCode ? 'hide' : 'show'}
           </button>
         </div>
       </div>
       {showCode && (
         <pre style={{ margin: 0, padding: '8px 12px', overflowX: 'auto',
-          fontSize: 11.5, lineHeight: 1.5, color: '#ECEEF3', maxHeight: 400 }}>
+          fontSize: 21.5, lineHeight: 1.5, color: '#ECEEF3', maxHeight: 400 }}>
           {content}
         </pre>
       )}
@@ -587,18 +604,18 @@ function CodeBlock({ lang, content, onRun }: {
   lang: string; content: string; onRun: () => void;
 }) {
   const [copied, setCopied] = useState(false);
-  const [previewing, setPreviewing] = useState(false);
-  // HTML was never runnable as a script — the sandbox's /run-code has no
-  // interpreter for it and silently fell through to `bash _snippet.sh`,
-  // which just executes "<!DOCTYPE html>" as a shell command and fails
-  // with a nonsense syntax error. Markup needs to be rendered, not run.
+  // HTML previews by default — that's the whole point of asking for a page.
+  // Plain source stays collapsed; nobody asked to read raw code.
   const isHtml = /^(html|htm)$/i.test((lang || '').trim());
+  const [previewing, setPreviewing] = useState(isHtml);
+  const [showCode, setShowCode] = useState(false);
+  const lines = content.split('\n').length;
   return (
     <div style={{ margin: '8px 0', background: '#0B0D12',
       border: '1px solid #232838', borderRadius: 6, overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '4px 10px', borderBottom: '1px solid #191D27', gap: 8 }}>
-        <span style={{ fontSize: 10, color: '#656C7E', textTransform: 'uppercase',
+        <span style={{ fontSize: 20, color: '#656C7E', textTransform: 'uppercase',
           letterSpacing: '0.1em' }}>{lang || 'code'}</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <button type="button" data-testid="copy-code-btn"
@@ -608,7 +625,7 @@ function CodeBlock({ lang, content, onRun }: {
             }}
             style={{ background: 'transparent', color: copied ? '#FF3D8E' : '#34D399',
               border: '1px solid rgba(52,211,153,.16)', borderRadius: 4, padding: '2px 10px',
-              cursor: 'pointer', fontFamily: 'inherit', fontSize: 11 }}>
+              cursor: 'pointer', fontFamily: 'inherit', fontSize: 21 }}>
             {copied ? 'Copied' : 'Copy'}
           </button>
           {isHtml ? (
@@ -616,17 +633,22 @@ function CodeBlock({ lang, content, onRun }: {
               onClick={() => setPreviewing(p => !p)}
               style={{ background: 'rgba(52,211,153,.16)', color: '#34D399', border: '1px solid rgba(52,211,153,.16)',
                 borderRadius: 4, padding: '2px 10px', cursor: 'pointer',
-                fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
+                fontFamily: 'inherit', fontSize: 21, fontWeight: 700 }}>
               {previewing ? 'Hide preview' : '▶ Preview'}
             </button>
           ) : (
             <button onClick={onRun} data-testid="run-code-btn"
               style={{ background: 'rgba(52,211,153,.16)', color: '#34D399', border: '1px solid rgba(52,211,153,.16)',
                 borderRadius: 4, padding: '2px 10px', cursor: 'pointer',
-                fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
+                fontFamily: 'inherit', fontSize: 21, fontWeight: 700 }}>
               ▶ Run in Sandbox
             </button>
           )}
+          <button onClick={() => setShowCode(s => !s)}
+            style={{ background: 'transparent', color: '#656C7E', border: 'none',
+              fontSize: 21, cursor: 'pointer', padding: 0 }}>
+            {showCode ? 'hide code' : `code (${lines} lines)`}
+          </button>
         </div>
       </div>
       {isHtml && previewing && (
@@ -637,11 +659,13 @@ function CodeBlock({ lang, content, onRun }: {
           style={{ width: '100%', height: 320, border: 'none', borderBottom: '1px solid #191D27', background: '#fff' }}
         />
       )}
-      <pre style={{ margin: 0, padding: '8px 12px', overflowX: 'auto',
-        fontSize: 12, lineHeight: 1.5, color: '#ECEEF3',
-        maxHeight: 300, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-        {content}
-      </pre>
+      {showCode && (
+        <pre style={{ margin: 0, padding: '8px 12px', overflowX: 'auto',
+          fontSize: 22, lineHeight: 1.5, color: '#ECEEF3',
+          maxHeight: 300, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+          {content}
+        </pre>
+      )}
     </div>
   );
 }
@@ -657,7 +681,7 @@ function AssistantBody({ msg, appliedPaths, onRunCode }: {
       <>
         {segs.map((seg, i) => {
           if (seg.type === 'text') return (
-            <p key={i} style={{ margin: '4px 0', fontSize: 13, lineHeight: 1.6,
+            <p key={i} style={{ margin: '4px 0', fontSize: 23, lineHeight: 1.6,
               color: '#ECEEF3', whiteSpace: 'pre-wrap' }}>{seg.content.trim()}</p>
           );
           if (seg.type === 'file-change') return (
@@ -677,7 +701,7 @@ function AssistantBody({ msg, appliedPaths, onRunCode }: {
   // Welcome text, errors, and any reply that didn't parse into segments
   // MUST still render — previously these were invisible.
   return (
-    <p data-testid="assistant-text" style={{ margin: '4px 0', fontSize: 13, lineHeight: 1.6,
+    <p data-testid="assistant-text" style={{ margin: '4px 0', fontSize: 23, lineHeight: 1.6,
       color: '#ECEEF3', whiteSpace: 'pre-wrap' }}>{msg.content}</p>
   );
 }
@@ -694,6 +718,10 @@ export interface Message {
   kind?:       'user' | 'retry-inject' | 'welcome' | 'imported';
   segments?:   Segment[];
   fileChanges?: PendingChange[];
+  /** Set on audit/review replies: the exact file paths whose real content was
+   *  sent to the model for this turn — computed by the client, not claimed by
+   *  the model, so it can't be wrong the way the model's own words can be. */
+  contextFilesUsed?: string[];
 }
 
 let _id = 0;
@@ -813,6 +841,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   ): Promise<PendingChange[]> => {
     if (!text || sendingRef.current) return [];
     sendingRef.current = true;
+    let usedFallbackModel: string | null = null;
 
     // 1) Show the bubble IMMEDIATELY — never wait on auto-context / network first.
     const userMsg: Message = { id: uid(), role: 'user', content: text, kind };
@@ -912,15 +941,30 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       prov: string,
       mod: string,
       key?: string,
+      triedFreeFallback = false,
     ): Promise<AgentReply> => {
       try {
         return await callAgentOnce(history, systemPrompt, sid, prov, mod, key);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (!isTransientNetworkError(msg)) throw err;
-        setLiveThoughts('');
-        await new Promise((r) => setTimeout(r, 1200));
-        return callAgentOnce(history, systemPrompt, sid, prov, mod, key);
+        if (isTransientNetworkError(msg)) {
+          setLiveThoughts('');
+          await new Promise((r) => setTimeout(r, 1200));
+          return callAgentOnce(history, systemPrompt, sid, prov, mod, key);
+        }
+        // Free-tier capacity error — rotate to a different free model once,
+        // same provider, never paid. The user never needs to see this class
+        // of error at all if a backup answers.
+        if (!triedFreeFallback && prov === 'openrouter' && isFreeModelUnavailableError(msg)) {
+          const next = OPENROUTER_FREE_FALLBACK_CHAIN.find(id => id !== mod);
+          if (next) {
+            setLiveThoughts('');
+            const result = await callAgent(history, systemPrompt, sid, prov, next, key, true);
+            usedFallbackModel = next;
+            return result;
+          }
+        }
+        throw err;
       }
     };
 
@@ -1049,6 +1093,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       // Light chat ("hey", "thanks"): don't paste tree/files into the model.
       const lightTurn = !needsCodeContext(text);
+      // Ground truth for what this turn actually saw — computed here, from the
+      // same ctx map that gets packed into the prompt below, not from
+      // anything the model says about itself afterward.
+      const ctxFilesUsed = suggestTurn && !lightTurn ? [...ctx.keys()] : undefined;
       let systemPrompt = buildSystemPrompt(
         root,
         lightTurn ? [] : tr,
@@ -1070,7 +1118,19 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           '\n\nROLE=PLAN: architecture and steps only. No File: blocks, no fenced code, no scripts until the user says to apply/implement.';
       } else if (suggestTurn) {
         systemPrompt +=
-          '\n\nSUGGEST-ONLY this turn: plain advice, real paths, no File: blocks, no placeholders.';
+          '\n\nSUGGEST-ONLY this turn (audit/review/advice) — no File: blocks, no placeholders.\n' +
+          'This class of reply is where generic filler is most tempting and least forgivable. Hard rules:\n' +
+          '- Start by naming exactly which files you were given full content for, right now, in this context. ' +
+          'If that list is short, say the review only covers those files — do not pad the rest with generic advice.\n' +
+          '- Every point must trace to something you can actually point at in that content — a real function, ' +
+          'line, config value, or its absence. "Ensure passwords are hashed" is not a finding unless you looked ' +
+          'at the code that handles passwords and can say what it currently does.\n' +
+          '- Never restate the standard security/performance/scalability/maintainability checklist (bcrypt, ' +
+          'HTTPS, rate limiting, caching, microservices, CI/CD, monitoring, code splitting) as if it were specific ' +
+          'to this app unless you read the code that has that exact problem. A generic checklist is indistinguishable ' +
+          'from not having looked at all, and the user will notice.\n' +
+          '- If the user says you are not actually looking at their app, they are right to call that out — say so ' +
+          'plainly and name the files you need, instead of rewording the same answer with different headers.';
       } else if (applyTurn) {
         systemPrompt +=
           '\n\nAPPLY this turn: output complete File: blocks only (FULL files). Stubs are rejected and will not save. '
@@ -1084,6 +1144,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       // Always hit agent-chat — it accepts systemPrompt. /api/chat ignores it
       // and is the main-chat persona endpoint, not the agent.
       let reply = await callAgentWithContinue(history, systemPrompt, sid, prov, mod, key);
+      if (usedFallbackModel) {
+        reply += `\n\n_(the usual free model was full — answered by a backup instead)_`;
+        usedFallbackModel = null;
+      }
       let segs  = parseSegments(reply);
       let report = extractFileChangeReport(reply);
       // Full-file writes (new files / explicit rewrites) + unresolved Edit:
@@ -1106,6 +1170,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       setMessages(m => [...m, {
         id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
+        contextFilesUsed: ctxFilesUsed,
       }]);
       if (speakOnRef.current && kind === 'user' && cleanForSpeech(reply)) {
         void speakReply(reply);
@@ -1143,6 +1208,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           { role: 'user', content: nudgeText },
         ];
         reply = await callAgentWithContinue(nudgedHistory, systemPrompt, sid, prov, mod, key);
+        if (usedFallbackModel) {
+          reply += `\n\n_(the usual free model was full — answered by a backup instead)_`;
+          usedFallbackModel = null;
+        }
         segs  = parseSegments(reply);
         report = extractFileChangeReport(reply);
         fc = [
@@ -1175,7 +1244,13 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
     } catch (e: unknown) {
       const msg = friendlyError(e instanceof Error ? e.message : String(e));
       setError(msg);
-      setMessages(m => [...m, { id: uid(), role: 'assistant', content: `⚠ ${msg}` }]);
+      // Never show the same failure twice in a row (e.g. a retry hitting the
+      // identical error) — one clear message beats a wall of repeats.
+      setMessages(m => {
+        const last = m[m.length - 1];
+        if (last?.role === 'assistant' && last.content === `⚠ ${msg}`) return m;
+        return [...m, { id: uid(), role: 'assistant', content: `⚠ ${msg}` }];
+      });
       return [];
     } finally {
       setLoading(false);
@@ -1314,15 +1389,15 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       <div style={{ padding: '7px 12px', borderBottom: '1px solid #191D27',
         background: '#0B0D12', flexShrink: 0, display: 'flex',
         alignItems: 'center', gap: 10 }}>
-        <span style={{ color: '#FF3D8E', fontSize: 10, letterSpacing: '0.1em',
+        <span style={{ color: '#FF3D8E', fontSize: 20, letterSpacing: '0.1em',
           textTransform: 'uppercase' }}>// agent</span>
         {(autoSelectedFiles.length > 0 || contextFiles.size > 0) && (
-          <span style={{ fontSize: 10, color: '#656C7E' }}>
+          <span style={{ fontSize: 20, color: '#656C7E' }}>
             reading {Math.max(autoSelectedFiles.length, contextFiles.size)} file
             {Math.max(autoSelectedFiles.length, contextFiles.size) !== 1 ? 's' : ''} for you
           </span>
         )}
-        {error && <span style={{ fontSize: 10, color: '#ff6a6a', marginLeft: 'auto' }}>
+        {error && <span style={{ fontSize: 20, color: '#ff6a6a', marginLeft: 'auto' }}>
           ✗ {error}
         </span>}
       </div>
@@ -1331,7 +1406,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       {autoSelectedFiles.length > 0 && (
         <div style={{ padding: '5px 12px', background: 'rgba(212,255,63,.05)',
           borderBottom: '1px solid rgba(212,255,63,.15)', flexShrink: 0,
-          fontSize: 10, color: '#C81F6B', lineHeight: 1.6 }}>
+          fontSize: 20, color: '#C81F6B', lineHeight: 1.6 }}>
           <span style={{ fontWeight: 700 }}>Looking at:</span>{' '}
           {autoSelectedFiles.map(p => p.split('/').pop() || p).join(', ')}
         </div>
@@ -1341,7 +1416,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       <div data-testid="chat-messages" style={{ flex: 1, overflowY: 'auto', padding: '12px 14px',
         display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
         {messages.length === 0 && !loading && (
-          <div style={{ fontSize: 12, color: '#323A50', lineHeight: 1.5 }}>
+          <div style={{ fontSize: 22, color: '#323A50', lineHeight: 1.5 }}>
             {repoRoot ? 'Ask for a change.' : 'Start a blank project or open a GitHub URL, then ask.'}
           </div>
         )}
@@ -1354,7 +1429,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             {msg.role === 'user' && msg.kind === 'retry-inject' ? (
               <div style={{ padding: '5px 10px', background: 'rgba(52,211,153,.16)',
                 border: '1px dashed rgba(52,211,153,.16)', borderRadius: 6,
-                fontSize: 11, color: '#7FE0B8', whiteSpace: 'pre-wrap',
+                fontSize: 21, color: '#7FE0B8', whiteSpace: 'pre-wrap',
                 maxHeight: 160, overflowY: 'auto' }}>
                 <span style={{ fontWeight: 700, display: 'block', marginBottom: 3, color: '#FF3D8E' }}>
                   ⟳ Auto-retry — test failure injected
@@ -1367,14 +1442,14 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 border: '1px solid #1FAE7E',
                 borderRadius: 8,
                 padding: '8px 12px',
-                fontSize: 14,
+                fontSize: 24,
                 lineHeight: 1.45,
                 color: '#FFD6E8',
                 whiteSpace: 'pre-wrap',
                 wordBreak: 'break-word',
               }}>
                 <div style={{
-                  fontSize: 10,
+                  fontSize: 20,
                   fontWeight: 700,
                   letterSpacing: '0.08em',
                   textTransform: 'uppercase',
@@ -1391,7 +1466,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 border: '2px solid #ff6a6a',
                 borderRadius: 8,
                 padding: '10px 12px',
-                fontSize: 13,
+                fontSize: 23,
                 lineHeight: 1.45,
                 color: '#ffd0d0',
                 whiteSpace: 'pre-wrap',
@@ -1403,7 +1478,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             ) : (
               <div>
                 <div style={{
-                  fontSize: 10,
+                  fontSize: 20,
                   fontWeight: 700,
                   letterSpacing: '0.08em',
                   textTransform: 'uppercase',
@@ -1412,6 +1487,18 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 }}>
                   Agent
                 </div>
+                {msg.contextFilesUsed !== undefined && (
+                  <div style={{
+                    fontSize: 15, lineHeight: 1.4, marginBottom: 6, padding: '4px 8px',
+                    borderRadius: 4, border: '1px solid #232838',
+                    background: msg.contextFilesUsed.length === 0 ? '#3a1010' : '#12151D',
+                    color: msg.contextFilesUsed.length === 0 ? '#ffb4b4' : '#9198AA',
+                  }}>
+                    {msg.contextFilesUsed.length === 0
+                      ? "⚠ Read 0 files from your project for this — the answer below is generic, not based on your code."
+                      : `Read ${msg.contextFilesUsed.length} file${msg.contextFilesUsed.length === 1 ? '' : 's'}: ${msg.contextFilesUsed.map(p => p.split('/').pop()).join(', ')}`}
+                  </div>
+                )}
                 <AssistantBody msg={msg} appliedPaths={appliedPaths} onRunCode={onRunCode} />
               </div>
             )}
@@ -1419,7 +1506,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         ))}
         {loading && (
           <div data-testid="thinking" style={{ alignSelf: 'flex-start', maxWidth: '92%' }}>
-            <div style={{ fontSize: 12, color: '#656C7E', marginBottom: liveThoughts ? 6 : 0 }}>
+            <div style={{ fontSize: 22, color: '#656C7E', marginBottom: liveThoughts ? 6 : 0 }}>
               thinking… · {elapsedSecs}s
             </div>
             {liveThoughts ? (
@@ -1429,7 +1516,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 overflow: 'auto',
                 whiteSpace: 'pre-wrap',
                 wordBreak: 'break-word',
-                fontSize: 11,
+                fontSize: 21,
                 lineHeight: 1.45,
                 color: '#9198AA',
                 background: '#0B0D12',
@@ -1449,7 +1536,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           display: 'flex', flexWrap: 'wrap', gap: 6, background: '#0B0D12' }}>
           {uploads.map((u, i) => (
             <span key={`${u.name}-${i}`} style={{
-              fontSize: 10, color: '#9198AA', background: '#171B26', border: '1px solid #232838',
+              fontSize: 20, color: '#9198AA', background: '#171B26', border: '1px solid #232838',
               borderRadius: 4, padding: '2px 8px', display: 'inline-flex', gap: 6, alignItems: 'center',
             }}>
               {u.kind === 'image' ? '🖼' : '📄'} {u.name}
@@ -1473,7 +1560,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           disabled={loading}
           style={{ background: '#171B26', color: '#9198AA', border: '1px solid #232838',
             borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
-            fontFamily: 'inherit', fontSize: 12, alignSelf: 'flex-end' }}>📎</button>
+            fontFamily: 'inherit', fontSize: 22, alignSelf: 'flex-end' }}>📎</button>
         <button type="button" data-testid="workspace-mic" title={listening ? 'Stop listening' : (speakOn ? 'Voice chat — tap to talk' : 'Dictate into the box')}
           onClick={toggleMic}
           disabled={loading}
@@ -1481,7 +1568,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             color: listening ? '#ff8a8a' : '#9198AA',
             border: `1px solid ${listening ? '#6a2a2a' : '#232838'}`,
             borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
-            fontFamily: 'inherit', fontSize: 12, alignSelf: 'flex-end' }}>
+            fontFamily: 'inherit', fontSize: 22, alignSelf: 'flex-end' }}>
           {listening ? '●' : '🎙'}
         </button>
         <button type="button" data-testid="workspace-speak" title={speakOn ? 'Voice replies on — tap to mute' : 'Voice replies off — tap to speak answers'}
@@ -1490,7 +1577,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             color: speakOn ? '#FF3D8E' : '#9198AA',
             border: `1px solid ${speakOn ? 'rgba(52,211,153,.16)' : '#232838'}`,
             borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
-            fontFamily: 'inherit', fontSize: 12, alignSelf: 'flex-end' }}>
+            fontFamily: 'inherit', fontSize: 22, alignSelf: 'flex-end' }}>
           {speakOn ? '🔊' : '🔇'}
         </button>
         <textarea
@@ -1505,7 +1592,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           disabled={loading}
           style={{ flex: 1, background: '#12151D', color: '#ECEEF3',
             border: '1px solid #232838', borderRadius: 4,
-            padding: '7px 10px', fontFamily: 'inherit', fontSize: 16,
+            padding: '7px 10px', fontFamily: 'inherit', fontSize: 25,
             outline: 'none', resize: 'vertical', minHeight: 48, maxHeight: 120,
             WebkitTextFillColor: '#ECEEF3',
             opacity: 1 }} />
@@ -1514,7 +1601,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             color: (input.trim() || uploads.length) && !loading ? '#0B0D12' : '#9198AA',
             border: 'none', borderRadius: 4, padding: '8px 16px',
             cursor: (input.trim() || uploads.length) && !loading ? 'pointer' : 'default',
-            fontFamily: 'inherit', fontSize: 12, fontWeight: 700,
+            fontFamily: 'inherit', fontSize: 22, fontWeight: 700,
             alignSelf: 'flex-end' }}>{loading ? '…' : 'Send'}</button>
       </form>
     </div>
