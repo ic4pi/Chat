@@ -16,6 +16,7 @@
 
 import { estimateTokens } from '../lib/context-filters.js';
 import { resolveProvider, withProviderChatExtras, formatProviderError } from '../lib/providers.js';
+import { prepareImageMessages } from '../lib/vision.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
 
 /** Stay under Venice/Dolphin ~131k with room for the completion. */
@@ -389,7 +390,24 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: err.message || 'Provider not configured' });
   }
 
-  const budgeted = budgetMessages(systemPrompt, messages);
+  // Same guard as /api/chat: text-only models 400 on an image_url part, so
+  // turn attachments into text before they ever reach the provider.
+  const pid = providerId || resolved.id || 'openrouter';
+  let chatMessages = messages;
+  try {
+    const prepared = await prepareImageMessages({
+      providerId: pid,
+      model: model || '',
+      resolved,
+      messages,
+      canUseModel: (id) => !requirePaidAccess(req, pid, id),
+    });
+    chatMessages = prepared.messages;
+  } catch (err) {
+    console.error('image preparation failed:', err);
+  }
+
+  const budgeted = budgetMessages(systemPrompt, chatMessages);
   const messagesWithSystem = budgeted.system
     ? [{ role: 'system', content: budgeted.system }, ...budgeted.messages]
     : budgeted.messages;

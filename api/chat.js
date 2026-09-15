@@ -8,6 +8,7 @@
 import { loadConfig } from '../lib/config.js';
 import { resolveProvider, withProviderChatExtras, formatProviderError } from '../lib/providers.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
+import { prepareImageMessages, hasImageParts } from '../lib/vision.js';
 
 /**
  * Headroom under vercel.json maxDuration 300. Must stay below the platform
@@ -63,13 +64,14 @@ function extractDelta(chunk) {
   return { text, reasoning };
 }
 
-async function handleStream(req, res, resolved, model, messagesWithSystem, providerId) {
+async function handleStream(req, res, resolved, model, messagesWithSystem, providerId, notice, hadImages) {
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
+  if (notice) sseWrite(res, { type: 'status', message: notice });
   sseWrite(res, { type: 'status', message: `Connecting to ${resolved.label}…` });
 
   const controller = new AbortController();
@@ -124,7 +126,7 @@ async function handleStream(req, res, resolved, model, messagesWithSystem, provi
       const errText = await upstream.text();
       sseWrite(res, {
         type: 'error',
-        error: formatProviderError(resolved.label, upstream.status, errText, model),
+        error: formatProviderError(resolved.label, upstream.status, errText, model, { hadImages }),
         provider: resolved.label,
         model,
       });
@@ -200,7 +202,7 @@ async function handleStream(req, res, resolved, model, messagesWithSystem, provi
   }
 }
 
-async function handleJson(req, res, resolved, model, messagesWithSystem, providerId) {
+async function handleJson(req, res, resolved, model, messagesWithSystem, providerId, notice, hadImages) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
@@ -236,7 +238,7 @@ async function handleJson(req, res, resolved, model, messagesWithSystem, provide
 
     if (!upstream.ok) {
       return res.status(upstream.status).json({
-        error: formatProviderError(resolved.label, upstream.status, data, model),
+        error: formatProviderError(resolved.label, upstream.status, data, model, { hadImages }),
         provider: resolved.label,
         model,
         raw: data,
@@ -252,6 +254,7 @@ async function handleJson(req, res, resolved, model, messagesWithSystem, provide
         : reply;
     return res.status(200).json({
       reply: out,
+      notice: notice || undefined,
       incomplete: incomplete || undefined,
       provider: resolved.label,
       model,
@@ -311,17 +314,40 @@ export default async function handler(req, res) {
     });
   }
 
+  const pid = providerId || resolved.id || 'openrouter';
+
+  // Uncensored text models answer an image_url part with a bare
+  // "400 Invalid request parameters". Turn the upload into text first.
+  let chatMessages = messages;
+  let visionNotice;
+  try {
+    const prepared = await prepareImageMessages({
+      providerId: pid,
+      model,
+      resolved,
+      messages,
+      // A helper model must clear the same paid gate the picked model did.
+      canUseModel: (id) => !requirePaidAccess(req, pid, id),
+    });
+    chatMessages = prepared.messages;
+    visionNotice = prepared.notice;
+  } catch (err) {
+    console.error('image preparation failed:', err);
+  }
+
+  // True only when images survive preparation, i.e. the model claims vision.
+  const sentImages = hasImageParts(chatMessages);
+
   const effectiveSystemPrompt = await resolveSystemPrompt(personaId);
   const messagesWithSystem = effectiveSystemPrompt
     ? [
         { role: 'system', content: effectiveSystemPrompt },
-        ...messages.map((m) => ({ role: m.role, content: m.content })),
+        ...chatMessages.map((m) => ({ role: m.role, content: m.content })),
       ]
-    : messages.map((m) => ({ role: m.role, content: m.content }));
+    : chatMessages.map((m) => ({ role: m.role, content: m.content }));
 
-  const pid = providerId || resolved.id || 'openrouter';
   if (wantStream) {
-    return handleStream(req, res, resolved, model, messagesWithSystem, pid);
+    return handleStream(req, res, resolved, model, messagesWithSystem, pid, visionNotice, sentImages);
   }
-  return handleJson(req, res, resolved, model, messagesWithSystem, pid);
+  return handleJson(req, res, resolved, model, messagesWithSystem, pid, visionNotice, sentImages);
 }
