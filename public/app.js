@@ -5417,6 +5417,39 @@ function renderAttachPreview() {
   });
 }
 
+/**
+ * Phone screenshots are 3-8MB of PNG, and base64 inflates that by a third —
+ * three of them blow past the serverless body limit and cost a fortune in
+ * image tokens. Shrink to something a vision model reads just as well.
+ */
+const MAX_IMAGE_EDGE = 1568;
+const MAX_IMAGE_BYTES = 1_200_000;
+
+async function downscaleImageFile(file, dataUrl) {
+  // GIFs would lose their animation, and anything already small is fine as-is.
+  if (/gif$/i.test(file.type) || (file.size <= MAX_IMAGE_BYTES && dataUrl.length < 1_600_000)) {
+    return dataUrl;
+  }
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return dataUrl;
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close?.();
+    // 0.9 keeps small UI text readable, which is most of what gets pasted here.
+    const out = canvas.toDataURL('image/jpeg', 0.9);
+    return out.length < dataUrl.length ? out : dataUrl;
+  } catch {
+    return dataUrl;
+  }
+}
+
 async function readUploadFile(file) {
   const isImage = /^image\//.test(file.type) || /\.(png|jpe?g|gif|webp)$/i.test(file.name);
   const content = await new Promise((resolve, reject) => {
@@ -5426,7 +5459,10 @@ async function readUploadFile(file) {
     if (isImage) r.readAsDataURL(file);
     else r.readAsText(file);
   });
-  return { kind: isImage ? 'image' : 'text', name: file.name, content };
+  if (isImage) {
+    return { kind: 'image', name: file.name, content: await downscaleImageFile(file, content) };
+  }
+  return { kind: 'text', name: file.name, content };
 }
 
 if (els.attachBtn && els.attachInput) {

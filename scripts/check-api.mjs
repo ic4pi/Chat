@@ -18,6 +18,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const SYNTAX_FILES = [
   'lib/providers.js',
+  'lib/vision.js',
   'lib/auth.js',
   'lib/config.js',
   'lib/kv.js',
