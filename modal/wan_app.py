@@ -328,6 +328,7 @@ class Wan:
         image: str = "",     # start the clip from this frame (image-to-video)
         keyframes: list | None = None,  # [{image, frame}] — see the block below
         polish: bool = True,  # ffmpeg interpolation + upscale pass; see _export_polished
+        prompts: list | None = None,  # per-clip prompts for a continuous scene
     ) -> dict:
         import torch
         from diffusers.utils import export_to_video
@@ -335,7 +336,14 @@ class Wan:
         started = time.time()
         # Re-clamped here, not just client-side: the endpoint is reachable
         # directly and a 20-clip request would run until the timeout.
+        shot_prompts = []
+        if prompts:
+            shot_prompts = [str(p).strip() for p in prompts if str(p or "").strip()]
+        if shot_prompts:
+            num_clips = len(shot_prompts)
         num_clips = max(1, min(MAX_CLIPS, int(num_clips)))
+        if not shot_prompts:
+            shot_prompts = [prompt] * num_clips
 
         # Whether the LoRA loaded decides the sampler settings, not the caller —
         # 4 steps without it is noise, and CFG with it is burnt frames.
@@ -451,7 +459,7 @@ class Wan:
         for clip in range(num_clips):
             generator = torch.Generator("cpu").manual_seed(seed + clip)
             common = dict(
-                prompt=prompt,
+                prompt=shot_prompts[clip] if clip < len(shot_prompts) else prompt,
                 negative_prompt=negative_prompt or None,
                 height=height,
                 width=width,
@@ -501,12 +509,13 @@ def generate(
     api/media-generate.js targets is ic4pi--wan-video-generate.modal.run."""
     _check_secret(x_modal_secret)
     prompt = (payload.get("prompt") or "").strip()
-    if not prompt:
+    prompts = payload.get("prompts") if isinstance(payload.get("prompts"), list) else None
+    if not prompt and not (prompts and any(str(p or "").strip() for p in prompts)):
         return {"error": "Missing 'prompt'."}
 
     try:
         return Wan().run.remote(
-            prompt=prompt,
+            prompt=prompt or (str(prompts[0]).strip() if prompts else ""),
             negative_prompt=payload.get("negative_prompt") or "",
             width=int(payload.get("width") or 832),
             height=int(payload.get("height") or 480),
@@ -518,6 +527,7 @@ def generate(
             strength=float(payload.get("strength") or 0.6),
             image=payload.get("image") or "",
             keyframes=payload.get("keyframes"),
+            prompts=prompts,
             **({"polish": payload["polish"]} if "polish" in payload else {}),
         )
     except Exception as exc:  # surfaced verbatim; the client reads body.error
@@ -592,12 +602,13 @@ def submit(
     """Start a generation and return immediately with its job id."""
     _check_secret(x_modal_secret)
     prompt = (payload.get("prompt") or "").strip()
-    if not prompt:
+    prompts = payload.get("prompts") if isinstance(payload.get("prompts"), list) else None
+    if not prompt and not (prompts and any(str(p or "").strip() for p in prompts)):
         return {"error": "Missing 'prompt'."}
 
     try:
         call = Wan().run.spawn(
-            prompt=prompt,
+            prompt=prompt or (str(prompts[0]).strip() if prompts else ""),
             negative_prompt=payload.get("negative_prompt") or "",
             width=int(payload.get("width") or 832),
             height=int(payload.get("height") or 480),
@@ -609,6 +620,7 @@ def submit(
             strength=float(payload.get("strength") or 0.6),
             image=payload.get("image") or "",
             keyframes=payload.get("keyframes"),
+            prompts=prompts,
             **({"polish": payload["polish"]} if "polish" in payload else {}),
         )
         return {"job_id": call.object_id, "status": "running"}

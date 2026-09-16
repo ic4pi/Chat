@@ -195,12 +195,20 @@ class LTX:
         keyframes: list | None = None,
         image: str = "",  # start the clip from this frame (image-to-video)
         polish: bool = True,  # ffmpeg interpolation + upscale pass; see _export_polished
+        prompts: list | None = None,  # per-clip prompts for a continuous scene
     ) -> dict:
         import torch
         from diffusers.utils import export_to_video
 
         started = time.time()
+        shot_prompts = []
+        if prompts:
+            shot_prompts = [str(p).strip() for p in prompts if str(p or "").strip()]
+        if shot_prompts:
+            num_clips = len(shot_prompts)
         num_clips = max(1, min(MAX_CLIPS, int(num_clips)))
+        if not shot_prompts:
+            shot_prompts = [prompt] * num_clips
 
         width = _round_to(width, 32, 256)
         height = _round_to(height, 32, 256)
@@ -272,7 +280,7 @@ class LTX:
         for clip in range(num_clips):
             generator = torch.Generator("cpu").manual_seed(seed + clip)
             common = dict(
-                prompt=prompt,
+                prompt=shot_prompts[clip] if clip < len(shot_prompts) else prompt,
                 negative_prompt=negative_prompt or None,
                 width=width,
                 height=height,
@@ -313,12 +321,13 @@ class LTX:
 @modal.fastapi_endpoint(method="POST")
 def generate(payload: dict) -> dict:
     prompt = (payload.get("prompt") or "").strip()
-    if not prompt:
+    prompts = payload.get("prompts") if isinstance(payload.get("prompts"), list) else None
+    if not prompt and not (prompts and any(str(p or "").strip() for p in prompts)):
         return {"error": "Missing 'prompt'."}
 
     try:
         return LTX().run.remote(
-            prompt=prompt,
+            prompt=prompt or (str(prompts[0]).strip() if prompts else ""),
             negative_prompt=payload.get("negative_prompt") or "",
             width=int(payload.get("width") or 704),
             height=int(payload.get("height") or 480),
@@ -328,6 +337,7 @@ def generate(payload: dict) -> dict:
             seed=int(payload["seed"]) if payload.get("seed") else random.randint(1, 2**31 - 1),
             keyframes=payload.get("keyframes"),
             image=payload.get("image") or "",
+            prompts=prompts,
             **({"polish": payload["polish"]} if "polish" in payload else {}),
         )
     except Exception as exc:
@@ -365,12 +375,13 @@ def warm() -> dict:
 def submit(payload: dict) -> dict:
     """Start a generation and return immediately with its job id."""
     prompt = (payload.get("prompt") or "").strip()
-    if not prompt:
+    prompts = payload.get("prompts") if isinstance(payload.get("prompts"), list) else None
+    if not prompt and not (prompts and any(str(p or "").strip() for p in prompts)):
         return {"error": "Missing 'prompt'."}
 
     try:
         call = LTX().run.spawn(
-            prompt=prompt,
+            prompt=prompt or (str(prompts[0]).strip() if prompts else ""),
             negative_prompt=payload.get("negative_prompt") or "",
             width=int(payload.get("width") or 704),
             height=int(payload.get("height") or 480),
@@ -380,6 +391,7 @@ def submit(payload: dict) -> dict:
             seed=int(payload["seed"]) if payload.get("seed") else random.randint(1, 2**31 - 1),
             keyframes=payload.get("keyframes"),
             image=payload.get("image") or "",
+            prompts=prompts,
             **({"polish": payload["polish"]} if "polish" in payload else {}),
         )
         return {"job_id": call.object_id, "status": "running"}

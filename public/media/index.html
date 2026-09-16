@@ -154,8 +154,18 @@
         </div>
 
         <label class="media-field hidden" id="seriesWrap">
-          <span>Series <em class="opt">(one shot per line — leave empty for a single clip)</em></span>
-          <textarea id="mediaSeries" rows="4" placeholder="sitting alone on a park bench at dusk&#10;slowly turning to look at the camera&#10;standing up and walking away"></textarea>
+          <span>Scene beats <em class="opt">(one line ≈ 5s — write 4–6 for a 20–30s shot)</em></span>
+          <textarea id="mediaSeries" rows="6" placeholder="sitting alone on a park bench at dusk&#10;slowly turning to look at the camera&#10;standing up from the bench&#10;walking toward the streetlamp&#10;looking back over one shoulder"></textarea>
+          <label class="media-check" id="flowWrap">
+            <input id="mediaFlow" type="checkbox" checked />
+            Flow as one shot — last frame of each clip starts the next (no cut)
+          </label>
+          <p class="media-flow-hint" id="flowHint">
+            Beats generate back-to-back so the GPU stays warm. Each clip is
+            image-to-video from the last frame of the one before, then they
+            join. That is a continuation, not five unrelated shots taped together.
+            A14B cannot do this (no image-to-video) — use Wan 2.2 5B or LTX.
+          </p>
         </label>
 
         <label class="media-field" id="refWrap">
@@ -216,6 +226,6 @@
     </section>
   </main>
 
-  <script src="/media/media.js?v=7"></script>
+  <script src="/media/media.js?v=8"></script>
 </body>
 </html>
