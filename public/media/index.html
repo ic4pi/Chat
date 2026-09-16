@@ -74,6 +74,19 @@
           <button type="button" id="addKeyframe" class="media-mini">+ Add keyframe</button>
         </div>
 
+        <div class="media-field hidden" id="spanWrap">
+          <span>Start still</span>
+          <input id="mediaSpanStart" type="file" accept="image/*" />
+          <div id="spanStartPreview" class="ref-preview hidden"></div>
+          <span>End still</span>
+          <input id="mediaSpanEnd" type="file" accept="image/*" />
+          <div id="spanEndPreview" class="ref-preview hidden"></div>
+          <p class="media-flow-hint">
+            LTX morphs from the first picture to the last in one pass.
+            Wan treats each still as a new segment (a cut at the second picture).
+          </p>
+        </div>
+
         <label class="media-field hidden" id="modeWrap">
           <span>Mode</span>
           <select id="mediaMode">
@@ -210,6 +223,9 @@
           Wan 2.2 A14B (NSFW LoRA) on Modal.
           Clips are uploaded to storage and returned as a URL, so length is not
           capped by Vercel's 4.5MB response limit.
+          <strong>Lip sync</strong> is a post-pass on any finished clip plus
+          the voice: mouth only, not Wan-specific. Click the talker when there
+          are several faces; a character still is used if one is selected.
           Vercel env: <code>VENICE_API_KEY</code>,
           <code>CLOUDFLARE_ACCOUNT_ID</code> + <code>CLOUDFLARE_API_TOKEN</code>,
           <code>SUPABASE_SERVICE_ROLE_KEY</code> (required for video).
@@ -226,6 +242,6 @@
     </section>
   </main>
 
-  <script src="/media/media.js?v=8"></script>
+  <script src="/media/media.js?v=9"></script>
 </body>
 </html>
