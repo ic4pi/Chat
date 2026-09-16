@@ -16,6 +16,21 @@ import type { FileEdit } from './agentParse.js';
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
 
+/**
+ * The GitHub PAT the push panel already keeps in this browser, if there is one.
+ * Sent to /api/init-repo so a private repo can be cloned — the same token the
+ * push path sends, to the same origin, and never persisted server-side.
+ */
+function savedGitHubToken(): string | undefined {
+  try {
+    const saved =
+      localStorage.getItem('gh_push_token') || sessionStorage.getItem('gh_push_token');
+    return saved?.trim() || undefined;
+  } catch {
+    return undefined; // private mode / storage blocked
+  }
+}
+
 export interface PendingChange {
   path:    string;
   content: string;
@@ -144,7 +159,9 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
           method: 'POST',
           headers: { 'Content-Type': 'application/json',
             ...(sandboxId ? { 'X-Sandbox-Session': sandboxId } : {}) },
-          body: JSON.stringify({ url: rootPathOrUrl, sandboxId }),
+          // Private repos cannot be cloned anonymously, and a sandbox has no
+          // terminal to be asked for a password at — so reuse the saved token.
+          body: JSON.stringify({ url: rootPathOrUrl, sandboxId, token: savedGitHubToken() }),
         });
         const data = await res.json() as {
           sandboxId?: string; repoDir?: string;
