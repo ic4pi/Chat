@@ -30,9 +30,9 @@ const IMAGE_MODELS = [
 // training length, so untested for coherence beyond that. maxSeconds 20 is a
 // cautious ceiling, not a measured one; dial it back if quality falls apart.
 const VIDEO_MODELS = [
-  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, A10G)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', fps: 16, usesRef: false, maxSeconds: 30, modes: ['text', 'image', 'keyframes', 'restyle'] },
+  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, A10G)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', fps: 16, usesRef: false, maxSeconds: 30, modes: ['text', 'image', 'span', 'keyframes', 'restyle'] },
   { value: 'modal:wan2.2-a14b', label: 'Wan 2.2 A14B · NSFW · Text → Video (best quality, single pass, A100)', kind: 'video', provider: 'modal', model: 'wan2.2-a14b', fps: 16, usesRef: false, maxSeconds: 20, modes: ['text'] },
-  { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', fps: 24, usesRef: false, maxSeconds: 30, modes: ['text', 'image', 'keyframes'] },
+  { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', fps: 24, usesRef: false, maxSeconds: 30, modes: ['text', 'image', 'span', 'keyframes'] },
   // fal.ai / NVIDIA / Cloudflare video removed - fal and NVIDIA both bill per
   // generation, and Cloudflare's Seedance models are a third-party pass-through
   // (not covered by the Workers AI free Neurons tier, not on Cloudflare's own
@@ -90,6 +90,11 @@ const els = {
   keyframesWrap: document.getElementById('keyframesWrap'),
   keyframeRows: document.getElementById('keyframeRows'),
   addKeyframe: document.getElementById('addKeyframe'),
+  spanWrap: document.getElementById('spanWrap'),
+  spanStart: document.getElementById('mediaSpanStart'),
+  spanEnd: document.getElementById('mediaSpanEnd'),
+  spanStartPreview: document.getElementById('spanStartPreview'),
+  spanEndPreview: document.getElementById('spanEndPreview'),
   lengthWrap: document.getElementById('lengthWrap'),
   ref: document.getElementById('mediaRef'),
   refWrap: document.getElementById('refWrap'),
@@ -134,12 +139,15 @@ let kind = 'image';
 let refData = null; // { base64, mimeType }
 let srcVideoData = null; // base64 data URL of a clip to restyle
 let audioData = null; // base64 data URL of an audio track to lay over the result
+let spanStartData = null;
+let spanEndData = null;
 let pendingVoice = null; // voice sample staged in the character editor, saved with it
 let pendingImage = null; // reference image staged the same way
 
 const VIDEO_MODE_LABELS = {
   text: 'Text → Video',
   image: 'Start from an image',
+  span: 'Start → end stills',
   restyle: 'Restyle a video (keeps the motion)',
   keyframes: 'Timeline keyframes (guide the motion)',
 };
@@ -272,9 +280,11 @@ function syncFields() {
   els.videoModeWrap.classList.toggle('hidden', !selfHostedVideo || (spec?.modes?.length || 1) < 2);
   els.srcVideoWrap.classList.toggle('hidden', vm !== 'restyle');
   els.keyframesWrap.classList.toggle('hidden', vm !== 'keyframes');
+  if (els.spanWrap) els.spanWrap.classList.toggle('hidden', vm !== 'span');
   // Length is chosen by the source clip when restyling, and by the last
-  // keyframe when keyframing — neither reads the picker.
-  els.lengthWrap.classList.toggle('hidden', kind !== 'video' || (vm !== 'text' && vm !== 'image'));
+  // keyframe when keyframing — neither reads the picker. Start→end stills
+  // do: that is how long the morph lasts.
+  els.lengthWrap.classList.toggle('hidden', kind !== 'video' || (vm !== 'text' && vm !== 'image' && vm !== 'span'));
 
   // Strength means "how far from the source" in both img2img and restyle.
   // A character and a shot list only make sense for plain text/image video —
@@ -647,6 +657,9 @@ els.speakBtn.addEventListener('click', async () => {
     // Clearing the file input keeps it honest: the audio slot now holds the
     // generated line, not whatever was picked there earlier.
     els.audio.value = '';
+    fetch('/api/media-generate?op=warm&model=lipsync', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', keepalive: true,
+    }).catch(() => {});
     const who = spoken.cloned ? `${character.name}'s voice` : 'the default voice';
     els.dialogueState.textContent = `${spoken.seconds}s in ${who} — ready to lay over the video.`;
 
@@ -782,6 +795,35 @@ els.addKeyframe.addEventListener('click', () => {
   renderKeyframeRows();
 });
 renderKeyframeRows();
+
+async function bindStillInput(input, preview, setter) {
+  if (!input) return;
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    setter(null);
+    if (preview) {
+      preview.innerHTML = '';
+      preview.classList.add('hidden');
+    }
+    if (!file) return;
+    try {
+      const compressed = await compressImageFile(file);
+      setter(compressed.base64);
+      if (preview) {
+        const img = document.createElement('img');
+        img.src = compressed.base64;
+        img.alt = file.name;
+        preview.appendChild(img);
+        preview.classList.remove('hidden');
+      }
+    } catch (err) {
+      input.value = '';
+      setStatus(err.message || 'Could not read still.', true);
+    }
+  });
+}
+bindStillInput(els.spanStart, els.spanStartPreview, (v) => { spanStartData = v; });
+bindStillInput(els.spanEnd, els.spanEndPreview, (v) => { spanEndData = v; });
 
 // ---- Cold-start warming --------------------------------------------------
 // A Modal app that has scaled to zero spends ~60s loading weights before it
@@ -1066,10 +1108,10 @@ function renderVideoResult(data) {
   vid.playsInline = true;
   card.insertBefore(vid, card.firstChild);
   const spec = selectedSpec();
+  const actions = document.createElement('div');
+  actions.className = 'media-card-actions';
   const canContinue = spec && spec.kind === 'video' && !/a14b/i.test(spec.model || '') && data.videoUrl;
   if (canContinue) {
-    const actions = document.createElement('div');
-    actions.className = 'media-card-actions';
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'text-btn char-btn';
@@ -1090,8 +1132,74 @@ function renderVideoResult(data) {
       }
     });
     actions.appendChild(btn);
-    card.appendChild(actions);
   }
+  if (data.videoUrl) {
+    const pick = document.createElement('button');
+    pick.type = 'button';
+    pick.className = 'text-btn char-btn';
+    pick.textContent = 'Click the talker';
+    const sync = document.createElement('button');
+    sync.type = 'button';
+    sync.className = 'text-btn char-btn';
+    sync.textContent = 'Lip sync';
+    let facePoint = null;
+    let picking = false;
+    pick.addEventListener('click', () => {
+      picking = true;
+      pick.textContent = 'Click the face in the clip…';
+      setStatus('Click the person who should talk. Tiny faces (wide shots) are skipped — you would not see the mouth anyway.');
+    });
+    vid.addEventListener('click', (e) => {
+      if (!picking) return;
+      e.preventDefault();
+      const r = vid.getBoundingClientRect();
+      facePoint = {
+        x: Math.min(1, Math.max(0, (e.clientX - r.left) / (r.width || 1))),
+        y: Math.min(1, Math.max(0, (e.clientY - r.top) / (r.height || 1))),
+      };
+      picking = false;
+      pick.textContent = 'Talker marked — Lip sync';
+      setStatus('Face marked. Lip sync uses that person; a character still, if one is selected, wins over the click.');
+    });
+    sync.addEventListener('click', async () => {
+      if (!audioData) {
+        setStatus('Generate the voice first (Dialogue → Generate voice), then Lip sync.', true);
+        els.dialogue?.focus();
+        return;
+      }
+      sync.disabled = true;
+      pick.disabled = true;
+      const label = sync.textContent;
+      sync.textContent = 'Lip-syncing…';
+      setStatus('Lip-syncing — mouth only, the rest of the shot stays.');
+      try {
+        const character = selectedCharacter();
+        fetch('/api/media-generate?op=warm&model=lipsync', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', keepalive: true,
+        }).catch(() => {});
+        const synced = await runSync({
+          __op: 'lipsync',
+          video: data.videoUrl,
+          audio: audioData,
+          ...(character?.image ? { face: character.image } : {}),
+          ...(facePoint ? { facePoint } : {}),
+          accessKey: (els.accessKey.value || '').trim(),
+        });
+        renderVideoResult(synced);
+        setStatus(synced.note || 'Lip-synced.');
+      } catch (err) {
+        console.error(err);
+        setStatus(err.message || 'Lip sync failed.', true);
+      } finally {
+        sync.disabled = false;
+        pick.disabled = false;
+        sync.textContent = label;
+      }
+    });
+    actions.appendChild(pick);
+    actions.appendChild(sync);
+  }
+  if (actions.childNodes.length) card.appendChild(actions);
   prependCard(card);
   if (data.billing) {
     setStatus(`Done. Charged $${data.billing.chargedUsd.toFixed(2)} · balance $${data.billing.balanceUsd.toFixed(2)}`);
@@ -1263,6 +1371,16 @@ els.generate.addEventListener('click', async () => {
         if (!srcVideoData) throw new Error('Pick a source video to restyle.');
         body.video = srcVideoData;
         body.strength = (Number(els.strength.value) || 60) / 100;
+      } else if (vm === 'span') {
+        if (!spanStartData || !spanEndData) {
+          throw new Error('Start → end stills needs both pictures.');
+        }
+        const fps = spec.fps || 16;
+        const secs = Number(els.length.value) || 5;
+        body.keyframes = [
+          { image: spanStartData, frame: 0, strength: 1 },
+          { image: spanEndData, frame: Math.max(1, Math.round(secs * fps) - 1), strength: 1 },
+        ];
       } else if (vm === 'keyframes') {
         // Frame index, not seconds: the apps work in frames. The rate is the
         // model's own — LTX runs at 24fps and Wan at 16, so a fixed 24 here
@@ -1464,7 +1582,7 @@ els.generate.addEventListener('click', async () => {
   }
 });
 
-const BUILD = 'b8';
+const BUILD = 'b9';
 const hint = document.querySelector('.media-top-hint');
 if (hint) hint.textContent = `Image · Video · ${BUILD}`;
 
