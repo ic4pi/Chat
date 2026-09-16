@@ -223,6 +223,45 @@
 .ref-preview.hidden { display: none; }
 .media-field.hidden { display: none; }
 
+.media-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+  cursor: pointer;
+  line-height: 1.35;
+  padding: 2px 0;
+}
+.media-check input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.media-flow-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+  opacity: 0.75;
+}
+.media-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 2px 2px;
+}
+.media-card-actions .text-btn {
+  min-height: 36px;
+  font-size: 12px;
+}
+
 .media-gallery {
   display: grid;
   gap: 12px;
