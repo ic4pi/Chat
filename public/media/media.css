@@ -23,7 +23,7 @@
 .media-topbar h1 {
   margin: 0;
   font-family: var(--display);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -31,7 +31,7 @@
   flex: 1;
 }
 .media-top-hint {
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   color: var(--text);
   opacity: 0.75;
 }
@@ -78,7 +78,7 @@
 }
 .media-box h2 {
   margin: 0;
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--accent);
@@ -112,7 +112,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   color: var(--text);
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -127,12 +127,12 @@
   color: var(--text);
   opacity: 0.7;
   font-style: normal;
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
 }
 .media-field select,
 .media-field input[type="text"],
 .media-field textarea {
-  font-size: 16px;
+  font-size: calc(16px * var(--text-scale));
   min-height: 44px;
   padding: 10px 12px;
   border-radius: 8px;
@@ -148,10 +148,10 @@
   resize: vertical;
   text-transform: none;
   letter-spacing: 0;
-  font-size: 15px;
+  font-size: calc(15px * var(--text-scale));
 }
 .media-field input[type="file"] {
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   color: var(--text);
   padding: 10px;
   border: 1px solid var(--accent-dim);
@@ -188,7 +188,7 @@
   color: var(--text);
 }
 .media-status {
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   color: var(--text);
   opacity: 0.8;
   text-transform: none;
@@ -200,7 +200,7 @@
 }
 .media-keys-note {
   margin: 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   color: var(--text);
   line-height: 1.45;
   text-transform: none;
@@ -208,7 +208,7 @@
 }
 .media-keys-note code {
   color: var(--text);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   font-weight: 700;
 }
 
@@ -243,7 +243,7 @@
 }
 .media-card .meta {
   padding: 8px 10px;
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   color: var(--accent);
   display: flex;
   justify-content: space-between;
@@ -263,7 +263,7 @@
   margin: 0;
   color: var(--text);
   opacity: 0.75;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 .media-empty.hidden { display: none; }
 
@@ -273,7 +273,7 @@
 .media-mini {
   align-self: flex-start;
   font: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   padding: 5px 10px;
   cursor: pointer;
   border: 1px solid currentColor;
@@ -291,7 +291,7 @@
   margin-bottom: 8px;
 }
 .keyframe-row input[type="file"] { min-width: 0; }
-.keyframe-row .kf-drop { font-size: 13px; cursor: pointer; opacity: .7; }
+.keyframe-row .kf-drop { font-size: calc(13px * var(--text-scale)); cursor: pointer; opacity: .7; }
 .keyframe-row .kf-drop:hover { opacity: 1; }
 
 /* A status line reporting a problem, not progress. */
@@ -310,7 +310,7 @@
 .char-row select { flex: 1; min-width: 0; }
 .char-btn {
   padding: 6px 10px;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   white-space: nowrap;
 }
 .char-editor {
@@ -329,11 +329,11 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   opacity: .9;
 }
 .char-voice-state {
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   opacity: .7;
 }
 #dialogueWrap textarea { resize: vertical; }
