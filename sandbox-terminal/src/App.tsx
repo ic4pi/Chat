@@ -343,6 +343,7 @@ export function App() {
   const [mobileTab,    setMobileTab]    = useState<MobileTab>('chat');
   const [desktopRightTab, setDesktopRightTab] = useState<'terminal' | 'preview'>('terminal');
   const [previewPort, setPreviewPort] = useState<number | null>(null);
+  const [previewKick, setPreviewKick] = useState(0);
   const autoSwitchedToPreview = useRef(false);
   const handleDevServerPort = useCallback((port: number) => {
     setPreviewPort(port);
@@ -581,6 +582,16 @@ export function App() {
       const results = await repo.applyChanges(files);
       setApplyResults(results);
       setAppliedPaths(new Set(results.filter(r => r.ok).map(r => r.path)));
+      if (results.some(r => r.ok) && repo.sandboxId) {
+        // First successful write: start Preview (auto-detects html vs npm)
+        // and switch the right pane so you see the app, not the terminal.
+        setPreviewKick(k => k + 1);
+        if (!autoSwitchedToPreview.current) {
+          autoSwitchedToPreview.current = true;
+          setDesktopRightTab('preview');
+          setMobileTab('preview');
+        }
+      }
       return results;
     } finally { setApplying(false); }
   }, [repo]);
@@ -813,7 +824,7 @@ export function App() {
 
   const handlePush = useCallback(async (token: string, message: string) => {
     if (!repo.sandboxId) {
-      setPushError('Open a GitHub repo first (blank projects have no remote yet).');
+      setPushError('Start a blank project or open a GitHub URL first.');
       return;
     }
     setPushing(true);
@@ -857,15 +868,18 @@ export function App() {
       const data = await res.json() as {
         ok?: boolean; pushed?: boolean; branch?: string;
         message?: string; error?: string; detail?: string; checkFailed?: boolean;
+        createdRepoUrl?: string | null; pullRequestUrl?: string | null;
       };
       if (!res.ok) {
         throw new Error(data.error ?? `HTTP ${res.status}`);
       }
       if (data.pushed) {
-        setPushOk(
-          `Pushed to GitHub${data.branch ? ` (${data.branch})` : ''} after checks passed. ` +
-          'Open the repo on github.com to see the new commit.',
-        );
+        const bits = [
+          `Pushed to GitHub${data.branch ? ` (${data.branch})` : ''} after checks passed.`,
+        ];
+        if (data.createdRepoUrl) bits.push(`New private repo: ${data.createdRepoUrl}`);
+        if (data.pullRequestUrl) bits.push(`PR: ${data.pullRequestUrl}`);
+        setPushOk(bits.join(' '));
       } else {
         setPushOk(data.message ?? 'Nothing new to push.');
       }
@@ -1186,9 +1200,9 @@ export function App() {
       <DiffPanel
         changes={repo.pendingChanges} applying={applying}
         appliedPaths={appliedPaths}
-        canPush={!!repo.sandboxId && !!repo.repoUrl && autoVerify.pushAllowed}
+        canPush={!!repo.sandboxId && autoVerify.pushAllowed}
         pushBlockedReason={
-          !repo.sandboxId || !repo.repoUrl
+          !repo.sandboxId
             ? null
             : autoVerify.pushAllowed
               ? null
@@ -1332,7 +1346,7 @@ export function App() {
               </div>
               <div style={{ position: 'absolute', inset: 0, overflow: 'hidden',
                 display: desktopRightTab === 'preview' ? 'flex' : 'none', flexDirection: 'column' }}>
-                <PreviewPanel sandboxId={repo.sandboxId} detectedPort={previewPort} />
+                <PreviewPanel sandboxId={repo.sandboxId} detectedPort={previewPort} autoStartKey={previewKick} />
               </div>
             </div>
           </div>
@@ -1356,7 +1370,7 @@ export function App() {
             </div>
             <div style={{ position: 'absolute', inset: 0, overflow: 'hidden',
               display: mobileTab === 'preview' ? 'flex' : 'none', flexDirection: 'column' }}>
-              <PreviewPanel sandboxId={repo.sandboxId} detectedPort={previewPort} />
+              <PreviewPanel sandboxId={repo.sandboxId} detectedPort={previewPort} autoStartKey={previewKick} />
             </div>
           </div>
           <div style={{ display: 'flex', flexShrink: 0, borderTop: '1px solid #191D27',

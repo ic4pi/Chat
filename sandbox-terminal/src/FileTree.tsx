@@ -137,7 +137,7 @@ export function FileTree({
             value={inputPath}
             onChange={e => setInputPath(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleOpen()}
-            placeholder="GitHub URL (optional) — or start blank"
+            placeholder="https://github.com/you/private-repo"
             style={{ flex: 1, minWidth: 0, background: '#12151D', color: '#ECEEF3',
               border: '1px solid #232838', borderRadius: 4, padding: '4px 8px',
               fontFamily: 'inherit', fontSize: 11, outline: 'none' }} />
@@ -169,6 +169,10 @@ export function FileTree({
         {error && (
           <div style={{ marginTop: 5, fontSize: 11, color: '#ff6a6a' }}>✗ {error}</div>
         )}
+        <div style={{ marginTop: 6, fontSize: 10, color: '#656C7E', lineHeight: 1.4 }}>
+          Private repos use the GitHub token from Push (saved in this browser).
+          Paste one there once, then Open works without making the repo public.
+        </div>
         {pythonReady != null && (
           <div style={{
             marginTop: 5, fontSize: 10, lineHeight: 1.4,
