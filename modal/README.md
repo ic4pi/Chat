@@ -1,7 +1,7 @@
 # Modal apps (self-hosted media)
 
-The three Modal apps behind the self-hosted options in Media Studio and the
-chat handoff. They are the cheap path: L4, scale-to-zero, no external content
+The Modal apps behind the self-hosted options in Media Studio and the
+chat handoff. They are the cheap path: scale-to-zero, no external content
 filter.
 
 | App | Endpoint | Called by |
@@ -9,9 +9,11 @@ filter.
 | `wan-video` | `ic4pi--wan-video-generate.modal.run` | `generateModalWanVideo()` |
 | `ltx-video` | `ic4pi--ltx-video-generate.modal.run` | `generateModalLtxVideo()` |
 | `sdxl-nsfw` | `ic4pi--sdxl-nsfw-generate.modal.run` | `generateModalSdxlImage()` |
+| `voice-tts` | `ic4pi--voice-tts-speak.modal.run` | `?op=speak` |
+| `lip-sync` | `ic4pi--lip-sync-run.modal.run` | `?op=lipsync` |
 
-All three are consumed by `api/media-generate.js`. Override any endpoint with
-`MODAL_WAN_ENDPOINT`, `MODAL_LTX_ENDPOINT`, `MODAL_SDXL_ENDPOINT`.
+These are consumed by `api/media-generate.js`. Override any endpoint with
+`MODAL_WAN_ENDPOINT`, `MODAL_LTX_ENDPOINT`, `MODAL_SDXL_ENDPOINT`, `MODAL_LIPSYNC_ENDPOINT`.
 
 ## ⚠️ These files are reconstructed, not recovered
 

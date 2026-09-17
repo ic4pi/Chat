@@ -30,9 +30,9 @@ const IMAGE_MODELS = [
 // training length, so untested for coherence beyond that. maxSeconds 20 is a
 // cautious ceiling, not a measured one; dial it back if quality falls apart.
 const VIDEO_MODELS = [
-  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, A10G)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', fps: 16, usesRef: false, maxSeconds: 30, modes: ['text', 'image', 'keyframes', 'restyle'] },
+  { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, A10G)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', fps: 16, usesRef: false, maxSeconds: 30, modes: ['text', 'image', 'span', 'keyframes', 'restyle'] },
   { value: 'modal:wan2.2-a14b', label: 'Wan 2.2 A14B · NSFW · Text → Video (best quality, single pass, A100)', kind: 'video', provider: 'modal', model: 'wan2.2-a14b', fps: 16, usesRef: false, maxSeconds: 20, modes: ['text'] },
-  { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', fps: 24, usesRef: false, maxSeconds: 30, modes: ['text', 'image', 'keyframes'] },
+  { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', fps: 24, usesRef: false, maxSeconds: 30, modes: ['text', 'image', 'span', 'keyframes'] },
   // fal.ai / NVIDIA / Cloudflare video removed - fal and NVIDIA both bill per
   // generation, and Cloudflare's Seedance models are a third-party pass-through
   // (not covered by the Workers AI free Neurons tier, not on Cloudflare's own
@@ -90,6 +90,11 @@ const els = {
   keyframesWrap: document.getElementById('keyframesWrap'),
   keyframeRows: document.getElementById('keyframeRows'),
   addKeyframe: document.getElementById('addKeyframe'),
+  spanWrap: document.getElementById('spanWrap'),
+  spanStart: document.getElementById('mediaSpanStart'),
+  spanEnd: document.getElementById('mediaSpanEnd'),
+  spanStartPreview: document.getElementById('spanStartPreview'),
+  spanEndPreview: document.getElementById('spanEndPreview'),
   lengthWrap: document.getElementById('lengthWrap'),
   ref: document.getElementById('mediaRef'),
   refWrap: document.getElementById('refWrap'),
@@ -119,6 +124,9 @@ const els = {
   audioWrap: document.getElementById('audioWrap'),
   series: document.getElementById('mediaSeries'),
   seriesWrap: document.getElementById('seriesWrap'),
+  flow: document.getElementById('mediaFlow'),
+  flowWrap: document.getElementById('flowWrap'),
+  flowHint: document.getElementById('flowHint'),
   accessKey: document.getElementById('mediaAccessKey'),
   accessKeyWrap: document.getElementById('accessKeyWrap'),
   generate: document.getElementById('mediaGenerate'),
@@ -131,12 +139,15 @@ let kind = 'image';
 let refData = null; // { base64, mimeType }
 let srcVideoData = null; // base64 data URL of a clip to restyle
 let audioData = null; // base64 data URL of an audio track to lay over the result
+let spanStartData = null;
+let spanEndData = null;
 let pendingVoice = null; // voice sample staged in the character editor, saved with it
 let pendingImage = null; // reference image staged the same way
 
 const VIDEO_MODE_LABELS = {
   text: 'Text → Video',
   image: 'Start from an image',
+  span: 'Start → end stills',
   restyle: 'Restyle a video (keeps the motion)',
   keyframes: 'Timeline keyframes (guide the motion)',
 };
@@ -269,9 +280,11 @@ function syncFields() {
   els.videoModeWrap.classList.toggle('hidden', !selfHostedVideo || (spec?.modes?.length || 1) < 2);
   els.srcVideoWrap.classList.toggle('hidden', vm !== 'restyle');
   els.keyframesWrap.classList.toggle('hidden', vm !== 'keyframes');
+  if (els.spanWrap) els.spanWrap.classList.toggle('hidden', vm !== 'span');
   // Length is chosen by the source clip when restyling, and by the last
-  // keyframe when keyframing — neither reads the picker.
-  els.lengthWrap.classList.toggle('hidden', kind !== 'video' || (vm !== 'text' && vm !== 'image'));
+  // keyframe when keyframing — neither reads the picker. Start→end stills
+  // do: that is how long the morph lasts.
+  els.lengthWrap.classList.toggle('hidden', kind !== 'video' || (vm !== 'text' && vm !== 'image' && vm !== 'span'));
 
   // Strength means "how far from the source" in both img2img and restyle.
   // A character and a shot list only make sense for plain text/image video —
@@ -283,6 +296,19 @@ function syncFields() {
   els.characterWrap.classList.toggle('hidden', !seriesable);
   els.dialogueWrap.classList.toggle('hidden', !seriesable);
   els.seriesWrap.classList.toggle('hidden', !seriesable);
+  // A14B has no image-to-video pipeline, so last-frame continuation cannot
+  // run. Leave the beats list, but force separate shots rather than lying.
+  const canFlow = seriesable && spec && !/a14b/i.test(spec.model || '');
+  if (els.flowWrap) els.flowWrap.classList.toggle('hidden', !seriesable);
+  if (els.flow) {
+    els.flow.disabled = !canFlow;
+    if (!canFlow) els.flow.checked = false;
+  }
+  if (els.flowHint) {
+    els.flowHint.textContent = canFlow
+      ? 'Beats generate back-to-back so the GPU stays warm. Each clip is image-to-video from the last frame of the one before, then they join — a continuation, not five unrelated shots taped together.'
+      : 'Wan A14B cannot continue from a frame (no image-to-video). Use Wan 2.2 5B or LTX for a 20–30s scene with no cut.';
+  }
 
   els.strengthWrap.classList.toggle('hidden', m !== 'img2img' && vm !== 'restyle');
   els.expandWrap.classList.toggle('hidden', m !== 'expand');
@@ -631,6 +657,9 @@ els.speakBtn.addEventListener('click', async () => {
     // Clearing the file input keeps it honest: the audio slot now holds the
     // generated line, not whatever was picked there earlier.
     els.audio.value = '';
+    fetch('/api/media-generate?op=warm&model=lipsync', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', keepalive: true,
+    }).catch(() => {});
     const who = spoken.cloned ? `${character.name}'s voice` : 'the default voice';
     els.dialogueState.textContent = `${spoken.seconds}s in ${who} — ready to lay over the video.`;
 
@@ -767,6 +796,35 @@ els.addKeyframe.addEventListener('click', () => {
 });
 renderKeyframeRows();
 
+async function bindStillInput(input, preview, setter) {
+  if (!input) return;
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    setter(null);
+    if (preview) {
+      preview.innerHTML = '';
+      preview.classList.add('hidden');
+    }
+    if (!file) return;
+    try {
+      const compressed = await compressImageFile(file);
+      setter(compressed.base64);
+      if (preview) {
+        const img = document.createElement('img');
+        img.src = compressed.base64;
+        img.alt = file.name;
+        preview.appendChild(img);
+        preview.classList.remove('hidden');
+      }
+    } catch (err) {
+      input.value = '';
+      setStatus(err.message || 'Could not read still.', true);
+    }
+  });
+}
+bindStillInput(els.spanStart, els.spanStartPreview, (v) => { spanStartData = v; });
+bindStillInput(els.spanEnd, els.spanEndPreview, (v) => { spanEndData = v; });
+
 // ---- Cold-start warming --------------------------------------------------
 // A Modal app that has scaled to zero spends ~60s loading weights before it
 // generates anything. Firing that off when the prompt box is focused overlaps
@@ -795,6 +853,7 @@ function warmSelectedModel() {
 }
 
 els.prompt.addEventListener('focus', warmSelectedModel);
+if (els.series) els.series.addEventListener('focus', warmSelectedModel);
 // Switching model after focusing should warm the new one too.
 els.model.addEventListener('change', () => {
   if (document.activeElement === els.prompt) warmSelectedModel();
@@ -954,6 +1013,78 @@ function clearPendingJob() {
   }
 }
 
+/** Last frame of a finished clip, as a JPEG data URL for the next i2v call.
+ *  Fetch-as-blob first so a hosted URL does not taint the canvas. Seek near
+ *  the end rather than duration itself — some decoders never paint EOS. */
+async function lastFrameFromVideoUrl(url) {
+  if (!url) throw new Error('No clip to continue from.');
+  let blob;
+  if (String(url).startsWith('data:')) {
+    blob = await (await fetch(url)).blob();
+  } else {
+    const res = await fetch(url, { mode: 'cors' });
+    if (!res.ok) throw new Error(`Could not load clip (HTTP ${res.status})`);
+    blob = await res.blob();
+  }
+  const obj = URL.createObjectURL(blob);
+  try {
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'auto';
+    await new Promise((resolve, reject) => {
+      video.onloadedmetadata = resolve;
+      video.onerror = () => reject(new Error('Could not decode clip for last frame.'));
+      video.src = obj;
+    });
+    const t = Math.max(0, (Number.isFinite(video.duration) ? video.duration : 0) - 0.05);
+    await new Promise((resolve, reject) => {
+      const to = setTimeout(() => resolve(), 1800);
+      video.onseeked = () => { clearTimeout(to); resolve(); };
+      video.onerror = () => { clearTimeout(to); reject(new Error('Could not seek to last frame.')); };
+      try { video.currentTime = t; } catch { clearTimeout(to); resolve(); }
+    });
+    const w = video.videoWidth || 832;
+    const h = video.videoHeight || 480;
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+    return canvas.toDataURL('image/jpeg', 0.86);
+  } finally {
+    URL.revokeObjectURL(obj);
+  }
+}
+
+function showCarryPreview(dataUrl) {
+  els.refPreview.innerHTML = '';
+  const img = document.createElement('img');
+  img.src = dataUrl;
+  img.alt = 'Last frame — next clip starts here';
+  els.refPreview.appendChild(img);
+  els.refPreview.classList.remove('hidden');
+}
+
+function armContinueFrom(videoUrl) {
+  const spec = selectedSpec();
+  if (!spec || spec.kind !== 'video' || /a14b/i.test(spec.model || '')) {
+    throw new Error('Pick Wan 2.2 5B or LTX — A14B cannot continue from a frame.');
+  }
+  return lastFrameFromVideoUrl(videoUrl).then((frame) => {
+    refData = { base64: frame, mimeType: 'image/jpeg' };
+    showCarryPreview(frame);
+    if (els.videoMode) {
+      els.videoMode.value = 'image';
+      fillVideoModes();
+    }
+    syncFields();
+    els.prompt.value = '';
+    els.prompt.placeholder = 'What happens next — this starts from the last frame of that clip.';
+    els.prompt.focus();
+    setStatus('Last frame loaded. Write the next beat (or 4–6 more lines under Scene beats) and Generate.');
+  });
+}
+
 /** Renders a finished video job's result into a result card. */
 function renderVideoResult(data) {
   if (data.fallbackNote) setStatus(data.fallbackNote);
@@ -976,6 +1107,99 @@ function renderVideoResult(data) {
   vid.controls = true;
   vid.playsInline = true;
   card.insertBefore(vid, card.firstChild);
+  const spec = selectedSpec();
+  const actions = document.createElement('div');
+  actions.className = 'media-card-actions';
+  const canContinue = spec && spec.kind === 'video' && !/a14b/i.test(spec.model || '') && data.videoUrl;
+  if (canContinue) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'text-btn char-btn';
+    btn.textContent = 'Continue from last frame';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      const label = btn.textContent;
+      btn.textContent = 'Grabbing last frame…';
+      setStatus('Grabbing last frame…');
+      try {
+        await armContinueFrom(data.videoUrl);
+      } catch (err) {
+        console.error(err);
+        setStatus(err.message || 'Could not grab last frame.', true);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = label;
+      }
+    });
+    actions.appendChild(btn);
+  }
+  if (data.videoUrl) {
+    const pick = document.createElement('button');
+    pick.type = 'button';
+    pick.className = 'text-btn char-btn';
+    pick.textContent = 'Click the talker';
+    const sync = document.createElement('button');
+    sync.type = 'button';
+    sync.className = 'text-btn char-btn';
+    sync.textContent = 'Lip sync';
+    let facePoint = null;
+    let picking = false;
+    pick.addEventListener('click', () => {
+      picking = true;
+      pick.textContent = 'Click the face in the clip…';
+      setStatus('Click the person who should talk. Tiny faces (wide shots) are skipped — you would not see the mouth anyway.');
+    });
+    vid.addEventListener('click', (e) => {
+      if (!picking) return;
+      e.preventDefault();
+      const r = vid.getBoundingClientRect();
+      facePoint = {
+        x: Math.min(1, Math.max(0, (e.clientX - r.left) / (r.width || 1))),
+        y: Math.min(1, Math.max(0, (e.clientY - r.top) / (r.height || 1))),
+      };
+      picking = false;
+      pick.textContent = 'Talker marked — Lip sync';
+      setStatus('Face marked. Lip sync uses that person; a character still, if one is selected, wins over the click.');
+    });
+    sync.addEventListener('click', async () => {
+      if (!audioData) {
+        setStatus('Generate the voice first (Dialogue → Generate voice), then Lip sync.', true);
+        els.dialogue?.focus();
+        return;
+      }
+      sync.disabled = true;
+      pick.disabled = true;
+      const label = sync.textContent;
+      sync.textContent = 'Lip-syncing…';
+      setStatus('Lip-syncing — mouth only, the rest of the shot stays.');
+      try {
+        const character = selectedCharacter();
+        fetch('/api/media-generate?op=warm&model=lipsync', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', keepalive: true,
+        }).catch(() => {});
+        const synced = await runSync({
+          __op: 'lipsync',
+          video: data.videoUrl,
+          audio: audioData,
+          ...(character?.image ? { face: character.image } : {}),
+          ...(facePoint ? { facePoint } : {}),
+          accessKey: (els.accessKey.value || '').trim(),
+        });
+        renderVideoResult(synced);
+        setStatus(synced.note || 'Lip-synced.');
+      } catch (err) {
+        console.error(err);
+        setStatus(err.message || 'Lip sync failed.', true);
+      } finally {
+        sync.disabled = false;
+        pick.disabled = false;
+        sync.textContent = label;
+      }
+    });
+    actions.appendChild(pick);
+    actions.appendChild(sync);
+  }
+  if (actions.childNodes.length) card.appendChild(actions);
   prependCard(card);
   if (data.billing) {
     setStatus(`Done. Charged $${data.billing.chargedUsd.toFixed(2)} · balance $${data.billing.balanceUsd.toFixed(2)}`);
@@ -1147,6 +1371,16 @@ els.generate.addEventListener('click', async () => {
         if (!srcVideoData) throw new Error('Pick a source video to restyle.');
         body.video = srcVideoData;
         body.strength = (Number(els.strength.value) || 60) / 100;
+      } else if (vm === 'span') {
+        if (!spanStartData || !spanEndData) {
+          throw new Error('Start → end stills needs both pictures.');
+        }
+        const fps = spec.fps || 16;
+        const secs = Number(els.length.value) || 5;
+        body.keyframes = [
+          { image: spanStartData, frame: 0, strength: 1 },
+          { image: spanEndData, frame: Math.max(1, Math.round(secs * fps) - 1), strength: 1 },
+        ];
       } else if (vm === 'keyframes') {
         // Frame index, not seconds: the apps work in frames. The rate is the
         // model's own — LTX runs at 24fps and Wan at 16, so a fixed 24 here
@@ -1180,13 +1414,50 @@ els.generate.addEventListener('click', async () => {
     // Modal container, and the cold start plus the app's idle window is paid
     // once for the whole list instead of once per clip. Firing them together
     // would start a container each and cost the overhead every time.
+    //
+    // Flow mode: each beat is a 5s clip that starts on the last frame of the
+    // previous one (image-to-video). That is how you get 20–30s with no cut.
+    // Stitching independent clips of the same seed is still a cut at every
+    // join — do not do that when the user asked for one scene.
+    const specCanFlow = spec && !/a14b/i.test(spec.model || '');
+    const flowOn = kind === 'video' && specCanFlow && els.flow && els.flow.checked && shots.length >= 1;
+    const MAX_FLOW_BEATS = 6;
+    if (flowOn && shots.length > MAX_FLOW_BEATS) {
+      shots.length = MAX_FLOW_BEATS;
+      setStatus(`Using the first ${MAX_FLOW_BEATS} beats (~${MAX_FLOW_BEATS * 5}s). Continue from last frame for more.`);
+    }
+
     const seriesClips = [];
+    let carryFrame = null;
+    if (flowOn) {
+      if (refData && (videoMode() === 'image' || modelUsesRef(spec))) {
+        carryFrame = refData.base64;
+      } else if (character?.image && videoMode() === 'image') {
+        carryFrame = character.image;
+      }
+    }
+
     for (const [i, shot] of shots.entries()) {
       const perShot = { ...body, prompt: composePrompt(shot, character) };
       // One seed across the series is half of what keeps a character stable;
       // the repeated description in composePrompt() is the other half.
       if (character && Number.isFinite(Number(character.seed))) perShot.seed = Number(character.seed);
-      if (shots.length > 1) setStatus(`Shot ${i + 1} of ${shots.length}… ${shot}`);
+      if (flowOn) {
+        // One clip per beat. The length picker is the total scene when they
+        // only typed one prompt; with a beat list, each line is ~5s.
+        if (shots.length > 1) perShot.seconds = 5;
+        if (carryFrame) {
+          perShot.imageBase64 = carryFrame;
+          perShot.mimeType = 'image/jpeg';
+        }
+      }
+      if (shots.length > 1) {
+        setStatus(
+          flowOn
+            ? `Beat ${i + 1} of ${shots.length} (~${(i + 1) * 5}s / ${shots.length * 5}s)… ${shot}`
+            : `Shot ${i + 1} of ${shots.length}… ${shot}`,
+        );
+      }
 
       // Self-hosted video goes through the async job API. One blocking request
       // would be bounded by the API's 800s function timeout, which is what caps
@@ -1204,6 +1475,7 @@ els.generate.addEventListener('click', async () => {
         if (shots.length === 1) throw shotErr;
         console.error(shotErr);
         setStatus(`Shot ${i + 1} failed: ${shotErr.message}`, true);
+        carryFrame = null; // continuity is broken; remaining beats start fresh
         continue;
       }
 
@@ -1240,6 +1512,17 @@ els.generate.addEventListener('click', async () => {
       } else if (data.kind === 'video') {
         renderVideoResult(data);
         if (data.videoUrl) seriesClips.push(data.videoUrl);
+        if (flowOn && i < shots.length - 1 && data.videoUrl) {
+          setStatus(`Grabbing last frame of beat ${i + 1} so beat ${i + 2} continues from it…`);
+          try {
+            carryFrame = await lastFrameFromVideoUrl(data.videoUrl);
+            showCarryPreview(carryFrame);
+          } catch (frameErr) {
+            console.error(frameErr);
+            setStatus(`Could not grab last frame (${frameErr.message}). Remaining beats start fresh.`, true);
+            carryFrame = null;
+          }
+        }
       } else {
         // "Unexpected response" alone gives nothing to act on. The keys say
         // whether this is an error body, a stale API shape, or a cached client
@@ -1254,14 +1537,34 @@ els.generate.addEventListener('click', async () => {
       }
     }
 
-    if (shots.length > 1) setStatus(`Done — ${shots.length} shots.`);
+    if (shots.length > 1) {
+      setStatus(flowOn
+        ? `Done — ${seriesClips.length} beats chained from last frame.`
+        : `Done — ${shots.length} shots.`);
+    }
 
     // Assembly passes links, not bytes. Inline clips (no storage configured)
     // would blow the request limit, so the offer is only made when there is
     // something linkable to send. A lone clip is only worth assembling when
     // there is audio to lay over it.
     const linkable = seriesClips.filter((u) => !String(u).startsWith('data:'));
-    if (linkable.length > 1 || (linkable.length === 1 && audioData)) {
+    if (flowOn && linkable.length > 1) {
+      setStatus(`Joining ${linkable.length} beats into one continuous clip…`);
+      try {
+        const joined = await runSync({
+          __op: 'stitch',
+          clips: linkable,
+          ...(audioData ? { audio: audioData } : {}),
+          accessKey: body.accessKey || '',
+        });
+        renderVideoResult(joined);
+        setStatus(`Joined ${linkable.length} beats into one clip. Use Continue from last frame to keep going.`);
+      } catch (joinErr) {
+        console.error(joinErr);
+        setStatus(`Beats are ready but joining failed: ${joinErr.message}`, true);
+        offerStitch(linkable, body.accessKey || '', audioData);
+      }
+    } else if (linkable.length > 1 || (linkable.length === 1 && audioData)) {
       offerStitch(linkable, body.accessKey || '', audioData);
     } else if (seriesClips.length > 1 || (seriesClips.length === 1 && audioData)) {
       setStatus(
@@ -1279,7 +1582,7 @@ els.generate.addEventListener('click', async () => {
   }
 });
 
-const BUILD = 'b7';
+const BUILD = 'b9';
 const hint = document.querySelector('.media-top-hint');
 if (hint) hint.textContent = `Image · Video · ${BUILD}`;
 

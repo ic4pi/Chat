@@ -643,6 +643,9 @@ function modalEndpoint(model, fn) {
 }
 
 function warmEndpointFor(model) {
+  if (/lipsync|latent.?sync|lip-sync/i.test(String(model || ''))) {
+    return MODAL_LIPSYNC_ENDPOINT.replace(/-run(\.modal\.run)$/, '-warm$1');
+  }
   return modalEndpoint(model, 'warm');
 }
 
@@ -775,6 +778,15 @@ const MODAL_STITCH_ENDPOINT = cleanEndpoint(
 const MODAL_TTS_ENDPOINT = cleanEndpoint(
   process.env.MODAL_TTS_ENDPOINT,
   'https://ic4pi--voice-tts-speak.modal.run',
+);
+
+/**
+ * Lip-sync pass. Own GPU app so it never wakes Wan. See modal/lipsync_app.py.
+ * Works on any finished clip (Wan, LTX, an upload) plus a voice track.
+ */
+const MODAL_LIPSYNC_ENDPOINT = cleanEndpoint(
+  process.env.MODAL_LIPSYNC_ENDPOINT,
+  'https://ic4pi--lip-sync-run.modal.run',
 );
 
 async function generateModalWanVideo({
@@ -1119,6 +1131,84 @@ export default async function handler(req, res) {
       cloned: !!spoken.cloned,
       elapsedSeconds: spoken.elapsed_seconds,
     });
+  }
+
+  // Lip-sync an existing clip to a voice track.
+  //   POST ?op=lipsync {video, audio, face?, facePoint?} -> { kind:'video', videoUrl }
+  //
+  // Not Wan-specific: any finished mp4 plus the Chatterbox line. `face` is a
+  // still of the character (embedding match). `facePoint` is a click on the
+  // frame (0–1). Faces too small to read are rejected rather than guessed.
+  if (String(req.query?.op || '') === 'lipsync') {
+    if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+    const { video, audio, face, facePoint, face_point: facePointSnake, accessKey: lk } = req.body || {};
+    if (!video || !audio) {
+      return res.status(400).json({ error: 'video and audio are required.' });
+    }
+    if (payloadTooLarge({ video, audio, face })) {
+      return res.status(413).json({
+        code: 'PAYLOAD_TOO_LARGE',
+        error:
+          'Clip or audio is too large to send inline. Store the video as a URL ' +
+          '(SUPABASE_SERVICE_ROLE_KEY) and generate the voice first — then only links are sent.',
+      });
+    }
+
+    let person = null;
+    if (billingEnabled()) {
+      person = findPerson(lk);
+      if (!person) return res.status(401).json({ error: 'Invalid or missing access key.' });
+      try {
+        await assertHasCredit(person);
+      } catch (creditErr) {
+        return res.status(creditErr.status || 402).json({ error: creditErr.message });
+      }
+    }
+
+    const upstream = await fetch(MODAL_LIPSYNC_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
+      body: JSON.stringify({
+        video,
+        audio,
+        ...(face ? { face } : {}),
+        face_point: facePoint || facePointSnake || undefined,
+      }),
+    });
+    const synced = await upstream.json().catch(() => ({}));
+    if (!upstream.ok || synced.error || !synced.video_base64) {
+      return res.status(upstream.ok ? 502 : upstream.status).json({
+        error: synced.error || `Modal lip-sync HTTP ${upstream.status} calling ${MODAL_LIPSYNC_ENDPOINT}`,
+      });
+    }
+
+    let out = {
+      kind: 'video',
+      provider: 'modal',
+      model: 'lipsync',
+      videoUrl: `data:video/mp4;base64,${synced.video_base64}`,
+      mime: 'video/mp4',
+      elapsedSeconds: synced.elapsed_seconds,
+      faceCount: synced.face_count,
+      faceUsed: synced.face_used,
+      note:
+        synced.face_used === 'reference' ? 'Lip-synced the character that matched the still.'
+        : synced.face_used === 'click' ? 'Lip-synced the face you clicked.'
+        : 'Lip-synced the largest face in the shot.',
+    };
+    try {
+      out = await persistVideoResult(out);
+    } catch (persistErr) {
+      return res.status(persistErr.status || 502).json({ error: persistErr.message });
+    }
+    if (person) {
+      const billing = await chargeForGeneration(person, {
+        elapsedSeconds: out.elapsedSeconds,
+        prompt: 'lipsync',
+      });
+      out.billing = { name: person.name, markupPct: person.markupPct, ...billing };
+    }
+    return res.status(200).json(out);
   }
 
   // Join a series of finished clips into one video.

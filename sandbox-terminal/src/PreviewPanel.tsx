@@ -5,9 +5,12 @@
  * sandbox's public domain for that port (Vercel Sandbox's `sandbox.domain()`).
  * Rendered in a sandboxed iframe; "open in new tab" covers any dev server
  * that blocks framing.
+ *
+ * Leave the command box empty to auto-detect: npm run dev, npm start, or a
+ * static `python3 -m http.server` for a plain HTML page.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
@@ -16,15 +19,18 @@ interface Props {
   sandboxId: string | null;
   /** Auto-detected port from terminal output, if any — prefilled, editable. */
   detectedPort: number | null;
+  /** Increment to auto-start (or restart) preview after files are written. */
+  autoStartKey?: number;
 }
 
-export function PreviewPanel({ sandboxId, detectedPort }: Props) {
-  const [command, setCommand] = useState('npm run dev');
+export function PreviewPanel({ sandboxId, detectedPort, autoStartKey = 0 }: Props) {
+  const [command, setCommand] = useState('');
   const [port, setPort] = useState<string>(String(detectedPort ?? 3000));
   const [url, setUrl] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const lastKick = useRef(0);
 
   // Auto-detected port only ever raises the prefill — never fights a value
   // the user already typed in manually.
@@ -50,10 +56,14 @@ export function PreviewPanel({ sandboxId, detectedPort }: Props) {
       const res = await fetch(`${API_URL}/preview-start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Sandbox-Session': sandboxId },
-        body: JSON.stringify({ command, port: p }),
+        body: JSON.stringify({
+          ...(command.trim() ? { command: command.trim() } : {}),
+          port: p,
+        }),
       });
-      const data = await res.json() as { url?: string; error?: string };
+      const data = await res.json() as { url?: string; error?: string; command?: string };
       if (!res.ok || !data.url) throw new Error(data.error || `HTTP ${res.status}`);
+      if (data.command && !command.trim()) setCommand(data.command);
       setUrl(data.url);
       setReloadKey(k => k + 1);
     } catch (err) {
@@ -63,13 +73,22 @@ export function PreviewPanel({ sandboxId, detectedPort }: Props) {
     }
   }
 
+  useEffect(() => {
+    if (!autoStartKey || autoStartKey === lastKick.current) return;
+    if (!sandboxId) return;
+    lastKick.current = autoStartKey;
+    void start();
+    // start reads latest command/port/sandboxId from the closure of this render
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStartKey, sandboxId]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div style={{ display: 'flex', gap: 6, padding: 10, borderBottom: '1px solid #191D27', flexShrink: 0 }}>
         <input
           value={command}
           onChange={e => setCommand(e.target.value)}
-          placeholder="npm run dev"
+          placeholder="auto (html → python server, else npm run dev)"
           style={{ flex: 1, background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
             borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 12 }}
         />
@@ -114,13 +133,14 @@ export function PreviewPanel({ sandboxId, detectedPort }: Props) {
           key={reloadKey}
           src={url}
           title="Live preview"
-          sandbox="allow-scripts allow-forms allow-popups"
+          sandbox="allow-scripts allow-forms allow-popups allow-same-origin"
           style={{ flex: 1, minHeight: 0, border: 'none', background: '#fff' }}
         />
       ) : (
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
           color: '#656C7E', fontSize: 12, textAlign: 'center', padding: 20 }}>
-          Start a dev server (or run one from chat) and hit "Start preview" to see it live here.
+          Write a file (or hit Start preview). Plain HTML pages are served automatically —
+          no npm, no typed command.
         </div>
       )}
     </div>
