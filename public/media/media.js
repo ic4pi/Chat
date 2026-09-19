@@ -975,9 +975,11 @@ const POLL_CEILING_MS = 3_600_000;
 // The submit/result endpoints only exist on Modal apps deployed from modal/.
 // Until those are deployed the apps expose `generate` alone, so the async
 // route 404s and this falls back to the blocking one, which they do serve.
-// Remembered per page load so the fallback costs one failed request, not one
-// per generation.
-let asyncVideoUnavailable = false;
+// Keyed by model rather than one flag: the three video apps deploy and fail
+// independently, so one model missing its job API must not silently drop
+// every other model — which were otherwise working fine — into the slow
+// blocking route for the rest of the page session.
+const asyncVideoUnavailable = new Set();
 
 // The job itself runs server-side on Modal regardless of whether this tab
 // stays open — closing it never kills the generation. What used to get lost
@@ -1258,7 +1260,7 @@ async function pollJob(jobId, model, accessKey) {
 }
 
 async function runVideoJob(body) {
-  if (asyncVideoUnavailable) return runSyncVideoFallback(body);
+  if (asyncVideoUnavailable.has(body.model)) return runSyncVideoFallback(body);
 
   const submitRes = await fetch('/api/media-generate?op=submit', {
     method: 'POST',
@@ -1268,7 +1270,7 @@ async function runVideoJob(body) {
   const job = await submitRes.json().catch(() => ({}));
 
   if (job.code === 'ASYNC_UNAVAILABLE') {
-    asyncVideoUnavailable = true;
+    asyncVideoUnavailable.add(body.model);
     return runSyncVideoFallback(body);
   }
   if (!submitRes.ok || !job.jobId) throw new Error(friendlyHttpError(submitRes.status, job));
