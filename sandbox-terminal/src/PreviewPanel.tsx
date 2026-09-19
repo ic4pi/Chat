@@ -90,31 +90,31 @@ export function PreviewPanel({ sandboxId, detectedPort, autoStartKey = 0 }: Prop
           onChange={e => setCommand(e.target.value)}
           placeholder="auto (html → python server, else npm run dev)"
           style={{ flex: 1, background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
-            borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 12 }}
+            borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 16 }}
         />
         <input
           value={port}
           onChange={e => setPort(e.target.value.replace(/[^\d]/g, ''))}
           placeholder="port"
           style={{ width: 64, background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
-            borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 12 }}
+            borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 16 }}
         />
         <button type="button" onClick={() => void start()} disabled={starting}
           style={{ background: '#FF3D8E', color: '#0B0D12', border: 'none', borderRadius: 4,
             padding: '6px 12px', cursor: starting ? 'default' : 'pointer', fontFamily: 'inherit',
-            fontSize: 12, fontWeight: 700, opacity: starting ? 0.6 : 1, whiteSpace: 'nowrap' }}>
+            fontSize: 16, fontWeight: 700, opacity: starting ? 0.6 : 1, whiteSpace: 'nowrap' }}>
           {starting ? 'Starting…' : url ? 'Restart' : 'Start preview'}
         </button>
         {url && (
           <>
             <button type="button" onClick={() => setReloadKey(k => k + 1)}
               style={{ background: '#171B26', color: '#9198AA', border: '1px solid #232838',
-                borderRadius: 4, padding: '6px 10px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12 }}>
+                borderRadius: 4, padding: '6px 10px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 16 }}>
               ↻
             </button>
             <a href={url} target="_blank" rel="noreferrer"
               style={{ background: '#171B26', color: '#9198AA', border: '1px solid #232838',
-                borderRadius: 4, padding: '6px 10px', fontFamily: 'inherit', fontSize: 12,
+                borderRadius: 4, padding: '6px 10px', fontFamily: 'inherit', fontSize: 16,
                 textDecoration: 'none', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
               Open ↗
             </a>
@@ -123,7 +123,7 @@ export function PreviewPanel({ sandboxId, detectedPort, autoStartKey = 0 }: Prop
       </div>
 
       {error && (
-        <div style={{ padding: '8px 12px', color: '#ff9b9b', fontSize: 12, borderBottom: '1px solid #191D27' }}>
+        <div style={{ padding: '8px 12px', color: '#ff9b9b', fontSize: 16, borderBottom: '1px solid #191D27' }}>
           {error}
         </div>
       )}
@@ -138,7 +138,7 @@ export function PreviewPanel({ sandboxId, detectedPort, autoStartKey = 0 }: Prop
         />
       ) : (
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: '#656C7E', fontSize: 12, textAlign: 'center', padding: 20 }}>
+          color: '#656C7E', fontSize: 16, textAlign: 'center', padding: 20 }}>
           Write a file (or hit Start preview). Plain HTML pages are served automatically —
           no npm, no typed command.
         </div>
