@@ -762,6 +762,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   const [input,    setInput]    = useState('');
   const [loading,  setLoading]  = useState(false);
   const [liveThoughts, setLiveThoughts] = useState('');
+  // The backend sends 'status' events (Connecting… / Model is writing…) for
+  // exactly the phase — cold start, provider TTFB — where there is otherwise
+  // NO visible sign of life at all: no tokens yet, often no reasoning either.
+  // That silent stretch is what actually reads as "frozen"; showing the
+  // status closes it.
+  const [liveStatus, setLiveStatus] = useState('');
   const [elapsedSecs, setElapsedSecs] = useState(0);
   const loadingStartedAtRef = useRef(0);
   const [error,    setError]    = useState<string | null>(null);
@@ -822,6 +828,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
     setMessages(m => [...m, userMsg]);
     setLoading(true);
     setLiveThoughts('');
+    setLiveStatus('Connecting…');
     setError(null);
 
     const callAgentOnce = async (
@@ -895,6 +902,8 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             extendDeadlineOnActivity();
           } else if (ev.type === 'token' && typeof ev.text === 'string' && ev.text) {
             extendDeadlineOnActivity();
+          } else if (ev.type === 'status' && typeof ev.message === 'string' && ev.message) {
+            setLiveStatus(ev.message);
           }
         });
       } finally {
@@ -922,6 +931,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         const msg = err instanceof Error ? err.message : String(err);
         if (!isTransientNetworkError(msg)) throw err;
         setLiveThoughts('');
+        setLiveStatus('Connection dropped — retrying…');
         await new Promise((r) => setTimeout(r, 1200));
         return callAgentOnce(history, systemPrompt, sid, prov, mod, key);
       }
@@ -977,6 +987,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
               { role: 'user', content: contPrompt },
             ];
         setLiveThoughts('');
+        setLiveStatus('Continuing…');
         result = await callAgent(contHistory, systemPrompt, sid, prov, mod, key);
         reply = emptyThink
           ? result.reply
@@ -1183,6 +1194,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
     } finally {
       setLoading(false);
       setLiveThoughts('');
+      setLiveStatus('');
       sendingRef.current = false;
     }
   }, []);
@@ -1421,9 +1433,19 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           </div>
         ))}
         {loading && (
-          <div data-testid="thinking" style={{ alignSelf: 'flex-start', maxWidth: '92%' }}>
-            <div style={{ fontSize: 12, color: '#656C7E', marginBottom: liveThoughts ? 6 : 0 }}>
-              thinking… · {elapsedSecs}s
+          <div data-testid="thinking" style={{ alignSelf: 'flex-start', maxWidth: '92%', width: '100%' }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: 'rgba(255,61,142,.08)', border: '1px solid rgba(255,61,142,.3)',
+              borderRadius: 6, padding: '8px 12px', marginBottom: liveThoughts ? 6 : 0,
+            }}>
+              <span aria-hidden="true" style={{
+                width: 9, height: 9, borderRadius: '50%', background: '#FF3D8E', flexShrink: 0,
+                animation: 'agent-pulse 1.1s ease-in-out infinite',
+              }} />
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#FF9FC4' }}>
+                {liveStatus || 'Working…'} · {elapsedSecs}s
+              </span>
             </div>
             {liveThoughts ? (
               <pre data-testid="thinking-stream" style={{
