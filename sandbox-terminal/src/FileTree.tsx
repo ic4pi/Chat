@@ -66,13 +66,13 @@ function TreeNode({ node, depth, contextPaths, onClickFile }: {
         <div
           onClick={() => setOpen(o => !o)}
           style={{ display: 'flex', alignItems: 'center', gap: 4,
-            padding: '2px 0 2px 4px', cursor: 'pointer', fontSize: 12,
+            padding: '2px 0 2px 4px', cursor: 'pointer', fontSize: 16,
             color: '#9198AA', paddingLeft: 8 + depth * 14,
             userSelect: 'none', borderRadius: 3 }}
           onMouseEnter={e => (e.currentTarget.style.background = '#191D27')}
           onMouseLeave={e => (e.currentTarget.style.background = '')}
         >
-          <span style={{ fontSize: 10, opacity: .6 }}>{open ? '▾' : '▸'}</span>
+          <span style={{ fontSize: 14, opacity: .6 }}>{open ? '▾' : '▸'}</span>
           <span>{node.name}</span>
         </div>
         {open && node.children?.map(c => (
@@ -93,14 +93,14 @@ function TreeNode({ node, depth, contextPaths, onClickFile }: {
       style={{
         display: 'flex', alignItems: 'center', gap: 5,
         padding: '2px 4px 2px 0', paddingLeft: 8 + depth * 14,
-        cursor: 'pointer', fontSize: 12, borderRadius: 3,
+        cursor: 'pointer', fontSize: 16, borderRadius: 3,
         background: inCtx ? 'rgba(212,255,63,.08)' : 'transparent',
         borderLeft: inCtx ? '2px solid #FF3D8E' : '2px solid transparent',
       }}
       onMouseEnter={e => (e.currentTarget.style.background = inCtx ? 'rgba(212,255,63,.12)' : '#191D27')}
       onMouseLeave={e => (e.currentTarget.style.background = inCtx ? 'rgba(212,255,63,.08)' : '')}
     >
-      <span style={{ color, fontSize: 10, fontWeight: 700, minWidth: 26,
+      <span style={{ color, fontSize: 14, fontWeight: 700, minWidth: 26,
         textAlign: 'right', opacity: .7 }}>
         {node.ext?.slice(1) ?? ''}
       </span>
@@ -108,7 +108,7 @@ function TreeNode({ node, depth, contextPaths, onClickFile }: {
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {node.name}
       </span>
-      {inCtx && <span style={{ fontSize: 9, color: '#FF3D8E', opacity: .7 }}>●</span>}
+      {inCtx && <span style={{ fontSize: 12, color: '#FF3D8E', opacity: .7 }}>●</span>}
     </div>
   );
 }
@@ -172,7 +172,7 @@ export function FileTree({
 
       {/* ── repo path input ── */}
       <div style={{ padding: '8px 10px', borderBottom: '1px solid #191D27', flexShrink: 0 }}>
-        <div style={{ fontSize: 10, color: '#656C7E', letterSpacing: '0.1em',
+        <div style={{ fontSize: 14, color: '#656C7E', letterSpacing: '0.1em',
           textTransform: 'uppercase', marginBottom: 6 }}>// project</div>
         <div style={{ display: 'flex', gap: 6 }}>
           <input
@@ -182,13 +182,13 @@ export function FileTree({
             placeholder="https://github.com/you/private-repo"
             style={{ flex: 1, minWidth: 0, background: '#12151D', color: '#ECEEF3',
               border: '1px solid #232838', borderRadius: 4, padding: '4px 8px',
-              fontFamily: 'inherit', fontSize: 11, outline: 'none' }} />
+              fontFamily: 'inherit', fontSize: 15, outline: 'none' }} />
           <button onClick={handleOpen} disabled={loading || !inputPath.trim()}
             style={{ background: inputPath.trim() ? '#FF3D8E' : '#191D27',
               color: inputPath.trim() ? '#0B0D12' : '#323A50',
               border: 'none', borderRadius: 4, padding: '4px 10px',
               cursor: inputPath.trim() ? 'pointer' : 'default',
-              fontFamily: 'inherit', fontSize: 11, fontWeight: 700 }}>
+              fontFamily: 'inherit', fontSize: 15, fontWeight: 700 }}>
             {loading ? '…' : 'Open'}
           </button>
         </div>
@@ -202,22 +202,22 @@ export function FileTree({
               background: '#191D27', color: '#FF3D8E',
               border: '1px solid rgba(52,211,153,.16)', borderRadius: 4,
               padding: '6px 10px', cursor: loading ? 'default' : 'pointer',
-              fontFamily: 'inherit', fontSize: 11, fontWeight: 700,
+              fontFamily: 'inherit', fontSize: 15, fontWeight: 700,
             }}
           >
             {blankLabel}
           </button>
         )}
         {error && (
-          <div style={{ marginTop: 5, fontSize: 11, color: '#ff6a6a' }}>✗ {error}</div>
+          <div style={{ marginTop: 5, fontSize: 15, color: '#ff6a6a' }}>✗ {error}</div>
         )}
-        <div style={{ marginTop: 6, fontSize: 10, color: '#656C7E', lineHeight: 1.4 }}>
+        <div style={{ marginTop: 6, fontSize: 14, color: '#656C7E', lineHeight: 1.4 }}>
           Private repos use the GitHub token from Push (saved in this browser).
           Paste one there once, then Open works without making the repo public.
         </div>
         {pythonReady != null && (
           <div style={{
-            marginTop: 5, fontSize: 10, lineHeight: 1.4,
+            marginTop: 5, fontSize: 14, lineHeight: 1.4,
             color: pythonReady ? '#34D399' : '#ff6a6a',
           }}>
             {pythonReady ? '●' : '✗'} Python {pythonReady ? 'ready' : 'missing'}
@@ -226,7 +226,7 @@ export function FileTree({
         )}
         {rustReady != null && (
           <div style={{
-            marginTop: 3, fontSize: 10, lineHeight: 1.4,
+            marginTop: 3, fontSize: 14, lineHeight: 1.4,
             color: rustReady ? '#34D399' : '#ff6a6a',
           }}>
             {rustReady ? '●' : '✗'} Rust {rustReady ? 'ready' : 'missing'}
@@ -235,7 +235,7 @@ export function FileTree({
         )}
         {goReady != null && (
           <div style={{
-            marginTop: 3, fontSize: 10, lineHeight: 1.4,
+            marginTop: 3, fontSize: 14, lineHeight: 1.4,
             color: goReady ? '#34D399' : '#ff6a6a',
           }}>
             {goReady ? '●' : '✗'} Go {goReady ? 'ready' : 'missing'}
@@ -243,7 +243,7 @@ export function FileTree({
           </div>
         )}
         {repoRoot && !loading && (
-          <div style={{ marginTop: 4, fontSize: 10, color: '#656C7E' }}>
+          <div style={{ marginTop: 4, fontSize: 14, color: '#656C7E' }}>
             {totalFiles} files
           </div>
         )}
@@ -252,7 +252,7 @@ export function FileTree({
       {/* ── file tree ── */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
         {tree.length === 0 && !loading && !repoRoot && (
-          <div style={{ padding: '12px 10px', fontSize: 11, color: '#323A50',
+          <div style={{ padding: '12px 10px', fontSize: 15, color: '#323A50',
             lineHeight: 1.6 }}>
             Tap <b style={{ color: '#9198AA' }}>Start blank project</b> to begin without GitHub,
             or paste a repo URL and Open.
@@ -269,28 +269,28 @@ export function FileTree({
         <div style={{ borderTop: '1px solid #191D27', padding: '8px 10px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center',
             justifyContent: 'space-between', marginBottom: 5 }}>
-            <span style={{ fontSize: 10, color: '#FF3D8E', letterSpacing: '0.08em',
+            <span style={{ fontSize: 14, color: '#FF3D8E', letterSpacing: '0.08em',
               textTransform: 'uppercase' }}>
               Pinned ({contextFiles.size})
             </span>
             <button onClick={onClearContext}
               style={{ background: 'transparent', color: '#656C7E', border: 'none',
-                fontSize: 10, cursor: 'pointer', padding: 0 }}>
+                fontSize: 14, cursor: 'pointer', padding: 0 }}>
               clear
             </button>
           </div>
-          <div style={{ fontSize: 10, color: '#323A50', marginBottom: 6, lineHeight: 1.4 }}>
+          <div style={{ fontSize: 14, color: '#323A50', marginBottom: 6, lineHeight: 1.4 }}>
             Optional — the agent already finds files from your question.
           </div>
           {[...contextFiles.keys()].map(p => (
             <div key={p} style={{ display: 'flex', alignItems: 'center',
               justifyContent: 'space-between', padding: '2px 0', gap: 6 }}>
-              <span style={{ fontSize: 10, color: '#9198AA', flex: 1,
+              <span style={{ fontSize: 14, color: '#9198AA', flex: 1,
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                 title={p}>{p.split('/').pop()}</span>
               <button onClick={() => onRemoveFromContext(p)}
                 style={{ background: 'transparent', color: '#656C7E', border: 'none',
-                  fontSize: 11, cursor: 'pointer', padding: 0, lineHeight: 1 }}>×</button>
+                  fontSize: 15, cursor: 'pointer', padding: 0, lineHeight: 1 }}>×</button>
             </div>
           ))}
         </div>
