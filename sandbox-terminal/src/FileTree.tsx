@@ -5,8 +5,40 @@
  *   3. Active context list (files currently sent to the model)
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import type { FileNode } from './types.js';
+
+// Sandbox VMs take 15-30s to boot on first use — with no feedback that reads
+// as a hang, not "working". Stage through real status text keyed off elapsed
+// time so it's obvious progress is happening even though the backend only
+// returns one response at the end (no streaming).
+const BOOT_STAGES: [seconds: number, label: string][] = [
+  [0,  'Starting…'],
+  [3,  'Booting sandbox VM…'],
+  [10, 'Installing Python…'],
+  [18, 'Almost there…'],
+  [30, 'Still going — first boot can take a minute…'],
+];
+
+function useStagedLabel(active: boolean, idleLabel: string) {
+  const [label, setLabel] = useState(idleLabel);
+  useEffect(() => {
+    if (!active) {
+      setLabel(idleLabel);
+      return;
+    }
+    const start = Date.now();
+    setLabel(BOOT_STAGES[0]![1]);
+    const id = setInterval(() => {
+      const elapsed = (Date.now() - start) / 1000;
+      let current = BOOT_STAGES[0]![1];
+      for (const [t, msg] of BOOT_STAGES) if (elapsed >= t) current = msg;
+      setLabel(current);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [active, idleLabel]);
+  return label;
+}
 
 const EXT_COLOR: Record<string, string> = {
   '.ts': '#5b8dee', '.tsx': '#5b8dee', '.js': '#FF3D8E', '.jsx': '#FF3D8E',
@@ -111,10 +143,19 @@ export function FileTree({
   onOpenRepo, onStartBlank, onAddToContext, onRemoveFromContext, onClearContext,
 }: Props) {
   const [inputPath, setInputPath] = useState(repoRoot || '');
+  // Both buttons share one `loading` flag from the hook — track which one was
+  // actually pressed so the staged status text doesn't animate on the other.
+  const [pendingAction, setPendingAction] = useState<'open' | 'blank' | null>(null);
+  useEffect(() => {
+    if (!loading) setPendingAction(null);
+  }, [loading]);
 
   const handleOpen = useCallback(() => {
     const p = inputPath.trim();
-    if (p) onOpenRepo(p);
+    if (p) {
+      setPendingAction('open');
+      onOpenRepo(p);
+    }
   }, [inputPath, onOpenRepo]);
 
   const handleClick = useCallback((node: FileNode) => {
@@ -123,6 +164,7 @@ export function FileTree({
   }, [contextFiles, onAddToContext, onRemoveFromContext]);
 
   const contextPaths = new Set(contextFiles.keys());
+  const blankLabel = useStagedLabel(loading && pendingAction === 'blank', 'Start blank project (no clone)');
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%',
@@ -153,7 +195,7 @@ export function FileTree({
         {onStartBlank && (
           <button
             type="button"
-            onClick={() => onStartBlank()}
+            onClick={() => { setPendingAction('blank'); onStartBlank(); }}
             disabled={loading}
             style={{
               marginTop: 8, width: '100%',
@@ -163,7 +205,7 @@ export function FileTree({
               fontFamily: 'inherit', fontSize: 11, fontWeight: 700,
             }}
           >
-            {loading ? 'Starting…' : 'Start blank project (no clone)'}
+            {blankLabel}
           </button>
         )}
         {error && (
