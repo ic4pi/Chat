@@ -120,7 +120,7 @@
       "maxDuration": 300
     },
     "api/sandbox/[op].js": {
-      "maxDuration": 60
+      "maxDuration": 120
     },
     "api/agent-chat.js": {
       "maxDuration": 800
