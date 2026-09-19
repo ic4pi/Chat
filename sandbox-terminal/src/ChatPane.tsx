@@ -777,6 +777,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
+  // Lets the Cancel button reach whichever fetch is currently in flight —
+  // there was previously NO way to bail out of a slow model mid-request;
+  // the only option was to sit and wait out the full timeout.
+  const activeControllerRef = useRef<AbortController | null>(null);
+  const userCancelledRef = useRef(false);
   const recognitionRef = useRef<ReturnType<typeof getSpeechRecognition>>(null);
   const speakOnRef = useRef(speakOn);
   speakOnRef.current = speakOn;
@@ -829,6 +834,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
     setLoading(true);
     setLiveThoughts('');
     setLiveStatus('Connecting…');
+    userCancelledRef.current = false;
     setError(null);
 
     const callAgentOnce = async (
@@ -847,6 +853,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       if (paidPw) chatHeaders['X-Paid-Password'] = paidPw;
 
       const controller = new AbortController();
+      activeControllerRef.current = controller;
       // Only a model that's actually still working earns more time — the
       // deadline starts at the normal CHAT_TIMEOUT_MS and only gets pushed
       // out, up to MAX_CHAT_TIMEOUT_MS total, each time real data actually
@@ -1187,6 +1194,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       return fc;
     } catch (e: unknown) {
+      if (userCancelledRef.current) {
+        setMessages(m => [...m, { id: uid(), role: 'assistant', content: '⏸ Cancelled — pick a model and try again.' }]);
+        return [];
+      }
       const msg = friendlyError(e instanceof Error ? e.message : String(e));
       setError(msg);
       setMessages(m => [...m, { id: uid(), role: 'assistant', content: `⚠ ${msg}` }]);
@@ -1196,7 +1207,13 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       setLiveThoughts('');
       setLiveStatus('');
       sendingRef.current = false;
+      activeControllerRef.current = null;
     }
+  }, []);
+
+  const cancelSend = useCallback(() => {
+    userCancelledRef.current = true;
+    activeControllerRef.current?.abort();
   }, []);
 
   // Expose imperative handle to parent (used by the verify loop)
@@ -1443,9 +1460,16 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 width: 9, height: 9, borderRadius: '50%', background: '#FF3D8E', flexShrink: 0,
                 animation: 'agent-pulse 1.1s ease-in-out infinite',
               }} />
-              <span style={{ fontSize: 18, fontWeight: 600, color: '#FF9FC4' }}>
+              <span style={{ fontSize: 18, fontWeight: 600, color: '#FF9FC4', flex: 1 }}>
                 {liveStatus || 'Working…'} · {elapsedSecs}s
               </span>
+              <button type="button" data-testid="cancel-send" onClick={cancelSend}
+                title="Stop waiting and pick a different model"
+                style={{ background: 'transparent', color: '#FF9FC4', border: '1px solid rgba(255,61,142,.5)',
+                  borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
+                  fontSize: 14, fontWeight: 600, flexShrink: 0 }}>
+                Cancel
+              </button>
             </div>
             {liveThoughts ? (
               <pre data-testid="thinking-stream" style={{
