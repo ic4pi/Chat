@@ -234,9 +234,14 @@ export default async function handler(req, res) {
   }
 
   const controller = new AbortController();
+  // Leave headroom under vercel.json's maxDuration (800s) so a stuck persona
+  // gets aborted in time for the closing summary + `done` event to still go
+  // out, instead of the platform killing the function mid-stream with no
+  // `done` ever sent — which the client currently has no way to recover
+  // from short of losing every remaining round.
   const timer = setTimeout(
     () => controller.abort(),
-    UPSTREAM_TIMEOUT_MS * Math.min(MAX_PERSONAS + 2, 14),
+    Math.min(UPSTREAM_TIMEOUT_MS * Math.min(MAX_PERSONAS + 2, 14), 750_000),
   );
   res.on('close', () => {
     if (!controller.signal.aborted) controller.abort();

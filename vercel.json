@@ -126,7 +126,7 @@
       "maxDuration": 800
     },
     "api/group-chat.js": {
-      "maxDuration": 300
+      "maxDuration": 800
     },
     "api/generate.js": {
       "maxDuration": 300

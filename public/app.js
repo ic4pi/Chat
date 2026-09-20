@@ -3293,7 +3293,18 @@ async function sendMessage(text) {
 async function callGroupStream(chat, apiMessages, onEvent) {
   const controller = new AbortController();
   activeChatAbort = controller;
-  const timer = setTimeout(() => controller.abort(), Math.max(timeoutFor(state.activeProvider, state.activeModel), 240_000));
+  // A round talks to every persona at the table sequentially, not one model
+  // like timeoutFor() assumes — scale the client's patience with the table
+  // size (mirrors the server's own per-persona budget in api/group-chat.js)
+  // so one slow persona can't abort the connection before the round
+  // finishes. That used to kill every remaining round in the session along
+  // with it, since sendGroupMessage stops the whole multi-round loop the
+  // moment one round comes back as a network failure.
+  const roundTimeoutMs = Math.min(
+    Math.max(90_000 * (Math.max(personas.length, 1) + 2), 240_000),
+    780_000,
+  );
+  const timer = setTimeout(() => controller.abort(), roundTimeoutMs);
   const apiKey = (providerKeys[state.activeProvider] || '').trim();
   const headers = paidAuthHeaders({ 'Content-Type': 'application/json', Accept: 'text/event-stream' });
   if (apiKey) headers['X-Provider-Key'] = apiKey;
