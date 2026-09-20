@@ -29,6 +29,7 @@ import {
   extractFileChangeReport,
   formatRejectedSandboxWarning,
   looksLikeApplyRequest,
+  looksLikeRunRequest,
   looksLikeSuggestRequest,
   looksLikeLegacyWelcome,
   needsCodeContext,
@@ -58,6 +59,7 @@ export {
   extractFileChanges,
   formatRejectedSandboxWarning,
   looksLikeApplyRequest,
+  looksLikeRunRequest,
   looksLikeSuggestRequest,
   needsCodeContext,
 } from './agentParse.js';
@@ -1067,6 +1069,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         looksLikeSuggestRequest(text) || activeRole === 'plan' || activeRole === 'review'
       );
       const applyTurn = kind === 'user' && looksLikeApplyRequest(text) && activeRole !== 'plan';
+      const runTurn = kind === 'user' && !applyTurn && !suggestTurn && looksLikeRunRequest(text) && activeRole !== 'plan';
 
       // Light chat ("hey", "thanks"): don't paste tree/files into the model.
       const lightTurn = !needsCodeContext(text);
@@ -1100,6 +1103,16 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           + 'Do not say you are "just a text-based AI" or that you cannot provide code/an interface "directly" — '
           + 'that is false here. Do not hand back a design blueprint, description, or plan instead of code. Write '
           + 'the File:/Edit: blocks now.';
+      } else if (runTurn) {
+        systemPrompt +=
+          '\n\nRUN this turn: the user wants a file/script actually EXECUTED, not written or explained. '
+          + 'NEVER say you are "just a text-based AI", or that you have no access to a Python interpreter, '
+          + 'terminal, or API key — that is false here, this sandbox has a real Terminal and executes real '
+          + 'commands. You cannot trigger execution yourself from a chat reply, so instead: name the exact '
+          + 'file to run, give the exact command (e.g. "python analyze_waste.py"), and tell the user to open '
+          + 'the Terminal tab and run it there — or, if the code is short, repeat it as an untitled ``` code '
+          + 'block (no File: label) so the ▶ Run in Sandbox button appears on it. Keep this short — do not '
+          + 'restate the whole file.';
       }
 
       // Always hit agent-chat — it accepts systemPrompt. /api/chat ignores it

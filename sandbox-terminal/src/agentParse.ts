@@ -222,6 +222,19 @@ export function looksLikeApplyRequest(text: string): boolean {
   return /\b(apply|implement|write the|do it|go ahead|ship it|save (it|the)|patch it|fix (it|this|my|the)|build|create|add|update|refactor|rewrite|replace|delete|remove|rename|make the)\b/.test(t);
 }
 
+/**
+ * User wants the code EXECUTED (run/launch/start/test-run it), not written or
+ * explained. Distinct from looksLikeApplyRequest — "run" isn't in that list,
+ * so without this, a run request fell through to no turn-specific system
+ * prompt addendum and the model defaulted to claiming it has no interpreter/
+ * terminal/API key, which is false in this sandbox.
+ */
+export function looksLikeRunRequest(text: string): boolean {
+  const t = text.toLowerCase();
+  if (t.length < 2) return false;
+  return /\b(run (it|this|that|the (file|script|code|app|program)|[\w.\-\/]+\.\w+)|execute (it|this|that)|launch it|start it|try running|go ahead and run)\b/.test(t);
+}
+
 /** @deprecated use looksLikeSuggestRequest */
 export function looksLikeAuditRequest(text: string): boolean {
   return looksLikeSuggestRequest(text);
