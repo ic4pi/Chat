@@ -75,6 +75,18 @@ function formatRecent(messages, limit = RECENT_WINDOW) {
     .join('\n');
 }
 
+/** Fisher-Yates. Speaking order was always config order, so the same
+ * persona always opened and everyone after them was structurally reacting
+ * to that opener rather than the topic itself — shuffle per round instead. */
+function shuffled(arr) {
+  const out = arr.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
 function pickKey(providerKeys, providerId, fallbackKey) {
   const map = providerKeys && typeof providerKeys === 'object' ? providerKeys : {};
   const fromMap = typeof map[providerId] === 'string' ? map[providerId].trim() : '';
@@ -277,7 +289,7 @@ export default async function handler(req, res) {
     const roundSoFar = [];
     const master = (config.masterPrompt || '').trim();
 
-    for (const persona of personas) {
+    for (const persona of shuffled(personas)) {
       if (controller.signal.aborted) break;
 
       let turnResolved;
@@ -324,7 +336,7 @@ export default async function handler(req, res) {
 
       const roundBlock = roundSoFar.length
         ? roundSoFar.map((t) => `${t.name}: ${t.content}`).join('\n\n')
-        : '(You speak first this round.)';
+        : '(No one else has spoken yet this round.)';
 
       const userPayload = [
         `GROUP DISCUSSION — topic: ${topicText}`,
@@ -332,10 +344,13 @@ export default async function handler(req, res) {
         'Rolling summary of earlier discussion (previous ~10 messages condensed):',
         rollingSummary || '(Just starting.)',
         '',
-        'This round so far (other personas already spoke):',
+        'What others have said so far this round (context only — not a script to follow):',
         roundBlock,
         '',
-        `You are ${persona.name}. It is your turn at the table.`,
+        `You are ${persona.name}. Answer the topic itself, from your own perspective —`,
+        'do not just summarize or react to what others already said. Bring a point they',
+        'haven\'t made, or push back with a reason if you actually disagree. Speaking',
+        'order is shuffled every round, so do not assume you are "first" or "last."',
         'Speak in character. Do not narrate stage directions. Do not invent other speakers\' lines.',
       ].join('\n');
 
