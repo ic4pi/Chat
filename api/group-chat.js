@@ -75,16 +75,59 @@ function formatRecent(messages, limit = RECENT_WINDOW) {
     .join('\n');
 }
 
-/** Fisher-Yates. Speaking order was always config order, so the same
- * persona always opened and everyone after them was structurally reacting
- * to that opener rather than the topic itself — shuffle per round instead. */
-function shuffled(arr) {
-  const out = arr.slice();
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [out[i], out[j]] = [out[j], out[i]];
+/**
+ * Order personas by actual relevance to this topic, not a fixed config
+ * order and not a blind shuffle — a persona whose expertise matches the
+ * topic should lead; one whose expertise clearly doesn't should not be
+ * forced to open (or fake authority it doesn't have). Falls back to
+ * config order — never a random one — if the ranking call fails or
+ * returns something that isn't a clean permutation of every persona.
+ */
+async function rankPersonasByRelevance(resolved, model, { topic, personas, recentBlock, signal }) {
+  if (personas.length <= 1) return personas;
+  const roster = personas
+    .map((p) => `${p.id}: ${p.name} — ${(p.description || 'no stated specialty').slice(0, 200)}`)
+    .join('\n');
+  const prompt = [
+    'You are seating a round-table discussion. Order these personas from',
+    'MOST to LEAST relevant to speak on THIS SPECIFIC topic, based on their',
+    'actual stated expertise below — not popularity, not seniority. The',
+    'persona whose specialty genuinely matches the topic leads; a persona',
+    'whose expertise clearly does not match (e.g. a comedy persona on a',
+    'technical topic, or vice versa) should go later, not first.',
+    '',
+    `Topic: ${topic}`,
+    recentBlock ? `Recent discussion so far:\n${recentBlock}` : '',
+    '',
+    'Personas (id: name — description):',
+    roster,
+    '',
+    'Reply with ONLY a JSON array of persona ids, most relevant first, every',
+    'id exactly once. No prose, no markdown fences, no explanation.',
+  ].filter(Boolean).join('\n');
+
+  try {
+    const raw = await callCompletion(
+      resolved,
+      model,
+      [
+        { role: 'system', content: 'You output only a valid JSON array of strings, nothing else.' },
+        { role: 'user', content: prompt },
+      ],
+      { maxTokens: 200, signal, providerId: resolved.id },
+    );
+    const match = raw.match(/\[[\s\S]*\]/);
+    const ids = match ? JSON.parse(match[0]) : null;
+    if (!Array.isArray(ids)) throw new Error('not an array');
+    const byId = new Map(personas.map((p) => [p.id, p]));
+    const ordered = ids.map((id) => byId.get(id)).filter(Boolean);
+    // A partial or hallucinated list would silently drop someone from the
+    // round — only trust it when it's a clean permutation of everyone.
+    if (ordered.length !== personas.length) throw new Error('incomplete ranking');
+    return ordered;
+  } catch {
+    return personas;
   }
-  return out;
 }
 
 function pickKey(providerKeys, providerId, fallbackKey) {
@@ -289,7 +332,14 @@ export default async function handler(req, res) {
     const roundSoFar = [];
     const master = (config.masterPrompt || '').trim();
 
-    for (const persona of shuffled(personas)) {
+    const speakingOrder = await rankPersonasByRelevance(defaultResolved, defaultModel, {
+      topic: topicText,
+      personas,
+      recentBlock,
+      signal: controller.signal,
+    });
+
+    for (const persona of speakingOrder) {
       if (controller.signal.aborted) break;
 
       let turnResolved;
@@ -349,8 +399,11 @@ export default async function handler(req, res) {
         '',
         `You are ${persona.name}. Answer the topic itself, from your own perspective —`,
         'do not just summarize or react to what others already said. Bring a point they',
-        'haven\'t made, or push back with a reason if you actually disagree. Speaking',
-        'order is shuffled every round, so do not assume you are "first" or "last."',
+        'haven\'t made, or push back with a reason if you actually disagree. Speaking order',
+        'is seated by who is actually relevant to this topic, not turn-taking, so do not',
+        'assume you are "first" or "last" for form\'s sake. If this topic genuinely falls',
+        'outside what you\'d actually know or care about, say so briefly and give whatever',
+        'honest, limited perspective you do have — do not fake expertise you don\'t have.',
         'Speak in character. Do not narrate stage directions. Do not invent other speakers\' lines.',
       ].join('\n');
 
