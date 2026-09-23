@@ -230,19 +230,21 @@ ok('code-slices + generate contract');
 // 6) Reasoning models need Pro-length budgets — Hobby-era 55s/60s kills
 // mid-thought with nothing to show (Qwen uncensored, GLM Flash Heretic, etc.).
 // api/agent-chat.js (Workspace) gets the higher Fluid Compute ceiling (800s)
-// since its reasoning models routinely need more than 280s; the other two
-// routes stay on the plain 300s budget.
+// since its reasoning models routinely need more than 280s. api/group-chat.js
+// joined it there: a round talks to every persona sequentially, so one slow
+// model used to blow the 300s budget and take every remaining round with it.
+// api/chat.js is a single completion and stays on the plain 300s budget.
 const vercel = JSON.parse(readFileSync(path.join(root, 'vercel.json'), 'utf8'));
-for (const route of ['api/chat.js', 'api/group-chat.js']) {
-  const dur = vercel.functions?.[route]?.maxDuration;
+{
+  const dur = vercel.functions?.['api/chat.js']?.maxDuration;
   if (dur !== 300) {
-    fail(`${route} maxDuration must be 300 (got ${dur}) — thinking streams need headroom`);
+    fail(`api/chat.js maxDuration must be 300 (got ${dur}) — thinking streams need headroom`);
   }
 }
-{
-  const dur = vercel.functions?.['api/agent-chat.js']?.maxDuration;
+for (const route of ['api/agent-chat.js', 'api/group-chat.js']) {
+  const dur = vercel.functions?.[route]?.maxDuration;
   if (dur !== 800) {
-    fail(`api/agent-chat.js maxDuration must be 800 (got ${dur}) — Fluid Compute headroom for reasoning models`);
+    fail(`${route} maxDuration must be 800 (got ${dur}) — Fluid Compute headroom for sequential/reasoning streams`);
   }
 }
 const agentChatSrc = readFileSync(path.join(root, 'api/agent-chat.js'), 'utf8');
