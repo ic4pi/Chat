@@ -32,6 +32,13 @@ const IMAGE_MODELS = [
 const VIDEO_MODELS = [
   { value: 'modal:wan2.2-5b', label: 'Wan 2.2 5B · Text → Video (self-hosted, A10G)', kind: 'video', provider: 'modal', model: 'wan2.2-5b', fps: 16, usesRef: false, maxSeconds: 30, modes: ['text', 'image', 'span', 'keyframes', 'restyle'] },
   { value: 'modal:wan2.2-a14b', label: 'Wan 2.2 A14B · NSFW · Text → Video (best quality, single pass, A100)', kind: 'video', provider: 'modal', model: 'wan2.2-a14b', fps: 16, usesRef: false, maxSeconds: 20, modes: ['text'] },
+  // Separate app from wan2.2-a14b above: that one has the NSFW LoRA but no
+  // image input; wan2.2-5b takes an image but has no LoRA for its
+  // architecture and is the aligned checkpoint (steers explicit source
+  // photos back to "safe"). This is the only combination of the two. See
+  // modal/wan_a14b_i2v_app.py — the LoRA's trigger words are unconfirmed
+  // (different repo than the T2V one), so none are hardcoded into the UI hint.
+  { value: 'modal:wan2.2-a14b-i2v', label: 'Wan 2.2 A14B I2V · NSFW · Start from an image (A100)', kind: 'video', provider: 'modal', model: 'wan2.2-a14b-i2v', fps: 16, usesRef: false, maxSeconds: 20, modes: ['image'] },
   { value: 'modal:ltx-video', label: 'LTX-Video · Text → Video (self-hosted, fast)', kind: 'video', provider: 'modal', model: 'ltx-video', fps: 24, usesRef: false, maxSeconds: 30, modes: ['text', 'image', 'span', 'keyframes'] },
   // fal.ai / NVIDIA / Cloudflare video removed - fal and NVIDIA both bill per
   // generation, and Cloudflare's Seedance models are a third-party pass-through
@@ -279,7 +286,27 @@ function syncFields() {
   const vm = videoMode();
   const selfHostedVideo = kind === 'video' && spec?.provider === 'modal';
   els.videoModeWrap.classList.toggle('hidden', !selfHostedVideo || (spec?.modes?.length || 1) < 2);
-  if (els.a14bHint) els.a14bHint.classList.toggle('hidden', spec?.model !== 'wan2.2-a14b');
+  if (els.a14bHint) {
+    if (spec?.model === 'wan2.2-a14b') {
+      els.a14bHint.classList.remove('hidden');
+      els.a14bHint.innerHTML =
+        'The NSFW LoRA on this model has no generic on-switch — it responds to its ' +
+        'own trigger words, exactly as spelled: <code>m15510n4ry</code>, <code>bl0wj0b</code>, ' +
+        '<code>d0ubl3_bj</code>, <code>c0wg1rl</code>, <code>d0gg1e</code>. Without one of ' +
+        'these in the prompt, generation falls back to the stock model, which is ' +
+        'trained to steer away from explicit content.';
+    } else if (spec?.model === 'wan2.2-a14b-i2v') {
+      els.a14bHint.classList.remove('hidden');
+      els.a14bHint.innerHTML =
+        'This model uses a different NSFW LoRA than the text-only A14B above, and its ' +
+        'trigger words are not confirmed yet — describe explicitly and check the ' +
+        'response\'s <code>nsfwUsed</code> / <code>nsfwLoraError</code> fields (or ' +
+        '<code>POST ?op=diag {"model":"wan2.2-a14b-i2v"}</code>) to see whether the ' +
+        'LoRA actually applied to a given generation.';
+    } else {
+      els.a14bHint.classList.add('hidden');
+    }
+  }
   els.srcVideoWrap.classList.toggle('hidden', vm !== 'restyle');
   els.keyframesWrap.classList.toggle('hidden', vm !== 'keyframes');
   if (els.spanWrap) els.spanWrap.classList.toggle('hidden', vm !== 'span');

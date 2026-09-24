@@ -7,13 +7,23 @@ filter.
 | App | Endpoint | Called by |
 |---|---|---|
 | `wan-video` | `ic4pi--wan-video-generate.modal.run` | `generateModalWanVideo()` |
+| `wan-video-a14b` | `ic4pi--wan-video-a14b-generate.modal.run` | `generateModalWanVideo()` (a14b branch) |
+| `wan-video-a14b-i2v` | `ic4pi--wan-video-a14b-i2v-generate.modal.run` | `generateModalWanA14bI2vVideo()` |
 | `ltx-video` | `ic4pi--ltx-video-generate.modal.run` | `generateModalLtxVideo()` |
 | `sdxl-nsfw` | `ic4pi--sdxl-nsfw-generate.modal.run` | `generateModalSdxlImage()` |
 | `voice-tts` | `ic4pi--voice-tts-speak.modal.run` | `?op=speak` |
 | `lip-sync` | `ic4pi--lip-sync-run.modal.run` | `?op=lipsync` |
 
 These are consumed by `api/media-generate.js`. Override any endpoint with
-`MODAL_WAN_ENDPOINT`, `MODAL_LTX_ENDPOINT`, `MODAL_SDXL_ENDPOINT`, `MODAL_LIPSYNC_ENDPOINT`.
+`MODAL_WAN_ENDPOINT`, `MODAL_WAN_A14B_ENDPOINT`, `MODAL_WAN_A14B_I2V_ENDPOINT`,
+`MODAL_LTX_ENDPOINT`, `MODAL_SDXL_ENDPOINT`, `MODAL_LIPSYNC_ENDPOINT`.
+
+`wan-video-a14b-i2v` (`modal/wan_a14b_i2v_app.py`) is new and unverified — see
+its own module docstring before deploying. It exists specifically because
+neither other video app is both (takes a source image) and (not the stock,
+alignment-trained checkpoint): `wan-video` (5B) takes an image but has no NSFW
+LoRA built for its architecture, and `wan-video-a14b` has the LoRA but no
+image input.
 
 ## ⚠️ These files are reconstructed, not recovered
 
