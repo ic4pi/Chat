@@ -884,6 +884,17 @@ async function generateModalWanVideo({
       ...(Number.isFinite(Number(seed)) ? { seed: Number(seed) } : {}),
       ...(imageBase64 ? { image: imageBase64 } : {}),
       ...(Array.isArray(keyframes) && keyframes.length ? { keyframes } : {}),
+      // A14B loads the Lightning speed LoRA by default (unlike the 5B app,
+      // where it can never load at all — see wan_app.py). Left alone, every
+      // generation runs it at 4 steps / guidance_scale 1.0 (CFG disabled —
+      // required for a distilled LoRA), with its weights merged in for the
+      // whole container life. steps/guidance_scale alone don't undo that —
+      // running real CFG *through* a LoRA distilled for CFG-1 is the "burnt,
+      // oversaturated frames" case Lightning's own comment warns about, and
+      // it still crowds out the NSFW LoRA stacked alongside it. use_lightning:
+      // false actually detaches its adapters for this call (needs the
+      // matching modal/wan_a14b_app.py fix deployed — see its run()).
+      ...(isA14b ? { steps: 40, guidance_scale: 4.0, use_lightning: false } : {}),
     }),
   });
 
@@ -961,6 +972,12 @@ async function generateModalWanA14bI2vVideo({
       num_frames,
       fps,
       ...(Number.isFinite(Number(seed)) ? { seed: Number(seed) } : {}),
+      // Same Lightning-vs-LoRA conflict as generateModalWanVideo's a14b
+      // branch — see the comment there. use_lightning:false detaches its
+      // adapters per-call instead of merely outrunning them with more steps.
+      steps: 40,
+      guidance_scale: 4.0,
+      use_lightning: false,
     }),
   });
 
@@ -1172,6 +1189,12 @@ export default async function handler(req, res) {
         // Start-from-an-image. Both video apps take it as `image` and route
         // clip 0 through their i2v pipeline instead of t2v.
         ...(jimg ? { image: jimg } : {}),
+        // Same Lightning-speed-LoRA-vs-quality-LoRA conflict as
+        // generateModalWanVideo — see the comment there. Applies to both
+        // A14B apps and is harmless (unrecognized key, ignored) elsewhere.
+        ...(/a14b/i.test(String(jm || ''))
+          ? { steps: 40, guidance_scale: 4.0, use_lightning: false }
+          : {}),
       }),
     });
     const sub = await upstream.json().catch(() => ({}));

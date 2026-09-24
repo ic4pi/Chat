@@ -237,6 +237,18 @@ class WanA14B:
         guidance_scale: float | None = None,
         polish: bool = True,
         nsfw: bool = True,  # append the NSFW LoRA's trigger word, if it loaded
+        # None = use Lightning iff it loaded (old default). Explicit False is
+        # the one that matters: set_adapters() at load() fixed the adapter
+        # list for the container's whole life, so every request got
+        # Lightning's weights merged in regardless of steps/guidance_scale —
+        # sending real CFG through a LoRA distilled for CFG-1/4-step is
+        # exactly the "distilled model given real CFG produces burnt,
+        # oversaturated frames" case wan_app.py's own Lightning comment
+        # warns about, AND leaves less headroom for the NSFW LoRA stacked
+        # alongside it to actually show up. False detaches Lightning's
+        # adapters for this call instead of merely outrunning them with
+        # more steps.
+        use_lightning: bool | None = None,
     ) -> dict:
         import torch
         from diffusers.utils import export_to_video
@@ -244,13 +256,23 @@ class WanA14B:
         started = time.time()
         # Wan rejects frame counts that are not 4k+1.
         num_frames = max(5, min(MAX_FRAMES, ((int(num_frames) - 1) // 4) * 4 + 1))
+        use_speed = self.fast if use_lightning is None else (use_lightning and self.fast)
         if steps is None:
-            steps = FAST_STEPS if self.fast else FULL_STEPS
+            steps = FAST_STEPS if use_speed else FULL_STEPS
         if guidance_scale is None:
-            guidance_scale = FAST_GUIDANCE if self.fast else FULL_GUIDANCE
+            guidance_scale = FAST_GUIDANCE if use_speed else FULL_GUIDANCE
 
         use_nsfw = nsfw and self.nsfw_available
         run_prompt = f"{prompt}, {NSFW_LORA_TRIGGER}" if use_nsfw and NSFW_LORA_TRIGGER else prompt
+
+        # Per-request adapter selection — load() merely made these available,
+        # it did not commit every call to using all of them.
+        wanted = []
+        if use_speed:
+            wanted += ["lightning_high", "lightning_low"]
+        if use_nsfw:
+            wanted += ["nsfw_high", "nsfw_low"]
+        self.pipe.set_adapters(wanted) if wanted else self.pipe.disable_lora()
 
         frames = self.pipe(
             prompt=run_prompt,
@@ -278,7 +300,9 @@ class WanA14B:
             "num_frames": len(frames),
             "fps": out_fps,
             "fast": self.fast,
+            "lightning_used": use_speed,
             "steps": steps,
+            "guidance_scale": guidance_scale,
             "lora_error": self.lora_error,
             "polished": polish,
             "nsfw_used": use_nsfw,
@@ -308,6 +332,7 @@ def generate(payload: dict) -> dict:
             ),
             **({"polish": payload["polish"]} if "polish" in payload else {}),
             **({"nsfw": payload["nsfw"]} if "nsfw" in payload else {}),
+            **({"use_lightning": payload["use_lightning"]} if "use_lightning" in payload else {}),
         )
     except Exception as exc:
         import traceback
@@ -365,8 +390,13 @@ def submit(payload: dict) -> dict:
             num_frames=int(payload.get("num_frames") or FRAMES_PER_CLIP),
             fps=int(payload.get("fps") or DEFAULT_FPS),
             seed=int(payload["seed"]) if payload.get("seed") else random.randint(1, 2**31 - 1),
+            steps=int(payload["steps"]) if payload.get("steps") else None,
+            guidance_scale=(
+                float(payload["guidance_scale"]) if payload.get("guidance_scale") else None
+            ),
             **({"polish": payload["polish"]} if "polish" in payload else {}),
             **({"nsfw": payload["nsfw"]} if "nsfw" in payload else {}),
+            **({"use_lightning": payload["use_lightning"]} if "use_lightning" in payload else {}),
         )
         return {"job_id": call.object_id, "status": "running"}
     except Exception as exc:
