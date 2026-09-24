@@ -46,6 +46,14 @@
           <textarea id="mediaPrompt" rows="4" placeholder="Describe the image or video…"></textarea>
         </label>
 
+        <p class="media-flow-hint hidden" id="a14bHint">
+          The NSFW LoRA on this model has no generic on-switch — it responds to its
+          own trigger words, exactly as spelled: <code>m15510n4ry</code>, <code>bl0wj0b</code>,
+          <code>d0ubl3_bj</code>, <code>c0wg1rl</code>, <code>d0gg1e</code>. Without one of
+          these in the prompt, generation falls back to the stock model, which is
+          trained to steer away from explicit content.
+        </p>
+
         <label class="media-field" id="negativeWrap">
           <span>Negative prompt <em class="opt">(optional)</em></span>
           <input id="mediaNegative" type="text" placeholder="blurry, low quality…" />

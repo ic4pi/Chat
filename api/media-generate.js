@@ -866,6 +866,19 @@ async function generateModalWanVideo({
     throw err;
   }
 
+  // a14b is the only Wan variant with an NSFW LoRA to begin with, and that
+  // LoRA can fail to load on a given container (gated repo, renamed file,
+  // shape mismatch) without failing the request — the app falls back to the
+  // stock checkpoint silently. Forwarding the flags the app already computes
+  // is the only way to tell "the LoRA didn't apply" apart from "the LoRA
+  // applied and this is what it produces" instead of guessing from output.
+  const nsfwDiag = isA14b
+    ? {
+        nsfwUsed: !!body.nsfw_used,
+        nsfwLoraError: body.nsfw_lora_error || null,
+      }
+    : {};
+
   return {
     kind: 'video',
     provider: 'modal',
@@ -875,7 +888,12 @@ async function generateModalWanVideo({
     uncensored: true,
     elapsedSeconds: body.elapsed_seconds,
     numClips: body.num_clips,
-    note: 'Self-hosted Wan 2.2 on Modal (scale-to-zero, no external content filter).',
+    ...nsfwDiag,
+    note: isA14b
+      ? (body.nsfw_used
+          ? 'Self-hosted Wan 2.2 A14B on Modal, NSFW LoRA active (no external content filter).'
+          : `Self-hosted Wan 2.2 A14B on Modal — NSFW LoRA did NOT apply to this generation${body.nsfw_lora_error ? ` (${body.nsfw_lora_error})` : ''}; this ran on the stock checkpoint, which is trained to steer away from explicit prompts.`)
+      : 'Self-hosted Wan 2.2 on Modal (scale-to-zero, no external content filter).',
   };
 }
 
@@ -976,6 +994,41 @@ export default async function handler(req, res) {
       // Warming is best-effort by design.
     }
     return res.status(202).json({ warming: true, target: target || 'sdxl' });
+  }
+
+  // Diagnostic: did the NSFW LoRA actually load on the a14b container?
+  //   POST ?op=diag {model:'wan2.2-a14b'} -> { ready, fast, nsfwAvailable, nsfwLoraError, loraError }
+  // Blocks on a cold start (up to ~a minute) instead of firing-and-forgetting
+  // like ?op=warm — that's the point: it waits for load() to finish so it can
+  // report whether the LoRA landed, before anyone spends a real generation
+  // on a container that silently fell back to the stock checkpoint.
+  if (String(req.query?.op || '') === 'diag') {
+    const target = String(req.query?.model || req.body?.model || 'wan2.2-a14b');
+    const endpoint = modalEndpoint(target, 'status');
+    try {
+      const upstream = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
+        body: '{}',
+        signal: AbortSignal.timeout(90000),
+      });
+      const diag = await upstream.json().catch(() => ({}));
+      if (!upstream.ok || diag.error) {
+        return res.status(upstream.ok ? 502 : upstream.status).json({
+          error: diag.error || `Modal status HTTP ${upstream.status} calling ${endpoint}`,
+        });
+      }
+      return res.status(200).json({
+        model: target,
+        ready: !!diag.ready,
+        fast: !!diag.fast,
+        loraError: diag.lora_error || null,
+        nsfwAvailable: !!diag.nsfw_available,
+        nsfwLoraError: diag.nsfw_lora_error || null,
+      });
+    } catch (err) {
+      return res.status(502).json({ error: `Diag call to ${endpoint} failed: ${err.message}` });
+    }
   }
 
   // Async video jobs.

@@ -215,7 +215,13 @@ class WanA14B:
 
     @modal.method()
     def ping(self) -> dict:
-        return {"ready": True}
+        return {
+            "ready": True,
+            "fast": self.fast,
+            "lora_error": self.lora_error,
+            "nsfw_available": self.nsfw_available,
+            "nsfw_lora_error": self.nsfw_lora_error,
+        }
 
     @modal.method()
     def run(
@@ -320,6 +326,27 @@ def warm() -> dict:
         return {"warming": True}
     except Exception as exc:
         return {"warming": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+# Diagnostic, not a warmup: blocks on the cold start (up to ~a minute) so it
+# can hand back whether the NSFW LoRA actually loaded on this container
+# (gated repo, renamed weight file, and a shape mismatch all fail silently
+# inside load() otherwise, and the only symptom is output that looks like
+# the stock, alignment-steered checkpoint). Costs one cold start, no GPU
+# generation — call this before spending a real generation trying to tell
+# "the LoRA didn't apply" apart from "it applied and this is its output."
+@app.function(image=image, timeout=120)
+@modal.fastapi_endpoint(method="POST")
+def status() -> dict:
+    try:
+        return WanA14B().ping.remote()
+    except Exception as exc:
+        import traceback
+
+        return {
+            "error": f"{type(exc).__name__}: {exc}",
+            "traceback": "".join(traceback.format_exc()).strip()[-3000:],
+        }
 
 
 @app.function(image=image, timeout=60)

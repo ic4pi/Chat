@@ -85,6 +85,7 @@ const els = {
   poseWrap: document.getElementById('poseWrap'),
   videoMode: document.getElementById('mediaVideoMode'),
   videoModeWrap: document.getElementById('videoModeWrap'),
+  a14bHint: document.getElementById('a14bHint'),
   srcVideo: document.getElementById('mediaSrcVideo'),
   srcVideoWrap: document.getElementById('srcVideoWrap'),
   keyframesWrap: document.getElementById('keyframesWrap'),
@@ -278,6 +279,7 @@ function syncFields() {
   const vm = videoMode();
   const selfHostedVideo = kind === 'video' && spec?.provider === 'modal';
   els.videoModeWrap.classList.toggle('hidden', !selfHostedVideo || (spec?.modes?.length || 1) < 2);
+  if (els.a14bHint) els.a14bHint.classList.toggle('hidden', spec?.model !== 'wan2.2-a14b');
   els.srcVideoWrap.classList.toggle('hidden', vm !== 'restyle');
   els.keyframesWrap.classList.toggle('hidden', vm !== 'keyframes');
   if (els.spanWrap) els.spanWrap.classList.toggle('hidden', vm !== 'span');
