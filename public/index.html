@@ -110,9 +110,10 @@
 
       <button id="personaChip" class="persona-chip" type="button" aria-haspopup="dialog" aria-expanded="false" title="Switch persona">
         <span id="chipAvatar" class="persona-avatar">?</span>
+        <!-- Model and role live in the context row below; repeating them here
+             was the same two facts twice on one screen. -->
         <span class="chip-text">
           <span id="chipName" class="chip-name">Persona</span>
-          <span id="chipMeta" class="chip-meta"></span>
         </span>
         <span class="chip-caret">▾</span>
       </button>
@@ -165,9 +166,10 @@
       </select>
     </header>
 
-    <!-- Compact status row: model + role, always visible, tap to open the
-         full picker. Keeps the topbar itself to a single clean line. -->
-    <div class="status-row">
+    <!-- One line for everything about "where am I": which model, which role,
+         which conversation. These were three separate full-width rows, which
+         cost a third of a phone screen before a single message was visible. -->
+    <div class="context-row">
       <button id="statusModelBtn" class="status-pill" type="button" title="Change model">
         <span class="status-dot"></span>
         <span id="statusModelLabel">Loading…</span>
@@ -175,10 +177,7 @@
       <button id="statusRoleBtn" class="status-pill ghost" type="button" title="Change role">
         <span id="statusRoleLabel">Plan</span>
       </button>
-    </div>
-
-    <div class="chat-title-row">
-      <h1 id="chatTitle" contenteditable="true" spellcheck="false">Untitled</h1>
+      <h1 id="chatTitle" contenteditable="true" spellcheck="false" title="Rename this chat">Untitled</h1>
     </div>
 
 
@@ -228,7 +227,7 @@
         <button id="micBtn" type="button" class="icon-btn" title="Mic: dictation, or voice chat when 🔊 is on (Chrome/Safari)">🎤</button>
         <button id="interruptBtn" type="button" class="icon-btn interrupt-btn hidden" title="Interrupt: stop the reply and speech right now">✋</button>
         <button id="speakBtn" type="button" class="icon-btn" title="Speak replies with neural voice" aria-pressed="false">🔊</button>
-        <textarea id="input" rows="1" placeholder="Plan or ask… (code builds in Workspace)"></textarea>
+        <textarea id="input" rows="1" placeholder="Plan or ask…"></textarea>
         <button id="stopBtn" type="button" class="text-btn danger hidden" title="Stop reply + voice (Esc also stops)">Stop</button>
         <button id="sendBtn" type="submit">Send</button>
       </div>

@@ -1164,6 +1164,9 @@ function renderMessages(opts = {}) {
   const prevTop = els.chat?.scrollTop || 0;
   els.chat.innerHTML = '';
   const chat = activeChat();
+  // The composer cheat sheet is onboarding: keep it while a chat is empty and
+  // there is room for it, drop it once the conversation needs the screen.
+  document.body.classList.toggle('has-messages', (chat?.messages?.length || 0) > 0);
   if (!chat) return;
 
   if (chat.kind === 'group') {
@@ -6103,7 +6106,14 @@ function syncStatusRow() {
   }
   const modelLabel = document.getElementById('statusModelLabel');
   const pickerLabel = document.getElementById('modelPickerLabel');
-  if (modelLabel && pickerLabel) modelLabel.textContent = pickerLabel.textContent;
+  if (modelLabel && pickerLabel) {
+    // "Venice · Gemma 4 Uncensored" is two facts, and the provider is the one
+    // you never need mid-conversation — it cost the chat name its space on a
+    // phone. The full label stays on the button's tooltip and in the picker.
+    const full = pickerLabel.textContent || '';
+    modelLabel.textContent = full.split('·').pop().trim() || full;
+    document.getElementById('statusModelBtn')?.setAttribute('title', full ? `Change model — ${full}` : 'Change model');
+  }
 }
 document.getElementById('roleSelect')?.addEventListener('change', syncStatusRow);
 new MutationObserver(syncStatusRow).observe(

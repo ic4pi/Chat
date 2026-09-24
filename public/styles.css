@@ -140,7 +140,7 @@ body::before {
 
 /* A thin brass seam between every major structural panel — this is what
    reads as "hardware" instead of "flat divs". */
-.sidebar, #topbar, .status-row, .chat-title-row, .mod-nav, #inputForm {
+.sidebar, #topbar, .context-row, .mod-nav, #inputForm {
   position: relative;
 }
 .sidebar.left::after, .sidebar.right::before {
@@ -484,57 +484,65 @@ body::before {
   font-family: var(--display); font-weight: 600; font-size: 18px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.chip-meta {
-  font-family: var(--mono); font-size: 14px; color: var(--muted-2);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
 .chip-caret { color: var(--muted-2); font-size: 12px; flex: 0 0 auto; }
 
-.status-row {
-  display: flex; gap: 8px; padding: 8px 12px;
+/* Model · role · chat name, one line. The model pill keeps its full name
+   (it is the thing most worth reading); the title gives up its width first. */
+.context-row {
+  display: flex; align-items: center; gap: 8px; padding: 6px 12px;
   border-bottom: 1px solid var(--border);
-  flex: 0 0 auto; overflow-x: auto;
+  flex: 0 0 auto; min-width: 0;
 }
 .status-pill {
   display: flex; align-items: center; gap: 6px;
-  padding: 6px 13px; border-radius: 999px;
+  padding: 5px 11px; border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--panel-2);
-  font-family: var(--mono); font-size: 15px; color: var(--muted);
-  white-space: nowrap;
+  font-family: var(--mono); font-size: 14px; color: var(--muted);
+  white-space: nowrap; flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden;
   transition: border-color .16s, color .16s;
 }
+.status-pill > span:not(.status-dot) { overflow: hidden; text-overflow: ellipsis; }
 .status-pill:hover { color: var(--text); border-color: var(--brass-dk); }
 .status-pill.ghost { background: transparent; }
 .status-dot {
-  width: 6px; height: 6px; border-radius: 50%;
+  width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%;
   background: var(--verdigris);
   box-shadow: 0 0 6px var(--verdigris);
 }
 
-.chat-title-row { padding: 10px 16px 8px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
-.chat-title-row h1 {
-  font-size: 16px; font-weight: 500; letter-spacing: .1em; text-transform: uppercase;
+.context-row h1 {
+  flex: 1 1 0; min-width: 0;
+  font-size: 14px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase;
   color: var(--muted-2); outline: none; font-family: var(--display);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right;
 }
-.chat-title-row h1:focus { color: var(--brass-lt); }
+.context-row h1:focus {
+  color: var(--brass-lt);
+  text-overflow: clip; /* editing a name you cannot see all of is worse */
+  text-align: left;
+}
+/* Renaming needs the whole line, not the sliver left over beside two pills. */
+.context-row:focus-within .status-pill { display: none; }
 
 /* ---- Persistent module nav ----------------------------------------------
    The fix for "I can't leave chat": always visible, no menu to find first.
    Styled like a row of brass instrument selectors. */
 
 .mod-nav {
-  display: flex; gap: 6px;
-  padding: 8px 12px 10px;
+  display: flex; gap: 4px;
+  padding: 5px 10px 6px;
   border-bottom: 1px solid var(--border-2);
   background: var(--panel);
   flex: 0 0 auto;
   overflow-x: auto;
 }
 .mod-nav-btn {
-  flex: 1 1 0; min-width: 64px;
-  display: flex; flex-direction: column; align-items: center; gap: 3px;
-  padding: 8px 4px 7px;
+  /* Size each tab to its own label, then share the slack — equal widths made
+     "Workspace" clip while "Chat" sat in empty space. */
+  flex: 1 1 auto; min-width: 0; overflow: hidden;
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  padding: 4px 3px 3px;
   border-radius: var(--r-sm);
   border: 1px solid var(--border);
   background: var(--panel-2);
@@ -549,8 +557,14 @@ body::before {
   background: linear-gradient(180deg, rgba(201,150,62,.14), rgba(201,150,62,.04));
   color: var(--brass-lt);
 }
-.mn-ico { font-size: 22px; line-height: 1; }
-.mn-label { font-family: var(--display); font-size: 13px; letter-spacing: .05em; text-transform: uppercase; }
+.mn-ico { font-size: 16px; line-height: 1.1; }
+/* Six tabs on a phone: the label has to fit inside its own button, so it
+   shrinks and clips rather than spilling over the border. */
+.mn-label {
+  font-family: var(--display); font-size: 10px; letter-spacing: .02em;
+  text-transform: uppercase;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .mn-badge {
   position: absolute; top: 3px; right: 10px;
   min-width: 15px; height: 15px; padding: 0 4px;
@@ -564,7 +578,7 @@ body::before {
 
 #chat { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 20px 16px 10px; display: flex; flex-direction: column; }
 
-.msg { max-width: 88%; margin-bottom: 18px; font-size: 20px; line-height: 1.65; position: relative; }
+.msg { max-width: 88%; margin-bottom: 18px; font-size: 21px; line-height: 1.6; position: relative; }
 .msg.user {
   align-self: flex-end;
   background: var(--user-bubble);
@@ -680,15 +694,25 @@ body::before {
 }
 
 .voice-hint { margin-top: 7px; font-size: 14px; color: var(--muted-2); line-height: 1.5; }
-/* While the keyboard is up, screen space is the scarce thing: drop the
-   four-line cheat sheet and the chat title so the conversation and the
-   module nav both stay visible instead of being squeezed out. */
-body.kb-open .voice-hint,
-body.kb-open .chat-title-row { display: none; }
-body.kb-open .status-row { padding: 4px 12px; }
+/* The cheat sheet is onboarding, not chrome: four permanent lines of it sat
+   under every conversation. It stays on an empty chat, where there is room
+   and nothing else to read, and gets out of the way once you are talking. */
+body.has-messages .voice-hint { display: none; }
+/* While the keyboard is up, screen space is the scarce thing. */
+body.kb-open .voice-hint { display: none; }
+body.kb-open .context-row { padding: 3px 12px; }
 
-.smart-reply-chips { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 4px 8px; }
+/* One scrollable line, not three stacked rows — those chips were eating a
+   sixth of the screen while the reply above them got cropped. */
+.smart-reply-chips {
+  display: flex; gap: 6px; flex-wrap: nowrap;
+  padding: 0 4px 8px; overflow-x: auto;
+  scrollbar-width: none;
+}
+.smart-reply-chips::-webkit-scrollbar { display: none; }
 .reply-chip {
+  flex: 0 0 auto; max-width: 78%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   padding: 7px 13px; border-radius: 999px;
   border: 1px solid var(--border); background: var(--panel-2);
   font-family: var(--display); font-size: 16px; color: var(--text);
