@@ -90,6 +90,10 @@ const els = {
   expandWrap: document.getElementById('expandWrap'),
   poseSource: document.getElementById('mediaPoseSource'),
   poseWrap: document.getElementById('poseWrap'),
+  loras: document.getElementById('mediaLoras'),
+  lorasWrap: document.getElementById('lorasWrap'),
+  nsfwScale: document.getElementById('mediaNsfwScale'),
+  nsfwScaleWrap: document.getElementById('nsfwScaleWrap'),
   videoMode: document.getElementById('mediaVideoMode'),
   videoModeWrap: document.getElementById('videoModeWrap'),
   a14bHint: document.getElementById('a14bHint'),
@@ -151,6 +155,31 @@ let spanStartData = null;
 let spanEndData = null;
 let pendingVoice = null; // voice sample staged in the character editor, saved with it
 let pendingImage = null; // reference image staged the same way
+
+/**
+ * "repo, repo:file.safetensors, repo:file.safetensors:0.8" -> [{repo,
+ * weight_name?, scale?}, ...]. Malformed entries (empty repo) are dropped
+ * rather than sent — the backend already skips a bad repo/file gracefully,
+ * this just keeps obviously-empty ones from taking up one of its 4 slots.
+ */
+function parseLoraField(raw) {
+  return String(raw || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const [repo, weightFile, scaleStr] = entry.split(':').map((s) => s.trim());
+      if (!repo) return null;
+      const out = { repo };
+      if (weightFile) out.weight_name = weightFile;
+      if (scaleStr) {
+        const scale = Number(scaleStr);
+        if (Number.isFinite(scale)) out.scale = scale;
+      }
+      return out;
+    })
+    .filter(Boolean);
+}
 
 const VIDEO_MODE_LABELS = {
   text: 'Text → Video',
@@ -280,6 +309,7 @@ function syncFields() {
   const selfHostedImage = kind === 'image' && spec?.provider === 'modal';
   els.countWrap.classList.toggle('hidden', !selfHostedImage);
   els.modeWrap.classList.toggle('hidden', !selfHostedImage);
+  if (els.lorasWrap) els.lorasWrap.classList.toggle('hidden', !selfHostedImage);
 
   // Each mode reveals only the controls it actually reads.
   const m = imageMode();
@@ -306,6 +336,12 @@ function syncFields() {
     } else {
       els.a14bHint.classList.add('hidden');
     }
+  }
+  if (els.nsfwScaleWrap) {
+    els.nsfwScaleWrap.classList.toggle(
+      'hidden',
+      spec?.model !== 'wan2.2-a14b' && spec?.model !== 'wan2.2-a14b-i2v',
+    );
   }
   els.srcVideoWrap.classList.toggle('hidden', vm !== 'restyle');
   els.keyframesWrap.classList.toggle('hidden', vm !== 'keyframes');
@@ -1394,9 +1430,14 @@ els.generate.addEventListener('click', async () => {
         body.detectPose = els.poseSource.value === 'detect';
         body.controlScale = 0.8;
       }
+      const loras = parseLoraField(els.loras?.value);
+      if (loras.length) body.loras = loras;
     }
     if (kind === 'video') {
       body.seconds = Number(els.length.value) || 5;
+      if (spec.model === 'wan2.2-a14b' || spec.model === 'wan2.2-a14b-i2v') {
+        body.nsfwScale = (Number(els.nsfwScale.value) || 100) / 100;
+      }
       const vm = videoMode();
       if (vm === 'restyle') {
         if (!srcVideoData) throw new Error('Pick a source video to restyle.');

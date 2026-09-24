@@ -707,7 +707,7 @@ const MODAL_IMAGE_MODES = new Set(['text', 'img2img', 'expand', 'outpaint', 'pos
 
 async function generateModalSdxlImage({
   prompt, negativePrompt, model, size, count,
-  mode, imageBase64, strength, expand, controlScale, detectPose,
+  mode, imageBase64, strength, expand, controlScale, detectPose, loras,
 }) {
   const dims = String(size || '1024x1024').split(/[x*]/i).map(Number);
   const width = dims[0] || 1024;
@@ -740,6 +740,11 @@ async function generateModalSdxlImage({
             ...(detectPose != null ? { detect_pose: !!detectPose } : {}),
           }
         : {}),
+      // Extra community LoRAs stacked on top of the checkpoint — detail/
+      // quality tweakers, style or character LoRAs, anything on the Hub.
+      // Previously nothing here supported LoRAs at all beyond the two
+      // baked-in checkpoints. See modal/sdxl_app.py's _apply_extra_loras.
+      ...(Array.isArray(loras) && loras.length ? { loras } : {}),
     }),
   });
 
@@ -768,7 +773,9 @@ async function generateModalSdxlImage({
     uncensored: true,
     elapsedSeconds: body.elapsed_seconds,
     mode: imageMode,
-    note: `Self-hosted SDXL on Modal${imageMode !== 'text' ? ` · ${imageMode}` : ''}${batch.length > 1 ? ` · ${batch.length} images` : ''} (scale-to-zero, no external content filter).`,
+    lorasApplied: body.loras_applied || [],
+    loraErrors: body.lora_errors || [],
+    note: `Self-hosted SDXL on Modal${imageMode !== 'text' ? ` · ${imageMode}` : ''}${batch.length > 1 ? ` · ${batch.length} images` : ''}${body.lora_errors?.length ? ` · ${body.lora_errors.length} LoRA(s) failed to load` : ''} (scale-to-zero, no external content filter).`,
   };
 }
 
@@ -845,6 +852,7 @@ async function generateModalWanVideo({
   seed,
   endpoint = MODAL_WAN_ENDPOINT,
   model = 'wan2.2-5b',
+  nsfwScale, // a14b only — 1.0 (default) = as trained; turn the LoRA down instead of off if it's too strong
 }) {
   const dims = String(size || '832x480').split(/[x*]/i).map(Number);
   const width = dims[0] || 832;
@@ -895,6 +903,7 @@ async function generateModalWanVideo({
       // false actually detaches its adapters for this call (needs the
       // matching modal/wan_a14b_app.py fix deployed — see its run()).
       ...(isA14b ? { steps: 40, guidance_scale: 4.0, use_lightning: false } : {}),
+      ...(isA14b && Number.isFinite(Number(nsfwScale)) ? { nsfw_scale: Number(nsfwScale) } : {}),
     }),
   });
 
@@ -947,7 +956,7 @@ async function generateModalWanVideo({
  * app has the LoRA but no image input at all.
  */
 async function generateModalWanA14bI2vVideo({
-  prompt, negativePrompt, size, seconds, imageBase64, seed,
+  prompt, negativePrompt, size, seconds, imageBase64, seed, nsfwScale,
 }) {
   if (!imageBase64) {
     const err = new Error('wan2.2-a14b-i2v needs a source image — use "wan2.2-a14b" for text-only.');
@@ -978,6 +987,7 @@ async function generateModalWanA14bI2vVideo({
       steps: 40,
       guidance_scale: 4.0,
       use_lightning: false,
+      ...(Number.isFinite(Number(nsfwScale)) ? { nsfw_scale: Number(nsfwScale) } : {}),
     }),
   });
 
@@ -1155,6 +1165,7 @@ export default async function handler(req, res) {
     const {
       model: jm, prompt: jp, negativePrompt: jn, size: js, seconds: jsec, accessKey: jk,
       video: jv, strength: jstr, keyframes: jkf, imageBase64: jimg, seed: jseed,
+      nsfwScale: jNsfwScale,
     } = req.body || {};
     if (!jp || !String(jp).trim()) return res.status(400).json({ error: 'prompt is required' });
 
@@ -1193,7 +1204,12 @@ export default async function handler(req, res) {
         // generateModalWanVideo — see the comment there. Applies to both
         // A14B apps and is harmless (unrecognized key, ignored) elsewhere.
         ...(/a14b/i.test(String(jm || ''))
-          ? { steps: 40, guidance_scale: 4.0, use_lightning: false }
+          ? {
+              steps: 40,
+              guidance_scale: 4.0,
+              use_lightning: false,
+              ...(Number.isFinite(Number(jNsfwScale)) ? { nsfw_scale: Number(jNsfwScale) } : {}),
+            }
           : {}),
       }),
     });
@@ -1515,6 +1531,8 @@ export default async function handler(req, res) {
     accessKey,
     keyframes,
     seed,
+    loras,
+    nsfwScale,
   } = req.body || {};
 
   if (typeof prompt !== 'string' || !prompt.trim()) {
@@ -1585,6 +1603,7 @@ export default async function handler(req, res) {
           expand,
           controlScale,
           detectPose,
+          loras,
         });
 
         if (person) {
@@ -1676,6 +1695,7 @@ export default async function handler(req, res) {
               seconds,
               imageBase64,
               seed,
+              nsfwScale,
             })
           : isLtx
           ? await generateModalLtxVideo({
@@ -1695,6 +1715,7 @@ export default async function handler(req, res) {
               imageBase64,
               keyframes,
               seed,
+              nsfwScale,
               ...(isA14b
                 ? { endpoint: MODAL_WAN_A14B_ENDPOINT, model: 'wan2.2-a14b' }
                 : {}),

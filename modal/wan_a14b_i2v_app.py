@@ -290,6 +290,7 @@ class WanA14BI2V:
         # produces burnt frames, and it also crowds out the NSFW LoRA
         # stacked alongside it. False detaches Lightning per-call instead.
         use_lightning: bool | None = None,
+        nsfw_scale: float = 1.0,  # 1.0 = as trained; turn down instead of off if it's too strong
     ) -> dict:
         import torch
         from diffusers.utils import export_to_video
@@ -309,13 +310,16 @@ class WanA14BI2V:
 
         use_nsfw = nsfw and self.nsfw_available
         run_prompt = f"{prompt}, {NSFW_LORA_TRIGGER}" if use_nsfw and NSFW_LORA_TRIGGER else prompt
+        nsfw_scale = max(0.0, min(2.0, float(nsfw_scale)))
 
-        wanted = []
+        wanted, weights = [], []
         if use_speed:
             wanted += ["lightning_high", "lightning_low"]
+            weights += [1.0, 1.0]
         if use_nsfw:
             wanted += ["nsfw_high", "nsfw_low"]
-        self.pipe.set_adapters(wanted) if wanted else self.pipe.disable_lora()
+            weights += [nsfw_scale, nsfw_scale]
+        self.pipe.set_adapters(wanted, adapter_weights=weights) if wanted else self.pipe.disable_lora()
 
         frames = self.pipe(
             image=seed_frame,
@@ -350,6 +354,7 @@ class WanA14BI2V:
             "lora_error": self.lora_error,
             "polished": polish,
             "nsfw_used": use_nsfw,
+            "nsfw_scale": nsfw_scale if use_nsfw else None,
             "nsfw_lora_error": self.nsfw_lora_error,
         }
 
@@ -379,6 +384,7 @@ def generate(payload: dict) -> dict:
             **({"polish": payload["polish"]} if "polish" in payload else {}),
             **({"nsfw": payload["nsfw"]} if "nsfw" in payload else {}),
             **({"use_lightning": payload["use_lightning"]} if "use_lightning" in payload else {}),
+            **({"nsfw_scale": float(payload["nsfw_scale"])} if "nsfw_scale" in payload else {}),
         )
     except Exception as exc:
         import traceback
@@ -440,6 +446,7 @@ def submit(payload: dict) -> dict:
             **({"polish": payload["polish"]} if "polish" in payload else {}),
             **({"nsfw": payload["nsfw"]} if "nsfw" in payload else {}),
             **({"use_lightning": payload["use_lightning"]} if "use_lightning" in payload else {}),
+            **({"nsfw_scale": float(payload["nsfw_scale"])} if "nsfw_scale" in payload else {}),
         )
         return {"job_id": call.object_id, "status": "running"}
     except Exception as exc:
