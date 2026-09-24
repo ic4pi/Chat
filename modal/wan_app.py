@@ -413,8 +413,20 @@ class Wan:
 
             frames = []
             for i, (start, img) in enumerate(marks):
-                # A segment runs to the next mark; the last one gets a full clip.
-                end = marks[i + 1][0] if i + 1 < len(marks) else start + num_frames
+                # A segment runs to the next mark. The last mark only gets a
+                # full extra clip when it's the ONLY mark (a lone keyframe
+                # used as a start image, which has nothing to run toward but
+                # forward). With more than one mark, the last one is meant as
+                # the video's end — pinned there by the caller (e.g. the
+                # "start -> end stills" span) — so it gets just enough frames
+                # to land on it instead of continuing a whole new ~5s clip
+                # past the point the caller asked the video to stop.
+                if i + 1 < len(marks):
+                    end = marks[i + 1][0]
+                elif len(marks) == 1:
+                    end = start + num_frames
+                else:
+                    end = start + 5
                 seg_frames = _wan_frames(max(5, end - start))
                 out = self.i2v(
                     image=img,

@@ -654,16 +654,32 @@ function clipsForSeconds(seconds) {
   return Math.min(6, Math.max(1, Math.round((Number(seconds) || 5) / 5)));
 }
 
-/** Per-model video geometry, matching what each app is built around. */
-function videoGeometry(model, size) {
+/**
+ * Per-model video geometry, matching what each app is built around.
+ *
+ * num_frames defaults to one ~5s chained clip — the length actually lives in
+ * num_clips for a plain generation. But timeline keyframes replace the clip
+ * chain outright (num_clips is ignored downstream once keyframes are
+ * present), so a fixed 121/81 there silently threw away whatever duration
+ * the two stills were supposed to span: the frontend computes the end
+ * keyframe's frame index from the real `seconds`, and the Modal app clamps
+ * any index past num_frames back down to it — collapsing a requested 10s
+ * span into ~5s with the end picture landing wherever the clamp put it.
+ */
+function videoGeometry(model, size, seconds, keyframes) {
   const isLtx = /ltx/i.test(String(model || ''));
   const fallback = isLtx ? '704x480' : '832x480';
   const dims = String(size || fallback).split(/[x*]/i).map(Number);
+  const fps = isLtx ? 24 : 16;
+  const hasKeyframes = Array.isArray(keyframes) && keyframes.length > 0;
+  const num_frames = hasKeyframes
+    ? Math.max(isLtx ? 9 : 5, Math.round((Number(seconds) || 5) * fps))
+    : (isLtx ? 121 : 81);
   return {
     width: dims[0] || (isLtx ? 704 : 832),
     height: dims[1] || 480,
-    fps: isLtx ? 24 : 16,
-    num_frames: isLtx ? 121 : 81,
+    fps,
+    num_frames,
   };
 }
 
@@ -879,7 +895,14 @@ async function generateModalLtxVideo({ prompt, negativePrompt, size, seconds, im
   const width = dims[0] || 704;
   const height = dims[1] || 480;
   const fps = 24;
-  const num_frames = 121; // ~5s per clip at 24fps
+  // Keyframes replace clip-chaining outright (num_clips below is ignored once
+  // they're present downstream), so a fixed 121 silently truncated any span
+  // longer than ~5s and clamped the end keyframe back into that window. Only
+  // the plain chained-clip path keeps the fixed per-clip length.
+  const hasKeyframes = Array.isArray(keyframes) && keyframes.length > 0;
+  const num_frames = hasKeyframes
+    ? Math.max(9, Math.round((Number(seconds) || 5) * fps))
+    : 121; // ~5s per clip at 24fps
 
   const num_clips = Math.min(6, Math.max(1, Math.round((Number(seconds) || 5) / 5)));
 
@@ -985,7 +1008,7 @@ export default async function handler(req, res) {
       }
     }
 
-    const geo = videoGeometry(jm, js);
+    const geo = videoGeometry(jm, js, jsec, jkf);
     const upstream = await fetch(modalEndpoint(jm, 'submit'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...modalAuthHeaders() },
