@@ -51,11 +51,16 @@ import base64
 import io
 import os
 import random
+import re
 import time
 
 import modal
 
 MODEL_ID = os.environ.get("WAN_A14B_I2V_MODEL_ID", "Wan-AI/Wan2.2-I2V-A14B-Diffusers")
+
+# Bounds how many extra community LoRAs one request can stack. Same cap as
+# sdxl_app.py / wan_a14b_app.py.
+MAX_EXTRA_LORAS = 4
 
 # Guessed by analogy to WAN_A14B_LIGHTNING_LORA_SUBFOLDER in wan_a14b_app.py
 # ("Wan2.2-T2V-A14B-4steps-lora-250928") — unverified whether this subfolder
@@ -258,6 +263,51 @@ class WanA14BI2V:
 
         self.pipe.enable_model_cpu_offload()
 
+        # Extra community LoRAs a caller stacks on top — see
+        # _load_extra_loras (identical pattern to wan_a14b_app.py).
+        self._extra_loras: dict = {}
+
+    def _load_extra_loras(self, requested: list):
+        """See wan_a14b_app.py's version of this for the full rationale —
+        same dual-expert caveat applies: a generic single-file LoRA loads
+        onto the high-noise expert only unless the spec also names
+        weight_name_low."""
+        names, weights, errors = [], [], []
+        for i, spec in enumerate((requested or [])[:MAX_EXTRA_LORAS]):
+            if not isinstance(spec, dict):
+                continue
+            repo = str(spec.get("repo") or "").strip()
+            if not repo:
+                continue
+            weight_name = spec.get("weight_name") or None
+            weight_name_low = spec.get("weight_name_low") or None
+            scale = max(0.0, min(2.0, float(spec.get("scale", 1.0))))
+            slug = re.sub(r"[^a-zA-Z0-9]", "_", f"{repo}_{weight_name or ''}")[:50]
+            adapter_id = f"extra{i}_{slug}"
+            if adapter_id not in self._extra_loras:
+                try:
+                    self.pipe.load_lora_weights(
+                        repo, weight_name=weight_name, adapter_name=adapter_id, cache_dir="/cache/hf",
+                    )
+                    if weight_name_low:
+                        self.pipe.load_lora_weights(
+                            repo,
+                            weight_name=weight_name_low,
+                            adapter_name=f"{adapter_id}_low",
+                            load_into_transformer_2=True,
+                            cache_dir="/cache/hf",
+                        )
+                    self._extra_loras[adapter_id] = (repo, weight_name, weight_name_low)
+                except Exception as exc:
+                    errors.append(f"{repo}{'/' + weight_name if weight_name else ''}: {type(exc).__name__}: {exc}")
+                    continue
+            names.append(adapter_id)
+            weights.append(scale)
+            if self._extra_loras.get(adapter_id, (None, None, None))[2]:
+                names.append(f"{adapter_id}_low")
+                weights.append(scale)
+        return names, weights, errors
+
     @modal.method()
     def ping(self) -> dict:
         return {
@@ -291,6 +341,7 @@ class WanA14BI2V:
         # stacked alongside it. False detaches Lightning per-call instead.
         use_lightning: bool | None = None,
         nsfw_scale: float = 1.0,  # 1.0 = as trained; turn down instead of off if it's too strong
+        loras: list | None = None,  # [{repo, weight_name?, weight_name_low?, scale?}, ...]
     ) -> dict:
         import torch
         from diffusers.utils import export_to_video
@@ -319,6 +370,9 @@ class WanA14BI2V:
         if use_nsfw:
             wanted += ["nsfw_high", "nsfw_low"]
             weights += [nsfw_scale, nsfw_scale]
+        extra_names, extra_weights, lora_errors = self._load_extra_loras(loras)
+        wanted += extra_names
+        weights += extra_weights
         self.pipe.set_adapters(wanted, adapter_weights=weights) if wanted else self.pipe.disable_lora()
 
         frames = self.pipe(
@@ -356,6 +410,8 @@ class WanA14BI2V:
             "nsfw_used": use_nsfw,
             "nsfw_scale": nsfw_scale if use_nsfw else None,
             "nsfw_lora_error": self.nsfw_lora_error,
+            "loras_applied": extra_names,
+            "lora_errors": lora_errors,
         }
 
 
@@ -385,6 +441,7 @@ def generate(payload: dict) -> dict:
             **({"nsfw": payload["nsfw"]} if "nsfw" in payload else {}),
             **({"use_lightning": payload["use_lightning"]} if "use_lightning" in payload else {}),
             **({"nsfw_scale": float(payload["nsfw_scale"])} if "nsfw_scale" in payload else {}),
+            loras=payload.get("loras") if isinstance(payload.get("loras"), list) else None,
         )
     except Exception as exc:
         import traceback
@@ -447,6 +504,7 @@ def submit(payload: dict) -> dict:
             **({"nsfw": payload["nsfw"]} if "nsfw" in payload else {}),
             **({"use_lightning": payload["use_lightning"]} if "use_lightning" in payload else {}),
             **({"nsfw_scale": float(payload["nsfw_scale"])} if "nsfw_scale" in payload else {}),
+            loras=payload.get("loras") if isinstance(payload.get("loras"), list) else None,
         )
         return {"job_id": call.object_id, "status": "running"}
     except Exception as exc:

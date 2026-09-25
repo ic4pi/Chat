@@ -853,6 +853,7 @@ async function generateModalWanVideo({
   endpoint = MODAL_WAN_ENDPOINT,
   model = 'wan2.2-5b',
   nsfwScale, // a14b only — 1.0 (default) = as trained; turn the LoRA down instead of off if it's too strong
+  loras, // extra community LoRAs to stack — [{repo, weight_name?, weight_name_low?, scale?}, ...]
 }) {
   const dims = String(size || '832x480').split(/[x*]/i).map(Number);
   const width = dims[0] || 832;
@@ -904,6 +905,9 @@ async function generateModalWanVideo({
       // matching modal/wan_a14b_app.py fix deployed — see its run()).
       ...(isA14b ? { steps: 40, guidance_scale: 4.0, use_lightning: false } : {}),
       ...(isA14b && Number.isFinite(Number(nsfwScale)) ? { nsfw_scale: Number(nsfwScale) } : {}),
+      // Extra community LoRAs stacked on top — supported on both the 5B and
+      // both A14B apps now (see each's _apply_extra_loras/_load_extra_loras).
+      ...(Array.isArray(loras) && loras.length ? { loras } : {}),
     }),
   });
 
@@ -939,11 +943,14 @@ async function generateModalWanVideo({
     elapsedSeconds: body.elapsed_seconds,
     numClips: body.num_clips,
     ...nsfwDiag,
-    note: isA14b
+    lorasApplied: body.loras_applied || [],
+    loraErrors: body.lora_errors || [],
+    note: (isA14b
       ? (body.nsfw_used
           ? 'Self-hosted Wan 2.2 A14B on Modal, NSFW LoRA active (no external content filter).'
           : `Self-hosted Wan 2.2 A14B on Modal — NSFW LoRA did NOT apply to this generation${body.nsfw_lora_error ? ` (${body.nsfw_lora_error})` : ''}; this ran on the stock checkpoint, which is trained to steer away from explicit prompts.`)
-      : 'Self-hosted Wan 2.2 on Modal (scale-to-zero, no external content filter).',
+      : 'Self-hosted Wan 2.2 on Modal (scale-to-zero, no external content filter).')
+      + (body.lora_errors?.length ? ` · ${body.lora_errors.length} extra LoRA(s) failed to load` : ''),
   };
 }
 
@@ -956,7 +963,7 @@ async function generateModalWanVideo({
  * app has the LoRA but no image input at all.
  */
 async function generateModalWanA14bI2vVideo({
-  prompt, negativePrompt, size, seconds, imageBase64, seed, nsfwScale,
+  prompt, negativePrompt, size, seconds, imageBase64, seed, nsfwScale, loras,
 }) {
   if (!imageBase64) {
     const err = new Error('wan2.2-a14b-i2v needs a source image — use "wan2.2-a14b" for text-only.');
@@ -988,6 +995,7 @@ async function generateModalWanA14bI2vVideo({
       guidance_scale: 4.0,
       use_lightning: false,
       ...(Number.isFinite(Number(nsfwScale)) ? { nsfw_scale: Number(nsfwScale) } : {}),
+      ...(Array.isArray(loras) && loras.length ? { loras } : {}),
     }),
   });
 
@@ -1011,9 +1019,12 @@ async function generateModalWanA14bI2vVideo({
     numClips: 1,
     nsfwUsed: !!body.nsfw_used,
     nsfwLoraError: body.nsfw_lora_error || null,
-    note: body.nsfw_used
+    lorasApplied: body.loras_applied || [],
+    loraErrors: body.lora_errors || [],
+    note: (body.nsfw_used
       ? 'Self-hosted Wan 2.2 I2V-A14B on Modal, NSFW LoRA active (no external content filter).'
-      : `Self-hosted Wan 2.2 I2V-A14B on Modal — NSFW LoRA did NOT apply${body.nsfw_lora_error ? ` (${body.nsfw_lora_error})` : ''}; this ran on the stock checkpoint, which is trained to steer explicit images back to "safe".`,
+      : `Self-hosted Wan 2.2 I2V-A14B on Modal — NSFW LoRA did NOT apply${body.nsfw_lora_error ? ` (${body.nsfw_lora_error})` : ''}; this ran on the stock checkpoint, which is trained to steer explicit images back to "safe".`)
+      + (body.lora_errors?.length ? ` · ${body.lora_errors.length} extra LoRA(s) failed to load` : ''),
   };
 }
 
@@ -1165,7 +1176,7 @@ export default async function handler(req, res) {
     const {
       model: jm, prompt: jp, negativePrompt: jn, size: js, seconds: jsec, accessKey: jk,
       video: jv, strength: jstr, keyframes: jkf, imageBase64: jimg, seed: jseed,
-      nsfwScale: jNsfwScale,
+      nsfwScale: jNsfwScale, loras: jLoras,
     } = req.body || {};
     if (!jp || !String(jp).trim()) return res.status(400).json({ error: 'prompt is required' });
 
@@ -1200,6 +1211,7 @@ export default async function handler(req, res) {
         // Start-from-an-image. Both video apps take it as `image` and route
         // clip 0 through their i2v pipeline instead of t2v.
         ...(jimg ? { image: jimg } : {}),
+        ...(Array.isArray(jLoras) && jLoras.length ? { loras: jLoras } : {}),
         // Same Lightning-speed-LoRA-vs-quality-LoRA conflict as
         // generateModalWanVideo — see the comment there. Applies to both
         // A14B apps and is harmless (unrecognized key, ignored) elsewhere.
@@ -1696,6 +1708,7 @@ export default async function handler(req, res) {
               imageBase64,
               seed,
               nsfwScale,
+              loras,
             })
           : isLtx
           ? await generateModalLtxVideo({
@@ -1716,6 +1729,7 @@ export default async function handler(req, res) {
               keyframes,
               seed,
               nsfwScale,
+              loras,
               ...(isA14b
                 ? { endpoint: MODAL_WAN_A14B_ENDPOINT, model: 'wan2.2-a14b' }
                 : {}),

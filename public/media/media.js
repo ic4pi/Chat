@@ -309,12 +309,14 @@ function syncFields() {
   const selfHostedImage = kind === 'image' && spec?.provider === 'modal';
   els.countWrap.classList.toggle('hidden', !selfHostedImage);
   els.modeWrap.classList.toggle('hidden', !selfHostedImage);
-  if (els.lorasWrap) els.lorasWrap.classList.toggle('hidden', !selfHostedImage);
 
   // Each mode reveals only the controls it actually reads.
   const m = imageMode();
   const vm = videoMode();
   const selfHostedVideo = kind === 'video' && spec?.provider === 'modal';
+  // Extra LoRA stacking works on every self-hosted model now — SDXL and all
+  // three Wan apps (5B, T2V-A14B, I2V-A14B).
+  if (els.lorasWrap) els.lorasWrap.classList.toggle('hidden', !selfHostedImage && !selfHostedVideo);
   els.videoModeWrap.classList.toggle('hidden', !selfHostedVideo || (spec?.modes?.length || 1) < 2);
   if (els.a14bHint) {
     if (spec?.model === 'wan2.2-a14b') {
@@ -1438,6 +1440,8 @@ els.generate.addEventListener('click', async () => {
       if (spec.model === 'wan2.2-a14b' || spec.model === 'wan2.2-a14b-i2v') {
         body.nsfwScale = (Number(els.nsfwScale.value) || 100) / 100;
       }
+      const videoLoras = parseLoraField(els.loras?.value);
+      if (videoLoras.length) body.loras = videoLoras;
       const vm = videoMode();
       if (vm === 'restyle') {
         if (!srcVideoData) throw new Error('Pick a source video to restyle.');

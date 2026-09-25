@@ -18,6 +18,7 @@ Deploy:  modal deploy modal/wan_app.py
 
 import base64
 import random
+import re
 import io
 import os
 import subprocess
@@ -28,6 +29,10 @@ import fastapi
 import modal
 
 MODEL_ID = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+
+# Bounds how many extra community LoRAs one request can stack — see
+# _apply_extra_loras. Same cap and reasoning as sdxl_app.py.
+MAX_EXTRA_LORAS = 4
 
 # Clips are chained rather than generated as one long video: quality and speed
 # per clip stay flat, where a single long generation degrades and risks the
@@ -268,6 +273,56 @@ class Wan:
         self.i2v.enable_model_cpu_offload()
         self.v2v.enable_model_cpu_offload()
 
+        # Extra community LoRAs a caller stacks on top — see
+        # _apply_extra_loras. Loaded onto t2v's transformer, which i2v and
+        # v2v share (same object, passed in above), so one load reaches all
+        # three entry points.
+        self._extra_loras: dict = {}
+
+    def _apply_extra_loras(self, requested: list):
+        """Load and activate the caller's requested community LoRA stack —
+        style, character, motion, whatever's on the Hub. See sdxl_app.py's
+        version of this for the full rationale; same pattern here: cached
+        per adapter id so a warm container doesn't re-download, activated
+        explicitly every call via set_adapters()/disable_lora() since
+        different requests can ask for different stacks, and a LoRA that
+        fails to load is skipped and reported rather than fatal.
+
+        Applied to self.t2v specifically, but its transformer is the same
+        object i2v and v2v were built with, so this reaches all three.
+        """
+        names, weights, errors = [], [], []
+        for i, spec in enumerate((requested or [])[:MAX_EXTRA_LORAS]):
+            if not isinstance(spec, dict):
+                continue
+            repo = str(spec.get("repo") or "").strip()
+            if not repo:
+                continue
+            weight_name = spec.get("weight_name") or None
+            scale = max(0.0, min(2.0, float(spec.get("scale", 1.0))))
+            slug = re.sub(r"[^a-zA-Z0-9]", "_", f"{repo}_{weight_name or ''}")[:50]
+            adapter_id = f"extra{i}_{slug}"
+            if adapter_id not in self._extra_loras:
+                try:
+                    self.t2v.load_lora_weights(
+                        repo, weight_name=weight_name, adapter_name=adapter_id, cache_dir="/cache/hf",
+                    )
+                    self._extra_loras[adapter_id] = (repo, weight_name)
+                except Exception as exc:
+                    errors.append(f"{repo}{'/' + weight_name if weight_name else ''}: {type(exc).__name__}: {exc}")
+                    continue
+            names.append(adapter_id)
+            weights.append(scale)
+
+        if names:
+            self.t2v.set_adapters(names, adapter_weights=weights)
+        else:
+            try:
+                self.t2v.disable_lora()
+            except Exception:
+                pass
+        return names, errors
+
     @modal.method()
     def ping(self) -> dict:
         """Warm-up target. Does no work — @modal.enter() has already loaded the
@@ -329,11 +384,13 @@ class Wan:
         keyframes: list | None = None,  # [{image, frame}] — see the block below
         polish: bool = True,  # ffmpeg interpolation + upscale pass; see _export_polished
         prompts: list | None = None,  # per-clip prompts for a continuous scene
+        loras: list | None = None,  # [{repo, weight_name?, scale?}, ...] — see _apply_extra_loras
     ) -> dict:
         import torch
         from diffusers.utils import export_to_video
 
         started = time.time()
+        lora_names, lora_errors = self._apply_extra_loras(loras)
         # Re-clamped here, not just client-side: the endpoint is reachable
         # directly and a 20-clip request would run until the timeout.
         shot_prompts = []
@@ -388,6 +445,8 @@ class Wan:
                 "fast": self.fast,
                 "steps": steps,
                 "polished": polish,
+                "loras_applied": lora_names,
+                "lora_errors": lora_errors,
             }
 
         # Timeline keyframes. TI2V-5B has no conditioning pipeline that pins an
@@ -459,6 +518,8 @@ class Wan:
                 "fast": self.fast,
                 "steps": steps,
                 "polished": polish,
+                "loras_applied": lora_names,
+                "lora_errors": lora_errors,
             }
 
         frames: list = []
@@ -508,6 +569,8 @@ class Wan:
             "fast": self.fast,
             "steps": steps,
             "polished": polish,
+            "loras_applied": lora_names,
+            "lora_errors": lora_errors,
         }
 
 
@@ -540,6 +603,7 @@ def generate(
             image=payload.get("image") or "",
             keyframes=payload.get("keyframes"),
             prompts=prompts,
+            loras=payload.get("loras") if isinstance(payload.get("loras"), list) else None,
             **({"polish": payload["polish"]} if "polish" in payload else {}),
         )
     except Exception as exc:  # surfaced verbatim; the client reads body.error
@@ -633,6 +697,7 @@ def submit(
             image=payload.get("image") or "",
             keyframes=payload.get("keyframes"),
             prompts=prompts,
+            loras=payload.get("loras") if isinstance(payload.get("loras"), list) else None,
             **({"polish": payload["polish"]} if "polish" in payload else {}),
         )
         return {"job_id": call.object_id, "status": "running"}
