@@ -419,6 +419,14 @@ body::before {
 .icon-btn.accent:hover { background: rgba(201,150,62,.12); }
 .icon-btn.interrupt-btn { color: var(--danger); border-color: rgba(196,82,59,.4); }
 .icon-btn.interrupt-btn:hover { background: var(--danger-soft); border-color: var(--danger); }
+.icon-btn.search-on, .icon-btn.speak-on { color: var(--brass); border-color: var(--brass-dk); background: rgba(201,150,62,.12); }
+
+.msg-sources { margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--border); }
+.msg-sources-label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 4px; }
+.msg-sources ol { margin: 0; padding-left: 18px; }
+.msg-sources li { font-size: 13px; line-height: 1.5; }
+.msg-sources a { color: var(--brass); text-decoration: none; word-break: break-word; }
+.msg-sources a:hover { text-decoration: underline; }
 
 .text-btn {
   padding: 9px 16px;

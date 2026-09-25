@@ -9,6 +9,7 @@ import { loadConfig } from '../lib/config.js';
 import { resolveProvider, withProviderChatExtras, formatProviderError } from '../lib/providers.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
 import { prepareImageMessages, hasImageParts } from '../lib/vision.js';
+import { extractQueryText, searchWeb, formatSearchContext } from '../lib/websearch.js';
 
 /**
  * Headroom under vercel.json maxDuration 300. Must stay below the platform
@@ -64,13 +65,14 @@ function extractDelta(chunk) {
   return { text, reasoning };
 }
 
-async function handleStream(req, res, resolved, model, messagesWithSystem, providerId, notice, hadImages) {
+async function handleStream(req, res, resolved, model, messagesWithSystem, providerId, notice, hadImages, sources) {
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
+  if (sources && sources.length) sseWrite(res, { type: 'sources', sources });
   if (notice) sseWrite(res, { type: 'status', message: notice });
   sseWrite(res, { type: 'status', message: `Connecting to ${resolved.label}…` });
 
@@ -202,7 +204,7 @@ async function handleStream(req, res, resolved, model, messagesWithSystem, provi
   }
 }
 
-async function handleJson(req, res, resolved, model, messagesWithSystem, providerId, notice, hadImages) {
+async function handleJson(req, res, resolved, model, messagesWithSystem, providerId, notice, hadImages, sources) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
@@ -259,6 +261,7 @@ async function handleJson(req, res, resolved, model, messagesWithSystem, provide
       provider: resolved.label,
       model,
       keySource: resolved.keySource,
+      sources: sources && sources.length ? sources : undefined,
     });
   } catch (err) {
     const aborted = err?.name === 'AbortError' || controller.signal.aborted;
@@ -290,6 +293,7 @@ export default async function handler(req, res) {
     personaId,
     apiKey: clientKey,
     stream: wantStream,
+    webSearch: wantWebSearch,
   } = req.body || {};
 
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -338,7 +342,27 @@ export default async function handler(req, res) {
   // True only when images survive preparation, i.e. the model claims vision.
   const sentImages = hasImageParts(chatMessages);
 
-  const effectiveSystemPrompt = await resolveSystemPrompt(personaId);
+  const basePrompt = await resolveSystemPrompt(personaId);
+
+  // Grounding: real search results turned into a numbered context block the
+  // model is told to cite, plus the same list handed back to the client so
+  // it can render real links instead of trusting whatever the model claims.
+  let searchNotice;
+  let sources = [];
+  let effectiveSystemPrompt = basePrompt;
+  if (wantWebSearch) {
+    try {
+      const lastUser = [...chatMessages].reverse().find((m) => m.role === 'user');
+      const query = extractQueryText(lastUser?.content);
+      sources = await searchWeb(query);
+      const context = formatSearchContext(query, sources);
+      effectiveSystemPrompt = [basePrompt, context].filter(Boolean).join('\n\n');
+    } catch (err) {
+      searchNotice = `Web search skipped: ${err.message}`;
+    }
+  }
+  const notice = [visionNotice, searchNotice].filter(Boolean).join(' ') || undefined;
+
   const messagesWithSystem = effectiveSystemPrompt
     ? [
         { role: 'system', content: effectiveSystemPrompt },
@@ -347,7 +371,7 @@ export default async function handler(req, res) {
     : chatMessages.map((m) => ({ role: m.role, content: m.content }));
 
   if (wantStream) {
-    return handleStream(req, res, resolved, model, messagesWithSystem, pid, visionNotice, sentImages);
+    return handleStream(req, res, resolved, model, messagesWithSystem, pid, notice, sentImages, sources);
   }
-  return handleJson(req, res, resolved, model, messagesWithSystem, pid, visionNotice, sentImages);
+  return handleJson(req, res, resolved, model, messagesWithSystem, pid, notice, sentImages, sources);
 }

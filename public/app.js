@@ -307,6 +307,11 @@ let roleModels = loadRoleModels();
 let pendingUploads = []; // { kind, name, content }
 const modelsCache = {};
 
+// Web search grounding toggle — persists across reloads like the speak toggle.
+const WEB_SEARCH_PREF_KEY = 'webSearchOn';
+let webSearchOn = false;
+try { webSearchOn = localStorage.getItem(WEB_SEARCH_PREF_KEY) === '1'; } catch { /* ignore */ }
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -599,6 +604,7 @@ const els = {
   attachBtn: $('attachBtn'),
   attachInput: $('attachInput'),
   attachPreview: $('attachPreview'),
+  webSearchBtn: $('webSearchBtn'),
   smartReplyChips: $('smartReplyChips'),
   micBtn: $('micBtn'),
   interruptBtn: $('interruptBtn'),
@@ -1276,6 +1282,27 @@ function renderMessageInto(container, m, idx) {
   if (m.role === 'assistant') {
     const shown = stripContinueMarkers(m.content || '') || (m.streaming ? '…' : '');
     renderMarkdownInto(content, shown);
+    if (Array.isArray(m.sources) && m.sources.length && !m.streaming) {
+      const box = document.createElement('div');
+      box.className = 'msg-sources';
+      const label = document.createElement('div');
+      label.className = 'msg-sources-label';
+      label.textContent = 'Sources';
+      box.appendChild(label);
+      const ol = document.createElement('ol');
+      m.sources.forEach((s) => {
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.href = s.url;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.textContent = s.title || s.url;
+        li.appendChild(a);
+        ol.appendChild(li);
+      });
+      box.appendChild(ol);
+      content.appendChild(box);
+    }
     if (m.content && !m.streaming) {
       const speak = document.createElement('button');
       speak.type = 'button';
@@ -2572,6 +2599,7 @@ async function callChat(provider, model, messages, personaId) {
         apiKey: apiKey || undefined,
         paidPassword: loadPaidPassword() || undefined,
         stream: false,
+        webSearch: webSearchOn || undefined,
       }),
       signal: controller.signal,
     });
@@ -2616,6 +2644,7 @@ async function streamChatResponse({ provider, model, messages, personaId, signal
         apiKey: apiKey || undefined,
         paidPassword: loadPaidPassword() || undefined,
         stream: true,
+        webSearch: webSearchOn || undefined,
       }),
       signal,
     });
@@ -2636,6 +2665,9 @@ async function streamChatResponse({ provider, model, messages, personaId, signal
         return { ok: false, status: res.status, data: null, errText: 'Non-JSON response' };
       }
       if (typeof onEvent === 'function' && data?.reply) {
+        if (Array.isArray(data.sources) && data.sources.length) {
+          onEvent({ type: 'sources', sources: data.sources });
+        }
         onEvent({ type: 'token', text: data.reply });
         onEvent({ type: 'done', reply: data.reply, provider: data.provider, model: data.model });
       }
@@ -2978,6 +3010,7 @@ async function sendMessage(text) {
       let pinnedToStart = false;
       let streamBuf = '';
       let spokenUpTo = 0;
+      let turnSources = [];
       chat.messages.push({
         role: 'assistant',
         content: '',
@@ -3024,7 +3057,9 @@ async function sendMessage(text) {
         apiMessages,
         state.activePersonaId,
         (evt) => {
-          if (evt.type === 'status') {
+          if (evt.type === 'sources') {
+            turnSources = Array.isArray(evt.sources) ? evt.sources : [];
+          } else if (evt.type === 'status') {
             updateStatusClock(evt.message || 'Working…');
           } else if (evt.type === 'thinking') {
             appendTypingThought(evt.text || '');
@@ -3059,7 +3094,8 @@ async function sendMessage(text) {
             apiMessages,
             state.activePersonaId,
             (evt) => {
-              if (evt.type === 'status') updateStatusClock(evt.message || 'Working…');
+              if (evt.type === 'sources') turnSources = Array.isArray(evt.sources) ? evt.sources : [];
+              else if (evt.type === 'status') updateStatusClock(evt.message || 'Working…');
               else if (evt.type === 'thinking') appendTypingThought(evt.text || '');
               else if (evt.type === 'token') {
                 streamBuf += evt.text || '';
@@ -3154,6 +3190,7 @@ async function sendMessage(text) {
           ts: assistantTs,
           provider: data.provider,
           model: data.model || state.activeModel,
+          sources: turnSources.length ? turnSources : undefined,
         });
         if (attempt.stopped || activeChatUserStopped) {
           chat.messages.push({ role: 'info', content: 'Stopped.', ts: Date.now() });
@@ -3193,6 +3230,7 @@ async function sendMessage(text) {
         provider: data.provider,
         model: data.model || state.activeModel,
         chunk: autoRound + 1,
+        sources: turnSources.length ? turnSources : undefined,
       });
 
       const newArts = extractArtifacts(displayReply, { role: state.activeRole || 'plan' });
@@ -5478,6 +5516,22 @@ async function readUploadFile(file) {
   }
   return { kind: 'text', name: file.name, content };
 }
+
+function syncWebSearchBtn() {
+  if (!els.webSearchBtn) return;
+  els.webSearchBtn.classList.toggle('search-on', webSearchOn);
+  els.webSearchBtn.setAttribute('aria-pressed', webSearchOn ? 'true' : 'false');
+  els.webSearchBtn.title = webSearchOn
+    ? 'Web search on — the next reply searches live and cites sources. Tap to turn off.'
+    : 'Search the web for this reply and cite sources.';
+}
+syncWebSearchBtn();
+
+els.webSearchBtn?.addEventListener('click', () => {
+  webSearchOn = !webSearchOn;
+  try { localStorage.setItem(WEB_SEARCH_PREF_KEY, webSearchOn ? '1' : '0'); } catch { /* ignore */ }
+  syncWebSearchBtn();
+});
 
 if (els.attachBtn && els.attachInput) {
   els.attachBtn.addEventListener('click', () => els.attachInput.click());
