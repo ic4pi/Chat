@@ -3369,6 +3369,7 @@ async function callGroupStream(chat, apiMessages, onEvent) {
         paidPassword: loadPaidPassword() || undefined,
         personaModels: personaModelMap,
         providerKeys,
+        webSearch: webSearchOn || undefined,
       }),
       signal: controller.signal,
     });
@@ -3523,6 +3524,7 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
   let streamBuf        = '';
   let firstPin         = overallFirstPin[0] || null;
   const spokenThisRound = [];
+  let roundSources      = [];
 
   const ensureBubble = (personaId, personaName, meta = {}) => {
     if (currentTs && currentPersonaId === personaId) return;
@@ -3574,6 +3576,8 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
     const attempt = await callGroupStream(chat, apiMessages, (evt) => {
       if (evt.type === 'status') {
         updateStatusClock(evt.message || 'Working…');
+      } else if (evt.type === 'sources') {
+        roundSources = Array.isArray(evt.sources) ? evt.sources : [];
       } else if (evt.type === 'summary' && typeof evt.summary === 'string') {
         chat.groupSummary = evt.summary;
       } else if (evt.type === 'speaker') {
@@ -3598,6 +3602,8 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
           msg.personaName = evt.personaName;
           if (evt.model)    msg.model    = evt.model;
           if (evt.provider) msg.provider = evt.provider;
+          const turnSrc = Array.isArray(evt.sources) ? evt.sources : roundSources;
+          if (turnSrc.length) msg.sources = turnSrc;
         }
         refreshBubble();
         spokenThisRound.push({ content: streamBuf, personaId: evt.personaId });
@@ -5502,18 +5508,100 @@ async function downscaleImageFile(file, dataUrl) {
   }
 }
 
+// PDF.js and Mammoth load from CDN only when a PDF/docx is actually attached,
+// and only once — the file itself never leaves the browser, only the library.
+let pdfjsModulePromise = null;
+function loadPdfJs() {
+  if (!pdfjsModulePromise) {
+    pdfjsModulePromise = import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/+esm').then((mod) => {
+      mod.GlobalWorkerOptions.workerSrc =
+        'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.worker.min.mjs';
+      return mod;
+    });
+  }
+  return pdfjsModulePromise;
+}
+
+let mammothModulePromise = null;
+function loadMammoth() {
+  if (!mammothModulePromise) {
+    mammothModulePromise = import('https://esm.sh/mammoth@1.8.0');
+  }
+  return mammothModulePromise;
+}
+
+async function extractPdfText(file) {
+  let pdfjs;
+  try {
+    pdfjs = await loadPdfJs();
+  } catch {
+    throw new Error(`Couldn't load the PDF reader (offline or blocked) for ${file.name}`);
+  }
+  const buf = await file.arrayBuffer();
+  const doc = await pdfjs.getDocument({ data: buf }).promise;
+  const maxPages = Math.min(doc.numPages, 200);
+  const pages = [];
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await doc.getPage(i);
+    const content = await page.getTextContent();
+    pages.push(content.items.map((it) => it.str).join(' '));
+  }
+  const text = pages.join('\n\n').trim();
+  if (!text) {
+    throw new Error(`${file.name} has no extractable text — likely a scanned PDF with no text layer`);
+  }
+  return text;
+}
+
+async function extractDocxText(file) {
+  let mammoth;
+  try {
+    mammoth = await loadMammoth();
+  } catch {
+    throw new Error(`Couldn't load the DOCX reader (offline or blocked) for ${file.name}`);
+  }
+  const buf = await file.arrayBuffer();
+  const result = await mammoth.extractRawText({ arrayBuffer: buf });
+  const text = (result?.value || '').trim();
+  if (!text) throw new Error(`${file.name} has no extractable text`);
+  return text;
+}
+
 async function readUploadFile(file) {
   const isImage = /^image\//.test(file.type) || /\.(png|jpe?g|gif|webp)$/i.test(file.name);
+  if (isImage) {
+    const content = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || ''));
+      r.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+      r.readAsDataURL(file);
+    });
+    return { kind: 'image', name: file.name, content: await downscaleImageFile(file, content) };
+  }
+
+  const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+  if (isPdf) {
+    return { kind: 'text', name: file.name, content: await extractPdfText(file) };
+  }
+
+  const isDocx =
+    file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    /\.docx$/i.test(file.name);
+  if (isDocx) {
+    return { kind: 'text', name: file.name, content: await extractDocxText(file) };
+  }
+
+  // .doc (old binary Word format) has no reliable browser-side text extraction.
+  if (/\.doc$/i.test(file.name)) {
+    throw new Error(`${file.name}: old .doc format isn't supported — save it as .docx or .pdf first`);
+  }
+
   const content = await new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => resolve(String(r.result || ''));
     r.onerror = () => reject(new Error(`Failed to read ${file.name}`));
-    if (isImage) r.readAsDataURL(file);
-    else r.readAsText(file);
+    r.readAsText(file);
   });
-  if (isImage) {
-    return { kind: 'image', name: file.name, content: await downscaleImageFile(file, content) };
-  }
   return { kind: 'text', name: file.name, content };
 }
 
@@ -5546,6 +5634,7 @@ if (els.attachBtn && els.attachInput) {
         pendingUploads.push(await readUploadFile(file));
       } catch (err) {
         console.warn(err);
+        alert(err.message || `Couldn't read ${file.name}`);
       }
     }
     renderAttachPreview();

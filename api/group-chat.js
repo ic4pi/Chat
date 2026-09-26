@@ -19,6 +19,7 @@
 import { loadConfig } from '../lib/config.js';
 import { resolveProvider, withProviderChatExtras } from '../lib/providers.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
+import { searchWeb, formatSearchContext } from '../lib/websearch.js';
 
 const UPSTREAM_TIMEOUT_MS = 90_000;
 const MAX_PERSONAS = 12;
@@ -249,6 +250,7 @@ export default async function handler(req, res) {
     apiKey: clientKey,
     personaModels = {},
     providerKeys = {},
+    webSearch: wantWebSearch,
   } = req.body || {};
 
   const mode = normalizeMode(rawMode);
@@ -316,6 +318,22 @@ export default async function handler(req, res) {
     const recentBlock = formatRecent(history, RECENT_WINDOW);
     const defaultModel = model || 'venice-uncensored';
 
+    // One search per round (not per persona) — every persona at the table
+    // argues from the same live facts instead of N separate queries.
+    let searchContext = '';
+    let sources = [];
+    if (wantWebSearch) {
+      try {
+        const lastUser = [...history].reverse().find((m) => m.role === 'user');
+        const query = (lastUser?.content && String(lastUser.content).trim()) || topicText;
+        sources = await searchWeb(query);
+        searchContext = formatSearchContext(query, sources);
+        sseWrite(res, { type: 'sources', sources });
+      } catch (err) {
+        sseWrite(res, { type: 'status', message: `Web search skipped: ${err.message}` });
+      }
+    }
+
     sseWrite(res, {
       type: 'status',
       message: `Updating table context (${mode}) · ${personas.length} personas…`,
@@ -380,7 +398,7 @@ export default async function handler(req, res) {
         message: `${persona.name} is speaking (${turnResolved.label} · ${turnModel})…`,
       });
 
-      const personaPrompt = [master, persona.systemPrompt, modeRules]
+      const personaPrompt = [master, persona.systemPrompt, modeRules, searchContext]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n');
 
@@ -454,6 +472,7 @@ export default async function handler(req, res) {
         content: reply,
         provider: turnResolved.label,
         model: turnModel,
+        sources: sources.length ? sources : undefined,
       });
 
       roundSoFar.push({
