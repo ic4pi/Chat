@@ -251,6 +251,7 @@ export default async function handler(req, res) {
     personaModels = {},
     providerKeys = {},
     webSearch: wantWebSearch,
+    personaIds,
   } = req.body || {};
 
   const mode = normalizeMode(rawMode);
@@ -306,8 +307,13 @@ export default async function handler(req, res) {
 
   try {
     const config = await loadConfig();
-    // All configured personas sit at the table (hard cap for latency/cost).
-    const personas = (config.personas || []).slice(0, MAX_PERSONAS);
+    // A caller can seat a subset (e.g. "just the marketing personas"); with
+    // no list, every configured persona sits at the table as before.
+    const wantedIds = Array.isArray(personaIds) ? personaIds.filter((id) => typeof id === 'string') : null;
+    const roster = wantedIds && wantedIds.length
+      ? (config.personas || []).filter((p) => wantedIds.includes(p.id))
+      : (config.personas || []);
+    const personas = roster.slice(0, MAX_PERSONAS);
     if (!personas.length) {
       sseWrite(res, { type: 'error', error: 'No personas configured.' });
       return res.end();

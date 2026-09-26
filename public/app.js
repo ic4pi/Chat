@@ -405,6 +405,7 @@ function migrate(s) {
     personaModels: (c.personaModels && typeof c.personaModels === 'object')
       ? c.personaModels
       : {},
+    personaIds: Array.isArray(c.personaIds) ? c.personaIds : null,
     provider: c.provider || 'venice',
     model: c.model || 'venice-uncensored',
     personaId: c.personaId || 'nexus',
@@ -476,6 +477,7 @@ function createChat(opts = {}) {
     personaModels: (opts.personaModels && typeof opts.personaModels === 'object')
       ? opts.personaModels
       : {},
+    personaIds: Array.isArray(opts.personaIds) ? opts.personaIds : null,
     provider: state.activeProvider,
     model: state.activeModel,
     personaId: state.activePersonaId,
@@ -499,13 +501,14 @@ const GROUP_MODE_LABELS = {
   freechat: 'Free chat',
 };
 
-function createGroupChat(mode, topic, personaModels = {}, rounds = 3) {
+function createGroupChat(mode, topic, personaModels = {}, rounds = 3, personaIds = null) {
   const label = GROUP_MODE_LABELS[mode] || 'Group';
   const chat = createChat({
     kind: 'group',
     groupMode: mode,
     topic,
     personaModels,
+    personaIds,
     groupRounds: rounds,
     name: `${label}: ${topic.slice(0, 36)}`,
     messages: [],
@@ -3341,8 +3344,11 @@ async function callGroupStream(chat, apiMessages, onEvent) {
   // finishes. That used to kill every remaining round in the session along
   // with it, since sendGroupMessage stops the whole multi-round loop the
   // moment one round comes back as a network failure.
+  const tableSize = Array.isArray(chat.personaIds) && chat.personaIds.length
+    ? chat.personaIds.length
+    : personas.length;
   const roundTimeoutMs = Math.min(
-    Math.max(90_000 * (Math.max(personas.length, 1) + 2), 240_000),
+    Math.max(90_000 * (Math.max(tableSize, 1) + 2), 240_000),
     780_000,
   );
   const timer = setTimeout(() => controller.abort(), roundTimeoutMs);
@@ -3370,6 +3376,7 @@ async function callGroupStream(chat, apiMessages, onEvent) {
         personaModels: personaModelMap,
         providerKeys,
         webSearch: webSearchOn || undefined,
+        personaIds: (Array.isArray(chat.personaIds) && chat.personaIds.length) ? chat.personaIds : undefined,
       }),
       signal: controller.signal,
     });
@@ -5209,6 +5216,13 @@ async function renderGroupPersonaModels() {
     row.className = 'group-persona-row';
     row.dataset.personaId = p.id;
 
+    const include = document.createElement('input');
+    include.type = 'checkbox';
+    include.className = 'group-persona-include';
+    include.checked = true;
+    include.title = 'Include this persona in the group';
+    row.appendChild(include);
+
     const name = document.createElement('div');
     name.className = 'group-persona-name';
     name.textContent = p.name;
@@ -5259,6 +5273,14 @@ async function renderGroupPersonaModels() {
       }
     };
 
+    const syncIncludeState = () => {
+      row.classList.toggle('group-persona-excluded', !include.checked);
+      provSelect.disabled = !include.checked;
+      modelSelect.disabled = !include.checked || !provSelect.value;
+    };
+    include.addEventListener('change', syncIncludeState);
+    syncIncludeState();
+
     provSelect.addEventListener('change', async () => {
       modelSelect.innerHTML = '';
       modelSelect.disabled = true;
@@ -5304,6 +5326,19 @@ function collectGroupPersonaModelsFromForm() {
     }
   });
   return out;
+}
+
+/** Which personas are checked in the group setup screen — the actual roster for this chat. */
+function collectSelectedPersonaIdsFromForm() {
+  const host = els.groupPersonaModels;
+  if (!host) return personas.map((p) => p.id);
+  const ids = [];
+  host.querySelectorAll('.group-persona-row').forEach((row) => {
+    const id = row.dataset.personaId;
+    const checked = row.querySelector('.group-persona-include')?.checked;
+    if (id && checked) ids.push(id);
+  });
+  return ids;
 }
 
 // ---------------------------------------------------------------------------
@@ -5422,10 +5457,15 @@ els.startGroupBtn?.addEventListener('click', async () => {
     return;
   }
   const rounds = parseInt(els.roundsDisplay?.textContent || '3', 10) || 3;
+  const personaIds = collectSelectedPersonaIdsFromForm();
+  if (personaIds.length < 1) {
+    alert('Check at least one persona for the table.');
+    return;
+  }
   ensurePersonaVoices(personas);
   ensurePersonaModels(personas);
   const assigned = collectGroupPersonaModelsFromForm();
-  createGroupChat(mode, topic, assigned, rounds);
+  createGroupChat(mode, topic, assigned, rounds, personaIds);
   // Clear draft and hide without re-capturing the emptied form.
   clearGroupDraft();
   els.groupModal?.classList.add('hidden');

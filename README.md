@@ -68,6 +68,10 @@ history; the server holds every prompt and key.
 ### 🎭 Group chat
 
 - Every persona speaks once per round, each on its own provider and model.
+- The setup screen lets you check/uncheck who's actually at the table —
+  each group chat keeps its own roster, so the same personas can sit as a
+  marketing panel in one chat and get swapped for an accounting panel in
+  another instead of all configured personas showing up every time.
 - Three modes: **boardroom** (serious), **brainstorm** (serious about the
   work, jokes allowed), **freechat** (anything).
 - Context stays small — a rolling summary plus what others said this round,
