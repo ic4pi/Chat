@@ -323,6 +323,10 @@ export default async function handler(req, res) {
     const history = Array.isArray(messages) ? messages : [];
     const recentBlock = formatRecent(history, RECENT_WINDOW);
     const defaultModel = model || 'venice-uncensored';
+    // The message each persona must actually answer this round, as opposed
+    // to the table's standing topic, which can drift once the user follows
+    // up with something narrower or different.
+    const lastUser = [...history].reverse().find((m) => m.role === 'user');
 
     // One search per round (not per persona) — every persona at the table
     // argues from the same live facts instead of N separate queries.
@@ -330,7 +334,6 @@ export default async function handler(req, res) {
     let sources = [];
     if (wantWebSearch) {
       try {
-        const lastUser = [...history].reverse().find((m) => m.role === 'user');
         const query = (lastUser?.content && String(lastUser.content).trim()) || topicText;
         sources = await searchWeb(query);
         searchContext = formatSearchContext(query, sources);
@@ -412,8 +415,15 @@ export default async function handler(req, res) {
         ? roundSoFar.map((t) => `${t.name}: ${t.content}`).join('\n\n')
         : '(No one else has spoken yet this round.)';
 
+      // The table's standing topic frames the discussion, but the thing each
+      // persona must actually answer is whatever the user just said — which
+      // can drift from (or be a follow-up narrower than) that original topic.
+      // Burying it inside the rolling summary let personas keep re-answering
+      // the opening topic verbatim instead of the latest question.
+      const latestUserMessage = (lastUser?.content && String(lastUser.content).trim()) || topicText;
+
       const userPayload = [
-        `GROUP DISCUSSION — topic: ${topicText}`,
+        `GROUP DISCUSSION — standing topic: ${topicText}`,
         '',
         'Rolling summary of earlier discussion (previous ~10 messages condensed):',
         rollingSummary || '(Just starting.)',
@@ -421,14 +431,18 @@ export default async function handler(req, res) {
         'What others have said so far this round (context only — not a script to follow):',
         roundBlock,
         '',
-        `You are ${persona.name}. Answer the topic itself, from your own perspective —`,
-        'do not just summarize or react to what others already said. Bring a point they',
-        'haven\'t made, or push back with a reason if you actually disagree. Speaking order',
-        'is seated by who is actually relevant to this topic, not turn-taking, so do not',
-        'assume you are "first" or "last" for form\'s sake. If this topic genuinely falls',
-        'outside what you\'d actually know or care about, say so briefly and give whatever',
-        'honest, limited perspective you do have — do not fake expertise you don\'t have.',
-        'Speak in character. Do not narrate stage directions. Do not invent other speakers\' lines.',
+        'THE USER JUST SAID THIS — answer it directly, not the standing topic in general:',
+        latestUserMessage,
+        '',
+        `You are ${persona.name}. Respond to the user's message above, from your own`,
+        'perspective — do not just summarize or react to what others already said. Bring',
+        'a point they haven\'t made, or push back with a reason if you actually disagree.',
+        'Speaking order is seated by who is actually relevant to this topic, not',
+        'turn-taking, so do not assume you are "first" or "last" for form\'s sake. If this',
+        'genuinely falls outside what you\'d actually know or care about, say so briefly',
+        'and give whatever honest, limited perspective you do have — do not fake expertise',
+        'you don\'t have. Speak in character. Do not narrate stage directions. Do not',
+        'invent other speakers\' lines.',
       ].join('\n');
 
       let reply = '';
@@ -496,7 +510,6 @@ export default async function handler(req, res) {
       personaName: t.name,
       content: t.content,
     }));
-    const lastUser = [...history].reverse().find((m) => m.role === 'user');
     const forSummary = [
       ...(lastUser ? [lastUser] : []),
       ...roundAsMsgs,
