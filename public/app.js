@@ -307,6 +307,11 @@ let roleModels = loadRoleModels();
 let pendingUploads = []; // { kind, name, content }
 const modelsCache = {};
 
+// Web search grounding toggle — persists across reloads like the speak toggle.
+const WEB_SEARCH_PREF_KEY = 'webSearchOn';
+let webSearchOn = false;
+try { webSearchOn = localStorage.getItem(WEB_SEARCH_PREF_KEY) === '1'; } catch { /* ignore */ }
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -400,6 +405,7 @@ function migrate(s) {
     personaModels: (c.personaModels && typeof c.personaModels === 'object')
       ? c.personaModels
       : {},
+    personaIds: Array.isArray(c.personaIds) ? c.personaIds : null,
     provider: c.provider || 'venice',
     model: c.model || 'venice-uncensored',
     personaId: c.personaId || 'nexus',
@@ -471,6 +477,7 @@ function createChat(opts = {}) {
     personaModels: (opts.personaModels && typeof opts.personaModels === 'object')
       ? opts.personaModels
       : {},
+    personaIds: Array.isArray(opts.personaIds) ? opts.personaIds : null,
     provider: state.activeProvider,
     model: state.activeModel,
     personaId: state.activePersonaId,
@@ -494,13 +501,14 @@ const GROUP_MODE_LABELS = {
   freechat: 'Free chat',
 };
 
-function createGroupChat(mode, topic, personaModels = {}, rounds = 3) {
+function createGroupChat(mode, topic, personaModels = {}, rounds = 3, personaIds = null) {
   const label = GROUP_MODE_LABELS[mode] || 'Group';
   const chat = createChat({
     kind: 'group',
     groupMode: mode,
     topic,
     personaModels,
+    personaIds,
     groupRounds: rounds,
     name: `${label}: ${topic.slice(0, 36)}`,
     messages: [],
@@ -599,6 +607,7 @@ const els = {
   attachBtn: $('attachBtn'),
   attachInput: $('attachInput'),
   attachPreview: $('attachPreview'),
+  webSearchBtn: $('webSearchBtn'),
   smartReplyChips: $('smartReplyChips'),
   micBtn: $('micBtn'),
   interruptBtn: $('interruptBtn'),
@@ -1276,6 +1285,27 @@ function renderMessageInto(container, m, idx) {
   if (m.role === 'assistant') {
     const shown = stripContinueMarkers(m.content || '') || (m.streaming ? '…' : '');
     renderMarkdownInto(content, shown);
+    if (Array.isArray(m.sources) && m.sources.length && !m.streaming) {
+      const box = document.createElement('div');
+      box.className = 'msg-sources';
+      const label = document.createElement('div');
+      label.className = 'msg-sources-label';
+      label.textContent = 'Sources';
+      box.appendChild(label);
+      const ol = document.createElement('ol');
+      m.sources.forEach((s) => {
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.href = s.url;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.textContent = s.title || s.url;
+        li.appendChild(a);
+        ol.appendChild(li);
+      });
+      box.appendChild(ol);
+      content.appendChild(box);
+    }
     if (m.content && !m.streaming) {
       const speak = document.createElement('button');
       speak.type = 'button';
@@ -2572,6 +2602,7 @@ async function callChat(provider, model, messages, personaId) {
         apiKey: apiKey || undefined,
         paidPassword: loadPaidPassword() || undefined,
         stream: false,
+        webSearch: webSearchOn || undefined,
       }),
       signal: controller.signal,
     });
@@ -2616,6 +2647,7 @@ async function streamChatResponse({ provider, model, messages, personaId, signal
         apiKey: apiKey || undefined,
         paidPassword: loadPaidPassword() || undefined,
         stream: true,
+        webSearch: webSearchOn || undefined,
       }),
       signal,
     });
@@ -2636,6 +2668,9 @@ async function streamChatResponse({ provider, model, messages, personaId, signal
         return { ok: false, status: res.status, data: null, errText: 'Non-JSON response' };
       }
       if (typeof onEvent === 'function' && data?.reply) {
+        if (Array.isArray(data.sources) && data.sources.length) {
+          onEvent({ type: 'sources', sources: data.sources });
+        }
         onEvent({ type: 'token', text: data.reply });
         onEvent({ type: 'done', reply: data.reply, provider: data.provider, model: data.model });
       }
@@ -2978,6 +3013,7 @@ async function sendMessage(text) {
       let pinnedToStart = false;
       let streamBuf = '';
       let spokenUpTo = 0;
+      let turnSources = [];
       chat.messages.push({
         role: 'assistant',
         content: '',
@@ -3024,7 +3060,9 @@ async function sendMessage(text) {
         apiMessages,
         state.activePersonaId,
         (evt) => {
-          if (evt.type === 'status') {
+          if (evt.type === 'sources') {
+            turnSources = Array.isArray(evt.sources) ? evt.sources : [];
+          } else if (evt.type === 'status') {
             updateStatusClock(evt.message || 'Working…');
           } else if (evt.type === 'thinking') {
             appendTypingThought(evt.text || '');
@@ -3059,7 +3097,8 @@ async function sendMessage(text) {
             apiMessages,
             state.activePersonaId,
             (evt) => {
-              if (evt.type === 'status') updateStatusClock(evt.message || 'Working…');
+              if (evt.type === 'sources') turnSources = Array.isArray(evt.sources) ? evt.sources : [];
+              else if (evt.type === 'status') updateStatusClock(evt.message || 'Working…');
               else if (evt.type === 'thinking') appendTypingThought(evt.text || '');
               else if (evt.type === 'token') {
                 streamBuf += evt.text || '';
@@ -3154,6 +3193,7 @@ async function sendMessage(text) {
           ts: assistantTs,
           provider: data.provider,
           model: data.model || state.activeModel,
+          sources: turnSources.length ? turnSources : undefined,
         });
         if (attempt.stopped || activeChatUserStopped) {
           chat.messages.push({ role: 'info', content: 'Stopped.', ts: Date.now() });
@@ -3193,6 +3233,7 @@ async function sendMessage(text) {
         provider: data.provider,
         model: data.model || state.activeModel,
         chunk: autoRound + 1,
+        sources: turnSources.length ? turnSources : undefined,
       });
 
       const newArts = extractArtifacts(displayReply, { role: state.activeRole || 'plan' });
@@ -3303,8 +3344,11 @@ async function callGroupStream(chat, apiMessages, onEvent) {
   // finishes. That used to kill every remaining round in the session along
   // with it, since sendGroupMessage stops the whole multi-round loop the
   // moment one round comes back as a network failure.
+  const tableSize = Array.isArray(chat.personaIds) && chat.personaIds.length
+    ? chat.personaIds.length
+    : personas.length;
   const roundTimeoutMs = Math.min(
-    Math.max(90_000 * (Math.max(personas.length, 1) + 2), 240_000),
+    Math.max(90_000 * (Math.max(tableSize, 1) + 2), 240_000),
     780_000,
   );
   const timer = setTimeout(() => controller.abort(), roundTimeoutMs);
@@ -3331,6 +3375,8 @@ async function callGroupStream(chat, apiMessages, onEvent) {
         paidPassword: loadPaidPassword() || undefined,
         personaModels: personaModelMap,
         providerKeys,
+        webSearch: webSearchOn || undefined,
+        personaIds: (Array.isArray(chat.personaIds) && chat.personaIds.length) ? chat.personaIds : undefined,
       }),
       signal: controller.signal,
     });
@@ -3485,6 +3531,7 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
   let streamBuf        = '';
   let firstPin         = overallFirstPin[0] || null;
   const spokenThisRound = [];
+  let roundSources      = [];
 
   const ensureBubble = (personaId, personaName, meta = {}) => {
     if (currentTs && currentPersonaId === personaId) return;
@@ -3536,6 +3583,8 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
     const attempt = await callGroupStream(chat, apiMessages, (evt) => {
       if (evt.type === 'status') {
         updateStatusClock(evt.message || 'Working…');
+      } else if (evt.type === 'sources') {
+        roundSources = Array.isArray(evt.sources) ? evt.sources : [];
       } else if (evt.type === 'summary' && typeof evt.summary === 'string') {
         chat.groupSummary = evt.summary;
       } else if (evt.type === 'speaker') {
@@ -3560,6 +3609,8 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
           msg.personaName = evt.personaName;
           if (evt.model)    msg.model    = evt.model;
           if (evt.provider) msg.provider = evt.provider;
+          const turnSrc = Array.isArray(evt.sources) ? evt.sources : roundSources;
+          if (turnSrc.length) msg.sources = turnSrc;
         }
         refreshBubble();
         spokenThisRound.push({ content: streamBuf, personaId: evt.personaId });
@@ -5165,6 +5216,13 @@ async function renderGroupPersonaModels() {
     row.className = 'group-persona-row';
     row.dataset.personaId = p.id;
 
+    const include = document.createElement('input');
+    include.type = 'checkbox';
+    include.className = 'group-persona-include';
+    include.checked = true;
+    include.title = 'Include this persona in the group';
+    row.appendChild(include);
+
     const name = document.createElement('div');
     name.className = 'group-persona-name';
     name.textContent = p.name;
@@ -5215,6 +5273,14 @@ async function renderGroupPersonaModels() {
       }
     };
 
+    const syncIncludeState = () => {
+      row.classList.toggle('group-persona-excluded', !include.checked);
+      provSelect.disabled = !include.checked;
+      modelSelect.disabled = !include.checked || !provSelect.value;
+    };
+    include.addEventListener('change', syncIncludeState);
+    syncIncludeState();
+
     provSelect.addEventListener('change', async () => {
       modelSelect.innerHTML = '';
       modelSelect.disabled = true;
@@ -5260,6 +5326,19 @@ function collectGroupPersonaModelsFromForm() {
     }
   });
   return out;
+}
+
+/** Which personas are checked in the group setup screen — the actual roster for this chat. */
+function collectSelectedPersonaIdsFromForm() {
+  const host = els.groupPersonaModels;
+  if (!host) return personas.map((p) => p.id);
+  const ids = [];
+  host.querySelectorAll('.group-persona-row').forEach((row) => {
+    const id = row.dataset.personaId;
+    const checked = row.querySelector('.group-persona-include')?.checked;
+    if (id && checked) ids.push(id);
+  });
+  return ids;
 }
 
 // ---------------------------------------------------------------------------
@@ -5378,10 +5457,15 @@ els.startGroupBtn?.addEventListener('click', async () => {
     return;
   }
   const rounds = parseInt(els.roundsDisplay?.textContent || '3', 10) || 3;
+  const personaIds = collectSelectedPersonaIdsFromForm();
+  if (personaIds.length < 1) {
+    alert('Check at least one persona for the table.');
+    return;
+  }
   ensurePersonaVoices(personas);
   ensurePersonaModels(personas);
   const assigned = collectGroupPersonaModelsFromForm();
-  createGroupChat(mode, topic, assigned, rounds);
+  createGroupChat(mode, topic, assigned, rounds, personaIds);
   // Clear draft and hide without re-capturing the emptied form.
   clearGroupDraft();
   els.groupModal?.classList.add('hidden');
@@ -5464,20 +5548,118 @@ async function downscaleImageFile(file, dataUrl) {
   }
 }
 
+// PDF.js and Mammoth load from CDN only when a PDF/docx is actually attached,
+// and only once — the file itself never leaves the browser, only the library.
+let pdfjsModulePromise = null;
+function loadPdfJs() {
+  if (!pdfjsModulePromise) {
+    pdfjsModulePromise = import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/+esm').then((mod) => {
+      mod.GlobalWorkerOptions.workerSrc =
+        'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.worker.min.mjs';
+      return mod;
+    });
+  }
+  return pdfjsModulePromise;
+}
+
+let mammothModulePromise = null;
+function loadMammoth() {
+  if (!mammothModulePromise) {
+    mammothModulePromise = import('https://esm.sh/mammoth@1.8.0');
+  }
+  return mammothModulePromise;
+}
+
+async function extractPdfText(file) {
+  let pdfjs;
+  try {
+    pdfjs = await loadPdfJs();
+  } catch {
+    throw new Error(`Couldn't load the PDF reader (offline or blocked) for ${file.name}`);
+  }
+  const buf = await file.arrayBuffer();
+  const doc = await pdfjs.getDocument({ data: buf }).promise;
+  const maxPages = Math.min(doc.numPages, 200);
+  const pages = [];
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await doc.getPage(i);
+    const content = await page.getTextContent();
+    pages.push(content.items.map((it) => it.str).join(' '));
+  }
+  const text = pages.join('\n\n').trim();
+  if (!text) {
+    throw new Error(`${file.name} has no extractable text — likely a scanned PDF with no text layer`);
+  }
+  return text;
+}
+
+async function extractDocxText(file) {
+  let mammoth;
+  try {
+    mammoth = await loadMammoth();
+  } catch {
+    throw new Error(`Couldn't load the DOCX reader (offline or blocked) for ${file.name}`);
+  }
+  const buf = await file.arrayBuffer();
+  const result = await mammoth.extractRawText({ arrayBuffer: buf });
+  const text = (result?.value || '').trim();
+  if (!text) throw new Error(`${file.name} has no extractable text`);
+  return text;
+}
+
 async function readUploadFile(file) {
   const isImage = /^image\//.test(file.type) || /\.(png|jpe?g|gif|webp)$/i.test(file.name);
+  if (isImage) {
+    const content = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || ''));
+      r.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+      r.readAsDataURL(file);
+    });
+    return { kind: 'image', name: file.name, content: await downscaleImageFile(file, content) };
+  }
+
+  const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+  if (isPdf) {
+    return { kind: 'text', name: file.name, content: await extractPdfText(file) };
+  }
+
+  const isDocx =
+    file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    /\.docx$/i.test(file.name);
+  if (isDocx) {
+    return { kind: 'text', name: file.name, content: await extractDocxText(file) };
+  }
+
+  // .doc (old binary Word format) has no reliable browser-side text extraction.
+  if (/\.doc$/i.test(file.name)) {
+    throw new Error(`${file.name}: old .doc format isn't supported — save it as .docx or .pdf first`);
+  }
+
   const content = await new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => resolve(String(r.result || ''));
     r.onerror = () => reject(new Error(`Failed to read ${file.name}`));
-    if (isImage) r.readAsDataURL(file);
-    else r.readAsText(file);
+    r.readAsText(file);
   });
-  if (isImage) {
-    return { kind: 'image', name: file.name, content: await downscaleImageFile(file, content) };
-  }
   return { kind: 'text', name: file.name, content };
 }
+
+function syncWebSearchBtn() {
+  if (!els.webSearchBtn) return;
+  els.webSearchBtn.classList.toggle('search-on', webSearchOn);
+  els.webSearchBtn.setAttribute('aria-pressed', webSearchOn ? 'true' : 'false');
+  els.webSearchBtn.title = webSearchOn
+    ? 'Web search on — the next reply searches live and cites sources. Tap to turn off.'
+    : 'Search the web for this reply and cite sources.';
+}
+syncWebSearchBtn();
+
+els.webSearchBtn?.addEventListener('click', () => {
+  webSearchOn = !webSearchOn;
+  try { localStorage.setItem(WEB_SEARCH_PREF_KEY, webSearchOn ? '1' : '0'); } catch { /* ignore */ }
+  syncWebSearchBtn();
+});
 
 if (els.attachBtn && els.attachInput) {
   els.attachBtn.addEventListener('click', () => els.attachInput.click());
@@ -5492,6 +5674,7 @@ if (els.attachBtn && els.attachInput) {
         pendingUploads.push(await readUploadFile(file));
       } catch (err) {
         console.warn(err);
+        alert(err.message || `Couldn't read ${file.name}`);
       }
     }
     renderAttachPreview();

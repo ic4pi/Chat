@@ -19,6 +19,7 @@
 import { loadConfig } from '../lib/config.js';
 import { resolveProvider, withProviderChatExtras } from '../lib/providers.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
+import { searchWeb, formatSearchContext } from '../lib/websearch.js';
 
 const UPSTREAM_TIMEOUT_MS = 90_000;
 const MAX_PERSONAS = 12;
@@ -249,6 +250,8 @@ export default async function handler(req, res) {
     apiKey: clientKey,
     personaModels = {},
     providerKeys = {},
+    webSearch: wantWebSearch,
+    personaIds,
   } = req.body || {};
 
   const mode = normalizeMode(rawMode);
@@ -304,8 +307,13 @@ export default async function handler(req, res) {
 
   try {
     const config = await loadConfig();
-    // All configured personas sit at the table (hard cap for latency/cost).
-    const personas = (config.personas || []).slice(0, MAX_PERSONAS);
+    // A caller can seat a subset (e.g. "just the marketing personas"); with
+    // no list, every configured persona sits at the table as before.
+    const wantedIds = Array.isArray(personaIds) ? personaIds.filter((id) => typeof id === 'string') : null;
+    const roster = wantedIds && wantedIds.length
+      ? (config.personas || []).filter((p) => wantedIds.includes(p.id))
+      : (config.personas || []);
+    const personas = roster.slice(0, MAX_PERSONAS);
     if (!personas.length) {
       sseWrite(res, { type: 'error', error: 'No personas configured.' });
       return res.end();
@@ -315,6 +323,22 @@ export default async function handler(req, res) {
     const history = Array.isArray(messages) ? messages : [];
     const recentBlock = formatRecent(history, RECENT_WINDOW);
     const defaultModel = model || 'venice-uncensored';
+
+    // One search per round (not per persona) — every persona at the table
+    // argues from the same live facts instead of N separate queries.
+    let searchContext = '';
+    let sources = [];
+    if (wantWebSearch) {
+      try {
+        const lastUser = [...history].reverse().find((m) => m.role === 'user');
+        const query = (lastUser?.content && String(lastUser.content).trim()) || topicText;
+        sources = await searchWeb(query);
+        searchContext = formatSearchContext(query, sources);
+        sseWrite(res, { type: 'sources', sources });
+      } catch (err) {
+        sseWrite(res, { type: 'status', message: `Web search skipped: ${err.message}` });
+      }
+    }
 
     sseWrite(res, {
       type: 'status',
@@ -380,7 +404,7 @@ export default async function handler(req, res) {
         message: `${persona.name} is speaking (${turnResolved.label} · ${turnModel})…`,
       });
 
-      const personaPrompt = [master, persona.systemPrompt, modeRules]
+      const personaPrompt = [master, persona.systemPrompt, modeRules, searchContext]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n');
 
@@ -454,6 +478,7 @@ export default async function handler(req, res) {
         content: reply,
         provider: turnResolved.label,
         model: turnModel,
+        sources: sources.length ? sources : undefined,
       });
 
       roundSoFar.push({

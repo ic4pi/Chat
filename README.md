@@ -32,6 +32,10 @@ history; the server holds every prompt and key.
 - **Attachments** — text files inline; images are described by a
   vision-capable model when the chosen text model cannot see them
   (`lib/vision.js`), instead of failing the turn.
+- **Web search** (🔎 toggle) — live Brave Search results fed into context per
+  turn, with the model told to cite `[1]`, `[2]`, ... The same sources come
+  back to the client and render as a clickable list under the reply, so a
+  citation always points at a real, checkable page (`lib/websearch.js`).
 - Smart-reply chips and conversation summaries via `/api/assist`.
 
 ### 🧠 Memory — Supabase
@@ -64,6 +68,10 @@ history; the server holds every prompt and key.
 ### 🎭 Group chat
 
 - Every persona speaks once per round, each on its own provider and model.
+- The setup screen lets you check/uncheck who's actually at the table —
+  each group chat keeps its own roster, so the same personas can sit as a
+  marketing panel in one chat and get swapped for an accounting panel in
+  another instead of all configured personas showing up every time.
 - Three modes: **boardroom** (serious), **brainstorm** (serious about the
   work, jokes allowed), **freechat** (anything).
 - Context stays small — a rolling summary plus what others said this round,
@@ -150,9 +158,12 @@ bypasses row-level security entirely.
 | `CEREBRAS_API_KEY` / `GROQ_API_KEY` / `XAI_API_KEY` | Those providers |
 | `NVIDIA_API_KEY` | NVIDIA NIM chat models |
 | `SITE_URL` | Sent as OpenRouter's `HTTP-Referer` |
+| `BRAVE_SEARCH_API_KEY` | Web search grounding (the 🔎 toggle) in `/api/chat` |
 
 A missing provider key is not fatal — that provider returns a clear error and
-the rest keep working.
+the rest keep working. Same for `BRAVE_SEARCH_API_KEY`: with the 🔎 toggle on
+and no key set, the reply still goes out, ungrounded, with a visible notice
+saying search was skipped — it never answers as if it searched when it didn't.
 
 ### Admin and paid gate
 
