@@ -23,6 +23,19 @@ const UPSTREAM_TIMEOUT_MS = 280_000;
  */
 const CHUNK_MAX_TOKENS = 8192;
 
+/**
+ * Small models (venice-uncensored et al.) tend to re-emit their entire prior
+ * answer verbatim on every follow-up instead of addressing just the new
+ * question — this is a response-quality instruction, not a content/safety
+ * rule, so it stays consistent with "nothing injected on uncensored models"
+ * below: it never tells the model what it may or may not say, only how to
+ * scope a reply once there's prior turns to not repeat.
+ */
+const NO_REPEAT_INSTRUCTION =
+  'This is an ongoing conversation. When replying to a follow-up, respond only ' +
+  'to what is newly asked — do not restate, re-summarize, or repeat your ' +
+  'previous answer(s) first.';
+
 function sseWrite(res, obj) {
   res.write(`data: ${JSON.stringify(obj)}\n\n`);
 }
@@ -342,7 +355,10 @@ export default async function handler(req, res) {
   // True only when images survive preparation, i.e. the model claims vision.
   const sentImages = hasImageParts(chatMessages);
 
-  const basePrompt = await resolveSystemPrompt(personaId);
+  const hasPriorTurn = chatMessages.some((m) => m.role === 'assistant');
+  const basePrompt = [await resolveSystemPrompt(personaId), hasPriorTurn ? NO_REPEAT_INSTRUCTION : '']
+    .filter(Boolean)
+    .join('\n\n');
 
   // Grounding: real search results turned into a numbered context block the
   // model is told to cite, plus the same list handed back to the client so
