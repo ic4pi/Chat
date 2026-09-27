@@ -1354,9 +1354,11 @@ function renderMessageInto(container, m, idx) {
   return div;
 }
 
-// Minimal markdown-esque renderer for the bot output. Only handles fenced code
-// blocks (```lang ... ```) — everything else is inserted as plain text nodes so
-// there is no XSS surface. Code blocks become <pre class="code-block"> elements.
+// Minimal markdown-esque renderer for the bot output. Handles fenced code
+// blocks (```lang ... ```), paragraphs, bullet/numbered lists, headings, and
+// bold/italic/inline-code — everything is built as DOM nodes with textContent
+// (never innerHTML on model output), so there is no XSS surface. Code blocks
+// become <pre class="code-block"> elements.
 function renderMarkdownInto(container, text) {
   const parts = splitByCodeFences(text);
   for (const part of parts) {
@@ -1373,12 +1375,107 @@ function renderMarkdownInto(container, text) {
       code.textContent = part.content;
       pre.appendChild(code);
       container.appendChild(pre);
-    } else if (part.content.length > 0) {
-      const p = document.createElement('p');
-      p.textContent = part.content;
-      container.appendChild(p);
+    } else if (part.content.trim().length > 0) {
+      renderTextBlocks(container, part.content);
     }
   }
+}
+
+const MD_BULLET_RE = /^\s*[-*•]\s+(.*)$/;
+const MD_ORDERED_RE = /^\s*\d+[.)]\s+(.*)$/;
+const MD_HEADING_RE = /^\s*(#{1,6})\s+(.*)$/;
+
+// Splits raw (non-code-fence) text into paragraph/list/heading blocks so
+// list items land one-per-line with real spacing, instead of the whole
+// reply becoming a single wall-of-text <p>.
+function renderTextBlocks(container, text) {
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  let i = 0;
+  while (i < lines.length) {
+    while (i < lines.length && lines[i].trim() === '') i++;
+    if (i >= lines.length) break;
+
+    const heading = lines[i].match(MD_HEADING_RE);
+    if (heading) {
+      const h = document.createElement('p');
+      h.className = 'md-heading';
+      appendInlineMarkdown(h, heading[2]);
+      container.appendChild(h);
+      i++;
+      continue;
+    }
+
+    const isOrdered = MD_ORDERED_RE.test(lines[i]);
+    const isBullet = MD_BULLET_RE.test(lines[i]);
+    if (isOrdered || isBullet) {
+      const list = document.createElement(isOrdered ? 'ol' : 'ul');
+      while (i < lines.length) {
+        const line = lines[i];
+        if (line.trim() === '') { i++; break; }
+        const m = line.match(isOrdered ? MD_ORDERED_RE : MD_BULLET_RE);
+        if (m) {
+          const li = document.createElement('li');
+          appendInlineMarkdown(li, m[1]);
+          list.appendChild(li);
+          i++;
+        } else if (/^\s{2,}\S/.test(line) && list.lastElementChild) {
+          // Indented continuation of the previous list item.
+          list.lastElementChild.appendChild(document.createElement('br'));
+          appendInlineMarkdown(list.lastElementChild, line.trim());
+          i++;
+        } else {
+          break;
+        }
+      }
+      container.appendChild(list);
+      continue;
+    }
+
+    const paraLines = [];
+    while (
+      i < lines.length &&
+      lines[i].trim() !== '' &&
+      !MD_BULLET_RE.test(lines[i]) &&
+      !MD_ORDERED_RE.test(lines[i]) &&
+      !MD_HEADING_RE.test(lines[i])
+    ) {
+      paraLines.push(lines[i]);
+      i++;
+    }
+    const p = document.createElement('p');
+    paraLines.forEach((ln, idx) => {
+      if (idx > 0) p.appendChild(document.createElement('br'));
+      appendInlineMarkdown(p, ln);
+    });
+    container.appendChild(p);
+  }
+}
+
+// Bold/italic/inline-code within a line, appended as real DOM nodes — text
+// content only ever goes through textContent, never innerHTML.
+const MD_INLINE_RE = /\*\*(.+?)\*\*|__(.+?)__|`([^`]+?)`|\*(.+?)\*|_(.+?)_/g;
+function appendInlineMarkdown(parent, text) {
+  MD_INLINE_RE.lastIndex = 0;
+  let last = 0;
+  let m;
+  while ((m = MD_INLINE_RE.exec(text)) !== null) {
+    if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
+    if (m[1] !== undefined || m[2] !== undefined) {
+      const strong = document.createElement('strong');
+      strong.textContent = m[1] !== undefined ? m[1] : m[2];
+      parent.appendChild(strong);
+    } else if (m[3] !== undefined) {
+      const code = document.createElement('code');
+      code.textContent = m[3];
+      parent.appendChild(code);
+    } else {
+      const em = document.createElement('em');
+      em.textContent = m[4] !== undefined ? m[4] : m[5];
+      parent.appendChild(em);
+    }
+    last = MD_INLINE_RE.lastIndex;
+  }
+  if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
 }
 
 // Split "hello ```py\ncode\n``` there" into [{type:text}, {type:code}, {type:text}]

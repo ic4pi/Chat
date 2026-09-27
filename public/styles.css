@@ -618,6 +618,20 @@ body::before {
   vertical-align: middle;
 }
 
+.msg .content p, .compare-panel-body p { margin: 0 0 12px; }
+.msg .content p:last-child, .compare-panel-body p:last-child { margin-bottom: 0; }
+.msg .content ul, .msg .content ol,
+.compare-panel-body ul, .compare-panel-body ol { margin: 0 0 12px; padding-left: 1.4em; }
+.msg .content ul:last-child, .msg .content ol:last-child,
+.compare-panel-body ul:last-child, .compare-panel-body ol:last-child { margin-bottom: 0; }
+.msg .content li, .compare-panel-body li { margin-bottom: 6px; }
+.msg .content li:last-child, .compare-panel-body li:last-child { margin-bottom: 0; }
+.msg .content li > br, .compare-panel-body li > br { line-height: 1.4; }
+.msg .content .md-heading, .compare-panel-body .md-heading {
+  font-weight: 700; margin: 4px 0 10px;
+}
+.msg .content .md-heading:first-child, .compare-panel-body .md-heading:first-child { margin-top: 0; }
+
 .msg .content pre {
   background: var(--code-bg); border: 1px solid var(--border);
   border-radius: var(--r); padding: 13px 15px;
