@@ -28,16 +28,22 @@ pair, not a mode switch on the same weights — holding both would need
 ~110GB+ of VRAM for transformers alone. Needs its own A100-80GB, same as
 wan_a14b_app.py.
 
-!! UNVERIFIED — written from the architecture and the LoRA repo name alone,
-not run on a GPU. Two things are genuine guesses and need confirming against
-the real repos before trusting this in production:
-  1. The NSFW LoRA's actual weight file names — discovered at load time via
-     list_repo_files() rather than hardcoded, specifically because guessing
-     wrong here is the exact failure this file exists to avoid repeating.
-  2. Whether lightx2v/Wan2.2-Lightning ships an I2V-A14B subfolder at all —
-     wrapped in the same try/except-and-fall-back-to-full-steps pattern
-     wan_a14b_app.py already uses, so a wrong guess costs speed, not
-     correctness.
+Confirmed for real (web search, not run on a GPU yet): both
+Wan-AI/Wan2.2-I2V-A14B-Diffusers and lopi999/Wan2.2-I2V_General-NSFW-LoRA
+exist and are correctly matched to this architecture — this was not a
+guess that turned out wrong. The LoRA's model card also gives its actual
+trigger word, "nsfwsks" (a single word, unlike the T2V LoRA's per-act
+tokens) — NSFW_LORA_TRIGGER below defaults to it now.
+
+Two things are still genuine guesses, lower-stakes than the above:
+  1. The NSFW LoRA's exact weight file names inside that repo — discovered
+     at load time via list_repo_files() rather than hardcoded, so a wrong
+     guess here surfaces as a clear nsfw_lora_error, not silent failure.
+  2. Whether lightx2v/Wan2.2-Lightning ships an I2V-A14B subfolder at all
+     (there's a real one at magespace/Wan2.2-I2V-A14B-Lightning-Diffusers —
+     not yet swapped in here). Moot by default: api/media-generate.js
+     always sends use_lightning:false, so this path never runs unless
+     someone explicitly re-enables it.
 
 Deploy:  modal deploy modal/wan_a14b_i2v_app.py
 Then before spending a real generation on it, hit the free diagnostic:
@@ -77,7 +83,9 @@ NSFW_LORA_REPO = os.environ.get("WAN_A14B_I2V_NSFW_LORA_REPO", "lopi999/Wan2.2-I
 # real file names turn out to differ from what auto-discovery picks.
 NSFW_LORA_HIGH_FILE = os.environ.get("WAN_A14B_I2V_NSFW_LORA_HIGH_FILE", "")
 NSFW_LORA_LOW_FILE = os.environ.get("WAN_A14B_I2V_NSFW_LORA_LOW_FILE", "")
-NSFW_LORA_TRIGGER = os.environ.get("WAN_A14B_I2V_NSFW_LORA_TRIGGER", "")
+# Confirmed from the repo's own model card (single word, unlike the T2V
+# LoRA's per-act tokens in wan_a14b_app.py) — this one has a real default now.
+NSFW_LORA_TRIGGER = os.environ.get("WAN_A14B_I2V_NSFW_LORA_TRIGGER", "nsfwsks")
 
 FAST_STEPS = 4
 FAST_GUIDANCE = 1.0

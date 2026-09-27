@@ -331,11 +331,11 @@ function syncFields() {
     } else if (spec?.model === 'wan2.2-a14b-i2v') {
       els.a14bHint.classList.remove('hidden');
       els.a14bHint.innerHTML =
-        'This model uses a different NSFW LoRA than the text-only A14B above, and its ' +
-        'trigger words are not confirmed yet — describe explicitly and check the ' +
-        'response\'s <code>nsfwUsed</code> / <code>nsfwLoraError</code> fields (or ' +
-        '<code>POST ?op=diag {"model":"wan2.2-a14b-i2v"}</code>) to see whether the ' +
-        'LoRA actually applied to a given generation.';
+        'This model uses a different NSFW LoRA than the text-only A14B above — its ' +
+        'trigger word (<code>nsfwsks</code>) is appended automatically now, no need to ' +
+        'type it yourself. Check the response\'s <code>nsfwUsed</code> / ' +
+        '<code>nsfwLoraError</code> fields (or <code>POST ?op=diag ' +
+        '{"model":"wan2.2-a14b-i2v"}</code>) to see whether the LoRA actually applied.';
     } else {
       els.a14bHint.classList.add('hidden');
     }
