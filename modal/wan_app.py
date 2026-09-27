@@ -194,7 +194,7 @@ def _export_polished(frames, path: str, fps: int, upscale: int = 2) -> int:
     # actually nets cheaper per generation here is unmeasured — nobody has
     # benchmarked this specific model on it. Override via env var so
     # switching back doesn't need touching this file again.
-    gpu=os.environ.get("WAN_GPU", "A100-80GB"),
+    gpu=os.environ.get("WAN_GPU", "L40S"),
     image=image,
     volumes={"/cache": cache},
     # Weights are ~10GB off a cold volume; a short window makes every request
