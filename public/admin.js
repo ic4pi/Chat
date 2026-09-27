@@ -25,6 +25,8 @@ const els = {
   importAdminBtn: $('importAdminBtn'),
   importAdminFile: $('importAdminFile'),
   signOutBtn: $('signOutBtn'),
+  refreshMediaBtn: $('refreshMediaBtn'),
+  mediaList: $('mediaList'),
 };
 
 let data = { masterPrompt: '', personas: [] };
@@ -118,6 +120,50 @@ async function refresh() {
     if (selectedPersonaId) selectPersona(selectedPersonaId);
   } catch (err) {
     showBootError(err.message);
+  }
+}
+
+function formatBytes(n) {
+  if (!Number.isFinite(n)) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderMediaList(files) {
+  els.mediaList.innerHTML = '';
+  if (!files.length) {
+    const li = document.createElement('li');
+    li.className = 'media-recent-empty';
+    li.textContent = 'Nothing generated yet.';
+    els.mediaList.appendChild(li);
+    return;
+  }
+  for (const f of files) {
+    const li = document.createElement('li');
+    li.className = 'media-recent-item';
+    const when = f.createdAt ? new Date(f.createdAt).toLocaleString() : '';
+    const kind = f.path.startsWith('video/') ? 'video' : 'image';
+    li.innerHTML = `
+      <a href="${f.url}" target="_blank" rel="noopener">${kind === 'video' ? '🎬' : '🖼️'} ${f.path}</a>
+      <span class="media-recent-meta">${when}${f.size != null ? ' · ' + formatBytes(f.size) : ''}</span>
+    `;
+    els.mediaList.appendChild(li);
+  }
+}
+
+async function refreshMedia() {
+  try {
+    const res = await fetch('/api/admin-media', { cache: 'no-store', credentials: 'same-origin' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body?.error || `Server returned HTTP ${res.status}`);
+    renderMediaList(body.files || []);
+  } catch (err) {
+    els.mediaList.innerHTML = '';
+    const li = document.createElement('li');
+    li.className = 'media-recent-empty';
+    li.textContent = err.message || 'Could not load media.';
+    els.mediaList.appendChild(li);
   }
 }
 
@@ -257,5 +303,7 @@ els.importAdminFile.addEventListener('change', (e) => {
   e.target.value = '';
 });
 els.signOutBtn.addEventListener('click', signOut);
+els.refreshMediaBtn?.addEventListener('click', refreshMedia);
 
 refresh();
+refreshMedia();
