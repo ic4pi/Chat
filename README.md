@@ -72,6 +72,11 @@ history; the server holds every prompt and key.
   each group chat keeps its own roster, so the same personas can sit as a
   marketing panel in one chat and get swapped for an accounting panel in
   another instead of all configured personas showing up every time.
+- Each persona can get an assigned task for the round (e.g. "check current
+  pricing"). With 🔎 search on, a persona with a task searches on that task
+  specifically instead of the shared topic — real evidence differences
+  between personas, not just differences in opinion. One search per tasked
+  persona per round, so cost scales with how many personas you assign.
 - Three modes: **boardroom** (serious), **brainstorm** (serious about the
   work, jokes allowed), **freechat** (anything).
 - Context stays small — a rolling summary plus what others said this round,

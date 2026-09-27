@@ -406,6 +406,7 @@ function migrate(s) {
       ? c.personaModels
       : {},
     personaIds: Array.isArray(c.personaIds) ? c.personaIds : null,
+    personaTasks: (c.personaTasks && typeof c.personaTasks === 'object') ? c.personaTasks : {},
     provider: c.provider || 'venice',
     model: c.model || 'venice-uncensored',
     personaId: c.personaId || 'nexus',
@@ -478,6 +479,7 @@ function createChat(opts = {}) {
       ? opts.personaModels
       : {},
     personaIds: Array.isArray(opts.personaIds) ? opts.personaIds : null,
+    personaTasks: (opts.personaTasks && typeof opts.personaTasks === 'object') ? opts.personaTasks : {},
     provider: state.activeProvider,
     model: state.activeModel,
     personaId: state.activePersonaId,
@@ -501,7 +503,7 @@ const GROUP_MODE_LABELS = {
   freechat: 'Free chat',
 };
 
-function createGroupChat(mode, topic, personaModels = {}, rounds = 3, personaIds = null) {
+function createGroupChat(mode, topic, personaModels = {}, rounds = 3, personaIds = null, personaTasks = {}) {
   const label = GROUP_MODE_LABELS[mode] || 'Group';
   const chat = createChat({
     kind: 'group',
@@ -509,6 +511,7 @@ function createGroupChat(mode, topic, personaModels = {}, rounds = 3, personaIds
     topic,
     personaModels,
     personaIds,
+    personaTasks,
     groupRounds: rounds,
     name: `${label}: ${topic.slice(0, 36)}`,
     messages: [],
@@ -1283,6 +1286,12 @@ function renderMessageInto(container, m, idx) {
   content.className = 'content';
 
   if (m.role === 'assistant') {
+    if (m.task) {
+      const taskLine = document.createElement('div');
+      taskLine.className = 'msg-task';
+      taskLine.textContent = `Task: ${m.task}`;
+      content.appendChild(taskLine);
+    }
     const shown = stripContinueMarkers(m.content || '') || (m.streaming ? '…' : '');
     renderMarkdownInto(content, shown);
     if (Array.isArray(m.sources) && m.sources.length && !m.streaming) {
@@ -3377,6 +3386,7 @@ async function callGroupStream(chat, apiMessages, onEvent) {
         providerKeys,
         webSearch: webSearchOn || undefined,
         personaIds: (Array.isArray(chat.personaIds) && chat.personaIds.length) ? chat.personaIds : undefined,
+        personaTasks: (chat.personaTasks && typeof chat.personaTasks === 'object') ? chat.personaTasks : undefined,
       }),
       signal: controller.signal,
     });
@@ -3611,6 +3621,7 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
           if (evt.provider) msg.provider = evt.provider;
           const turnSrc = Array.isArray(evt.sources) ? evt.sources : roundSources;
           if (turnSrc.length) msg.sources = turnSrc;
+          if (evt.task) msg.task = evt.task;
         }
         refreshBubble();
         spokenThisRound.push({ content: streamBuf, personaId: evt.personaId });
@@ -5196,10 +5207,16 @@ async function fillModelSelect(selectEl, provider, selectedModel) {
   if (pick) selectEl.value = pick;
 }
 
+// Assigned task per persona for the group chat currently being set up —
+// transient, reset each time the setup screen opens (this creates a new
+// chat; it doesn't edit an existing one's roster).
+let groupPersonaTasks = {};
+
 async function renderGroupPersonaModels() {
   const host = els.groupPersonaModels;
   if (!host) return;
   host.innerHTML = '';
+  groupPersonaTasks = {};
   if (!personas.length) {
     host.textContent = 'No personas loaded yet.';
     return;
@@ -5297,6 +5314,20 @@ async function renderGroupPersonaModels() {
     modelSelect.addEventListener('change', persist);
 
     list.appendChild(row);
+
+    const taskRow = document.createElement('div');
+    taskRow.className = 'group-persona-task-row';
+    taskRow.dataset.personaId = p.id;
+    const taskInput = document.createElement('input');
+    taskInput.type = 'text';
+    taskInput.className = 'group-persona-task';
+    taskInput.placeholder = 'Assigned task (optional) — e.g. "check current pricing"';
+    taskInput.value = groupPersonaTasks[p.id] || '';
+    taskInput.addEventListener('input', () => {
+      groupPersonaTasks[p.id] = taskInput.value;
+    });
+    taskRow.appendChild(taskInput);
+    list.appendChild(taskRow);
 
     if (provSelect.value) {
       await fillModelSelect(modelSelect, provSelect.value, assigned.model || DEFAULT_MODELS[provSelect.value] || '');
@@ -5465,7 +5496,12 @@ els.startGroupBtn?.addEventListener('click', async () => {
   ensurePersonaVoices(personas);
   ensurePersonaModels(personas);
   const assigned = collectGroupPersonaModelsFromForm();
-  createGroupChat(mode, topic, assigned, rounds, personaIds);
+  const tasks = {};
+  for (const id of personaIds) {
+    const t = (groupPersonaTasks[id] || '').trim();
+    if (t) tasks[id] = t;
+  }
+  createGroupChat(mode, topic, assigned, rounds, personaIds, tasks);
   // Clear draft and hide without re-capturing the emptied form.
   clearGroupDraft();
   els.groupModal?.classList.add('hidden');
