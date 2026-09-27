@@ -142,6 +142,7 @@ const els = {
   accessKey: document.getElementById('mediaAccessKey'),
   accessKeyWrap: document.getElementById('accessKeyWrap'),
   generate: document.getElementById('mediaGenerate'),
+  cancel: document.getElementById('mediaCancel'),
   status: document.getElementById('mediaStatus'),
   gallery: document.getElementById('mediaGallery'),
   empty: document.getElementById('mediaEmpty'),
@@ -1277,11 +1278,20 @@ function renderVideoResult(data) {
   }
 }
 
+// Set by the Cancel button. pollJob checks it each tick — there is no way
+// to actually stop the Modal container from here, only to stop the browser
+// waiting on it, which is what "stuck at running" actually needed.
+let pollCancelled = false;
+
 /** Polls an already-submitted job to completion. Shared by a fresh submit
  *  and by resuming a job left over from a previous page load. */
 async function pollJob(jobId, model, accessKey) {
   const started = Date.now();
   for (;;) {
+    if (pollCancelled) {
+      clearPendingJob();
+      throw new Error('__cancelled__');
+    }
     await new Promise((r) => setTimeout(r, POLL_MS));
 
     const elapsed = Math.round((Date.now() - started) / 1000);
@@ -1355,18 +1365,39 @@ async function resumePendingJobOnLoad() {
 
   els.generate.disabled = true;
   els.generate.textContent = 'Resuming…';
+  pollCancelled = false;
+  showCancelButton();
   setStatus('Resuming a video generation left over from earlier…');
   try {
     const data = await pollJob(pending.jobId, pending.model, pending.accessKey);
     if (data.kind === 'video' || data.videoUrl) renderVideoResult(data);
   } catch (err) {
-    console.error(err);
-    setStatus(`Previous job: ${String(err.message || 'failed').replace(/^(AIError:\s*)+/gi, '')}`, true);
+    if (err.message === '__cancelled__') {
+      setStatus('Cancelled — the Modal job may still be running server-side, just not being watched anymore.');
+    } else {
+      console.error(err);
+      setStatus(`Previous job: ${String(err.message || 'failed').replace(/^(AIError:\s*)+/gi, '')}`, true);
+    }
   } finally {
     els.generate.disabled = false;
     els.generate.textContent = 'Generate';
+    els.cancel?.classList.add('hidden');
   }
 }
+
+function showCancelButton() {
+  if (!els.cancel) return;
+  els.cancel.disabled = false;
+  els.cancel.textContent = 'Cancel';
+  els.cancel.classList.remove('hidden');
+}
+
+els.cancel?.addEventListener('click', () => {
+  pollCancelled = true;
+  els.cancel.disabled = true;
+  els.cancel.textContent = 'Cancelling…';
+  setStatus('Cancelling — stopping after the current check…');
+});
 
 els.generate.addEventListener('click', async () => {
   const prompt = (els.prompt.value || '').trim();
@@ -1399,6 +1430,8 @@ els.generate.addEventListener('click', async () => {
 
   els.generate.disabled = true;
   els.generate.textContent = 'Generating…';
+  pollCancelled = false;
+  if (kind === 'video') showCancelButton();
   setStatus(kind === 'video' ? 'Generating video (can take a few minutes)…' : 'Generating…');
 
   try {
@@ -1549,6 +1582,7 @@ els.generate.addEventListener('click', async () => {
         // One failed shot must not discard the clips already generated and
         // paid for, so the run continues and reports at the end.
         if (shots.length === 1) throw shotErr;
+        if (shotErr.message === '__cancelled__') throw shotErr; // stop the whole series, not just this beat — don't submit more jobs nobody's watching
         console.error(shotErr);
         setStatus(`Shot ${i + 1} failed: ${shotErr.message}`, true);
         carryFrame = null; // continuity is broken; remaining beats start fresh
@@ -1649,12 +1683,17 @@ els.generate.addEventListener('click', async () => {
       );
     }
   } catch (err) {
-    console.error(err);
-    setStatus('');
-    alert(String(err.message || 'Generation failed').replace(/^(AIError:\s*)+/gi, ''));
+    if (err.message === '__cancelled__') {
+      setStatus('Cancelled — the Modal job may still be running server-side, just not being watched anymore.');
+    } else {
+      console.error(err);
+      setStatus('');
+      alert(String(err.message || 'Generation failed').replace(/^(AIError:\s*)+/gi, ''));
+    }
   } finally {
     els.generate.disabled = false;
     els.generate.textContent = 'Generate';
+    els.cancel?.classList.add('hidden');
   }
 });
 
