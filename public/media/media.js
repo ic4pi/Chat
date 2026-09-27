@@ -1007,14 +1007,24 @@ function friendlyHttpError(status, data) {
 
 async function runSync(body) {
   const { __op, ...payload } = body;
-  const res = await fetch(`/api/media-generate${__op ? `?op=${__op}` : ''}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(friendlyHttpError(res.status, data));
-  return data;
+  const controller = new AbortController();
+  activeAbortController = controller;
+  try {
+    const res = await fetch(`/api/media-generate${__op ? `?op=${__op}` : ''}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(friendlyHttpError(res.status, data));
+    return data;
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('__cancelled__');
+    throw err;
+  } finally {
+    activeAbortController = null;
+  }
 }
 
 /** One blocking request, the way video worked before the job API existed.
@@ -1282,6 +1292,10 @@ function renderVideoResult(data) {
 // to actually stop the Modal container from here, only to stop the browser
 // waiting on it, which is what "stuck at running" actually needed.
 let pollCancelled = false;
+// The other half of Cancel: runSync's single blocking fetch (the fallback
+// used when a Modal app has no submit/result job API yet) has no loop to
+// check a flag in, so it needs its own abort handle instead.
+let activeAbortController = null;
 
 /** Polls an already-submitted job to completion. Shared by a fresh submit
  *  and by resuming a job left over from a previous page load. */
@@ -1394,6 +1408,7 @@ function showCancelButton() {
 
 els.cancel?.addEventListener('click', () => {
   pollCancelled = true;
+  activeAbortController?.abort();
   els.cancel.disabled = true;
   els.cancel.textContent = 'Cancelling…';
   setStatus('Cancelling — stopping after the current check…');
