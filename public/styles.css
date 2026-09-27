@@ -935,10 +935,15 @@ select { appearance: none; }
 .group-persona-models legend { font-size: 16px; color: var(--muted); margin-bottom: 4px; padding: 0; font-family: var(--display); }
 .group-persona-models-hint { font-size: 14px; color: var(--muted-2); margin: 0 0 10px; }
 .group-persona-models-list { max-height: 220px; overflow-y: auto; }
-.group-persona-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.group-persona-row { display: flex; align-items: center; gap: 10px; padding: 8px 0 4px; }
 .group-persona-row.group-persona-excluded { opacity: .45; }
 .group-persona-include { width: 18px; height: 18px; flex: 0 0 auto; accent-color: var(--brass); cursor: pointer; }
 .group-persona-name { flex: 1; font-size: 18px; display: flex; align-items: center; flex-wrap: wrap; }
+.group-persona-task-row { padding: 0 0 8px 28px; border-bottom: 1px solid var(--border); }
+.group-persona-task { width: 100%; box-sizing: border-box; padding: 7px 10px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-size: 14px; }
+.group-persona-task::placeholder { color: var(--muted-2); }
+
+.msg-task { font-size: 12px; font-style: italic; color: var(--muted); margin-bottom: 4px; }
 .group-banner { display: flex; align-items: center; gap: 10px; padding: 10px 14px; margin: 8px 12px; border-radius: var(--r-sm); background: var(--id-soft); border: 1px solid var(--brass-dk); font-size: 17px; }
 .group-banner-text { flex: 1; }
 .group-btn, .group-mp3-btn { padding: 6px 12px; border-radius: var(--r-sm); border: 1px solid var(--border); font-size: 16px; color: var(--muted); }

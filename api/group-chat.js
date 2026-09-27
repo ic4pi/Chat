@@ -252,6 +252,7 @@ export default async function handler(req, res) {
     providerKeys = {},
     webSearch: wantWebSearch,
     personaIds,
+    personaTasks = {},
   } = req.body || {};
 
   const mode = normalizeMode(rawMode);
@@ -328,20 +329,8 @@ export default async function handler(req, res) {
     // up with something narrower or different.
     const lastUser = [...history].reverse().find((m) => m.role === 'user');
 
-    // One search per round (not per persona) — every persona at the table
-    // argues from the same live facts instead of N separate queries.
-    let searchContext = '';
-    let sources = [];
-    if (wantWebSearch) {
-      try {
-        const query = (lastUser?.content && String(lastUser.content).trim()) || topicText;
-        sources = await searchWeb(query);
-        searchContext = formatSearchContext(query, sources);
-        sseWrite(res, { type: 'sources', sources });
-      } catch (err) {
-        sseWrite(res, { type: 'status', message: `Web search skipped: ${err.message}` });
-      }
-    }
+    // Default query when a persona has no assigned task of its own.
+    const fallbackQuery = (lastUser?.content && String(lastUser.content).trim()) || topicText;
 
     sseWrite(res, {
       type: 'status',
@@ -407,6 +396,24 @@ export default async function handler(req, res) {
         message: `${persona.name} is speaking (${turnResolved.label} · ${turnModel})…`,
       });
 
+      // Each persona with an assigned task searches on THAT task, not the
+      // shared topic — real evidence differences, not just prose disagreement.
+      const task = typeof personaTasks?.[persona.id] === 'string' ? personaTasks[persona.id].trim() : '';
+      let searchContext = '';
+      let personaSources = [];
+      if (wantWebSearch) {
+        const query = task || fallbackQuery;
+        try {
+          personaSources = await searchWeb(query);
+          searchContext = formatSearchContext(query, personaSources);
+        } catch (err) {
+          sseWrite(res, {
+            type: 'status',
+            message: `${persona.name}: web search skipped: ${err.message}`,
+          });
+        }
+      }
+
       const personaPrompt = [master, persona.systemPrompt, modeRules, searchContext]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n');
@@ -443,7 +450,8 @@ export default async function handler(req, res) {
         'and give whatever honest, limited perspective you do have — do not fake expertise',
         'you don\'t have. Speak in character. Do not narrate stage directions. Do not',
         'invent other speakers\' lines.',
-      ].join('\n');
+        task ? `\nYour assigned task this round: ${task}\nWork that task specifically — don't just give a generic take on the topic.` : '',
+      ].filter(Boolean).join('\n');
 
       let reply = '';
       try {
@@ -492,7 +500,8 @@ export default async function handler(req, res) {
         content: reply,
         provider: turnResolved.label,
         model: turnModel,
-        sources: sources.length ? sources : undefined,
+        sources: personaSources.length ? personaSources : undefined,
+        task: task || undefined,
       });
 
       roundSoFar.push({
