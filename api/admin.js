@@ -87,6 +87,19 @@ const ADMIN_HTML = `<!DOCTYPE html>
   </section>
 
   <section class="admin-section">
+    <h2>Recent media</h2>
+    <p class="admin-hint">
+      Images and videos generated in Media Studio, newest first — pulled
+      straight from Supabase Storage. This page's login is the only thing
+      gating this list.
+    </p>
+    <div class="admin-actions">
+      <button id="refreshMediaBtn" class="text-btn">Refresh</button>
+    </div>
+    <ul id="mediaList" class="media-recent-list"></ul>
+  </section>
+
+  <section class="admin-section">
     <h2>Backup</h2>
     <p class="admin-hint">
       Master prompt and personas are stored in your browser's localStorage on
