@@ -26,12 +26,17 @@ Deploy:  modal deploy modal/wan_a14b_app.py
 
 import base64
 import random
+import re
 import os
 import time
 
 import modal
 
 MODEL_ID = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+
+# Bounds how many extra community LoRAs one request can stack on top of the
+# Lightning/NSFW adapters this app already carries. Same cap as sdxl_app.py.
+MAX_EXTRA_LORAS = 4
 
 # The only Wan Lightning LoRA that actually exists ships two separate weight
 # files — one per expert — because A14B is a mixture of two 14B transformers
@@ -213,9 +218,75 @@ class WanA14B:
         # for activations at 720p instead of cutting it close.
         self.pipe.enable_model_cpu_offload()
 
+        # Extra community LoRAs a caller stacks on top of Lightning/NSFW —
+        # see _load_extra_loras.
+        self._extra_loras: dict = {}
+
+    def _load_extra_loras(self, requested: list):
+        """Load (not yet activate) the caller's requested community LoRA
+        stack, on top of whatever Lightning/NSFW adapters this container
+        already carries. Returns (names, weights, errors) to fold into
+        run()'s own set_adapters() call — this app already needs one call
+        combining several adapter groups per request, so loading and
+        activating are kept separate here (unlike sdxl_app.py/wan_app.py,
+        where nothing else shares the call).
+
+        A14B is two 14B experts (high/low-noise, switched by timestep) —
+        this app's own NSFW/Lightning LoRAs both ship matched high/low
+        file pairs for exactly that reason. A generic single-file LoRA from
+        the Hub is very unlikely to be split the same way, so the default
+        here is to load it onto the high-noise expert only, which is where
+        the bulk of composition/subject gets decided; a spec can name
+        weight_name_low too if it happens to have a matching pair, mirroring
+        NSFW_LORA_HIGH_FILE/LOW_FILE above. This is a real assumption, not a
+        verified fact — a LoRA that only touches one expert may show up
+        weaker than the same weight would on a single-transformer model.
+        """
+        names, weights, errors = [], [], []
+        for i, spec in enumerate((requested or [])[:MAX_EXTRA_LORAS]):
+            if not isinstance(spec, dict):
+                continue
+            repo = str(spec.get("repo") or "").strip()
+            if not repo:
+                continue
+            weight_name = spec.get("weight_name") or None
+            weight_name_low = spec.get("weight_name_low") or None
+            scale = max(0.0, min(2.0, float(spec.get("scale", 1.0))))
+            slug = re.sub(r"[^a-zA-Z0-9]", "_", f"{repo}_{weight_name or ''}")[:50]
+            adapter_id = f"extra{i}_{slug}"
+            if adapter_id not in self._extra_loras:
+                try:
+                    self.pipe.load_lora_weights(
+                        repo, weight_name=weight_name, adapter_name=adapter_id, cache_dir="/cache/hf",
+                    )
+                    if weight_name_low:
+                        self.pipe.load_lora_weights(
+                            repo,
+                            weight_name=weight_name_low,
+                            adapter_name=f"{adapter_id}_low",
+                            load_into_transformer_2=True,
+                            cache_dir="/cache/hf",
+                        )
+                    self._extra_loras[adapter_id] = (repo, weight_name, weight_name_low)
+                except Exception as exc:
+                    errors.append(f"{repo}{'/' + weight_name if weight_name else ''}: {type(exc).__name__}: {exc}")
+                    continue
+            names.append(adapter_id)
+            weights.append(scale)
+            if self._extra_loras.get(adapter_id, (None, None, None))[2]:
+                names.append(f"{adapter_id}_low")
+                weights.append(scale)
+        return names, weights, errors
+
     @modal.method()
     def ping(self) -> dict:
-        return {"ready": True}
+        return {
+            "ready": True,
+            "fast": self.fast,
+            "lora_error": self.lora_error,
+            "nsfw_available": self.nsfw_available,
+            "nsfw_lora_error": self.nsfw_lora_error,
+        }
 
     @modal.method()
     def run(
@@ -231,6 +302,24 @@ class WanA14B:
         guidance_scale: float | None = None,
         polish: bool = True,
         nsfw: bool = True,  # append the NSFW LoRA's trigger word, if it loaded
+        # None = use Lightning iff it loaded (old default). Explicit False is
+        # the one that matters: set_adapters() at load() fixed the adapter
+        # list for the container's whole life, so every request got
+        # Lightning's weights merged in regardless of steps/guidance_scale —
+        # sending real CFG through a LoRA distilled for CFG-1/4-step is
+        # exactly the "distilled model given real CFG produces burnt,
+        # oversaturated frames" case wan_app.py's own Lightning comment
+        # warns about, AND leaves less headroom for the NSFW LoRA stacked
+        # alongside it to actually show up. False detaches Lightning's
+        # adapters for this call instead of merely outrunning them with
+        # more steps.
+        use_lightning: bool | None = None,
+        # Binary on/off was the only lever before — a LoRA trained strong
+        # can still oversaturate or fight the base model's own coherence at
+        # full weight, and the fix for that is turning it down, not off.
+        # 1.0 = as trained.
+        nsfw_scale: float = 1.0,
+        loras: list | None = None,  # [{repo, weight_name?, weight_name_low?, scale?}, ...]
     ) -> dict:
         import torch
         from diffusers.utils import export_to_video
@@ -238,13 +327,29 @@ class WanA14B:
         started = time.time()
         # Wan rejects frame counts that are not 4k+1.
         num_frames = max(5, min(MAX_FRAMES, ((int(num_frames) - 1) // 4) * 4 + 1))
+        use_speed = self.fast if use_lightning is None else (use_lightning and self.fast)
         if steps is None:
-            steps = FAST_STEPS if self.fast else FULL_STEPS
+            steps = FAST_STEPS if use_speed else FULL_STEPS
         if guidance_scale is None:
-            guidance_scale = FAST_GUIDANCE if self.fast else FULL_GUIDANCE
+            guidance_scale = FAST_GUIDANCE if use_speed else FULL_GUIDANCE
 
         use_nsfw = nsfw and self.nsfw_available
         run_prompt = f"{prompt}, {NSFW_LORA_TRIGGER}" if use_nsfw and NSFW_LORA_TRIGGER else prompt
+        nsfw_scale = max(0.0, min(2.0, float(nsfw_scale)))
+
+        # Per-request adapter selection — load() merely made these available,
+        # it did not commit every call to using all of them.
+        wanted, weights = [], []
+        if use_speed:
+            wanted += ["lightning_high", "lightning_low"]
+            weights += [1.0, 1.0]
+        if use_nsfw:
+            wanted += ["nsfw_high", "nsfw_low"]
+            weights += [nsfw_scale, nsfw_scale]
+        extra_names, extra_weights, lora_errors = self._load_extra_loras(loras)
+        wanted += extra_names
+        weights += extra_weights
+        self.pipe.set_adapters(wanted, adapter_weights=weights) if wanted else self.pipe.disable_lora()
 
         frames = self.pipe(
             prompt=run_prompt,
@@ -272,11 +377,16 @@ class WanA14B:
             "num_frames": len(frames),
             "fps": out_fps,
             "fast": self.fast,
+            "lightning_used": use_speed,
             "steps": steps,
+            "guidance_scale": guidance_scale,
             "lora_error": self.lora_error,
             "polished": polish,
             "nsfw_used": use_nsfw,
+            "nsfw_scale": nsfw_scale if use_nsfw else None,
             "nsfw_lora_error": self.nsfw_lora_error,
+            "loras_applied": extra_names,
+            "lora_errors": lora_errors,
         }
 
 
@@ -302,6 +412,9 @@ def generate(payload: dict) -> dict:
             ),
             **({"polish": payload["polish"]} if "polish" in payload else {}),
             **({"nsfw": payload["nsfw"]} if "nsfw" in payload else {}),
+            **({"use_lightning": payload["use_lightning"]} if "use_lightning" in payload else {}),
+            **({"nsfw_scale": float(payload["nsfw_scale"])} if "nsfw_scale" in payload else {}),
+            loras=payload.get("loras") if isinstance(payload.get("loras"), list) else None,
         )
     except Exception as exc:
         import traceback
@@ -322,6 +435,27 @@ def warm() -> dict:
         return {"warming": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
+# Diagnostic, not a warmup: blocks on the cold start (up to ~a minute) so it
+# can hand back whether the NSFW LoRA actually loaded on this container
+# (gated repo, renamed weight file, and a shape mismatch all fail silently
+# inside load() otherwise, and the only symptom is output that looks like
+# the stock, alignment-steered checkpoint). Costs one cold start, no GPU
+# generation — call this before spending a real generation trying to tell
+# "the LoRA didn't apply" apart from "it applied and this is its output."
+@app.function(image=image, timeout=120)
+@modal.fastapi_endpoint(method="POST")
+def status() -> dict:
+    try:
+        return WanA14B().ping.remote()
+    except Exception as exc:
+        import traceback
+
+        return {
+            "error": f"{type(exc).__name__}: {exc}",
+            "traceback": "".join(traceback.format_exc()).strip()[-3000:],
+        }
+
+
 @app.function(image=image, timeout=60)
 @modal.fastapi_endpoint(method="POST")
 def submit(payload: dict) -> dict:
@@ -338,8 +472,15 @@ def submit(payload: dict) -> dict:
             num_frames=int(payload.get("num_frames") or FRAMES_PER_CLIP),
             fps=int(payload.get("fps") or DEFAULT_FPS),
             seed=int(payload["seed"]) if payload.get("seed") else random.randint(1, 2**31 - 1),
+            steps=int(payload["steps"]) if payload.get("steps") else None,
+            guidance_scale=(
+                float(payload["guidance_scale"]) if payload.get("guidance_scale") else None
+            ),
             **({"polish": payload["polish"]} if "polish" in payload else {}),
             **({"nsfw": payload["nsfw"]} if "nsfw" in payload else {}),
+            **({"use_lightning": payload["use_lightning"]} if "use_lightning" in payload else {}),
+            **({"nsfw_scale": float(payload["nsfw_scale"])} if "nsfw_scale" in payload else {}),
+            loras=payload.get("loras") if isinstance(payload.get("loras"), list) else None,
         )
         return {"job_id": call.object_id, "status": "running"}
     except Exception as exc:

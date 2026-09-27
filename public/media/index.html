@@ -46,6 +46,19 @@
           <textarea id="mediaPrompt" rows="4" placeholder="Describe the image or video…"></textarea>
         </label>
 
+        <p class="media-flow-hint hidden" id="a14bHint">
+          The NSFW LoRA on this model has no generic on-switch — it responds to its
+          own trigger words, exactly as spelled: <code>m15510n4ry</code>, <code>bl0wj0b</code>,
+          <code>d0ubl3_bj</code>, <code>c0wg1rl</code>, <code>d0gg1e</code>. Without one of
+          these in the prompt, generation falls back to the stock model, which is
+          trained to steer away from explicit content.
+        </p>
+
+        <label class="media-field hidden" id="nsfwScaleWrap">
+          <span>NSFW LoRA strength <em class="opt">(1.0 = as trained; lower if it distorts, raise if it's too subtle)</em></span>
+          <input id="mediaNsfwScale" type="range" min="0" max="150" step="5" value="100" />
+        </label>
+
         <label class="media-field" id="negativeWrap">
           <span>Negative prompt <em class="opt">(optional)</em></span>
           <input id="mediaNegative" type="text" placeholder="blurry, low quality…" />
@@ -118,6 +131,18 @@
             <option value="detect">A photo &mdash; detect the pose from it</option>
             <option value="skeleton">A stick figure / skeleton I drew</option>
           </select>
+        </label>
+
+        <label class="media-field hidden" id="lorasWrap">
+          <span>Extra LoRAs <em class="opt">(Hugging Face repo id, stacked on the checkpoint)</em></span>
+          <input id="mediaLoras" type="text" placeholder="user/repo-name:optional-file.safetensors:0.8, user/another-repo" />
+          <p class="media-flow-hint">
+            One or more, comma-separated. Each is <code>repo</code>, or
+            <code>repo:weight_file.safetensors</code>, or
+            <code>repo:weight_file.safetensors:scale</code> (scale 0&ndash;2, default 1).
+            A repo with only one .safetensors file doesn't need the weight file named.
+            A bad repo/file is skipped, not fatal — check <code>loraErrors</code> in the response.
+          </p>
         </label>
 
         <label class="media-field hidden" id="countWrap">

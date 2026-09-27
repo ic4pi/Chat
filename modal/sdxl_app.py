@@ -19,6 +19,7 @@ Deploy:  modal deploy modal/sdxl_app.py
 
 import base64
 import random
+import re
 import io
 import os
 import time
@@ -46,6 +47,11 @@ POSE_CONTROLNET = os.environ.get(
 )
 
 DEFAULT_MODEL = "lustify"
+
+# Bounds how many extra community LoRAs one request can stack — each is a
+# real download-and-load on first use, and PEFT's per-step adapter-merge
+# cost scales with how many are simultaneously active.
+MAX_EXTRA_LORAS = 4
 
 # Batch ceiling. Four 1024px images fit an L4 comfortably alongside a resident
 # SDXL; past that the activations start competing with the weights.
@@ -137,6 +143,11 @@ class SDXL:
         self._siblings: dict = {}
         self._cnet = None
         self._pose_det = None
+        # Extra (non-checkpoint) LoRAs a caller asked to stack on, keyed by
+        # checkpoint name -> {adapter_id: (repo, weight_name)}, so a warm
+        # container reuses anything already pulled down instead of
+        # re-downloading it on every request that asks for the same one.
+        self._extra_loras: dict = {}
 
     def _sibling(self, name: str, kind: str):
         """An img2img / inpaint / controlnet pipeline over the same weights.
@@ -270,6 +281,61 @@ class SDXL:
 
         return pipe
 
+    def _apply_extra_loras(self, name: str, pipe, requested: list):
+        """Load and activate the caller's requested community LoRA stack on
+        top of the resident checkpoint (detail/quality tweakers, character or
+        style LoRAs, anything on the Hub) — this app previously had no LoRA
+        support at all beyond the two baked-in checkpoints.
+
+        Loaded weights attach to the checkpoint's actual unet, which img2img/
+        inpaint/pose siblings share via `.components` (same object, not a
+        copy), so applying this once on the base pipe reaches all of them.
+
+        Adapters are cached per checkpoint so a warm container reuses
+        anything already pulled down. Activation is still explicit on every
+        call via set_adapters()/disable_lora() — caching what's loaded is not
+        the same as caching what's ACTIVE, and a container serves requests
+        with different LoRA stacks back to back. A LoRA that fails to load
+        (bad repo, wrong weight_name, gated) is skipped and reported in
+        lora_errors rather than failing the whole generation — same pattern
+        the NSFW/Lightning LoRAs already use on the Wan apps.
+        """
+        cache = self._extra_loras.setdefault(name, {})
+        names, weights, errors = [], [], []
+        for i, spec in enumerate((requested or [])[:MAX_EXTRA_LORAS]):
+            if not isinstance(spec, dict):
+                continue
+            repo = str(spec.get("repo") or "").strip()
+            if not repo:
+                continue
+            weight_name = spec.get("weight_name") or None
+            scale = max(0.0, min(2.0, float(spec.get("scale", 1.0))))
+            slug = re.sub(r"[^a-zA-Z0-9]", "_", f"{repo}_{weight_name or ''}")[:50]
+            adapter_id = f"extra{i}_{slug}"
+            if adapter_id not in cache:
+                try:
+                    pipe.load_lora_weights(
+                        repo,
+                        weight_name=weight_name,
+                        adapter_name=adapter_id,
+                        cache_dir="/cache/hf",
+                    )
+                    cache[adapter_id] = (repo, weight_name)
+                except Exception as exc:
+                    errors.append(f"{repo}{'/' + weight_name if weight_name else ''}: {type(exc).__name__}: {exc}")
+                    continue
+            names.append(adapter_id)
+            weights.append(scale)
+
+        if names:
+            pipe.set_adapters(names, adapter_weights=weights)
+        else:
+            try:
+                pipe.disable_lora()
+            except Exception:
+                pass  # nothing was ever loaded on this container — fine, nothing to disable
+        return names, errors
+
     @modal.method()
     def ping(self) -> dict:
         """Warm-up target. Does no work — @modal.enter() has already loaded the
@@ -297,11 +363,13 @@ class SDXL:
         control_scale: float = 0.8,
         detect_pose: bool = True,
         karras: bool | str | None = None,  # "standard" (default), True, or False — see _pipe above
+        loras: list | None = None,  # [{repo, weight_name?, scale?}, ...] — see _apply_extra_loras
     ) -> dict:
         started = time.time()
         name = model if model in CHECKPOINTS else DEFAULT_MODEL
         pipe = self._pipe(name, karras=karras)
         scheduler_used = type(pipe.scheduler).__name__
+        lora_names, lora_errors = self._apply_extra_loras(name, pipe, loras)
 
         # SDXL is trained at multiples of 64; off-grid sizes produce seams.
         width = max(512, int(round(width / 64)) * 64)
@@ -396,6 +464,8 @@ class SDXL:
             "height": images[0].height,
             "seed": seed,
             "scheduler": scheduler_used,
+            "loras_applied": lora_names,
+            "lora_errors": lora_errors,
         }
 
 
@@ -423,6 +493,7 @@ def generate(payload: dict) -> dict:
             control_scale=float(payload.get("control_scale") or 0.8),
             detect_pose=bool(payload.get("detect_pose", True)),
             karras=payload.get("karras"),
+            loras=payload.get("loras") if isinstance(payload.get("loras"), list) else None,
         )
     except Exception as exc:
         import traceback
