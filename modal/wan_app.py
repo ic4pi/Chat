@@ -187,7 +187,14 @@ def _export_polished(frames, path: str, fps: int, upscale: int = 2) -> int:
 
 
 @app.cls(
-    gpu="A10G",
+    # A10G ($1.10/hr) measured ~6m20s/clip at full 40 steps (see FULL_STEPS
+    # below) before cold start and the polish pass — a big chunk of why a
+    # generation runs 700-1000s+ end to end. A100-80GB ($2.50/hr, 2.3x the
+    # price) has roughly 2.5-3x the raw bf16 compute on paper; whether that
+    # actually nets cheaper per generation here is unmeasured — nobody has
+    # benchmarked this specific model on it. Override via env var so
+    # switching back doesn't need touching this file again.
+    gpu=os.environ.get("WAN_GPU", "A100-80GB"),
     image=image,
     volumes={"/cache": cache},
     # Weights are ~10GB off a cold volume; a short window makes every request
