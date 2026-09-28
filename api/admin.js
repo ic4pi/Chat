@@ -87,6 +87,51 @@ const ADMIN_HTML = `<!DOCTYPE html>
   </section>
 
   <section class="admin-section">
+    <h2>Social accounts</h2>
+    <p class="admin-hint">
+      Facebook Pages / Instagram Business accounts marketing personas can
+      publish to from chat, via the "Post to…" button on their replies.
+      Page tokens are stored server-side only — they never reach the main
+      chat page, only the publish endpoint uses them.
+    </p>
+    <div class="persona-manager">
+      <div class="persona-list-pane">
+        <button id="newAccountBtn" class="text-btn primary">+ New account</button>
+        <ul id="accountList" class="persona-list"></ul>
+      </div>
+      <div class="persona-edit-pane">
+        <label class="field">
+          <span>Label <em>(shown in the picker)</em></span>
+          <input id="accountLabelInput" type="text" placeholder="e.g. Client A — Main Page" />
+        </label>
+        <label class="field">
+          <span>Platform</span>
+          <select id="accountPlatformInput">
+            <option value="facebook">Facebook Page</option>
+            <option value="instagram">Instagram Business</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Page ID</span>
+          <input id="accountPageIdInput" type="text" placeholder="Facebook Page ID" />
+        </label>
+        <label class="field">
+          <span>Page access token</span>
+          <input id="accountPageTokenInput" type="password" placeholder="Long-lived Page access token" autocomplete="off" />
+        </label>
+        <label class="field" id="accountIgUserField">
+          <span>Instagram Business account ID <em>(only for Instagram)</em></span>
+          <input id="accountIgUserInput" type="text" placeholder="IG Business account ID" />
+        </label>
+        <div class="persona-actions">
+          <button id="saveAccountBtn" class="text-btn primary">Save</button>
+          <button id="deleteAccountBtn" class="text-btn danger">Delete</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="admin-section">
     <h2>Recent media</h2>
     <p class="admin-hint">
       Images and videos generated in Media Studio, newest first — pulled

@@ -27,10 +27,21 @@ const els = {
   signOutBtn: $('signOutBtn'),
   refreshMediaBtn: $('refreshMediaBtn'),
   mediaList: $('mediaList'),
+  accountList: $('accountList'),
+  newAccountBtn: $('newAccountBtn'),
+  accountLabelInput: $('accountLabelInput'),
+  accountPlatformInput: $('accountPlatformInput'),
+  accountPageIdInput: $('accountPageIdInput'),
+  accountPageTokenInput: $('accountPageTokenInput'),
+  accountIgUserField: $('accountIgUserField'),
+  accountIgUserInput: $('accountIgUserInput'),
+  saveAccountBtn: $('saveAccountBtn'),
+  deleteAccountBtn: $('deleteAccountBtn'),
 };
 
-let data = { masterPrompt: '', personas: [] };
+let data = { masterPrompt: '', personas: [], socialAccounts: [] };
 let selectedPersonaId = null;
+let selectedAccountId = null;
 
 function uid() {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -111,13 +122,22 @@ function selectPersona(id) {
 async function refresh() {
   try {
     const fresh = await apiGet();
-    data = { masterPrompt: fresh.masterPrompt || '', personas: fresh.personas || [] };
+    data = {
+      masterPrompt: fresh.masterPrompt || '',
+      personas: fresh.personas || [],
+      socialAccounts: fresh.socialAccounts || [],
+    };
     els.masterPromptInput.value = data.masterPrompt;
     if (!data.personas.some((p) => p.id === selectedPersonaId)) {
       selectedPersonaId = data.personas[0]?.id || null;
     }
     renderPersonaList();
     if (selectedPersonaId) selectPersona(selectedPersonaId);
+    if (!data.socialAccounts.some((a) => a.id === selectedAccountId)) {
+      selectedAccountId = data.socialAccounts[0]?.id || null;
+    }
+    renderAccountList();
+    if (selectedAccountId) selectAccount(selectedAccountId);
   } catch (err) {
     showBootError(err.message);
   }
@@ -173,17 +193,94 @@ async function commit() {
       masterPrompt: data.masterPrompt,
       // Save every persona, including NEXUS / Plain overrides.
       personas: data.personas,
+      socialAccounts: data.socialAccounts,
     });
-    data = { masterPrompt: updated.masterPrompt || '', personas: updated.personas || [] };
+    data = {
+      masterPrompt: updated.masterPrompt || '',
+      personas: updated.personas || [],
+      socialAccounts: updated.socialAccounts || [],
+    };
     if (!data.personas.some((p) => p.id === selectedPersonaId)) {
       selectedPersonaId = data.personas[0]?.id || null;
     }
     renderPersonaList();
     if (selectedPersonaId) selectPersona(selectedPersonaId);
+    if (!data.socialAccounts.some((a) => a.id === selectedAccountId)) {
+      selectedAccountId = data.socialAccounts[0]?.id || null;
+    }
+    renderAccountList();
+    if (selectedAccountId) selectAccount(selectedAccountId);
   } catch (err) {
     alert('Save failed: ' + err.message);
     throw err;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Social accounts — same list/edit pattern as personas above.
+// ---------------------------------------------------------------------------
+
+function renderAccountList() {
+  if (!els.accountList) return;
+  els.accountList.innerHTML = '';
+  for (const a of data.socialAccounts) {
+    const li = document.createElement('li');
+    if (a.id === selectedAccountId) li.classList.add('active');
+    const span = document.createElement('span');
+    span.textContent = `${a.label} (${a.platform})`;
+    li.appendChild(span);
+    li.addEventListener('click', () => selectAccount(a.id));
+    els.accountList.appendChild(li);
+  }
+}
+
+function syncAccountIgFieldVisibility() {
+  if (!els.accountIgUserField) return;
+  els.accountIgUserField.style.display = els.accountPlatformInput.value === 'instagram' ? '' : 'none';
+}
+
+function selectAccount(id) {
+  selectedAccountId = id;
+  const a = data.socialAccounts.find((x) => x.id === id);
+  if (!a) return;
+  els.accountLabelInput.value = a.label;
+  els.accountPlatformInput.value = a.platform;
+  els.accountPageIdInput.value = a.pageId || '';
+  els.accountPageTokenInput.value = a.pageToken || '';
+  els.accountIgUserInput.value = a.igUserId || '';
+  syncAccountIgFieldVisibility();
+  renderAccountList();
+}
+
+function newAccount() {
+  const a = { id: uid(), label: 'New account', platform: 'facebook', pageId: '', pageToken: '', igUserId: '' };
+  data.socialAccounts.push(a);
+  selectedAccountId = a.id;
+  renderAccountList();
+  selectAccount(a.id);
+  els.accountLabelInput.focus();
+  els.accountLabelInput.select();
+}
+
+async function saveAccount() {
+  const a = data.socialAccounts.find((x) => x.id === selectedAccountId);
+  if (!a) return;
+  a.label = els.accountLabelInput.value.trim() || 'Untitled account';
+  a.platform = els.accountPlatformInput.value === 'instagram' ? 'instagram' : 'facebook';
+  a.pageId = els.accountPageIdInput.value.trim();
+  a.pageToken = els.accountPageTokenInput.value.trim();
+  a.igUserId = els.accountIgUserInput.value.trim();
+  await commit();
+  flashButton(els.saveAccountBtn, 'Saved');
+}
+
+async function deleteAccount() {
+  const a = data.socialAccounts.find((x) => x.id === selectedAccountId);
+  if (!a) return;
+  if (!confirm(`Delete account "${a.label}"?`)) return;
+  data.socialAccounts = data.socialAccounts.filter((x) => x.id !== a.id);
+  selectedAccountId = data.socialAccounts[0]?.id || null;
+  await commit();
 }
 
 function newPersona() {
@@ -304,6 +401,10 @@ els.importAdminFile.addEventListener('change', (e) => {
 });
 els.signOutBtn.addEventListener('click', signOut);
 els.refreshMediaBtn?.addEventListener('click', refreshMedia);
+els.newAccountBtn?.addEventListener('click', newAccount);
+els.saveAccountBtn?.addEventListener('click', saveAccount);
+els.deleteAccountBtn?.addEventListener('click', deleteAccount);
+els.accountPlatformInput?.addEventListener('change', syncAccountIgFieldVisibility);
 
 refresh();
 refreshMedia();

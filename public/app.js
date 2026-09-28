@@ -358,6 +358,7 @@ function freshState() {
 // Persona list is populated by fetchPersonas() from /api/public-config.
 // Not persisted — always fetched fresh so admin edits show up on next load.
 let personas = FALLBACK_PERSONAS.slice();
+let socialAccounts = []; // { id, label, platform } — from /api/public-config
 
 const MOBILE_QUERY = '(max-width: 900px)';
 function isMobileViewport() {
@@ -1343,6 +1344,20 @@ function renderMessageInto(container, m, idx) {
         );
       });
       div.appendChild(copyBtn);
+
+      if (socialAccounts.length) {
+        const postBtn = document.createElement('button');
+        postBtn.type = 'button';
+        postBtn.className = 'text-btn msg-speak';
+        postBtn.textContent = 'Post to…';
+        postBtn.title = 'Publish this reply to a connected Facebook/Instagram account';
+        postBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          void handlePostToSocial(stripContinueMarkers(m.content), postBtn);
+        });
+        div.appendChild(postBtn);
+      }
     }
   } else if (m.autoContinue) {
     content.textContent = 'continue →';
@@ -1771,6 +1786,9 @@ async function fetchPersonas() {
         builtin: !!p.builtin,
       }));
     }
+    if (Array.isArray(data.socialAccounts)) {
+      socialAccounts = data.socialAccounts;
+    }
   } catch (err) {
     console.warn('Failed to fetch personas from server:', err);
   }
@@ -1782,6 +1800,52 @@ async function fetchPersonas() {
   ensurePersonaModels(personas);
   renderPersonaSelect();
   renderPersonaCards();
+}
+
+/**
+ * Publish a persona's drafted text to a real Facebook Page / Instagram
+ * account, via /api/social-post. Gated behind the same unlock password as
+ * paid models — this triggers a real, public, irreversible action.
+ */
+async function handlePostToSocial(text, triggerBtn) {
+  if (!socialAccounts.length) return;
+  let accountId = socialAccounts[0].id;
+  if (socialAccounts.length > 1) {
+    const labels = socialAccounts.map((a, i) => `${i + 1}. ${a.label} (${a.platform})`).join('\n');
+    const pick = prompt(`Post to which account?\n${labels}\n\nEnter a number:`, '1');
+    if (!pick) return;
+    const idx = parseInt(pick, 10) - 1;
+    if (!Number.isInteger(idx) || !socialAccounts[idx]) {
+      alert('Invalid choice — nothing posted.');
+      return;
+    }
+    accountId = socialAccounts[idx].id;
+  }
+  const account = socialAccounts.find((a) => a.id === accountId);
+  if (!confirm(`Post this to "${account.label}" now? This publishes publicly and can't be undone from here.`)) {
+    return;
+  }
+
+  let pw = loadPaidPassword();
+  if (!pw) {
+    pw = (prompt('Unlock password required to publish:') || '').trim();
+    if (!pw) return;
+    savePaidPassword(pw);
+  }
+
+  flashButton(triggerBtn, 'Posting…');
+  try {
+    const res = await fetch('/api/social-post', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Paid-Password': pw },
+      body: JSON.stringify({ accountId, message: text }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    flashButton(triggerBtn, 'Posted ✓');
+  } catch (err) {
+    alert('Post failed: ' + (err.message || err));
+  }
 }
 
 function activePersona() {
