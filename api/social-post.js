@@ -39,8 +39,11 @@ export default async function handler(req, res) {
     const config = await loadConfig();
     const account = (config.socialAccounts || []).find((a) => a.id === accountId);
     if (!account) return res.status(404).json({ error: 'That account is not configured in /admin.' });
-    if (!account.pageId || !account.pageToken) {
-      return res.status(400).json({ error: `"${account.label}" is missing its Page ID or token in /admin.` });
+    const configured = account.platform === 'twitter'
+      ? account.consumerKey && account.consumerSecret && account.accessToken && account.accessTokenSecret
+      : account.pageId && account.pageToken;
+    if (!configured) {
+      return res.status(400).json({ error: `"${account.label}" is missing credentials in /admin.` });
     }
 
     const result = await publishToAccount(account, { message: String(message || ''), imageUrl: imageUrl || undefined });

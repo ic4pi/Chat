@@ -109,20 +109,41 @@ const ADMIN_HTML = `<!DOCTYPE html>
           <select id="accountPlatformInput">
             <option value="facebook">Facebook Page</option>
             <option value="instagram">Instagram Business</option>
+            <option value="twitter">X (Twitter)</option>
           </select>
         </label>
-        <label class="field">
-          <span>Page ID</span>
-          <input id="accountPageIdInput" type="text" placeholder="Facebook Page ID" />
-        </label>
-        <label class="field">
-          <span>Page access token</span>
-          <input id="accountPageTokenInput" type="password" placeholder="Long-lived Page access token" autocomplete="off" />
-        </label>
-        <label class="field" id="accountIgUserField">
-          <span>Instagram Business account ID <em>(only for Instagram)</em></span>
-          <input id="accountIgUserInput" type="text" placeholder="IG Business account ID" />
-        </label>
+        <div id="accountMetaFields">
+          <label class="field">
+            <span>Page ID</span>
+            <input id="accountPageIdInput" type="text" placeholder="Facebook Page ID" />
+          </label>
+          <label class="field">
+            <span>Page access token</span>
+            <input id="accountPageTokenInput" type="password" placeholder="Long-lived Page access token" autocomplete="off" />
+          </label>
+          <label class="field" id="accountIgUserField">
+            <span>Instagram Business account ID <em>(only for Instagram)</em></span>
+            <input id="accountIgUserInput" type="text" placeholder="IG Business account ID" />
+          </label>
+        </div>
+        <div id="accountTwitterFields">
+          <label class="field">
+            <span>Consumer Key</span>
+            <input id="accountConsumerKeyInput" type="text" placeholder="X API Consumer Key" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Consumer Secret</span>
+            <input id="accountConsumerSecretInput" type="password" placeholder="X API Consumer Secret" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Access Token</span>
+            <input id="accountAccessTokenInput" type="text" placeholder="X Access Token" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Access Token Secret</span>
+            <input id="accountAccessTokenSecretInput" type="password" placeholder="X Access Token Secret" autocomplete="off" />
+          </label>
+        </div>
         <div class="persona-actions">
           <button id="saveAccountBtn" class="text-btn primary">Save</button>
           <button id="deleteAccountBtn" class="text-btn danger">Delete</button>

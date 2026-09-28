@@ -31,10 +31,16 @@ const els = {
   newAccountBtn: $('newAccountBtn'),
   accountLabelInput: $('accountLabelInput'),
   accountPlatformInput: $('accountPlatformInput'),
+  accountMetaFields: $('accountMetaFields'),
   accountPageIdInput: $('accountPageIdInput'),
   accountPageTokenInput: $('accountPageTokenInput'),
   accountIgUserField: $('accountIgUserField'),
   accountIgUserInput: $('accountIgUserInput'),
+  accountTwitterFields: $('accountTwitterFields'),
+  accountConsumerKeyInput: $('accountConsumerKeyInput'),
+  accountConsumerSecretInput: $('accountConsumerSecretInput'),
+  accountAccessTokenInput: $('accountAccessTokenInput'),
+  accountAccessTokenSecretInput: $('accountAccessTokenSecretInput'),
   saveAccountBtn: $('saveAccountBtn'),
   deleteAccountBtn: $('deleteAccountBtn'),
 };
@@ -234,9 +240,11 @@ function renderAccountList() {
   }
 }
 
-function syncAccountIgFieldVisibility() {
-  if (!els.accountIgUserField) return;
-  els.accountIgUserField.style.display = els.accountPlatformInput.value === 'instagram' ? '' : 'none';
+function syncAccountFieldVisibility() {
+  const platform = els.accountPlatformInput.value;
+  if (els.accountIgUserField) els.accountIgUserField.style.display = platform === 'instagram' ? '' : 'none';
+  if (els.accountMetaFields) els.accountMetaFields.style.display = platform === 'twitter' ? 'none' : '';
+  if (els.accountTwitterFields) els.accountTwitterFields.style.display = platform === 'twitter' ? '' : 'none';
 }
 
 function selectAccount(id) {
@@ -248,12 +256,20 @@ function selectAccount(id) {
   els.accountPageIdInput.value = a.pageId || '';
   els.accountPageTokenInput.value = a.pageToken || '';
   els.accountIgUserInput.value = a.igUserId || '';
-  syncAccountIgFieldVisibility();
+  els.accountConsumerKeyInput.value = a.consumerKey || '';
+  els.accountConsumerSecretInput.value = a.consumerSecret || '';
+  els.accountAccessTokenInput.value = a.accessToken || '';
+  els.accountAccessTokenSecretInput.value = a.accessTokenSecret || '';
+  syncAccountFieldVisibility();
   renderAccountList();
 }
 
 function newAccount() {
-  const a = { id: uid(), label: 'New account', platform: 'facebook', pageId: '', pageToken: '', igUserId: '' };
+  const a = {
+    id: uid(), label: 'New account', platform: 'facebook',
+    pageId: '', pageToken: '', igUserId: '',
+    consumerKey: '', consumerSecret: '', accessToken: '', accessTokenSecret: '',
+  };
   data.socialAccounts.push(a);
   selectedAccountId = a.id;
   renderAccountList();
@@ -266,10 +282,16 @@ async function saveAccount() {
   const a = data.socialAccounts.find((x) => x.id === selectedAccountId);
   if (!a) return;
   a.label = els.accountLabelInput.value.trim() || 'Untitled account';
-  a.platform = els.accountPlatformInput.value === 'instagram' ? 'instagram' : 'facebook';
+  a.platform = ['instagram', 'twitter'].includes(els.accountPlatformInput.value)
+    ? els.accountPlatformInput.value
+    : 'facebook';
   a.pageId = els.accountPageIdInput.value.trim();
   a.pageToken = els.accountPageTokenInput.value.trim();
   a.igUserId = els.accountIgUserInput.value.trim();
+  a.consumerKey = els.accountConsumerKeyInput.value.trim();
+  a.consumerSecret = els.accountConsumerSecretInput.value.trim();
+  a.accessToken = els.accountAccessTokenInput.value.trim();
+  a.accessTokenSecret = els.accountAccessTokenSecretInput.value.trim();
   await commit();
   flashButton(els.saveAccountBtn, 'Saved');
 }
@@ -404,7 +426,7 @@ els.refreshMediaBtn?.addEventListener('click', refreshMedia);
 els.newAccountBtn?.addEventListener('click', newAccount);
 els.saveAccountBtn?.addEventListener('click', saveAccount);
 els.deleteAccountBtn?.addEventListener('click', deleteAccount);
-els.accountPlatformInput?.addEventListener('change', syncAccountIgFieldVisibility);
+els.accountPlatformInput?.addEventListener('change', syncAccountFieldVisibility);
 
 refresh();
 refreshMedia();
