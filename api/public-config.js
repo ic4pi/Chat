@@ -19,9 +19,12 @@ export default async function handler(req, res) {
       description: p.description || '',
       builtin: !!p.builtin,
     }));
-    // Label + platform only — pageToken/pageId never reach the browser.
+    // Label + platform only — tokens/secrets never reach the browser.
+    const isConfigured = (a) => (a.platform === 'twitter'
+      ? a.consumerKey && a.consumerSecret && a.accessToken && a.accessTokenSecret
+      : a.pageId && a.pageToken);
     const socialAccounts = (config.socialAccounts || [])
-      .filter((a) => a.pageId && a.pageToken)
+      .filter(isConfigured)
       .map((a) => ({ id: a.id, label: a.label, platform: a.platform }));
     // Short public cache; personas rarely change. Admin edits will lag by a
     // few seconds on the public config which is fine — the chat endpoint
