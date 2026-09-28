@@ -19,6 +19,10 @@ export default async function handler(req, res) {
       description: p.description || '',
       builtin: !!p.builtin,
     }));
+    // Label + platform only — pageToken/pageId never reach the browser.
+    const socialAccounts = (config.socialAccounts || [])
+      .filter((a) => a.pageId && a.pageToken)
+      .map((a) => ({ id: a.id, label: a.label, platform: a.platform }));
     // Short public cache; personas rarely change. Admin edits will lag by a
     // few seconds on the public config which is fine — the chat endpoint
     // reads live from KV on every request, so replies never use a stale
@@ -26,6 +30,7 @@ export default async function handler(req, res) {
     res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=60');
     return res.status(200).json({
       personas,
+      socialAccounts,
       hasMasterPrompt: !!config.masterPrompt,
       storage: config._source,
     });

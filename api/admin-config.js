@@ -34,6 +34,7 @@ export default async function handler(req, res) {
       return res.status(200).json({
         masterPrompt: config.masterPrompt,
         personas: config.personas,
+        socialAccounts: config.socialAccounts,
       });
     }
 
@@ -41,12 +42,14 @@ export default async function handler(req, res) {
       const body = req.body || {};
       const masterPrompt = typeof body.masterPrompt === 'string' ? body.masterPrompt : '';
       const personas = Array.isArray(body.personas) ? body.personas : [];
-      await saveConfig({ masterPrompt, personas });
+      const socialAccounts = Array.isArray(body.socialAccounts) ? body.socialAccounts : [];
+      await saveConfig({ masterPrompt, personas, socialAccounts });
       const updated = await loadConfig();
       return res.status(200).json({
         ok: true,
         masterPrompt: updated.masterPrompt,
         personas: updated.personas,
+        socialAccounts: updated.socialAccounts,
       });
     }
 
