@@ -20,11 +20,22 @@ import { loadConfig } from '../lib/config.js';
 import { resolveProvider, withProviderChatExtras } from '../lib/providers.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
 import { searchWeb, formatSearchContext } from '../lib/websearch.js';
+import { scanCode, scanInfraConfig, formatScanContext } from '../lib/codescan.js';
 
 const UPSTREAM_TIMEOUT_MS = 90_000;
 const MAX_PERSONAS = 12;
 const RECENT_WINDOW = 10;
 const MAX_TOKENS_PER_TURN = 280;
+
+// These personas' jobs are described as needing live/current information —
+// give them the one real tool that exists (Brave web search) on every turn,
+// not just when the human running the round happens to have the toggle on.
+const FORCE_SEARCH_PERSONA_IDS = new Set(['sec-recon', 'agency-growth']);
+// These personas review code/infra — run the deterministic pattern scanner
+// (lib/codescan.js) against whatever's been pasted recently, so their
+// findings are grounded in an actual match, not an LLM guess.
+const CODE_SCAN_PERSONA_IDS = new Set(['sec-webapp']);
+const INFRA_SCAN_PERSONA_IDS = new Set(['sec-network']);
 
 const MODE_RULES = {
   boardroom: `MODE: BOARDROOM
@@ -332,6 +343,15 @@ export default async function handler(req, res) {
     // Default query when a persona has no assigned task of its own.
     const fallbackQuery = (lastUser?.content && String(lastUser.content).trim()) || topicText;
 
+    // Raw (unclipped) text of the last few user turns, for the code/infra
+    // scanners — formatRecent() truncates and strips whitespace, which would
+    // mangle fenced code blocks and multi-line configs.
+    const recentRawText = history
+      .filter((m) => m.role === 'user')
+      .slice(-3)
+      .map((m) => String(m.content || ''))
+      .join('\n\n');
+
     sseWrite(res, {
       type: 'status',
       message: `Updating table context (${mode}) · ${personas.length} personas…`,
@@ -401,7 +421,7 @@ export default async function handler(req, res) {
       const task = typeof personaTasks?.[persona.id] === 'string' ? personaTasks[persona.id].trim() : '';
       let searchContext = '';
       let personaSources = [];
-      if (wantWebSearch) {
+      if (wantWebSearch || FORCE_SEARCH_PERSONA_IDS.has(persona.id)) {
         const query = task || fallbackQuery;
         try {
           personaSources = await searchWeb(query);
@@ -414,7 +434,16 @@ export default async function handler(req, res) {
         }
       }
 
-      const personaPrompt = [master, persona.systemPrompt, modeRules, searchContext]
+      // Deterministic pattern scan for the security personas — real tool
+      // output (line-numbered matches), not the model guessing at findings.
+      let scanContext = '';
+      if (CODE_SCAN_PERSONA_IDS.has(persona.id) && recentRawText.trim()) {
+        scanContext = formatScanContext('code', scanCode(recentRawText));
+      } else if (INFRA_SCAN_PERSONA_IDS.has(persona.id) && recentRawText.trim()) {
+        scanContext = formatScanContext('infra', scanInfraConfig(recentRawText));
+      }
+
+      const personaPrompt = [master, persona.systemPrompt, modeRules, searchContext, scanContext]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n');
 
