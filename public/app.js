@@ -1350,7 +1350,7 @@ function renderMessageInto(container, m, idx) {
         postBtn.type = 'button';
         postBtn.className = 'text-btn msg-speak';
         postBtn.textContent = 'Post to…';
-        postBtn.title = 'Publish this reply to a connected Facebook/Instagram account';
+        postBtn.title = 'Publish or send this reply via a connected account (social or email)';
         postBtn.addEventListener('click', (e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -1822,8 +1822,18 @@ async function handlePostToSocial(text, triggerBtn) {
     accountId = socialAccounts[idx].id;
   }
   const account = socialAccounts.find((a) => a.id === accountId);
-  if (!confirm(`Post this to "${account.label}" now? This publishes publicly and can't be undone from here.`)) {
-    return;
+
+  let to;
+  let subject;
+  if (account.platform === 'email') {
+    to = (prompt('Send to which email address?') || '').trim();
+    if (!to) return;
+    subject = (prompt('Subject line:', 'Message from ' + (activePersona()?.name || 'the team')) || '').trim();
+    if (!confirm(`Send this email to ${to} now? This sends immediately and can't be undone.`)) return;
+  } else {
+    if (!confirm(`Post this to "${account.label}" now? This publishes publicly and can't be undone from here.`)) {
+      return;
+    }
   }
 
   let pw = loadPaidPassword();
@@ -1833,18 +1843,18 @@ async function handlePostToSocial(text, triggerBtn) {
     savePaidPassword(pw);
   }
 
-  flashButton(triggerBtn, 'Posting…');
+  flashButton(triggerBtn, account.platform === 'email' ? 'Sending…' : 'Posting…');
   try {
     const res = await fetch('/api/social-post', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Paid-Password': pw },
-      body: JSON.stringify({ accountId, message: text }),
+      body: JSON.stringify({ accountId, message: text, to, subject }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    flashButton(triggerBtn, 'Posted ✓');
+    flashButton(triggerBtn, account.platform === 'email' ? 'Sent ✓' : 'Posted ✓');
   } catch (err) {
-    alert('Post failed: ' + (err.message || err));
+    alert((account.platform === 'email' ? 'Send failed: ' : 'Post failed: ') + (err.message || err));
   }
 }
 

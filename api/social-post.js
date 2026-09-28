@@ -27,7 +27,7 @@ export default async function handler(req, res) {
     return res.status(403).json({ error: 'Wrong or missing unlock password.' });
   }
 
-  const { accountId, message, imageUrl } = req.body || {};
+  const { accountId, message, imageUrl, to, subject } = req.body || {};
   if (!accountId || typeof accountId !== 'string') {
     return res.status(400).json({ error: 'accountId is required' });
   }
@@ -41,12 +41,22 @@ export default async function handler(req, res) {
     if (!account) return res.status(404).json({ error: 'That account is not configured in /admin.' });
     const configured = account.platform === 'twitter'
       ? account.consumerKey && account.consumerSecret && account.accessToken && account.accessTokenSecret
-      : account.pageId && account.pageToken;
+      : account.platform === 'email'
+        ? account.resendApiKey && account.fromEmail
+        : account.pageId && account.pageToken;
     if (!configured) {
       return res.status(400).json({ error: `"${account.label}" is missing credentials in /admin.` });
     }
+    if (account.platform === 'email' && (!to || !String(to).trim())) {
+      return res.status(400).json({ error: 'A recipient address is required to send email.' });
+    }
 
-    const result = await publishToAccount(account, { message: String(message || ''), imageUrl: imageUrl || undefined });
+    const result = await publishToAccount(account, {
+      message: String(message || ''),
+      imageUrl: imageUrl || undefined,
+      to: to || undefined,
+      subject: subject || undefined,
+    });
     return res.status(200).json({ ok: true, id: result.id, label: account.label, platform: account.platform });
   } catch (err) {
     return res.status(502).json({ error: err.message || 'Publish failed' });
