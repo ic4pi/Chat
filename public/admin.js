@@ -41,6 +41,9 @@ const els = {
   accountConsumerSecretInput: $('accountConsumerSecretInput'),
   accountAccessTokenInput: $('accountAccessTokenInput'),
   accountAccessTokenSecretInput: $('accountAccessTokenSecretInput'),
+  accountEmailFields: $('accountEmailFields'),
+  accountResendApiKeyInput: $('accountResendApiKeyInput'),
+  accountFromEmailInput: $('accountFromEmailInput'),
   saveAccountBtn: $('saveAccountBtn'),
   deleteAccountBtn: $('deleteAccountBtn'),
 };
@@ -243,8 +246,11 @@ function renderAccountList() {
 function syncAccountFieldVisibility() {
   const platform = els.accountPlatformInput.value;
   if (els.accountIgUserField) els.accountIgUserField.style.display = platform === 'instagram' ? '' : 'none';
-  if (els.accountMetaFields) els.accountMetaFields.style.display = platform === 'twitter' ? 'none' : '';
+  if (els.accountMetaFields) {
+    els.accountMetaFields.style.display = (platform === 'twitter' || platform === 'email') ? 'none' : '';
+  }
   if (els.accountTwitterFields) els.accountTwitterFields.style.display = platform === 'twitter' ? '' : 'none';
+  if (els.accountEmailFields) els.accountEmailFields.style.display = platform === 'email' ? '' : 'none';
 }
 
 function selectAccount(id) {
@@ -260,6 +266,8 @@ function selectAccount(id) {
   els.accountConsumerSecretInput.value = a.consumerSecret || '';
   els.accountAccessTokenInput.value = a.accessToken || '';
   els.accountAccessTokenSecretInput.value = a.accessTokenSecret || '';
+  els.accountResendApiKeyInput.value = a.resendApiKey || '';
+  els.accountFromEmailInput.value = a.fromEmail || '';
   syncAccountFieldVisibility();
   renderAccountList();
 }
@@ -269,6 +277,7 @@ function newAccount() {
     id: uid(), label: 'New account', platform: 'facebook',
     pageId: '', pageToken: '', igUserId: '',
     consumerKey: '', consumerSecret: '', accessToken: '', accessTokenSecret: '',
+    resendApiKey: '', fromEmail: '',
   };
   data.socialAccounts.push(a);
   selectedAccountId = a.id;
@@ -282,7 +291,7 @@ async function saveAccount() {
   const a = data.socialAccounts.find((x) => x.id === selectedAccountId);
   if (!a) return;
   a.label = els.accountLabelInput.value.trim() || 'Untitled account';
-  a.platform = ['instagram', 'twitter'].includes(els.accountPlatformInput.value)
+  a.platform = ['instagram', 'twitter', 'email'].includes(els.accountPlatformInput.value)
     ? els.accountPlatformInput.value
     : 'facebook';
   a.pageId = els.accountPageIdInput.value.trim();
@@ -292,6 +301,8 @@ async function saveAccount() {
   a.consumerSecret = els.accountConsumerSecretInput.value.trim();
   a.accessToken = els.accountAccessTokenInput.value.trim();
   a.accessTokenSecret = els.accountAccessTokenSecretInput.value.trim();
+  a.resendApiKey = els.accountResendApiKeyInput.value.trim();
+  a.fromEmail = els.accountFromEmailInput.value.trim();
   await commit();
   flashButton(els.saveAccountBtn, 'Saved');
 }

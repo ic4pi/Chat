@@ -110,6 +110,7 @@ const ADMIN_HTML = `<!DOCTYPE html>
             <option value="facebook">Facebook Page</option>
             <option value="instagram">Instagram Business</option>
             <option value="twitter">X (Twitter)</option>
+            <option value="email">Email (Resend)</option>
           </select>
         </label>
         <div id="accountMetaFields">
@@ -142,6 +143,16 @@ const ADMIN_HTML = `<!DOCTYPE html>
           <label class="field">
             <span>Access Token Secret</span>
             <input id="accountAccessTokenSecretInput" type="password" placeholder="X Access Token Secret" autocomplete="off" />
+          </label>
+        </div>
+        <div id="accountEmailFields">
+          <label class="field">
+            <span>Resend API Key</span>
+            <input id="accountResendApiKeyInput" type="password" placeholder="re_..." autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>From address <em>(must be verified in Resend)</em></span>
+            <input id="accountFromEmailInput" type="text" placeholder="cole@yourdomain.com" autocomplete="off" />
           </label>
         </div>
         <div class="persona-actions">

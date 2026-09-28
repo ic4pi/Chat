@@ -22,7 +22,9 @@ export default async function handler(req, res) {
     // Label + platform only — tokens/secrets never reach the browser.
     const isConfigured = (a) => (a.platform === 'twitter'
       ? a.consumerKey && a.consumerSecret && a.accessToken && a.accessTokenSecret
-      : a.pageId && a.pageToken);
+      : a.platform === 'email'
+        ? a.resendApiKey && a.fromEmail
+        : a.pageId && a.pageToken);
     const socialAccounts = (config.socialAccounts || [])
       .filter(isConfigured)
       .map((a) => ({ id: a.id, label: a.label, platform: a.platform }));
