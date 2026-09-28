@@ -20,6 +20,7 @@ import { loadConfig } from '../lib/config.js';
 import { resolveProvider, withProviderChatExtras } from '../lib/providers.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
 import { searchWeb, formatSearchContext } from '../lib/websearch.js';
+import { resolveOwner, memoryContext } from '../lib/hub.js';
 
 const UPSTREAM_TIMEOUT_MS = 90_000;
 const MAX_PERSONAS = 12;
@@ -332,6 +333,16 @@ export default async function handler(req, res) {
     // Default query when a persona has no assigned task of its own.
     const fallbackQuery = (lastUser?.content && String(lastUser.content).trim()) || topicText;
 
+    // Same for every persona (it's the user's own saved facts, not a
+    // per-persona query) — fetch once for the round, not once per speaker.
+    let memoryBlock = '';
+    try {
+      const ownerId = await resolveOwner(req, res);
+      if (ownerId) memoryBlock = await memoryContext(ownerId);
+    } catch (err) {
+      console.error('memoryContext failed:', err);
+    }
+
     sseWrite(res, {
       type: 'status',
       message: `Updating table context (${mode}) · ${personas.length} personas…`,
@@ -414,7 +425,7 @@ export default async function handler(req, res) {
         }
       }
 
-      const personaPrompt = [master, persona.systemPrompt, modeRules, searchContext]
+      const personaPrompt = [master, persona.systemPrompt, modeRules, memoryBlock, searchContext]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n');
 
