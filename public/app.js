@@ -1825,12 +1825,32 @@ async function handlePostToSocial(text, triggerBtn) {
 
   let to;
   let subject;
+  let imageUrl;
   if (account.platform === 'email') {
     to = (prompt('Send to which email address?') || '').trim();
     if (!to) return;
     subject = (prompt('Subject line:', 'Message from ' + (activePersona()?.name || 'the team')) || '').trim();
     if (!confirm(`Send this email to ${to} now? This sends immediately and can't be undone.`)) return;
   } else {
+    const wantsImage = confirm(
+      account.platform === 'instagram'
+        ? 'Instagram needs an image. Generate one now with AI?'
+        : 'Generate an AI image to attach to this post?',
+    );
+    if (wantsImage) {
+      const imgPrompt = (prompt('Describe the image:', text.slice(0, 200)) || '').trim();
+      if (imgPrompt) {
+        flashButton(triggerBtn, 'Generating image…');
+        try {
+          imageUrl = await generateImageForPost(imgPrompt);
+        } catch (err) {
+          const keepGoing = account.platform === 'instagram'
+            ? false
+            : confirm(`Image generation failed: ${err.message || err}\n\nPost text-only instead?`);
+          if (!keepGoing) { flashButton(triggerBtn, 'Post to…'); return; }
+        }
+      }
+    }
     if (!confirm(`Post this to "${account.label}" now? This publishes publicly and can't be undone from here.`)) {
       return;
     }
@@ -1848,7 +1868,7 @@ async function handlePostToSocial(text, triggerBtn) {
     const res = await fetch('/api/social-post', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Paid-Password': pw },
-      body: JSON.stringify({ accountId, message: text, to, subject }),
+      body: JSON.stringify({ accountId, message: text, to, subject, imageUrl }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -1856,6 +1876,24 @@ async function handlePostToSocial(text, triggerBtn) {
   } catch (err) {
     alert((account.platform === 'email' ? 'Send failed: ' : 'Post failed: ') + (err.message || err));
   }
+}
+
+/** Generate a marketing image via /api/media-generate and return a hosted URL.
+ *  Throws if generation fails or storage isn't configured (no URL comes back —
+ *  Facebook/Instagram need a public URL, not inline bytes). */
+async function generateImageForPost(promptText) {
+  const res = await fetch('/api/media-generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind: 'image', provider: 'venice', prompt: promptText, size: '1024x1024' }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  const img = (data.images || [])[0];
+  if (!img?.url) {
+    throw new Error('Image generated but not hosted (set SUPABASE_SERVICE_ROLE_KEY in Vercel to enable this).');
+  }
+  return img.url;
 }
 
 function activePersona() {
