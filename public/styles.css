@@ -984,6 +984,11 @@ select { appearance: none; }
 .model-picker-status { font-size: 16px; color: var(--muted-2); margin-bottom: 6px; }
 .model-picker-list { max-height: 340px; overflow-y: auto; }
 .model-picker-group { font-size: 14px; color: var(--muted-2); text-transform: uppercase; letter-spacing: .06em; padding: 10px 4px 4px; font-family: var(--display); }
+.model-picker-row { display: flex; align-items: stretch; gap: 2px; }
+.model-picker-row .model-picker-item { flex: 1; min-width: 0; }
+.model-picker-fav { flex: 0 0 auto; width: 34px; border: none; background: transparent; color: var(--muted-2); font-size: 17px; cursor: pointer; border-radius: var(--r-sm); transition: background .14s, color .14s; }
+.model-picker-fav:hover { background: var(--panel-2); color: var(--text); }
+.model-picker-fav.active { color: #FFC94A; }
 .model-picker-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; border-radius: var(--r-sm); cursor: pointer; transition: background .14s; }
 .model-picker-item:hover, .model-picker-item.active { background: var(--panel-2); }
 .model-picker-item-name { font-size: 18px; }

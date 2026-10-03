@@ -30,6 +30,7 @@ import {
   WRITER_MODEL,
   requireHub,
   fail,
+  rateLimit,
   storeMediaAsset,
   decodeDataUrl,
 } from '../../lib/hub.js';
@@ -1227,7 +1228,15 @@ If nothing is worth keeping, return empty arrays. Empty is a correct answer.`;
 
 async function handle_sweep(req, res) {
   if (!requireHub(res)) return;
-  if (process.env.CRON_SECRET && req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
+  // Fails CLOSED, same as /admin: an unset secret used to mean this endpoint
+  // ran for anyone who found the URL — up to 100 threads, an LLM + embedding
+  // call per thread, on every hit, with no cap. Vercel Cron sets the
+  // Authorization header itself whenever CRON_SECRET exists as an env var,
+  // so the real cron never has to know this changed.
+  if (!process.env.CRON_SECRET) {
+    return fail(res, 503, 'Sweep is not configured — set CRON_SECRET in Vercel env vars, then redeploy.');
+  }
+  if (req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
     return fail(res, 401, 'unauthorized');
   }
 
@@ -1676,11 +1685,30 @@ const ROUTES = {
   sweep: handle_sweep,
 };
 
+// Every route here is reachable by anyone — owners auto-mint on first
+// contact, there's no login gate in front of any of it. Limits are per IP,
+// per 5-minute window. The LLM/embedding-calling routes get a tight cap;
+// `state` covers mostly-cheap reads (plus the writes guarded individually
+// below) so it gets a looser one.
+const ROUTE_RATE_LIMITS = {
+  initiate: { limit: 20, windowSeconds: 300 },
+  moderate: { limit: 30, windowSeconds: 300 },
+  document: { limit: 20, windowSeconds: 300 },
+  media: { limit: 20, windowSeconds: 300 },
+  state: { limit: 150, windowSeconds: 300 },
+  sweep: { limit: 10, windowSeconds: 300 },
+};
+
 export default async function handler(req, res) {
-  const route = ROUTES[req.query?.route];
+  const routeName = req.query?.route;
+  const route = ROUTES[routeName];
   if (!route) {
     return res.status(404).json({ error: 'unknown hub route', valid: Object.keys(ROUTES) });
   }
+
+  const limitCfg = ROUTE_RATE_LIMITS[routeName];
+  if (limitCfg && !(await rateLimit(req, res, { bucket: routeName, ...limitCfg }))) return;
+
   try {
     return await route(req, res);
   } catch (e) {

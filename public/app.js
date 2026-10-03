@@ -194,6 +194,34 @@ function saveModelPackagePrefs(prefs) {
 let modelPackagePrefs = loadModelPackagePrefs();
 
 /**
+ * Pinned models — the catalog spans six providers and hundreds of ids with
+ * no way to float the 3-4 you actually use back to the top. Stored as
+ * "provider::id" strings so two providers' colliding ids never collapse.
+ */
+const FAVORITE_MODELS_STORAGE = 'uncensored_favorite_models_v1';
+function favoriteModelKey(provider, id) { return `${provider}::${id}`; }
+function loadFavoriteModelIds() {
+  try {
+    const raw = localStorage.getItem(FAVORITE_MODELS_STORAGE);
+    const arr = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch {
+    return new Set();
+  }
+}
+function saveFavoriteModelIds() {
+  try { localStorage.setItem(FAVORITE_MODELS_STORAGE, JSON.stringify([...favoriteModelIds])); } catch { /* ignore */ }
+}
+let favoriteModelIds = loadFavoriteModelIds();
+function isFavoriteModel(m) { return favoriteModelIds.has(favoriteModelKey(m.provider, m.id)); }
+function toggleFavoriteModel(m) {
+  const key = favoriteModelKey(m.provider, m.id);
+  if (favoriteModelIds.has(key)) favoriteModelIds.delete(key);
+  else favoriteModelIds.add(key);
+  saveFavoriteModelIds();
+}
+
+/**
  * Persist paid unlock in localStorage (same as BYOK keys) so leaving the page
  * does not force re-entry. Migrates any leftover sessionStorage value once.
  */
@@ -2376,7 +2404,30 @@ function makeModelPickerRow(m, { unlocked, showId = false }) {
     if (comparePickerMode) toggleCompareModelSelection(m.provider, m.id, m.name || m.id);
     else selectModelFromPicker(m.provider, m.id);
   });
-  return btn;
+
+  // A <button> can't nest another <button>, so the star sits beside it
+  // inside a plain row wrapper rather than inside btn itself.
+  const row = document.createElement('div');
+  row.className = 'model-picker-row';
+  row.appendChild(btn);
+
+  const fav = isFavoriteModel(m);
+  const star = document.createElement('button');
+  star.type = 'button';
+  star.className = 'model-picker-fav' + (fav ? ' active' : '');
+  star.textContent = fav ? '★' : '☆';
+  star.title = fav ? 'Remove from favorites' : 'Pin to favorites';
+  star.setAttribute('aria-pressed', fav ? 'true' : 'false');
+  star.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleFavoriteModel(m);
+    renderModelPickerList();
+    renderSidebarModelList();
+  });
+  row.appendChild(star);
+
+  return row;
 }
 
 function appendPickerHeading(host, title, className = 'model-picker-group') {
@@ -2394,6 +2445,18 @@ function appendPickerHeading(host, title, className = 'model-picker-group') {
  * wondering why Claude isn't in a list that claims to have Claude.
  */
 function renderPackagedPickerList(host, query, unlocked) {
+  // Pinned models first, regardless of which brand/package they belong to.
+  // Rendered separately from `shown` below — a favorite still appears a
+  // second time in its normal brand group, and the status line should count
+  // the catalog once, not twice.
+  const favorites = filterCatalogModels(packageModels(allModelsCatalog, modelPackagePrefs.packages), { query })
+    .filter((m) => isFavoriteModel(m))
+    .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+  if (favorites.length) {
+    appendPickerHeading(host, `★ Favorites · ${favorites.length}`);
+    for (const m of favorites) host.appendChild(makeModelPickerRow(m, { unlocked, showId: true }));
+  }
+
   const packages = resolvePackages(allModelsCatalog, modelPackagePrefs.packages);
   let shown = 0;
   let lockedBrands = 0;
@@ -2455,6 +2518,8 @@ function renderAllModelsPickerList(host, query, unlocked) {
     appendPickerHeading(host, title);
     for (const m of items) host.appendChild(makeModelPickerRow(m, { unlocked, showId: true }));
   };
+  const favorites = filtered.filter((m) => isFavoriteModel(m)).sort(byName);
+  appendGroup(`★ Favorites · ${favorites.length}`, favorites);
   appendGroup(`Free · ${free.length}`, free);
   appendGroup(`Paid · ${paid.length}${unlocked ? '' : ' (unlock required)'}`, paid);
   return filtered.length;
@@ -2516,7 +2581,10 @@ async function renderSidebarModelList() {
     : packageModels(allModelsCatalog, modelPackagePrefs.packages);
   const free = pool
     .filter((m) => m.free)
-    .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+    .sort((a, b) => {
+      const favDiff = Number(isFavoriteModel(b)) - Number(isFavoriteModel(a));
+      return favDiff || (a.name || a.id).localeCompare(b.name || b.id);
+    });
   els.sidebarModelList.innerHTML = '';
   for (const m of free) {
     const li = document.createElement('li');
@@ -2525,7 +2593,7 @@ async function renderSidebarModelList() {
     li.setAttribute('role', 'option');
     const name = document.createElement('div');
     name.className = 'model-picker-item-name';
-    name.textContent = m.name || m.id;
+    name.textContent = (isFavoriteModel(m) ? '★ ' : '') + (m.name || m.id);
     const meta = document.createElement('div');
     meta.className = 'model-picker-item-meta';
     const limit = rateLimitLabel(m);
@@ -4071,8 +4139,40 @@ async function sendAgencyMessage(chat, displayText) {
 // Export / import / clear
 // ---------------------------------------------------------------------------
 
+/**
+ * Every localStorage key this app writes to, not just chat state — API
+ * keys, role assignments, voice/persona prefs, favorites, the paid unlock
+ * and the group-chat draft. Nothing here lives anywhere but this browser,
+ * so this file is the only backup that exists.
+ */
+function backupStorageKeys() {
+  return [
+    STORAGE_KEY,
+    KEYS_STORAGE,
+    ROLES_STORAGE,
+    PAID_PASS_STORAGE,
+    PACKAGES_STORAGE,
+    FAVORITE_MODELS_STORAGE,
+    WEB_SEARCH_PREF_KEY,
+    AGENCY_MODE_PREF_KEY,
+    SPEAK_PREF_KEY,
+    VOICE_PREF_KEY,
+    PERSONA_VOICES_KEY,
+    PERSONA_MODELS_KEY,
+    GROUP_DRAFT_KEY,
+  ];
+}
+
 function exportData() {
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const keys = {};
+  for (const key of backupStorageKeys()) {
+    const raw = localStorage.getItem(key);
+    if (raw !== null) keys[key] = raw;
+  }
+  const blob = new Blob(
+    [JSON.stringify({ backupVersion: 2, keys }, null, 2)],
+    { type: 'application/json' },
+  );
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
@@ -4087,11 +4187,31 @@ async function importData(file) {
   try {
     const text = await file.text();
     const parsed = JSON.parse(text);
-    const migrated = migrate(parsed);
-    Object.assign(state, migrated);
-    saveState();
-    await renderAll();
-    alert('Import complete.');
+
+    // Pre-v2 export: the bare `state` object, nothing else. Restore it the
+    // same way it always worked rather than breaking old backup files.
+    if (!parsed || typeof parsed !== 'object' || parsed.backupVersion !== 2 || !parsed.keys) {
+      Object.assign(state, migrate(parsed));
+      saveState();
+      await renderAll();
+      alert('Import complete.');
+      return;
+    }
+
+    if (!confirm(
+      'This will overwrite chats, projects, API keys, role assignments, ' +
+      'voice/favorite prefs and the paid unlock on this browser. Continue?',
+    )) return;
+
+    for (const [key, value] of Object.entries(parsed.keys)) {
+      try { localStorage.setItem(key, value); } catch { /* skip a single bad key */ }
+    }
+
+    // Everything else above is only read back into memory on page load —
+    // a reload is simpler and safer than re-syncing a dozen module-level
+    // variables by hand.
+    alert('Import complete. Reloading to apply it…');
+    location.reload();
   } catch (err) {
     alert('Import failed: ' + (err.message || err));
   }
