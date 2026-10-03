@@ -2,18 +2,15 @@
 // Groq / NVIDIA. Supports JSON (stream:false) and SSE (stream:true).
 //
 // System-prompt handling: the browser sends a personaId. The server looks up
-// that persona's system prompt in KV and prepends the master prompt, plus the
-// user's own saved memory (facts/notes) when the Hub is configured, plus a
+// that persona's system prompt in KV and prepends the master prompt, plus a
 // live search block when the caller asked for one. No channel/role/safety
-// rules are ever injected — those three are personalization and grounding,
-// not policy.
+// rules are ever injected.
 
 import { loadConfig } from '../lib/config.js';
 import { resolveProvider, withProviderChatExtras, formatProviderError } from '../lib/providers.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
 import { prepareImageMessages, hasImageParts } from '../lib/vision.js';
 import { extractQueryText, searchWeb, formatSearchContext } from '../lib/websearch.js';
-import { resolveOwner, memoryContext } from '../lib/hub.js';
 
 /**
  * Headroom under vercel.json maxDuration 300. Must stay below the platform
@@ -360,20 +357,7 @@ export default async function handler(req, res) {
   const sentImages = hasImageParts(chatMessages);
 
   const hasPriorTurn = chatMessages.some((m) => m.role === 'assistant');
-
-  // The user's own saved facts/notes, when the Hub is configured — best-effort:
-  // a memory hiccup should never break the actual reply, just leave it a
-  // little less personalized. Silent by design (unlike a search failure, a
-  // missing memory block can't make the model claim something false).
-  let memoryBlock = '';
-  try {
-    const ownerId = await resolveOwner(req, res);
-    if (ownerId) memoryBlock = await memoryContext(ownerId);
-  } catch (err) {
-    console.error('memoryContext failed:', err);
-  }
-
-  const basePrompt = [await resolveSystemPrompt(personaId), memoryBlock, hasPriorTurn ? NO_REPEAT_INSTRUCTION : '']
+  const basePrompt = [await resolveSystemPrompt(personaId), hasPriorTurn ? NO_REPEAT_INSTRUCTION : '']
     .filter(Boolean)
     .join('\n\n');
 

@@ -20,7 +20,7 @@ import { loadConfig } from '../lib/config.js';
 import { resolveProvider, withProviderChatExtras } from '../lib/providers.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
 import { searchWeb, formatSearchContext } from '../lib/websearch.js';
-import { resolveOwner, memoryContext } from '../lib/hub.js';
+import { resolveOwner } from '../lib/hub.js';
 import { recentTeamActions, formatTeamActions } from '../lib/team-log.js';
 
 const UPSTREAM_TIMEOUT_MS = 90_000;
@@ -360,18 +360,16 @@ export default async function handler(req, res) {
     // Default query when a persona has no assigned task of its own.
     const fallbackQuery = (lastUser?.content && String(lastUser.content).trim()) || topicText;
 
-    // Same for every persona (it's the user's own saved facts, not a
-    // per-persona query) — fetch once for the round, not once per speaker.
-    let memoryBlock = '';
+    // Fetch once for the round, not once per speaker — shared action log is
+    // owner-level, not per-persona.
     let teamActionsBlock = '';
     try {
       const ownerId = await resolveOwner(req, res);
       if (ownerId) {
-        memoryBlock = await memoryContext(ownerId);
         teamActionsBlock = formatTeamActions(await recentTeamActions(ownerId));
       }
     } catch (err) {
-      console.error('memoryContext failed:', err);
+      console.error('recentTeamActions failed:', err);
     }
 
     sseWrite(res, {
@@ -463,7 +461,7 @@ export default async function handler(req, res) {
         }
       }
 
-      const personaPrompt = [master, persona.systemPrompt, modeRules, memoryBlock, teamActionsBlock, searchContext]
+      const personaPrompt = [master, persona.systemPrompt, modeRules, teamActionsBlock, searchContext]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n');
 
