@@ -26,7 +26,10 @@ import { recentTeamActions, formatTeamActions } from '../lib/team-log.js';
 const UPSTREAM_TIMEOUT_MS = 90_000;
 const MAX_PERSONAS = 12;
 const RECENT_WINDOW = 10;
-const MAX_TOKENS_PER_TURN = 280;
+// 280 was cutting every persona off mid-sentence on anything longer than a
+// couple sentences — group chat has no auto-continue like solo chat does,
+// so a hit cap here is just a silently truncated reply, not a retry.
+const MAX_TOKENS_PER_TURN = 700;
 
 const MODE_RULES = {
   boardroom: `MODE: BOARDROOM
