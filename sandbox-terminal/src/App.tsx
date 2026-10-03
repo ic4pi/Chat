@@ -60,7 +60,8 @@ import {
   parseCoderKey,
   type ResolvedCoderBrand,
 } from './coderModels.js';
-import { ChunkModelPanel, type GenerateChunkResult } from './ChunkModelPanel.js';
+import type { GenerateChunkResult } from './ChunkModelPanel.js';
+import { SettingsPanel } from './SettingsPanel.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
@@ -327,9 +328,7 @@ export function App() {
   );
   const [coderBrands,  setCoderBrands]  = useState<ResolvedCoderBrand[]>([]);
   const [keys,         setKeys]         = useState(() => loadProviderKeys());
-  const [showKeys,     setShowKeys]     = useState(false);
-  const [showRoles,    setShowRoles]    = useState(false);
-  const [showSlices,   setShowSlices]   = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [roleModels,   setRoleModels]   = useState(() => loadRoleModels());
   // Auto-save ON — generated files go to the sandbox immediately so you can download/push.
   const [autoRun,      setAutoRun]      = useState(false);
@@ -1032,101 +1031,46 @@ export function App() {
             cursor: 'pointer', fontFamily: 'inherit', fontSize: 14 }}>
           {paidUnlocked() ? 'Paid ✓' : 'Unlock'}
         </button>
-        <button type="button" onClick={() => setShowKeys(s => !s)}
-          title="Bring your own API keys"
-          style={{ background: activeApiKey ? 'rgba(52,211,153,.16)' : '#171B26', color: activeApiKey ? '#34D399' : '#9198AA',
-            border: '1px solid #232838', borderRadius: 4, padding: '3px 8px',
-            cursor: 'pointer', fontFamily: 'inherit', fontSize: 14 }}>
-          Keys
-        </button>
-        <button type="button" onClick={() => { setShowRoles(s => !s); setShowSlices(false); }}
-          title="Assign models per role"
-          style={{ background: showRoles ? 'rgba(52,211,153,.16)' : '#171B26', color: '#9198AA',
-            border: '1px solid #232838', borderRadius: 4, padding: '3px 8px',
-            cursor: 'pointer', fontFamily: 'inherit', fontSize: 14 }}>
-          Roles
-        </button>
-        <button type="button"
-          onClick={() => { setShowSlices(s => !s); setShowRoles(false); }}
-          title="Assign an LLM per coding chunk (HTML, CSS, JS…) and Generate"
-          aria-expanded={showSlices}
-          aria-controls="chunk-model-panel"
-          style={{ background: showSlices ? 'rgba(52,211,153,.16)' : '#171B26',
-            color: showSlices ? '#FF3D8E' : '#9198AA',
-            border: '1px solid #232838', borderRadius: 4, padding: '3px 8px',
-            cursor: 'pointer', fontFamily: 'inherit', fontSize: 14 }}>
-          Slices
-        </button>
         {repo.sandboxId && (
           <span style={{ fontSize: 12, color: '#323A50', whiteSpace: 'nowrap',
             overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 120 }}
             title={repo.sandboxId}>● {repo.sandboxId.slice(0, 20)}</span>
         )}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <label title="Off by default. When on, suggested file changes save to the cloud sandbox only — not GitHub, not your phone."
-            style={{ display: 'flex', alignItems: 'center', gap: 4,
-            fontSize: 14, color: '#656C7E', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
-            Auto-save <input type="checkbox" checked={autoApplyOn} onChange={e => setAutoApplyOn(e.target.checked)}
-              style={{ accentColor: '#FF3D8E' }} />
-          </label>
-          <label title="Off by default. When on, code snippets run in the sandbox terminal."
-            style={{ display: 'flex', alignItems: 'center', gap: 4,
-            fontSize: 14, color: '#656C7E', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
-            Auto-run <input type="checkbox" checked={autoRun} onChange={e => setAutoRun(e.target.checked)}
-              style={{ accentColor: '#FF3D8E' }} />
-          </label>
-          <label title="On by default. Runs npm run check / project tests after saves so bad edits get fixed before you push."
-            style={{ display: 'flex', alignItems: 'center', gap: 4,
-            fontSize: 14, color: '#656C7E', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
-            Auto-test <input type="checkbox" checked={autoVerifyOn} onChange={e => setAutoVerifyOn(e.target.checked)}
-              style={{ accentColor: '#FF3D8E' }} />
-          </label>
-        </div>
+        <button type="button" className="ws-btn" onClick={() => setShowSettings(true)}
+          title="Settings — API keys, role models, automation, per-chunk models"
+          aria-haspopup="dialog" aria-expanded={showSettings}
+          style={{ marginLeft: 'auto', background: activeApiKey ? 'var(--success-dim)' : 'var(--surface-2)',
+            color: activeApiKey ? 'var(--success)' : 'var(--text-muted)',
+            border: '1px solid var(--border)', borderRadius: 'var(--radius)',
+            width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'pointer', fontSize: 16 }}>
+          ⚙
+        </button>
       </div>
-      {showKeys && (
-        <div style={{ padding: '8px 12px', borderTop: '1px solid #191D27',
-          display: 'grid', gap: 6, gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
-          <div style={{ gridColumn: '1 / -1', fontSize: 14, color: '#656C7E', lineHeight: 1.4 }}>
-            Keys stay in this browser only. Used when set; otherwise the server env key is used.
-          </div>
-          {PROVIDER_LIST.map(p => (
-            <label key={p.id} style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 14, color: '#9198AA' }}>
-              {p.label}
-              <input type="password" autoComplete="off"
-                value={keys[p.id] || ''}
-                placeholder={`${p.label} API key`}
-                onChange={e => handleKeySave(p.id, e.target.value)}
-                style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
-                  borderRadius: 4, padding: '4px 8px', fontFamily: 'inherit', fontSize: 15 }} />
-            </label>
-          ))}
-        </div>
-      )}
-      {showRoles && (
-        <div style={{ padding: '8px 12px', borderTop: '1px solid #191D27', fontSize: 14, color: '#9198AA', lineHeight: 1.5 }}>
-          Switch the role dropdown to use a different model for writing, reviewing, or planning.
-          Changing provider/model while a role is selected saves that assignment.
-          Current: write={roleModels.write.model.split('/').pop()} ·
-          review={roleModels.review.model.split('/').pop()} ·
-          plan={roleModels.plan.model.split('/').pop()}
-        </div>
-      )}
-      {showSlices && (
-        <div id="chunk-model-panel">
-          <ChunkModelPanel
-            sandboxReady={!!repo.sandboxId && !!repo.root}
-            contextText={
-              [
-                repo.repoUrl ? `Repo: ${repo.repoUrl}` : '',
-                repo.tree.length
-                  ? `File tree (sample): ${repo.tree.slice(0, 40).map((n) => n.path).join(', ')}`
-                  : '',
-              ].filter(Boolean).join('\n')
-            }
-            onComplete={handleSliceGenerateComplete}
-          />
-        </div>
-      )}
+      <SettingsPanel
+        open={showSettings}
+        onClose={() => setShowSettings(false)}
+        keys={keys}
+        onKeySave={handleKeySave}
+        roleSummary={{
+          write: roleModels.write.model.split('/').pop() ?? roleModels.write.model,
+          review: roleModels.review.model.split('/').pop() ?? roleModels.review.model,
+          plan: roleModels.plan.model.split('/').pop() ?? roleModels.plan.model,
+        }}
+        autoApplyOn={autoApplyOn} setAutoApplyOn={setAutoApplyOn}
+        autoRun={autoRun} setAutoRun={setAutoRun}
+        autoVerifyOn={autoVerifyOn} setAutoVerifyOn={setAutoVerifyOn}
+        sandboxReady={!!repo.sandboxId && !!repo.root}
+        contextText={
+          [
+            repo.repoUrl ? `Repo: ${repo.repoUrl}` : '',
+            repo.tree.length
+              ? `File tree (sample): ${repo.tree.slice(0, 40).map((n) => n.path).join(', ')}`
+              : '',
+          ].filter(Boolean).join('\n')
+        }
+        onSliceComplete={handleSliceGenerateComplete}
+      />
     </div>
   );
 

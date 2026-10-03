@@ -1,0 +1,151 @@
+/**
+ * Shared design tokens for Workspace. Previously every component hardcoded
+ * its own hex values inline — this is the single source of truth, and the
+ * only place that can express hover states, focus rings, or animation
+ * (inline React style objects can't do any of those). Palette values match
+ * what was already scattered through the app (accent #FF3D8E, bg #0B0D12,
+ * etc.) — this doesn't reskin the app, it unifies and extends it.
+ */
+
+:root {
+  /* Surfaces, darkest to lightest */
+  --bg:         #0B0D12;
+  --surface:    #12151D;
+  --surface-2:  #171B26;
+  --border:     #232838;
+  --border-hi:  #323A50;
+
+  /* Text */
+  --text:       #ECEEF3;
+  --text-muted: #9198AA;
+  --text-dim:   #656C7E;
+
+  /* Accent + status */
+  --accent:       #FF3D8E;
+  --accent-dim:   rgba(255, 61, 142, .16);
+  --accent-glow:  rgba(255, 61, 142, .35);
+  --success:      #34D399;
+  --success-dim:  rgba(52, 211, 153, .16);
+  --danger:       #ff9b9b;
+
+  /* Shape + motion */
+  --radius:     6px;
+  --radius-lg:  10px;
+  --ease:       cubic-bezier(.2, .7, .3, 1);
+  --fast:       120ms;
+  --normal:     200ms;
+}
+
+/* ---------------------------------------------------------------------
+   Base
+--------------------------------------------------------------------- */
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ---------------------------------------------------------------------
+   Shared interactive primitives — opt in with className, inline style
+   still wins for one-off layout (flex/width/etc.) since these only set
+   what inline styles structurally cannot: hover, focus, motion.
+--------------------------------------------------------------------- */
+
+.ws-btn {
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease),
+    color var(--fast) var(--ease), box-shadow var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+.ws-btn:hover:not(:disabled) {
+  border-color: var(--border-hi);
+  transform: translateY(-1px);
+}
+.ws-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+.ws-btn:disabled {
+  opacity: .5;
+  cursor: default;
+}
+.ws-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-glow);
+}
+
+/* The one button that should read as "the" action in a given row — a
+   restrained glow, not a neon sign. */
+.ws-btn-accent {
+  background: var(--accent);
+  color: var(--bg);
+  border: 1px solid var(--accent);
+}
+.ws-btn-accent:hover:not(:disabled) {
+  box-shadow: 0 0 0 1px var(--accent), 0 2px 16px -4px var(--accent-glow);
+}
+
+input.ws-input, select.ws-input, textarea.ws-input {
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+input.ws-input:focus, select.ws-input:focus, textarea.ws-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+/* ---------------------------------------------------------------------
+   Overlay panel (settings drawer, modals) — fade + slight rise, never a
+   hard cut. Backdrop blurs rather than just darkening, for the
+   "sophisticated" read without adding visual noise.
+--------------------------------------------------------------------- */
+
+@keyframes ws-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes ws-rise-in {
+  from { opacity: 0; transform: translateY(6px) scale(.99); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.ws-backdrop {
+  animation: ws-fade-in var(--normal) var(--ease);
+  background: rgba(5, 6, 9, .55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.ws-panel {
+  animation: ws-rise-in var(--normal) var(--ease);
+}
+
+/* ---------------------------------------------------------------------
+   Subtle "alive" cues — a thin animated accent line, not a spinner
+   circus. Used for in-progress / streaming states.
+--------------------------------------------------------------------- */
+
+@keyframes ws-pulse {
+  0%, 100% { opacity: .45; }
+  50%      { opacity: 1; }
+}
+.ws-pulse {
+  animation: ws-pulse 1.6s var(--ease) infinite;
+}
+
+@keyframes ws-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.ws-shimmer {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--border-hi) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: ws-shimmer 1.8s linear infinite;
+}
+
+/* Reduced-motion: keep state changes, drop the motion. */
+@media (prefers-reduced-motion: reduce) {
+  .ws-btn, input.ws-input, select.ws-input, textarea.ws-input,
+  .ws-backdrop, .ws-panel, .ws-pulse, .ws-shimmer {
+    animation: none !important;
+    transition: none !important;
+  }
+}
