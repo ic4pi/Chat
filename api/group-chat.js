@@ -294,6 +294,11 @@ export default async function handler(req, res) {
     webSearch: wantWebSearch,
     personaIds,
     personaTasks = {},
+    // Orchestrated-only: pin a specific persona as lead instead of letting
+    // rankPersonasByRelevance pick one. This is what turns Orchestrated mode
+    // into "solo chat with a team behind it" — the persona you're actually
+    // talking to stays the lead no matter what the topic is about.
+    forcedLeadId,
   } = req.body || {};
 
   const mode = normalizeMode(rawMode);
@@ -419,8 +424,15 @@ export default async function handler(req, res) {
     // detectHandoff() the other modes use for reordering, just driving
     // whether someone speaks at all instead of only when they speak.
     const isOrchestrated = mode === 'orchestrated';
-    const queue = isOrchestrated ? speakingOrder.slice(0, 1) : speakingOrder.slice();
-    const summonPool = isOrchestrated ? speakingOrder.slice(1) : [];
+    const pinnedLead = isOrchestrated && typeof forcedLeadId === 'string'
+      ? speakingOrder.find((p) => p.id === forcedLeadId)
+      : null;
+    const queue = isOrchestrated
+      ? (pinnedLead ? [pinnedLead] : speakingOrder.slice(0, 1))
+      : speakingOrder.slice();
+    const summonPool = isOrchestrated
+      ? speakingOrder.filter((p) => !queue.some((q) => q.id === p.id))
+      : [];
     const calledOnBy = new Map(); // personaId -> name of whoever just addressed them
 
     while (queue.length) {
