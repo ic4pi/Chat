@@ -2581,6 +2581,8 @@ async function openModelPicker() {
 function closeModelPicker() {
   els.modelPickerModal?.classList.add('hidden');
   els.modelFilterPanel?.classList.add('hidden');
+  els.modelPickerList?.classList.remove('hidden');
+  els.modelPickerStatus?.classList.remove('hidden');
   els.modelPickerBtn?.setAttribute('aria-expanded', 'false');
   if (comparePickerMode) {
     comparePickerMode = false;
@@ -4321,16 +4323,26 @@ els.modelPickerModal?.addEventListener('click', (e) => {
   if (e.target === els.modelPickerModal) closeModelPicker();
 });
 els.modelSearchInput?.addEventListener('input', () => renderModelPickerList());
+// Settings used to open as an accordion squeezed between the search bar and
+// the model list, inside a sheet that's already height-capped — the more
+// filter sections got added, the less room was left to actually see any
+// models. Settings now takes the full sheet while open (list hidden, not
+// shrunk) instead of fighting the list for space.
 els.modelFilterBtn?.addEventListener('click', (e) => {
   e.preventDefault();
   e.stopPropagation();
   initModelFilterChips();
-  els.modelFilterPanel?.classList.toggle('hidden');
+  const opening = els.modelFilterPanel?.classList.contains('hidden');
+  els.modelFilterPanel?.classList.toggle('hidden', !opening);
+  els.modelPickerList?.classList.toggle('hidden', opening);
+  els.modelPickerStatus?.classList.toggle('hidden', opening);
 });
 els.modelFilterDone?.addEventListener('click', (e) => {
   e.preventDefault();
   e.stopPropagation();
   els.modelFilterPanel?.classList.add('hidden');
+  els.modelPickerList?.classList.remove('hidden');
+  els.modelPickerStatus?.classList.remove('hidden');
 });
 els.modelFilterClear?.addEventListener('click', (e) => {
   e.preventDefault();
