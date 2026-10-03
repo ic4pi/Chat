@@ -9,6 +9,8 @@
 import { loadConfig } from '../lib/config.js';
 import { paidPasswordFromRequest, verifyPaidPassword, paidUnlockConfigured } from '../lib/model-meta.js';
 import { publishToAccount } from '../lib/social.js';
+import { resolveOwner } from '../lib/hub.js';
+import { logTeamAction } from '../lib/team-log.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -27,7 +29,7 @@ export default async function handler(req, res) {
     return res.status(403).json({ error: 'Wrong or missing unlock password.' });
   }
 
-  const { accountId, message, imageUrl, to, subject } = req.body || {};
+  const { accountId, message, imageUrl, to, subject, personaName } = req.body || {};
   if (!accountId || typeof accountId !== 'string') {
     return res.status(400).json({ error: 'accountId is required' });
   }
@@ -57,6 +59,22 @@ export default async function handler(req, res) {
       to: to || undefined,
       subject: subject || undefined,
     });
+    try {
+      const ownerId = await resolveOwner(req, res);
+      if (ownerId) {
+        await logTeamAction(ownerId, {
+          personaName: typeof personaName === 'string' ? personaName.slice(0, 80) : undefined,
+          platform: account.platform,
+          verb: account.platform === 'email' ? 'emailed' : 'posted',
+          summary: account.platform === 'email'
+            ? `to ${to}: ${String(subject || '').slice(0, 100)}`
+            : String(message || '').slice(0, 140),
+        });
+      }
+    } catch (err) {
+      console.error('team action log failed:', err);
+    }
+
     return res.status(200).json({ ok: true, id: result.id, label: account.label, platform: account.platform });
   } catch (err) {
     return res.status(502).json({ error: err.message || 'Publish failed' });

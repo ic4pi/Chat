@@ -1354,7 +1354,7 @@ function renderMessageInto(container, m, idx) {
         postBtn.addEventListener('click', (e) => {
           e.preventDefault();
           e.stopPropagation();
-          void handlePostToSocial(stripContinueMarkers(m.content), postBtn);
+          void handlePostToSocial(stripContinueMarkers(m.content), postBtn, m.personaName);
         });
         div.appendChild(postBtn);
       }
@@ -1807,7 +1807,7 @@ async function fetchPersonas() {
  * account, via /api/social-post. Gated behind the same unlock password as
  * paid models — this triggers a real, public, irreversible action.
  */
-async function handlePostToSocial(text, triggerBtn) {
+async function handlePostToSocial(text, triggerBtn, personaName) {
   if (!socialAccounts.length) return;
   let accountId = socialAccounts[0].id;
   if (socialAccounts.length > 1) {
@@ -1868,7 +1868,14 @@ async function handlePostToSocial(text, triggerBtn) {
     const res = await fetch('/api/social-post', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Paid-Password': pw },
-      body: JSON.stringify({ accountId, message: text, to, subject, imageUrl }),
+      body: JSON.stringify({
+        accountId,
+        message: text,
+        to,
+        subject,
+        imageUrl,
+        personaName: personaName || activePersona()?.name || undefined,
+      }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
