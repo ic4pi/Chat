@@ -151,7 +151,7 @@
     },
     {
       "path": "/api/cron/run-standing-tasks",
-      "schedule": "0 13 * * *"
+      "schedule": "0 * * * *"
     }
   ]
 }
