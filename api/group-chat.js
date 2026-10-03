@@ -21,6 +21,7 @@ import { resolveProvider, withProviderChatExtras } from '../lib/providers.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
 import { searchWeb, formatSearchContext } from '../lib/websearch.js';
 import { resolveOwner, memoryContext } from '../lib/hub.js';
+import { recentTeamActions, formatTeamActions } from '../lib/team-log.js';
 
 const UPSTREAM_TIMEOUT_MS = 90_000;
 const MAX_PERSONAS = 12;
@@ -130,6 +131,32 @@ async function rankPersonasByRelevance(resolved, model, { topic, personas, recen
   } catch {
     return personas;
   }
+}
+
+/**
+ * Did this reply address another seated persona by name? Used to bump that
+ * persona to speak next instead of sticking to the fixed relevance order —
+ * the difference between a round-robin and a conversation that actually
+ * responds to being asked something.
+ */
+function detectHandoff(replyText, currentPersona, remainingQueue) {
+  if (!replyText || !remainingQueue.length) return null;
+  let best = null;
+  let bestIndex = Infinity;
+  for (const p of remainingQueue) {
+    const name = (p.name || '').trim();
+    if (!name || name === currentPersona.name) continue;
+    const tokens = [...new Set([name, name.split(/\s+/)[0]])].filter((t) => t.length > 1);
+    for (const t of tokens) {
+      const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const match = new RegExp(`\\b${escaped}\\b`, 'i').exec(replyText);
+      if (match && match.index < bestIndex) {
+        bestIndex = match.index;
+        best = p.id;
+      }
+    }
+  }
+  return best;
 }
 
 function pickKey(providerKeys, providerId, fallbackKey) {
@@ -336,9 +363,13 @@ export default async function handler(req, res) {
     // Same for every persona (it's the user's own saved facts, not a
     // per-persona query) — fetch once for the round, not once per speaker.
     let memoryBlock = '';
+    let teamActionsBlock = '';
     try {
       const ownerId = await resolveOwner(req, res);
-      if (ownerId) memoryBlock = await memoryContext(ownerId);
+      if (ownerId) {
+        memoryBlock = await memoryContext(ownerId);
+        teamActionsBlock = formatTeamActions(await recentTeamActions(ownerId));
+      }
     } catch (err) {
       console.error('memoryContext failed:', err);
     }
@@ -366,8 +397,15 @@ export default async function handler(req, res) {
       signal: controller.signal,
     });
 
-    for (const persona of speakingOrder) {
+    // Mutable queue so a persona who gets addressed by name mid-round can be
+    // bumped to speak next, instead of waiting for a fixed relevance order —
+    // this is what makes the table feel like it's actually listening.
+    const queue = speakingOrder.slice();
+    const calledOnBy = new Map(); // personaId -> name of whoever just addressed them
+
+    while (queue.length) {
       if (controller.signal.aborted) break;
+      const persona = queue.shift();
 
       let turnResolved;
       let turnModel;
@@ -425,7 +463,7 @@ export default async function handler(req, res) {
         }
       }
 
-      const personaPrompt = [master, persona.systemPrompt, modeRules, memoryBlock, searchContext]
+      const personaPrompt = [master, persona.systemPrompt, modeRules, memoryBlock, teamActionsBlock, searchContext]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n');
 
@@ -462,6 +500,9 @@ export default async function handler(req, res) {
         'you don\'t have. Speak in character. Do not narrate stage directions. Do not',
         'invent other speakers\' lines.',
         task ? `\nYour assigned task this round: ${task}\nWork that task specifically — don't just give a generic take on the topic.` : '',
+        calledOnBy.has(persona.id)
+          ? `\n${calledOnBy.get(persona.id)} just addressed you directly — respond to them specifically, by name, before anything else.`
+          : '',
       ].filter(Boolean).join('\n');
 
       let reply = '';
@@ -495,6 +536,19 @@ export default async function handler(req, res) {
 
       if (!reply) reply = '…';
 
+      // Did this reply call on someone specific? Bump them to the front of
+      // the remaining queue so the handoff actually lands next turn instead
+      // of being answered three speakers later, if at all.
+      const handoffId = detectHandoff(reply, persona, queue);
+      if (handoffId) {
+        const idx = queue.findIndex((p) => p.id === handoffId);
+        if (idx > -1) {
+          const [bumped] = queue.splice(idx, 1);
+          queue.unshift(bumped);
+          calledOnBy.set(bumped.id, persona.name);
+        }
+      }
+
       // Stream as one token chunk so the client can reuse streaming UI
       sseWrite(res, {
         type: 'token',
@@ -522,6 +576,78 @@ export default async function handler(req, res) {
         provider: turnProviderId,
         model: turnModel,
       });
+    }
+
+    // Wrap-up: turn the round into one concrete, actionable takeaway instead
+    // of leaving the user to read N replies and infer it themselves. Skipped
+    // when only one persona spoke — nothing to synthesize.
+    if (roundSoFar.length > 1 && !controller.signal.aborted) {
+      sseWrite(res, {
+        type: 'speaker',
+        personaId: '_synthesis',
+        personaName: 'Wrap-up',
+        provider: defaultResolved.label,
+        model: defaultModel,
+      });
+      sseWrite(res, { type: 'status', message: 'Summarizing into one action item…' });
+
+      const synthesisUserMessage = (lastUser?.content && String(lastUser.content).trim()) || topicText;
+      const synthesisPrompt = [
+        'You are the team lead closing out this round. Read what everyone said and',
+        'produce ONE concrete, actionable takeaway — not a recap of who said what.',
+        'If the group reached a decision, state it plainly and say what happens next',
+        '(a draft to post, an email to send, a next step, an open question that',
+        'still needs the user\'s call). If they genuinely did not converge, say that',
+        'plainly and name the real disagreement instead of papering over it.',
+        'Max 120 words. No preamble like "Here is the summary". Speak directly.',
+        '',
+        `Topic: ${topicText}`,
+        `The user asked: ${synthesisUserMessage}`,
+        '',
+        'What was said this round:',
+        roundSoFar.map((t) => `${t.name}: ${t.content}`).join('\n\n'),
+      ].join('\n');
+
+      let synthesis = '';
+      try {
+        synthesis = await callCompletion(
+          defaultResolved,
+          defaultModel,
+          [
+            { role: 'system', content: 'You write terse, decisive wrap-ups for a multi-persona team discussion.' },
+            { role: 'user', content: synthesisPrompt },
+          ],
+          { maxTokens: 220, signal: controller.signal, providerId: defaultResolved.id },
+        );
+      } catch {
+        synthesis = '';
+      }
+
+      if (synthesis) {
+        sseWrite(res, {
+          type: 'token',
+          text: synthesis,
+          personaId: '_synthesis',
+          personaName: 'Wrap-up',
+          provider: defaultResolved.label,
+          model: defaultModel,
+        });
+        sseWrite(res, {
+          type: 'turn',
+          personaId: '_synthesis',
+          personaName: 'Wrap-up',
+          content: synthesis,
+          provider: defaultResolved.label,
+          model: defaultModel,
+        });
+        roundSoFar.push({
+          id: '_synthesis',
+          name: 'Wrap-up',
+          content: synthesis,
+          provider: defaultResolved.id,
+          model: defaultModel,
+        });
+      }
     }
 
     // Fold this round into the rolling summary for the next user message
