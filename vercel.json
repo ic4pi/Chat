@@ -148,6 +148,10 @@
     {
       "path": "/api/hub/sweep?route=sweep",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/run-standing-tasks",
+      "schedule": "0 13 * * *"
     }
   ]
 }
