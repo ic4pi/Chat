@@ -11,7 +11,7 @@
 
 import { UniversalEdgeTTS } from 'edge-tts-universal';
 
-const ALLOWED_VOICES = new Set([
+export const VOICE_LIST = [
   'en-US-AvaNeural',
   'en-US-AndrewNeural',
   'en-US-EmmaMultilingualNeural',
@@ -22,7 +22,8 @@ const ALLOWED_VOICES = new Set([
   'en-GB-RyanNeural',
   'en-AU-NatashaNeural',
   'en-AU-WilliamNeural',
-]);
+];
+const ALLOWED_VOICES = new Set(VOICE_LIST);
 
 const DEFAULT_VOICE = 'en-US-AvaNeural';
 /** Soft ceiling per request — client chunks below this so full replies play. */
