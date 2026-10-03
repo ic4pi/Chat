@@ -312,6 +312,14 @@ const WEB_SEARCH_PREF_KEY = 'webSearchOn';
 let webSearchOn = false;
 try { webSearchOn = localStorage.getItem(WEB_SEARCH_PREF_KEY) === '1'; } catch { /* ignore */ }
 
+// "Bring in the team" — solo Chat routes through the same Orchestrated
+// group-chat engine instead of a single model, with whichever persona is
+// selected pinned as lead (see api/group-chat.js's forcedLeadId). Off by
+// default so normal Chat behaves exactly as it always has.
+const AGENCY_MODE_PREF_KEY = 'agencyModeOn';
+let agencyModeOn = false;
+try { agencyModeOn = localStorage.getItem(AGENCY_MODE_PREF_KEY) === '1'; } catch { /* ignore */ }
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -613,6 +621,7 @@ const els = {
   attachInput: $('attachInput'),
   attachPreview: $('attachPreview'),
   webSearchBtn: $('webSearchBtn'),
+  agencyModeBtn: $('agencyModeBtn'),
   smartReplyChips: $('smartReplyChips'),
   micBtn: $('micBtn'),
   interruptBtn: $('interruptBtn'),
@@ -3191,6 +3200,16 @@ async function sendMessage(text) {
   renderChatTitle();
   renderMessages({ scroll: 'bottom' });
 
+  // Agency mode: route through the Orchestrated group-chat engine instead
+  // of a single model, with the selected persona pinned as lead. Not
+  // supported alongside an image upload this turn — that needs the
+  // vision-prep path solo chat has and group-chat doesn't, so an image
+  // message falls through to the normal single-model flow below instead
+  // of silently dropping the image.
+  if (agencyModeOn && imageParts.length === 0) {
+    return sendAgencyMessage(chat, displayText);
+  }
+
   setGeneratingUi(true);
   activeChatUserStopped = false;
   const startedAt = Date.now();
@@ -3604,6 +3623,7 @@ async function callGroupStream(chat, apiMessages, onEvent) {
         webSearch: webSearchOn || undefined,
         personaIds: (Array.isArray(chat.personaIds) && chat.personaIds.length) ? chat.personaIds : undefined,
         personaTasks: (chat.personaTasks && typeof chat.personaTasks === 'object') ? chat.personaTasks : undefined,
+        forcedLeadId: chat.forcedLeadId || undefined,
       }),
       signal: controller.signal,
     });
@@ -3995,6 +4015,52 @@ async function sendGroupMessage(text) {
     activeChatUserStopped = false;
     setTypingActive(false);
     els.input?.focus();
+    void window.hub?.syncChat?.(chat);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Agency mode: a normal (solo) chat, routed through the Orchestrated
+// group-chat engine with the selected persona pinned as lead. Reuses
+// runOneRound/callGroupStream exactly as sendGroupMessage does — the only
+// difference is this chat never becomes chat.kind === 'group' and only ever
+// runs one round per message, matching how a normal chat feels (send,
+// get a reply, send again) rather than group chat's multi-round table.
+// ---------------------------------------------------------------------------
+async function sendAgencyMessage(chat, displayText) {
+  chat.groupMode = 'orchestrated';
+  chat.personaIds = personas.map((p) => p.id);
+  chat.forcedLeadId = state.activePersonaId;
+  if (!chat.topic) {
+    chat.topic = (chat.name && chat.name !== 'New chat' && chat.name !== 'Untitled')
+      ? chat.name
+      : displayText.slice(0, 60);
+  }
+
+  setGeneratingUi(true);
+  activeChatUserStopped = false;
+  const startedAt = Date.now();
+  const updateStatusClock = (base) => {
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    setTypingActive(true, `${base} · ${secs}s`);
+  };
+  setTypingActive(true, 'Bringing in the team…');
+  const tickTimer = setInterval(() => {
+    const cur = els.typingStatus?.textContent || 'Waiting…';
+    updateStatusClock(cur.replace(/\s·\s\d+s$/, ''));
+  }, 1000);
+
+  try {
+    await runOneRound(chat, updateStatusClock, startedAt, [null]);
+  } finally {
+    clearInterval(tickTimer);
+    setGeneratingUi(false);
+    activeChatUserStopped = false;
+    setTypingActive(false);
+    els.input?.focus();
+    chat.updatedAt = Date.now();
+    saveState();
+    renderChatList();
     void window.hub?.syncChat?.(chat);
   }
 }
@@ -5912,6 +5978,22 @@ els.webSearchBtn?.addEventListener('click', () => {
   webSearchOn = !webSearchOn;
   try { localStorage.setItem(WEB_SEARCH_PREF_KEY, webSearchOn ? '1' : '0'); } catch { /* ignore */ }
   syncWebSearchBtn();
+});
+
+function syncAgencyModeBtn() {
+  if (!els.agencyModeBtn) return;
+  els.agencyModeBtn.classList.toggle('search-on', agencyModeOn);
+  els.agencyModeBtn.setAttribute('aria-pressed', agencyModeOn ? 'true' : 'false');
+  els.agencyModeBtn.title = agencyModeOn
+    ? 'Agency mode on — your selected persona leads and can bring in others by name. Tap to turn off.'
+    : 'Bring in the team — route this chat through the full roster, led by your selected persona.';
+}
+syncAgencyModeBtn();
+
+els.agencyModeBtn?.addEventListener('click', () => {
+  agencyModeOn = !agencyModeOn;
+  try { localStorage.setItem(AGENCY_MODE_PREF_KEY, agencyModeOn ? '1' : '0'); } catch { /* ignore */ }
+  syncAgencyModeBtn();
 });
 
 if (els.attachBtn && els.attachInput) {
