@@ -48,6 +48,15 @@ const MODE_RULES = {
 - Casual group hangout. Be fully yourself — jokes, tangents, seriousness as it fits.
 - Still respond to what others said; don't monologue forever.
 - 1–3 short paragraphs. Do not speak for other personas.`,
+
+  orchestrated: `MODE: ORCHESTRATED
+- You are the lead on this round. Everyone else stays silent unless you bring them in.
+- If someone else's specific expertise is actually needed, address them BY NAME directly
+  in your reply (e.g. "Rook, can you check the auth flow on this?") — naming them pulls
+  them into the round to respond next. Don't name someone just to be polite.
+- If no one else needs to weigh in, answer fully yourself and stop there.
+- Whoever you bring in can bring in someone else the same way, if they genuinely need to.
+- 1–4 short paragraphs. Do not speak for other personas.`,
 };
 
 function sseWrite(res, obj) {
@@ -59,6 +68,7 @@ function normalizeMode(raw) {
   if (m === 'boardroom' || m === 'board') return 'boardroom';
   if (m === 'brainstorm' || m === 'brainstorming') return 'brainstorm';
   if (m === 'freechat' || m === 'free' || m === 'free-chat') return 'freechat';
+  if (m === 'orchestrated' || m === 'orchestrate' || m === 'lead') return 'orchestrated';
   return 'brainstorm';
 }
 
@@ -401,7 +411,16 @@ export default async function handler(req, res) {
     // Mutable queue so a persona who gets addressed by name mid-round can be
     // bumped to speak next, instead of waiting for a fixed relevance order —
     // this is what makes the table feel like it's actually listening.
-    const queue = speakingOrder.slice();
+    //
+    // Orchestrated mode inverts the default: instead of everyone queued up
+    // front, only the top-ranked persona (the lead) starts in the queue.
+    // Everyone else sits in `summonPool` and only joins if the lead (or
+    // whoever's speaking) names them directly — detected by the same
+    // detectHandoff() the other modes use for reordering, just driving
+    // whether someone speaks at all instead of only when they speak.
+    const isOrchestrated = mode === 'orchestrated';
+    const queue = isOrchestrated ? speakingOrder.slice(0, 1) : speakingOrder.slice();
+    const summonPool = isOrchestrated ? speakingOrder.slice(1) : [];
     const calledOnBy = new Map(); // personaId -> name of whoever just addressed them
 
     while (queue.length) {
@@ -537,14 +556,17 @@ export default async function handler(req, res) {
 
       if (!reply) reply = '…';
 
-      // Did this reply call on someone specific? Bump them to the front of
-      // the remaining queue so the handoff actually lands next turn instead
-      // of being answered three speakers later, if at all.
-      const handoffId = detectHandoff(reply, persona, queue);
+      // Did this reply call on someone specific? In orchestrated mode that's
+      // the ONLY way anyone else gets seated this round — search the summon
+      // pool (everyone who hasn't spoken) and pull them in. In every other
+      // mode everyone's queued already; this just bumps them to speak next
+      // instead of three turns later.
+      const handoffSearchPool = isOrchestrated ? summonPool : queue;
+      const handoffId = detectHandoff(reply, persona, handoffSearchPool);
       if (handoffId) {
-        const idx = queue.findIndex((p) => p.id === handoffId);
+        const idx = handoffSearchPool.findIndex((p) => p.id === handoffId);
         if (idx > -1) {
-          const [bumped] = queue.splice(idx, 1);
+          const [bumped] = handoffSearchPool.splice(idx, 1);
           queue.unshift(bumped);
           calledOnBy.set(bumped.id, persona.name);
         }

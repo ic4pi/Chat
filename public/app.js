@@ -502,6 +502,7 @@ const GROUP_MODE_LABELS = {
   boardroom: 'Boardroom',
   brainstorm: 'Brainstorm',
   freechat: 'Free chat',
+  orchestrated: 'Orchestrated',
 };
 
 function createGroupChat(mode, topic, personaModels = {}, rounds = 3, personaIds = null, personaTasks = {}) {
@@ -5603,7 +5604,7 @@ function readGroupDraft() {
     const parsed = JSON.parse(raw);
     return {
       topic: typeof parsed.topic === 'string' ? parsed.topic : '',
-      mode: ['boardroom', 'brainstorm', 'freechat'].includes(parsed.mode) ? parsed.mode : 'brainstorm',
+      mode: ['boardroom', 'brainstorm', 'freechat', 'orchestrated'].includes(parsed.mode) ? parsed.mode : 'brainstorm',
       rounds: Math.min(20, Math.max(1, parseInt(parsed.rounds, 10) || 3)),
     };
   } catch {
