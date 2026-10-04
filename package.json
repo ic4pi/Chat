@@ -13,6 +13,7 @@
     "check:media": "node scripts/check-media-extract.mjs",
     "check:modal": "node scripts/check-modal-endpoints.mjs",
     "check:video": "node scripts/check-video-persist.mjs",
+    "test:agency": "node --test scripts/test-agency.mjs",
     "check:async": "node scripts/check-async-fallback.mjs"
   },
   "dependencies": {

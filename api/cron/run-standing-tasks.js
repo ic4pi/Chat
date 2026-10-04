@@ -4,6 +4,11 @@
 import { checkAdminAuth } from '../../lib/auth.js';
 import { listStandingTasks, saveStandingTasks, isTaskDue } from '../../lib/standing-tasks.js';
 import { runStandingTask } from '../../lib/run-standing-task.js';
+import { loadConfig } from '../../lib/config.js';
+import { createKvStore } from '../../lib/agency-store.js';
+import { createLlm } from '../../lib/agency-llm.js';
+import { createMetaPlatform } from '../../lib/agency-meta.js';
+import { runAgencyTick } from '../../lib/autopilot.js';
 
 export default async function handler(req, res) {
   // Vercel signs real cron invocations with this header; an admin-authed
@@ -32,5 +37,23 @@ export default async function handler(req, res) {
 
   if (due.length) await saveStandingTasks(tasks);
 
-  return res.status(200).json({ checked: tasks.length, ran: due.length, results });
+  // Agency autopilot rides the same hourly cron (no extra cron entry or
+  // function). Isolated so a failure here never hides the standing-task results.
+  let agency = [];
+  try {
+    const store = createKvStore();
+    if (store.enabled) {
+      const config = await loadConfig();
+      agency = await runAgencyTick({
+        store,
+        llm: createLlm(),
+        makePlatform: (client) =>
+          createMetaPlatform((config.socialAccounts || []).find((a) => a.id === client.state.accountId)),
+      });
+    }
+  } catch (err) {
+    agency = [{ error: err.message || String(err) }];
+  }
+
+  return res.status(200).json({ checked: tasks.length, ran: due.length, results, agency });
 }

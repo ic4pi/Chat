@@ -33,6 +33,15 @@ const SYNTAX_FILES = [
   'lib/code-slices.js',
   'lib/hub.js',
   'api/hub/[route].js',
+  'lib/client.js',
+  'lib/autopilot.js',
+  'lib/contentCycle.js',
+  'lib/reporting.js',
+  'lib/memory.js',
+  'lib/agency-store.js',
+  'lib/agency-llm.js',
+  'lib/agency-meta.js',
+  'api/cron/run-standing-tasks.js',
 ];
 
 function fail(msg) {
