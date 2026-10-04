@@ -238,7 +238,12 @@ async function callCompletion(resolved, model, messages, { maxTokens, signal, pr
     throw err;
   }
 
-  return String(data.choices?.[0]?.message?.content ?? '').trim();
+  const content = String(data.choices?.[0]?.message?.content ?? '').trim();
+  if (!content) {
+    // TEMP DEBUG — remove after diagnosing the empty-reply bug.
+    throw new Error('DEBUG empty content, raw: ' + JSON.stringify(data).slice(0, 1400));
+  }
+  return content;
 }
 
 async function refreshSummary(resolved, model, {
