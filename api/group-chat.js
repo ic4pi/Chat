@@ -196,7 +196,7 @@ function resolveForPersona(personaModels, personaId, defaultProvider, defaultMod
   return { resolved, model, providerId };
 }
 
-async function callCompletion(resolved, model, messages, { maxTokens, signal, providerId }) {
+async function callCompletionOnce(resolved, model, messages, { maxTokens, signal, providerId }) {
   const upstream = await fetch(resolved.url, {
     method: 'POST',
     headers: {
@@ -238,12 +238,29 @@ async function callCompletion(resolved, model, messages, { maxTokens, signal, pr
     throw err;
   }
 
-  const content = String(data.choices?.[0]?.message?.content ?? '').trim();
-  if (!content) {
-    // TEMP DEBUG — remove after diagnosing the empty-reply bug.
-    throw new Error('DEBUG empty content, raw: ' + JSON.stringify(data).slice(0, 1400));
-  }
-  return content;
+  const choice = data.choices?.[0];
+  return {
+    content: String(choice?.message?.content ?? '').trim(),
+    truncated: choice?.finish_reason === 'length' || choice?.native_finish_reason === 'length',
+  };
+}
+
+/**
+ * A reasoning-tagged model can burn its ENTIRE max_tokens budget on hidden
+ * "thinking" before it ever starts the visible answer — confirmed live:
+ * apodex-1.1-mini hit finish_reason:"length" at 2048 tokens still mid
+ * "Thinking Process:", content: null. Raising the default budget for every
+ * call just to cover this tail case would slow down and cost more on every
+ * normal turn. Instead: one retry, only when this exact failure shows up,
+ * with real headroom — pays the extra cost/time only when it's needed.
+ */
+async function callCompletion(resolved, model, messages, opts) {
+  const first = await callCompletionOnce(resolved, model, messages, opts);
+  if (first.content) return first.content;
+  if (!first.truncated) return ''; // genuinely empty reply, not a budget problem — let the '…' fallback handle it
+
+  const retried = await callCompletionOnce(resolved, model, messages, { ...opts, maxTokens: 6000 });
+  return retried.content;
 }
 
 async function refreshSummary(resolved, model, {
