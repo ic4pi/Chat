@@ -29,7 +29,14 @@ const RECENT_WINDOW = 10;
 // 280 was cutting every persona off mid-sentence on anything longer than a
 // couple sentences — group chat has no auto-continue like solo chat does,
 // so a hit cap here is just a silently truncated reply, not a retry.
-const MAX_TOKENS_PER_TURN = 700;
+// 700 turned out to still be broken for any reasoning-tagged free model
+// (confirmed live: apodex-1.1-mini, which burns its whole budget on hidden
+// reasoning tokens before it ever starts the visible answer) — content
+// comes back empty and the turn silently becomes "…". Solo chat gives a
+// single model 8192; this is per-turn with up to MAX_PERSONAS speakers a
+// round, so it stays well short of that, but needs real headroom for a
+// reasoning model's invisible thinking pass plus an actual answer.
+const MAX_TOKENS_PER_TURN = 2048;
 
 const MODE_RULES = {
   boardroom: `MODE: BOARDROOM
