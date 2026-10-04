@@ -62,6 +62,7 @@ import {
 } from './coderModels.js';
 import type { GenerateChunkResult } from './ChunkModelPanel.js';
 import { SettingsPanel } from './SettingsPanel.js';
+import { ComparePanel } from './ComparePanel.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
@@ -329,6 +330,7 @@ export function App() {
   const [coderBrands,  setCoderBrands]  = useState<ResolvedCoderBrand[]>([]);
   const [keys,         setKeys]         = useState(() => loadProviderKeys());
   const [showSettings, setShowSettings] = useState(false);
+  const [showCompare,  setShowCompare]  = useState(false);
   const [roleModels,   setRoleModels]   = useState(() => loadRoleModels());
   // Auto-save ON — generated files go to the sandbox immediately so you can download/push.
   const [autoRun,      setAutoRun]      = useState(false);
@@ -1036,10 +1038,19 @@ export function App() {
             overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 120 }}
             title={repo.sandboxId}>● {repo.sandboxId.slice(0, 20)}</span>
         )}
+        <button type="button" className="ws-btn" onClick={() => setShowCompare(true)}
+          title="Compare — two models, one prompt, two live previews"
+          aria-haspopup="dialog" aria-expanded={showCompare}
+          style={{ background: 'var(--surface-2)', color: 'var(--text-muted)',
+            border: '1px solid var(--border)', borderRadius: 'var(--radius)',
+            width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'pointer', fontSize: 15, marginLeft: 'auto' }}>
+          ⇄
+        </button>
         <button type="button" className="ws-btn" onClick={() => setShowSettings(true)}
           title="Settings — API keys, role models, automation, per-chunk models"
           aria-haspopup="dialog" aria-expanded={showSettings}
-          style={{ marginLeft: 'auto', background: activeApiKey ? 'var(--success-dim)' : 'var(--surface-2)',
+          style={{ background: activeApiKey ? 'var(--success-dim)' : 'var(--surface-2)',
             color: activeApiKey ? 'var(--success)' : 'var(--text-muted)',
             border: '1px solid var(--border)', borderRadius: 'var(--radius)',
             width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -1257,6 +1268,8 @@ export function App() {
           </div>
         </div>
       )}
+
+      <ComparePanel open={showCompare} onClose={() => setShowCompare(false)} sandboxId={repo.sandboxId} />
 
       {!isMobile ? (
         /* ── Desktop: 3-column grid (single ChatPane + Terminal) ── */

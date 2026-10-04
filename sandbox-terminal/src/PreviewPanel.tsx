@@ -21,11 +21,17 @@ interface Props {
   detectedPort: number | null;
   /** Increment to auto-start (or restart) preview after files are written. */
   autoStartKey?: number;
+  /** Run the dev server out of this subdirectory of the repo instead of its
+   *  root — Compare mode's two columns each pass their own ("compare-a" /
+   *  "compare-b") so two previews can run from one sandbox without colliding. */
+  dir?: string;
+  /** Default port before anything is typed — lets two panels default apart. */
+  defaultPort?: number;
 }
 
-export function PreviewPanel({ sandboxId, detectedPort, autoStartKey = 0 }: Props) {
+export function PreviewPanel({ sandboxId, detectedPort, autoStartKey = 0, dir, defaultPort = 3000 }: Props) {
   const [command, setCommand] = useState('');
-  const [port, setPort] = useState<string>(String(detectedPort ?? 3000));
+  const [port, setPort] = useState<string>(String(detectedPort ?? defaultPort));
   const [url, setUrl] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +65,7 @@ export function PreviewPanel({ sandboxId, detectedPort, autoStartKey = 0 }: Prop
         body: JSON.stringify({
           ...(command.trim() ? { command: command.trim() } : {}),
           port: p,
+          ...(dir ? { dir } : {}),
         }),
       });
       const data = await res.json() as { url?: string; error?: string; command?: string };
