@@ -78,6 +78,24 @@ function filterGroqChat(models) {
   });
 }
 
+/**
+ * OpenRouter's catalog mixes real chat models in with embedders, TTS/ASR,
+ * image/video/music generators, vision-only encoders and moderation
+ * classifiers — with nothing in the API response marking the difference.
+ * One of these (nvidia/nemotron-3.5-content-safety) was confirmed live:
+ * selectable as a free "chat" model, answers every single prompt — including
+ * "what's 2+2" — with just `User Safety: safe`. That reads exactly like the
+ * model refusing everything, when it's actually not a chat model at all.
+ * Same shape of problem lib/nvidia-models.js already solved for NVIDIA's own
+ * list; this is the equivalent denylist for OpenRouter's much larger one.
+ */
+const OPENROUTER_NON_CHAT_RE =
+  /\bembed|rerank|retrieval|whisper|\btts\b|\basr\b|transcri|guard|safety|moderation|\bocr\b|deplot|kosmos|fuyu|vision|(?:^|[/-])vl(?:$|[/-])|reward|\bparse\b|\bimage\b|\bvideo\b|flux|diffusion|nvclip|\bclip\b|vila|riva-translate|lyria|\bmusic\b|txt2img|text-to-image|text-to-video|text-to-speech|speech-to-text/i;
+
+function filterOpenRouterChat(models) {
+  return models.filter((m) => !OPENROUTER_NON_CHAT_RE.test(m.id || ''));
+}
+
 function sortOpenRouter(models) {
   return models.slice().sort((a, b) => {
     if (!!a.free !== !!b.free) return a.free ? -1 : 1;
@@ -209,7 +227,7 @@ export default async function handler(req, res) {
     if (providerId === 'venice') {
       models = normalizeVenice(data);
     } else if (providerId === 'openrouter') {
-      models = sortOpenRouter(normalizeOpenAIStyle(data, 'openrouter'));
+      models = sortOpenRouter(filterOpenRouterChat(normalizeOpenAIStyle(data, 'openrouter')));
     } else if (providerId === 'groq') {
       models = filterGroqChat(normalizeOpenAIStyle(data, 'groq'))
         .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
