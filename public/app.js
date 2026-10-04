@@ -602,6 +602,7 @@ const els = {
   modelFilterAccess: $('modelFilterAccess'),
   modelFilterAccessSection: $('modelFilterAccessSection'),
   modelShowAllToggle: $('modelShowAllToggle'),
+  modelHideReasoningToggle: $('modelHideReasoningToggle'),
   modelFilterClear: $('modelFilterClear'),
   modelFilterDone: $('modelFilterDone'),
   modelPickerStatus: $('modelPickerStatus'),
@@ -2044,6 +2045,17 @@ const modelPickerFilters = {
   access: null,     // 'free' | 'paid' — show-all mode only
 };
 
+// Reasoning-tagged models can sit silent for a minute or more generating
+// hidden "thinking" tokens before they produce anything speakable — real
+// upstream generation time, nothing the client can mask. Persisted so it
+// stays off once you turn it off, same pattern as the other model prefs.
+const HIDE_REASONING_KEY = 'uncensored_hide_reasoning_models_v1';
+let hideReasoningModels = false;
+try { hideReasoningModels = localStorage.getItem(HIDE_REASONING_KEY) === '1'; } catch { /* ignore */ }
+function saveHideReasoningModels() {
+  try { localStorage.setItem(HIDE_REASONING_KEY, hideReasoningModels ? '1' : '0'); } catch { /* ignore */ }
+}
+
 async function loadAllModelsCatalog({ force = false } = {}) {
   if (!force && allModelsCatalog.length) return allModelsCatalog;
   if (!force && allModelsLoading) return allModelsLoading;
@@ -2084,6 +2096,10 @@ function filterCatalogModels(models, { query = '', filters = modelPickerFilters 
       const cats = Array.isArray(m.categories) ? m.categories : [];
       if (!cats.includes(filters.category)) return false;
     }
+    if (hideReasoningModels) {
+      const cats = Array.isArray(m.categories) ? m.categories : [];
+      if (cats.includes('reasoning')) return false;
+    }
     return true;
   });
 }
@@ -2110,6 +2126,7 @@ function syncFilterChipUI() {
     btn.disabled = showingAllModels();
   });
   if (els.modelShowAllToggle) els.modelShowAllToggle.checked = showingAllModels();
+  if (els.modelHideReasoningToggle) els.modelHideReasoningToggle.checked = hideReasoningModels;
   // Access is a raw-catalog tool only — inside a package the free/paid split
   // is already the group layout, so a second control for it just confuses.
   els.modelFilterAccessSection?.classList.toggle('hidden', !showingAllModels());
@@ -2581,6 +2598,7 @@ async function renderSidebarModelList() {
     : packageModels(allModelsCatalog, modelPackagePrefs.packages);
   const free = pool
     .filter((m) => m.free)
+    .filter((m) => !hideReasoningModels || !(Array.isArray(m.categories) && m.categories.includes('reasoning')))
     .sort((a, b) => {
       const favDiff = Number(isFavoriteModel(b)) - Number(isFavoriteModel(a));
       return favDiff || (a.name || a.id).localeCompare(b.name || b.id);
@@ -4481,6 +4499,12 @@ els.modelShowAllToggle?.addEventListener('change', () => {
   if (!modelPackagePrefs.showAll) modelPickerFilters.access = null;
   saveModelPackagePrefs(modelPackagePrefs);
   syncFilterChipUI();
+  renderModelPickerList();
+  void renderSidebarModelList();
+});
+els.modelHideReasoningToggle?.addEventListener('change', () => {
+  hideReasoningModels = !!els.modelHideReasoningToggle.checked;
+  saveHideReasoningModels();
   renderModelPickerList();
   void renderSidebarModelList();
 });
