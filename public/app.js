@@ -3932,6 +3932,12 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
         }
         refreshBubble();
         spokenThisRound.push({ content: streamBuf, personaId: evt.personaId });
+        // Speak this persona's turn now, not after the whole round finishes —
+        // waiting for every remaining persona to also finish generating
+        // before any voice starts was the real source of multi-minute TTS
+        // delays in Agency/Group mode (solo chat already fixed this for
+        // single-persona replies; group mode never got the same treatment).
+        void speakReply(streamBuf, { personaId: evt.personaId });
         currentTs        = null;
         currentPersonaId = null;
         streamBuf        = '';
@@ -3963,9 +3969,8 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
       });
     }
     renderMessages({ scroll: groupScrollMode('bottom') });
-    for (const turn of spokenThisRound) {
-      void speakReply(turn.content, { personaId: turn.personaId });
-    }
+    // Speaking now happens per-turn, as each 'turn' event arrives above —
+    // not batched here after the whole round (and its SSE connection) closes.
     chat.updatedAt = Date.now();
     saveState();
     return true;
