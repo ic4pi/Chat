@@ -719,13 +719,7 @@ body::before {
   font-size: 16px; color: var(--muted);
 }
 
-.voice-hint { margin-top: 7px; font-size: 14px; color: var(--muted-2); line-height: 1.5; }
-/* The cheat sheet is onboarding, not chrome: four permanent lines of it sat
-   under every conversation. It stays on an empty chat, where there is room
-   and nothing else to read, and gets out of the way once you are talking. */
-body.has-messages .voice-hint { display: none; }
 /* While the keyboard is up, screen space is the scarce thing. */
-body.kb-open .voice-hint { display: none; }
 body.kb-open .context-row { padding: 3px 12px; }
 
 /* One scrollable line, not three stacked rows — those chips were eating a
