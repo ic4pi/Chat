@@ -178,7 +178,7 @@ export function ComparePanel({ open, onClose, sandboxId }: Props) {
       <div style={{ flex: '1 1 45%', minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <ChatPane
           ref={s.ref}
-          repoRoot={label}
+          repoRoot={dir}
           repoUrl={null}
           sandboxId={sandboxId}
           provider={s.state.provider}
