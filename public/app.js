@@ -3255,6 +3255,15 @@ async function sendMessage(text) {
   clearSmartReplyChips();
 
   const chat = ensureActiveChat();
+  // The 🏢 toggle must be the one thing that decides group vs. solo, for
+  // every chat — including one created back when "Group" was its own
+  // permanent chat kind, before it folded into this toggle. Without this,
+  // such a chat hit the line below unconditionally, before agencyModeOn
+  // was ever checked, so turning the toggle off did nothing for it. Once
+  // the toggle says off, that's final for this chat too, not just new ones.
+  if (chat.kind === 'group' && !agencyModeOn) {
+    chat.kind = 'chat';
+  }
   if (chat.kind === 'group') {
     return sendGroupMessage(text);
   }
