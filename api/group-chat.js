@@ -196,6 +196,18 @@ function resolveForPersona(personaModels, personaId, defaultProvider, defaultMod
   return { resolved, model, providerId };
 }
 
+// Group turns are short in-character lines — hidden reasoning only eats the
+// token budget and leaves the visible reply empty. Ask providers to skip it.
+function groupReasoningOff(body, providerId) {
+  if (providerId === 'venice') {
+    return { ...body, venice_parameters: { ...(body.venice_parameters || {}), disable_thinking: true } };
+  }
+  if (providerId === 'openrouter') {
+    return { ...body, reasoning: { effort: 'low', exclude: true } };
+  }
+  return body;
+}
+
 async function callCompletionOnce(resolved, model, messages, { maxTokens, signal, providerId }) {
   const upstream = await fetch(resolved.url, {
     method: 'POST',
@@ -204,7 +216,7 @@ async function callCompletionOnce(resolved, model, messages, { maxTokens, signal
       Authorization: `Bearer ${resolved.apiKey}`,
       ...resolved.extraHeaders(),
     },
-    body: JSON.stringify(
+    body: JSON.stringify(groupReasoningOff(
       withProviderChatExtras(
         {
           model,
@@ -215,7 +227,8 @@ async function callCompletionOnce(resolved, model, messages, { maxTokens, signal
         },
         providerId || resolved.id,
       ),
-    ),
+      providerId || resolved.id,
+    )),
     signal,
   });
 
@@ -595,7 +608,15 @@ export default async function handler(req, res) {
         continue;
       }
 
-      if (!reply) reply = '…';
+      if (!reply) {
+        sseWrite(res, {
+          type: 'error',
+          error: `${persona.name} (${turnModel}) returned an empty reply — pick a non-reasoning model for this persona.`,
+          personaId: persona.id,
+          personaName: persona.name,
+        });
+        continue;
+      }
 
       // Did this reply call on someone specific? In orchestrated mode that's
       // the ONLY way anyone else gets seated this round — search the summon

@@ -3920,6 +3920,13 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
         updateStatusClock(evt.message || 'Working…');
       } else if (evt.type === 'sources') {
         roundSources = Array.isArray(evt.sources) ? evt.sources : [];
+      } else if (evt.type === 'error' && evt.personaName) {
+        chat.messages.push({
+          role: 'error',
+          content: `${evt.personaName}: ${evt.error || 'turn failed'}`,
+          ts: Date.now(),
+        });
+        renderMessages({ scroll: groupScrollMode('bottom') });
       } else if (evt.type === 'summary' && typeof evt.summary === 'string') {
         chat.groupSummary = evt.summary;
       } else if (evt.type === 'speaker') {
