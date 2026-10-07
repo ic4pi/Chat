@@ -68,13 +68,14 @@
       </div>
       <div class="side-accordion-body">
         <ul id="chatList" class="chat-list"></ul>
-        <div class="sidebar-footer">
+        <details class="sidebar-footer">
+          <summary>Data</summary>
           <button id="exportBtn" class="text-btn" title="Export all data as JSON">Export</button>
           <button id="importBtn" class="text-btn" title="Import data from JSON">Import</button>
           <input id="importFile" type="file" accept="application/json" hidden />
           <button id="clearChatsBtn" class="text-btn danger" title="Delete chat history only — personas &amp; settings stay">Clear chats</button>
           <button id="clearAllBtn" class="text-btn" title="Reset local settings too (personas are server-side and stay)">Reset settings</button>
-        </div>
+        </details>
       </div>
     </div>
 
@@ -106,20 +107,34 @@
   <main id="main">
     <header id="topbar">
       <button id="toggleChats" class="icon-btn" title="Toggle chat list">☰</button>
-      <button id="newChatTopBtn" class="icon-btn accent" title="New chat" aria-label="New chat">+</button>
+      <button id="newChatTopBtn" class="icon-btn" title="New chat" aria-label="New chat">✎</button>
 
-      <button id="personaChip" class="persona-chip" type="button" aria-haspopup="dialog" aria-expanded="false" title="Switch persona">
-        <span id="chipAvatar" class="persona-avatar">?</span>
-        <!-- Model and role live in the context row below; repeating them here
-             was the same two facts twice on one screen. -->
-        <span class="chip-text">
-          <span id="chipName" class="chip-name">Persona</span>
-        </span>
-        <span class="chip-caret">▾</span>
-      </button>
+      <!-- Who + which model, stacked in one quiet block. Model and role used
+           to be a whole second row of pills under the topbar. -->
+      <div class="identity">
+        <button id="personaChip" class="persona-chip" type="button" aria-haspopup="dialog" aria-expanded="false" title="Switch persona">
+          <span id="chipAvatar" class="persona-avatar">?</span>
+          <span class="chip-text">
+            <span id="chipName" class="chip-name">Persona</span>
+          </span>
+          <span class="chip-caret">▾</span>
+        </button>
+        <div class="context-row">
+          <button id="statusModelBtn" class="status-pill" type="button" title="Change model">
+            <span class="status-dot"></span>
+            <span id="statusModelLabel">Loading…</span>
+          </button>
+          <span class="context-sep" aria-hidden="true">·</span>
+          <button id="statusRoleBtn" class="status-pill ghost" type="button" title="Change role">
+            <span id="statusRoleLabel">Plan</span>
+          </button>
+        </div>
+      </div>
 
+      <h1 id="chatTitle" contenteditable="true" spellcheck="false" title="Rename this chat">Untitled</h1>
+
+      <button id="toggleArtifacts" class="icon-btn" title="Artifacts, outline, compare, reminders, summary" aria-label="Side panel">◫</button>
       <button id="menuBtn" class="icon-btn" type="button" aria-haspopup="dialog" aria-expanded="false" title="Menu" aria-label="Menu">⋯</button>
-      <button id="toggleArtifacts" class="icon-btn" title="Toggle artifacts">📎</button>
 
       <!-- Hidden native controls kept for state + persistence; the sheet is
            the real UI for all of these now. -->
@@ -166,21 +181,6 @@
       </select>
     </header>
 
-    <!-- One line for everything about "where am I": which model, which role,
-         which conversation. These were three separate full-width rows, which
-         cost a third of a phone screen before a single message was visible. -->
-    <div class="context-row">
-      <button id="statusModelBtn" class="status-pill" type="button" title="Change model">
-        <span class="status-dot"></span>
-        <span id="statusModelLabel">Loading…</span>
-      </button>
-      <button id="statusRoleBtn" class="status-pill ghost" type="button" title="Change role">
-        <span id="statusRoleLabel">Plan</span>
-      </button>
-      <h1 id="chatTitle" contenteditable="true" spellcheck="false" title="Rename this chat">Untitled</h1>
-    </div>
-
-
     <!-- Always-visible module nav. This is the fix for "I can't get to
          Workspace" — real navigation, not a button that opens a menu that
          has to be found first. Every module is one tap away, always. -->
@@ -223,12 +223,15 @@
       <div id="smartReplyChips" class="smart-reply-chips hidden"></div>
       <div class="input-row">
         <input id="attachInput" type="file" multiple accept="image/*,.txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.css,.html,.yml,.yaml,.csv,.pdf,.docx" hidden />
-        <button id="attachBtn" type="button" class="icon-btn" title="Upload photo or file">📎</button>
-        <button id="webSearchBtn" type="button" class="icon-btn" title="Search the web for this reply and cite sources" aria-pressed="false">🔎</button>
-        <button id="agencyModeBtn" type="button" class="icon-btn" title="Bring in the team — route this chat through the full roster, led by your selected persona." aria-pressed="false">🏢</button>
+        <!-- Secondary tools fold behind this toggle. A tool that is switched
+             on (aria-pressed="true") stays visible so its state never hides. -->
+        <button id="toolsToggle" type="button" class="icon-btn tools-toggle" title="More tools" aria-label="More tools" aria-expanded="false" aria-controls="inputForm">+</button>
+        <button id="attachBtn" type="button" class="icon-btn tool-opt" title="Upload photo or file">📎</button>
+        <button id="webSearchBtn" type="button" class="icon-btn tool-opt" title="Search the web for this reply and cite sources" aria-pressed="false">🔎</button>
+        <button id="agencyModeBtn" type="button" class="icon-btn tool-opt" title="Bring in the team — route this chat through the full roster, led by your selected persona." aria-pressed="false">🏢</button>
         <button id="micBtn" type="button" class="icon-btn" title="Mic: dictation, or voice chat when 🔊 is on (Chrome/Safari)">🎤</button>
         <button id="interruptBtn" type="button" class="icon-btn interrupt-btn hidden" title="Interrupt: stop the reply and speech right now">✋</button>
-        <button id="speakBtn" type="button" class="icon-btn" title="Speak replies with neural voice" aria-pressed="false">🔊</button>
+        <button id="speakBtn" type="button" class="icon-btn tool-opt" title="Speak replies with neural voice" aria-pressed="false">🔊</button>
         <textarea id="input" rows="1" placeholder="Plan or ask…"></textarea>
         <button id="stopBtn" type="button" class="text-btn danger hidden" title="Stop reply + voice (Esc also stops)">Stop</button>
         <button id="sendBtn" type="submit">Send</button>

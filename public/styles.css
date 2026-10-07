@@ -519,19 +519,17 @@ body::before {
   box-shadow: 0 0 6px var(--verdigris);
 }
 
-.context-row h1 {
+#chatTitle {
   flex: 1 1 0; min-width: 0;
   font-size: 14px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase;
   color: var(--muted-2); outline: none; font-family: var(--display);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right;
 }
-.context-row h1:focus {
+#chatTitle:focus {
   color: var(--brass-lt);
   text-overflow: clip; /* editing a name you cannot see all of is worse */
   text-align: left;
 }
-/* Renaming needs the whole line, not the sliver left over beside two pills. */
-.context-row:focus-within .status-pill { display: none; }
 
 /* ---- Persistent module nav ----------------------------------------------
    The fix for "I can't leave chat": always visible, no menu to find first.
@@ -719,8 +717,6 @@ body::before {
   font-size: 16px; color: var(--muted);
 }
 
-/* While the keyboard is up, screen space is the scarce thing. */
-body.kb-open .context-row { padding: 3px 12px; }
 
 /* One scrollable line, not three stacked rows — those chips were eating a
    sixth of the screen while the reply above them got cropped. */
@@ -1052,3 +1048,177 @@ select { appearance: none; }
 }
 
 @media (prefers-reduced-motion: reduce) { *, *::before { transition: none !important; } }
+
+/* =============================================================================
+   MINIMAL LAYER
+   One quiet topbar, a text-only module nav, a composer that shows only
+   what you use every message. Nothing removed: secondary tools fold behind
+   the composer's + toggle, data actions behind "Data" in the chat list, and
+   every control keeps its original id so app.js binds unchanged.
+   ============================================================================= */
+
+/* No ambient glow, no grain — flat ink. */
+body { background: var(--bg); }
+body::before { display: none; }
+.sidebar.left::after, .sidebar.right::before { background: var(--border); }
+
+/* Icon buttons: bare glyphs, a soft hover, no ring. Emoji go monochrome
+   until they're switched on, so the bar stops reading as a sticker sheet. */
+.icon-btn {
+  width: 34px; height: 34px; font-size: 18px;
+  border: 0; background: transparent; box-shadow: none;
+  border-radius: var(--r-sm); color: var(--muted);
+}
+.icon-btn:hover { background: var(--panel-2); border: 0; }
+.icon-btn.accent { border: 0; }
+.icon-btn.tool-opt, #micBtn { filter: grayscale(1); opacity: .7; }
+.icon-btn.tool-opt:hover, #micBtn:hover { opacity: 1; }
+.icon-btn.search-on, .icon-btn.speak-on, .icon-btn[aria-pressed="true"], #micBtn.listening {
+  filter: none; opacity: 1; border: 0; background: var(--id-soft);
+}
+.icon-btn.interrupt-btn { border: 0; }
+
+.text-btn { border-color: transparent; }
+.text-btn:hover { border-color: transparent; background: var(--panel-2); }
+.text-btn.primary { background: var(--brass); border-color: var(--brass); box-shadow: none; }
+
+/* ---- Topbar: menu · who/model · title · panel · more ---- */
+#topbar {
+  gap: 6px; padding: 8px 12px;
+  padding-top: max(8px, env(safe-area-inset-top));
+  background: var(--bg); backdrop-filter: none;
+  border-bottom: 1px solid var(--border);
+}
+.identity { display: flex; flex-direction: column; min-width: 0; flex: 0 1 auto; }
+.persona-chip {
+  flex: 0 1 auto; gap: 7px; padding: 2px 4px;
+  border: 0; border-radius: var(--r-sm); background: transparent; box-shadow: none;
+}
+.persona-chip:hover { background: var(--panel-2); }
+.persona-avatar {
+  width: 22px; height: 22px; font-size: 12px;
+  box-shadow: none; border: 0;
+  background: var(--id);
+}
+.chip-name { font-size: 16px; font-weight: 600; letter-spacing: 0; }
+
+.context-row {
+  display: flex; align-items: center; gap: 4px;
+  padding: 0 4px; border: 0; min-width: 0;
+}
+.context-sep { color: var(--muted-2); font-size: 12px; }
+.status-pill {
+  padding: 0; border: 0; background: transparent; border-radius: 0;
+  font-size: 12px; color: var(--muted-2); max-width: none;
+}
+.status-pill:hover { color: var(--text); }
+.status-dot { width: 5px; height: 5px; box-shadow: none; }
+
+#chatTitle {
+  flex: 1 1 0; min-width: 0; text-align: center;
+  font-size: 13px; letter-spacing: .02em; text-transform: none;
+  font-weight: 500; color: var(--muted-2);
+}
+#chatTitle:focus { text-align: center; color: var(--text); }
+
+/* ---- Module nav: text tabs, underline marks where you are ---- */
+.mod-nav {
+  justify-content: center; gap: 2px;
+  padding: 0 8px; background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: none;
+}
+.mod-nav::-webkit-scrollbar { display: none; }
+.mod-nav-btn {
+  flex: 0 0 auto; flex-direction: row;
+  padding: 8px 12px 7px;
+  border: 0; border-radius: 0; background: transparent;
+  border-bottom: 2px solid transparent;
+  color: var(--muted-2);
+}
+.mod-nav-btn:hover { color: var(--text); border-color: transparent; }
+.mod-nav-btn.active {
+  background: transparent; color: var(--text);
+  border-bottom-color: var(--brass);
+}
+.mn-ico { display: none; }
+.mn-label { font-size: 13px; letter-spacing: .01em; text-transform: none; font-family: var(--body); font-weight: 500; }
+.mn-badge { top: 2px; right: 0; min-width: 14px; height: 14px; font-size: 10px; }
+
+/* ---- Composer ---- */
+#inputForm {
+  background: var(--bg); backdrop-filter: none; border-top: 0;
+  padding: 6px 12px 12px;
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+}
+.input-row { gap: 2px; padding: 4px; border-color: var(--border); border-radius: var(--r-lg); }
+.input-row:focus-within { box-shadow: none; border-color: var(--border-2); }
+#input { font-size: 18px; }
+#input::placeholder { font-style: normal; }
+#sendBtn { background: var(--brass); border: 0; box-shadow: none; width: 34px; height: 34px; }
+#sendBtn::before { font-size: 18px; }
+
+.tools-toggle { font-size: 22px; font-weight: 300; transition: transform .2s var(--ease); }
+.input-row.tools-open .tools-toggle { transform: rotate(45deg); color: var(--text); }
+.input-row:not(.tools-open) .tool-opt:not([aria-pressed="true"]) { display: none; }
+
+/* ---- Left sidebar: quieter section labels, data actions folded ---- */
+.side-accordion { border-bottom: 0; }
+.side-accordion-title {
+  font-size: 12px; letter-spacing: .08em; color: var(--muted-2); font-weight: 500;
+}
+.side-accordion-toggle:hover .side-accordion-title { color: var(--text); }
+.chat-list li { font-size: 16px; }
+.chat-list li.active { background: var(--panel-2); border-left: 0; padding-left: 11px; }
+.sidebar-footer { display: block; border-top: 1px solid var(--border); padding: 8px 14px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+.sidebar-footer > summary {
+  cursor: pointer; list-style: none;
+  font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted-2);
+  padding: 4px 0;
+}
+.sidebar-footer > summary::-webkit-details-marker { display: none; }
+.sidebar-footer > summary::after { content: ' ▸'; }
+.sidebar-footer[open] > summary::after { content: ' ▾'; }
+.sidebar-footer[open] { display: flex; flex-wrap: wrap; gap: 4px; }
+.sidebar-footer[open] > summary { flex: 1 0 100%; }
+.sidebar-footer .text-btn { font-size: 14px; padding: 6px 10px; }
+
+#input::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.input-row { align-items: center; }
+
+@media (max-width: 560px) {
+  #topbar { gap: 2px; padding-left: 6px; padding-right: 6px; }
+  .identity { max-width: 52%; }
+  #chatTitle { min-width: 64px; }
+  .mod-nav { justify-content: space-between; padding: 0 4px; }
+  .mod-nav-btn { flex: 1 1 auto; padding: 8px 4px 7px; }
+  .mn-label { font-size: 12.5px; }
+}
+
+/* ---- Sheets: compact lists instead of chunky tiles ---- */
+.sheet { border-top: 1px solid var(--border); padding-top: 8px; }
+.sheet-grabber { background: var(--border-2); margin-bottom: 14px; }
+.sheet-label { font-size: 12px; font-weight: 500; letter-spacing: .08em; margin-bottom: 8px; }
+.sheet-label::after { display: none; }
+.persona-grid { gap: 6px; margin-bottom: 18px; }
+.persona-card { padding: 10px; gap: 4px; border-color: transparent; }
+.persona-card .persona-avatar { width: 24px; height: 24px; font-size: 12px; box-shadow: none; background: var(--pc); }
+.pc-name { font-size: 16px; }
+.pc-desc { font-size: 14px; }
+.module-grid { grid-template-columns: 1fr; gap: 0; }
+.module-card {
+  flex-direction: row; align-items: center; gap: 12px;
+  padding: 11px 8px; border: 0; border-radius: var(--r-sm); background: transparent;
+}
+.module-card:hover { background: var(--panel-2); }
+.module-card .m-ico { font-size: 16px; margin: 0; width: 20px; text-align: center; color: var(--muted); }
+.module-card .m-name { font-size: 16px; font-weight: 500; }
+.module-card .m-sub { font-size: 13px; margin-left: auto; }
+.module-card.wide > span:last-child { flex-direction: row !important; align-items: baseline; gap: 12px !important; flex: 1; min-width: 0; }
+.module-card.wide .m-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-badge { position: static; margin-left: 6px; }
+.sheet-foot { margin-top: 12px; padding-top: 10px; }
+.sheet-foot > * { font-size: 14px; }
+.module-card { min-width: 0; }
+.module-card .m-sub:not(#sheetModelSub) { display: none; }
+.module-card.wide .m-sub { min-width: 0; }
