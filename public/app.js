@@ -6781,6 +6781,16 @@ els.nudgeBannerDismiss?.addEventListener('click', async () => {
   els.nudgeBanner?.classList.add('hidden');
 });
 
+// ---- Composer tools toggle -------------------------------------------------
+// Attach / web search / agency / speak fold behind one "+" so the composer
+// shows only what every message needs. Any tool switched on stays visible
+// via CSS (aria-pressed="true"), so folding never hides state.
+document.getElementById('toolsToggle')?.addEventListener('click', (e) => {
+  const row = e.currentTarget.closest('.input-row');
+  const open = row.classList.toggle('tools-open');
+  e.currentTarget.setAttribute('aria-expanded', open ? 'true' : 'false');
+});
+
 // ---- Status row (compact model/role controls under the topbar) ----------
 document.getElementById('statusModelBtn')?.addEventListener('click', () => {
   document.getElementById('modelPickerBtn')?.click();
