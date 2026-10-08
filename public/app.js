@@ -37,7 +37,6 @@ const FALLBACK_PERSONAS = [
 const PROVIDER_FALLBACKS = {
   venice: [
     { id: 'venice-uncensored-1-2', name: 'Venice Uncensored 1.2' },
-    { id: 'e2ee-venice-uncensored-24b-p', name: 'Venice Uncensored 1.1' },
     { id: 'venice-uncensored-role-play', name: 'Venice Role Play Uncensored' },
     { id: 'olafangensan-glm-4.7-flash-heretic', name: 'GLM 4.7 Flash Heretic' },
     { id: 'gemma-4-uncensored', name: 'Gemma 4 Uncensored' },
@@ -137,11 +136,15 @@ const VENICE_UNCENSORED_CHEAP_FIRST = [
   'e2ee-gemma-4-26b-a4b-uncensored-p',  // ~$0.19 / $0.88
   'venice-uncensored-1-2',              // ~$0.20 / $0.90
   'venice-uncensored',                  // Dolphin Mistral 24B Venice Edition
-  'e2ee-venice-uncensored-24b-p',       // ~$0.25 / $1.15
+  // e2ee-venice-uncensored-24b-p removed: Venice retired it (Oct 2026).
   'e2ee-qwen3-6-35b-a3b-uncensored-p',  // ~$0.38 / $1.88
   'venice-uncensored-role-play',        // ~$0.50 / $2.00
 ];
 const VENICE_UNCENSORED_SET = new Set(VENICE_UNCENSORED_CHEAP_FIRST);
+// Venice's live catalog, once /api/models answers. Curated ids missing from
+// it have been retired, so personas never get (or keep) them.
+let liveVeniceModelIds = null;
+const veniceModelIsLive = (id) => !liveVeniceModelIds || liveVeniceModelIds.has(id);
 
 const PROVIDER_IDS = ['venice', 'openrouter', 'cerebras', 'groq', 'xai', 'nvidia'];
 // 'groq' and 'xai' are different companies whose names differ by one letter,
@@ -335,18 +338,22 @@ let roleModels = loadRoleModels();
 let pendingUploads = []; // { kind, name, content }
 const modelsCache = {};
 
-// Web search grounding toggle — persists across reloads like the speak toggle.
-const WEB_SEARCH_PREF_KEY = 'webSearchOn';
-let webSearchOn = false;
-try { webSearchOn = localStorage.getItem(WEB_SEARCH_PREF_KEY) === '1'; } catch { /* ignore */ }
+// Web search is asked for in plain words ("search the web for X"), not a
+// toggle — see parseWebSearchRequest. Set per send; null = no search this
+// turn. Clear the old toggle's saved state so nobody is stuck searching.
+let turnSearchQuery = null;
+try { localStorage.removeItem('webSearchOn'); } catch { /* ignore */ }
 
-// 🏢 "Bring in the team" — on, the chat runs as a full group (every
-// persona, in rounds) with the selected persona speaking first (see
-// api/group-chat.js's forcedLeadId). Off by default so normal Chat behaves
-// exactly as it always has.
+// "Bring in the team" — solo Chat routes through the same Orchestrated
+// group-chat engine instead of a single model, with whichever persona is
+// selected pinned as lead (see api/group-chat.js's forcedLeadId). Off by
+// default so normal Chat behaves exactly as it always has.
 const AGENCY_MODE_PREF_KEY = 'agencyModeOn';
+// The 🏢 toggle is gone: one chat, and a group discussion is asked for in
+// plain words (see parseGroupDiscussionRequest). Clear any saved "on" state
+// so nobody is stuck in a mode with no button to leave it.
 let agencyModeOn = false;
-try { agencyModeOn = localStorage.getItem(AGENCY_MODE_PREF_KEY) === '1'; } catch { /* ignore */ }
+try { localStorage.removeItem(AGENCY_MODE_PREF_KEY); } catch { /* ignore */ }
 
 // ---------------------------------------------------------------------------
 // State
@@ -434,8 +441,9 @@ function migrate(s) {
   merged.chats = merged.chats.map((c) => ({
     id: c.id,
     name: c.name || 'Untitled',
-    kind: c.kind || 'chat',
+    kind: wasSilentlyDowngradedGroup(c) ? 'group' : (c.kind || 'chat'),
     groupMode: c.groupMode || null,
+    groupDowngraded: c.groupDowngraded === true,
     topic: c.topic || null,
     groupSummary: c.groupSummary || '',
     groupRounds: typeof c.groupRounds === 'number' ? c.groupRounds : 3,
@@ -501,6 +509,17 @@ function ensureActiveChat() {
     chat = createChat();
   }
   return chat;
+}
+
+// Group-button chats are named "<Mode label>: <topic>" by createGroupChat().
+// One that reads kind === 'chat' without the explicit groupDowngraded flag was
+// flipped to solo by the old send-time check, not by the user — restore it.
+function wasSilentlyDowngradedGroup(c) {
+  return c.kind === 'chat'
+    && c.groupDowngraded !== true
+    && typeof c.groupMode === 'string'
+    && Array.isArray(c.personaIds) && c.personaIds.length > 0
+    && /^(Boardroom|Brainstorm|Free chat|Orchestrated): /.test(String(c.name || ''));
 }
 
 function createChat(opts = {}) {
@@ -649,7 +668,6 @@ const els = {
   attachBtn: $('attachBtn'),
   attachInput: $('attachInput'),
   attachPreview: $('attachPreview'),
-  webSearchBtn: $('webSearchBtn'),
   agencyModeBtn: $('agencyModeBtn'),
   smartReplyChips: $('smartReplyChips'),
   micBtn: $('micBtn'),
@@ -2013,6 +2031,10 @@ async function loadProviderModels(provider) {
     const raw = models.length ? models : (PROVIDER_FALLBACKS[provider] || []);
     const list = raw.map((m) => enrichModelClient(provider, m));
     if (!key) modelsCache[cacheKey] = list;
+    if (provider === 'venice' && models.length) {
+      liveVeniceModelIds = new Set(models.map((m) => m.id));
+      ensurePersonaModels(personas); // reassign any persona on a retired model
+    }
     return list;
   } catch (err) {
     console.warn(`Could not fetch ${provider} model list:`, err);
@@ -2925,7 +2947,8 @@ async function callChat(provider, model, messages, personaId) {
         apiKey: apiKey || undefined,
         paidPassword: loadPaidPassword() || undefined,
         stream: false,
-        webSearch: webSearchOn || undefined,
+        webSearch: turnSearchQuery ? true : undefined,
+        webSearchQuery: turnSearchQuery || undefined,
       }),
       signal: controller.signal,
     });
@@ -2970,7 +2993,8 @@ async function streamChatResponse({ provider, model, messages, personaId, signal
         apiKey: apiKey || undefined,
         paidPassword: loadPaidPassword() || undefined,
         stream: true,
-        webSearch: webSearchOn || undefined,
+        webSearch: turnSearchQuery ? true : undefined,
+        webSearchQuery: turnSearchQuery || undefined,
       }),
       signal,
     });
@@ -3255,25 +3279,12 @@ async function sendMessage(text) {
   clearSmartReplyChips();
 
   const chat = ensureActiveChat();
-  // The 🏢 toggle is the one thing that decides group vs. solo, for every
-  // chat. On: the whole table answers, for the chat's full rounds. Off: a
-  // group chat drops back to solo. An image upload still goes solo for that
-  // one message — the group engine has no vision path.
-  const hasImageUpload = pendingUploads.some((u) => u.kind !== 'text');
-  if (agencyModeOn && chat.kind !== 'group' && !hasImageUpload) {
-    seatWholeTable(chat, text);
-  } else if (!agencyModeOn && chat.kind === 'group') {
-    chat.kind = 'chat';
-  }
+  // A group chat stays a group chat on send. Only an explicit tap of the 🏢
+  // toggle while viewing it turns it into a solo chat (see the toggle's click
+  // handler). Downgrading here on agencyModeOn === false — the default —
+  // silently turned every Group-button chat into a one-model solo chat on
+  // its first follow-up: one reply, no rounds, the rest of the table silent.
   if (chat.kind === 'group') {
-    const textUploads = pendingUploads.filter((u) => u.kind === 'text');
-    if (textUploads.length) {
-      pendingUploads = pendingUploads.filter((u) => u.kind !== 'text');
-      renderAttachPreview();
-      for (const u of textUploads) {
-        text += `\n\n[Uploaded file: ${u.name}]\n\`\`\`\n${u.content.slice(0, 80_000)}\n\`\`\``;
-      }
-    }
     return sendGroupMessage(text);
   }
 
@@ -3305,6 +3316,26 @@ async function sendMessage(text) {
   renderChatList();
   renderChatTitle();
   renderMessages({ scroll: 'bottom' });
+
+  // "Have a three round group discussion about X" → every persona, N rounds,
+  // right here in this chat; the next message is a normal reply again.
+  const prevUser = [...chat.messages].reverse().filter((m) => m.role === 'user')[1];
+  const groupAsk = imageParts.length === 0 ? parseGroupDiscussionRequest(text, prevUser?.content) : null;
+  // "Search the web for X" → this one reply is grounded in live results.
+  turnSearchQuery = groupAsk ? null : parseWebSearchRequest(text, prevUser?.content);
+  if (groupAsk) {
+    return runInlineGroupDiscussion(chat, groupAsk);
+  }
+
+  // Agency mode: route through the Orchestrated group-chat engine instead
+  // of a single model, with the selected persona pinned as lead. Not
+  // supported alongside an image upload this turn — that needs the
+  // vision-prep path solo chat has and group-chat doesn't, so an image
+  // message falls through to the normal single-model flow below instead
+  // of silently dropping the image.
+  if (agencyModeOn && imageParts.length === 0) {
+    return sendAgencyMessage(chat, displayText);
+  }
 
   setGeneratingUi(true);
   activeChatUserStopped = false;
@@ -3716,7 +3747,8 @@ async function callGroupStream(chat, apiMessages, onEvent) {
         paidPassword: loadPaidPassword() || undefined,
         personaModels: personaModelMap,
         providerKeys,
-        webSearch: webSearchOn || undefined,
+        webSearch: turnSearchQuery ? true : undefined,
+        webSearchQuery: turnSearchQuery || undefined,
         personaIds: (Array.isArray(chat.personaIds) && chat.personaIds.length) ? chat.personaIds : undefined,
         personaTasks: (chat.personaTasks && typeof chat.personaTasks === 'object') ? chat.personaTasks : undefined,
         forcedLeadId: chat.forcedLeadId || undefined,
@@ -3868,6 +3900,9 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
       personaId: m.personaId,
       personaName: m.personaName,
     }));
+  // An in-chat group discussion: personas answer the topic, not the literal
+  // "have a 3 round group discussion" request that started it.
+  if (chat.groupFocus) apiMessages.push({ role: 'user', content: chat.groupFocus });
 
   let currentTs        = null;
   let currentPersonaId = null;
@@ -3994,13 +4029,10 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
 
     if (attempt.data?.summary) chat.groupSummary = attempt.data.summary;
     const expected = attempt.data?.expectedTurns;
-    // The Wrap-up is a 'turn' too, but it isn't a persona — don't let it
-    // hide one that failed.
-    const spokeCount = spokenThisRound.filter((t) => t.personaId !== '_synthesis').length;
-    if (typeof expected === 'number' && spokeCount < expected) {
+    if (typeof expected === 'number' && spokenThisRound.length < expected) {
       chat.messages.push({
         role: 'info',
-        content: `${spokeCount} of ${expected} personas spoke this round (some turns may have failed).`,
+        content: `${spokenThisRound.length} of ${expected} personas spoke this round (some turns may have failed).`,
         ts: Date.now(),
       });
     }
@@ -4040,15 +4072,20 @@ async function runAdditionalRounds(chat, n) {
 
   try {
     for (let i = 1; i <= n; i++) {
-      chat.messages.push({
-        role: 'info',
-        content: `─── Extra round ${i} of ${n} ───`,
-        ts: Date.now(),
-      });
-      renderMessages({ scroll: groupScrollMode('bottom') });
-      updateStatusClock(`Extra round ${i}/${n} — gathering personas`);
+      if (n > 1) updateStatusClock(`Additional round ${i}/${n} — gathering personas`);
       const ok = await runOneRound(chat, updateStatusClock, startedAt, firstPin);
-      if (!ok) break;
+      // A failed round is already reported in the chat; only a user Stop
+      // ends the remaining rounds. Breaking on any failure is what cut a
+      // multi-round session down to one round.
+      if (!ok && activeChatUserStopped) break;
+      if (i < n) {
+        chat.messages.push({
+          role: 'info',
+          content: `─── Additional round ${i}/${n} complete ───`,
+          ts: Date.now(),
+        });
+        renderMessages({ scroll: groupScrollMode('bottom') });
+      }
     }
     showMoreRoundsPrompt(chat);
   } finally {
@@ -4071,6 +4108,9 @@ async function sendGroupMessage(text) {
 
   // Remove any pending "more rounds?" prompt
   els.chat?.querySelector('.rounds-prompt')?.remove();
+
+  const prevGroupUser = [...chat.messages].reverse().find((m) => m.role === 'user');
+  turnSearchQuery = parseWebSearchRequest(displayText, prevGroupUser?.content);
 
   chat.messages.push({ role: 'user', content: displayText, ts: Date.now() });
   chat.provider  = state.activeProvider;
@@ -4102,15 +4142,22 @@ async function sendGroupMessage(text) {
 
   try {
     for (let round = 1; round <= totalRounds; round++) {
-      chat.messages.push({
-        role: 'info',
-        content: `─── Round ${round} of ${totalRounds} ───`,
-        ts: Date.now(),
-      });
-      renderMessages({ scroll: groupScrollMode('bottom') });
-      updateStatusClock(`Round ${round}/${totalRounds} — gathering personas`);
+      if (totalRounds > 1) {
+        updateStatusClock(`Round ${round}/${totalRounds} — gathering personas`);
+      }
       const ok = await runOneRound(chat, updateStatusClock, startedAt, overallFirstPin);
-      if (!ok) break;
+      // A failed round is already reported in the chat; only a user Stop
+      // ends the remaining rounds. Breaking on any failure is what cut a
+      // multi-round session down to one round.
+      if (!ok && activeChatUserStopped) break;
+      if (round < totalRounds) {
+        chat.messages.push({
+          role: 'info',
+          content: `─── Round ${round}/${totalRounds} complete ───`,
+          ts: Date.now(),
+        });
+        renderMessages({ scroll: groupScrollMode('bottom') });
+      }
     }
     // Offer more rounds after all are done
     showMoreRoundsPrompt(chat);
@@ -4125,31 +4172,183 @@ async function sendGroupMessage(text) {
 }
 
 // ---------------------------------------------------------------------------
-// 🏢 on in a solo chat: turn it into a real group chat — every persona at
-// the table, the chat's full rounds, the selected persona speaking first.
-// This used to run Orchestrated mode for one round, where only the lead
-// speaks unless it names someone — so 1 of 12 answered and nothing more.
-// A group from the Group screen (no forcedLeadId) keeps its own mode/seats.
+// Group discussion on request, inside a normal chat. No separate mode or
+// screen: "have a 3 round group discussion on pricing" runs every persona
+// for 3 rounds here, then the chat goes back to one reply per message.
 // ---------------------------------------------------------------------------
-function seatWholeTable(chat, text) {
-  const fromToggle = !chat.groupMode || !!chat.forcedLeadId;
-  chat.kind = 'group';
-  if (fromToggle) {
-    chat.groupMode = 'brainstorm';
-    chat.personaIds = personas.map((p) => p.id);
-    chat.forcedLeadId = state.activePersonaId;
+const ROUND_WORDS = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+};
+// Explicit phrase ("group discussion", "team debate", "roundtable") or a round
+// count plus who + what ("3 rounds, everyone discuss X").
+const GROUP_PHRASE_RE = /\b(?:group|team|panel|round[\s-]?table)\s+(?:discussion|debate|brainstorm(?:ing)?|chat|conversation|talk)\b|\bround[\s-]?table\b/i;
+const GROUP_WHO_RE = /\b(?:group|team|everyone|everybody|all (?:the )?(?:models|personas|of you)|personas|models|table|panel)\b/i;
+const GROUP_WHAT_RE = /\b(?:discuss(?:ion)?|debate|brainstorm|talk|weigh in)\b/i;
+const ROUNDS_RE = /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)[\s-]*rounds?\b|\brounds?\s*[:=]?\s*(\d{1,2})\b/i;
+
+function parseGroupDiscussionRequest(text, previousUserText = '') {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  const m = raw.match(ROUNDS_RE);
+  const asked = GROUP_PHRASE_RE.test(raw) || (m && GROUP_WHO_RE.test(raw) && GROUP_WHAT_RE.test(raw));
+  if (!asked) return null;
+  let rounds = 3;
+  if (m) {
+    const tok = String(m[1] || m[2]).toLowerCase();
+    rounds = /^\d+$/.test(tok) ? parseInt(tok, 10) : (ROUND_WORDS[tok] || 3);
   }
-  if (!chat.topic) {
-    chat.topic = (chat.name && chat.name !== 'New chat' && chat.name !== 'Untitled')
-      ? chat.name
-      : (String(text || '').trim() || 'Open discussion').slice(0, 60);
+  rounds = Math.min(20, Math.max(1, rounds));
+  // Topic = whatever follows "about/on/regarding …". With none ("have a
+  // 3 round group discussion"), the group discusses the previous message.
+  const about = raw.match(/\b(?:about|on|regarding|re:|discuss(?:ing)?|debate|whether)\s+(?!(?:it|this|that)\b)(.+)$/i);
+  const topic = about
+    ? about[1].replace(ROUNDS_RE, '').replace(/[,;:.?!\s]+$/, '').trim()
+    : (String(previousUserText || '').trim() || raw);
+  return { rounds, topic: topic || raw };
+}
+
+// Web search on request, inside any chat. No button or mode: "search the
+// web for X", "look up X online", "google it" searches for X and the reply
+// cites the results. Anything else is a normal reply.
+const SEARCH_WEB = String.raw`(?:the\s+)?(?:web|internet|net)|online|google`;
+const SEARCH_ASK_RES = [
+  // "search the web for X", "search online about X", "web search X"
+  new RegExp(String.raw`\b(?:search|look\s*up|scour)\s+(?:on\s+)?(?:${SEARCH_WEB})\b(?:\s+(?:for|about|on|to\s+find))?\s*(.*)$`, 'i'),
+  /\bweb[\s-]*search\b[\s:]*(?:(?:for|about|on)\s+)?(.*)$/i,
+  // "look up X online", "search for X on the web"
+  new RegExp(String.raw`\b(?:look\s*up|search(?:\s+for)?)\s+(.+?)\s+(?:online|on\s+(?:the\s+)?(?:web|internet|google)|on\s+line)\b`, 'i'),
+];
+const SEARCH_TRAILING_RE = new RegExp(String.raw`^(.*?)[\s,.;:!?-]*(?:(?:please|pls|and|then|just)\s+)*(?:(?:search|look\s*(?:it|this|that)?\s*up)\s+(?:on\s+)?(?:${SEARCH_WEB})|google\s+(?:it|this|that))\s*[.!?]*$`, 'i');
+
+function parseWebSearchRequest(text, previousUserText = '') {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  let query = null;
+  const trailing = raw.match(SEARCH_TRAILING_RE);
+  if (trailing) query = trailing[1];
+  else {
+    for (const re of SEARCH_ASK_RES) {
+      const m = raw.match(re);
+      if (m) { query = m[1]; break; }
+    }
+  }
+  if (query === null) return null;
+  query = query.replace(/^(?:(?:for|about|on|and|to find|whether)\s+)+/i, '').replace(/[\s,;:.?!]+$/, '').trim();
+  // "search the web for that" / no subject → search the previous message.
+  if (!query || /^(?:it|this|that|this topic|that topic)$/i.test(query)) {
+    query = String(previousUserText || "").trim() || raw;
+  }
+  return query.slice(0, 400);
+}
+
+async function runInlineGroupDiscussion(chat, { rounds, topic }) {
+  // runOneRound reads these off the chat; set them for this discussion only
+  // and put the chat back exactly as it was afterwards.
+  const saved = {
+    groupMode: chat.groupMode,
+    personaIds: chat.personaIds,
+    forcedLeadId: chat.forcedLeadId,
+    topic: chat.topic,
+    groupFocus: chat.groupFocus,
+  };
+  chat.groupMode = 'brainstorm'; // everyone speaks each round
+  chat.personaIds = null;        // full roster
+  chat.forcedLeadId = undefined;
+  chat.topic = topic;
+  chat.groupFocus = topic;
+
+  // Visible right away: the first speaker can take a while (context summary,
+  // seating order), and an empty screen reads as stuck.
+  chat.messages.push({
+    role: 'info',
+    content: `Group discussion · ${rounds} round${rounds > 1 ? 's' : ''} · everyone at the table — starting…`,
+    ts: Date.now(),
+  });
+  renderMessages({ scroll: 'bottom' });
+
+  setGeneratingUi(true);
+  activeChatUserStopped = false;
+  const startedAt = Date.now();
+  const firstPin = [null];
+  const updateStatusClock = (base) => {
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    setTypingActive(true, `${base} · ${secs}s`);
+  };
+  setTypingActive(true, 'Gathering the group…');
+  const tickTimer = setInterval(() => {
+    const cur = els.typingStatus?.textContent || 'Waiting…';
+    updateStatusClock(cur.replace(/\s·\s\d+s$/, ''));
+  }, 1000);
+
+  try {
+    for (let round = 1; round <= rounds; round++) {
+      if (rounds > 1) updateStatusClock(`Round ${round}/${rounds} — gathering personas`);
+      const ok = await runOneRound(chat, updateStatusClock, startedAt, firstPin);
+      if (!ok && activeChatUserStopped) break;
+      chat.messages.push({
+        role: 'info',
+        content: `─── Round ${round}/${rounds} complete ───`,
+        ts: Date.now(),
+      });
+      renderMessages({ scroll: groupScrollMode('bottom') });
+    }
+  } finally {
+    Object.assign(chat, saved);
+    clearInterval(tickTimer);
+    setGeneratingUi(false);
+    activeChatUserStopped = false;
+    setTypingActive(false);
+    els.input?.focus();
+    chat.updatedAt = Date.now();
+    saveState();
+    void window.hub?.syncChat?.(chat);
   }
 }
 
-function setAgencyMode(on) {
-  agencyModeOn = !!on;
-  try { localStorage.setItem(AGENCY_MODE_PREF_KEY, agencyModeOn ? '1' : '0'); } catch { /* ignore */ }
-  syncAgencyModeBtn();
+// ---------------------------------------------------------------------------
+// Agency mode: a normal (solo) chat, routed through the Orchestrated
+// group-chat engine with the selected persona pinned as lead. Reuses
+// runOneRound/callGroupStream exactly as sendGroupMessage does — the only
+// difference is this chat never becomes chat.kind === 'group' and only ever
+// runs one round per message, matching how a normal chat feels (send,
+// get a reply, send again) rather than group chat's multi-round table.
+// ---------------------------------------------------------------------------
+async function sendAgencyMessage(chat, displayText) {
+  chat.groupMode = 'orchestrated';
+  chat.personaIds = personas.map((p) => p.id);
+  chat.forcedLeadId = state.activePersonaId;
+  if (!chat.topic) {
+    chat.topic = (chat.name && chat.name !== 'New chat' && chat.name !== 'Untitled')
+      ? chat.name
+      : displayText.slice(0, 60);
+  }
+
+  setGeneratingUi(true);
+  activeChatUserStopped = false;
+  const startedAt = Date.now();
+  const updateStatusClock = (base) => {
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    setTypingActive(true, `${base} · ${secs}s`);
+  };
+  setTypingActive(true, 'Bringing in the team…');
+  const tickTimer = setInterval(() => {
+    const cur = els.typingStatus?.textContent || 'Waiting…';
+    updateStatusClock(cur.replace(/\s·\s\d+s$/, ''));
+  }, 1000);
+
+  try {
+    await runOneRound(chat, updateStatusClock, startedAt, [null]);
+  } finally {
+    clearInterval(tickTimer);
+    setGeneratingUi(false);
+    activeChatUserStopped = false;
+    setTypingActive(false);
+    els.input?.focus();
+    chat.updatedAt = Date.now();
+    saveState();
+    renderChatList();
+    void window.hub?.syncChat?.(chat);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -4279,6 +4478,7 @@ async function renderAll() {
   renderArtifacts();
   renderAttachPreview();
   const chat = activeChat();
+  syncAgencyModeBtn();
   if (els.input) {
     els.input.placeholder = chat?.kind === 'group'
       ? 'Address the table…'
@@ -4292,12 +4492,19 @@ async function renderAll() {
 
 els.inputForm.addEventListener('submit', (e) => {
   e.preventDefault();
+  const text = els.input.value.trim();
   if (chatBusy) {
+    // Typed something while a reply or group discussion is running: keep
+    // the text and keep the run going. Stopping is the Stop / ✋ buttons
+    // or Esc — not a send that happens to land mid-run.
+    if (text) {
+      setTypingActive(true, 'Still working — your message is kept. Tap Stop to cancel.');
+      return;
+    }
     stopActiveChat('Stopped by user');
     setTypingActive(true, 'Stopping…');
     return;
   }
-  const text = els.input.value.trim();
   if (!text && pendingUploads.length === 0) return;
   els.input.value = '';
   els.input.style.height = 'auto';
@@ -4692,16 +4899,19 @@ function isVeniceUncensoredAssignment(assigned) {
     assigned &&
     assigned.provider === 'venice' &&
     typeof assigned.model === 'string' &&
-    VENICE_UNCENSORED_SET.has(assigned.model)
+    VENICE_UNCENSORED_SET.has(assigned.model) &&
+    veniceModelIsLive(assigned.model)
   );
 }
 
 function pickVeniceUncensoredModel(used) {
-  const free = VENICE_UNCENSORED_CHEAP_FIRST.find((id) => !used.has(id));
+  const live = VENICE_UNCENSORED_CHEAP_FIRST.filter(veniceModelIsLive);
+  const pool = live.length ? live : VENICE_UNCENSORED_CHEAP_FIRST;
+  const free = pool.find((id) => !used.has(id));
   if (free) return free;
   // More personas than curated models — reuse cheapest first.
-  const i = used.size % VENICE_UNCENSORED_CHEAP_FIRST.length;
-  return VENICE_UNCENSORED_CHEAP_FIRST[i];
+  const i = used.size % pool.length;
+  return pool[i];
 }
 
 /**
@@ -5940,9 +6150,6 @@ els.startGroupBtn?.addEventListener('click', async () => {
     if (t) tasks[id] = t;
   }
   createGroupChat(mode, topic, assigned, rounds, personaIds, tasks);
-  // 🏢 decides group vs. solo on every send — left off, the first follow-up
-  // would quietly turn this new group back into a solo chat.
-  setAgencyMode(true);
   // Clear draft and hide without re-capturing the emptied form.
   clearGroupDraft();
   els.groupModal?.classList.add('hidden');
@@ -6122,34 +6329,35 @@ async function readUploadFile(file) {
   return { kind: 'text', name: file.name, content };
 }
 
-function syncWebSearchBtn() {
-  if (!els.webSearchBtn) return;
-  els.webSearchBtn.classList.toggle('search-on', webSearchOn);
-  els.webSearchBtn.setAttribute('aria-pressed', webSearchOn ? 'true' : 'false');
-  els.webSearchBtn.title = webSearchOn
-    ? 'Web search on — the next reply searches live and cites sources. Tap to turn off.'
-    : 'Search the web for this reply and cite sources.';
-}
-syncWebSearchBtn();
-
-els.webSearchBtn?.addEventListener('click', () => {
-  webSearchOn = !webSearchOn;
-  try { localStorage.setItem(WEB_SEARCH_PREF_KEY, webSearchOn ? '1' : '0'); } catch { /* ignore */ }
-  syncWebSearchBtn();
-});
-
 function syncAgencyModeBtn() {
   if (!els.agencyModeBtn) return;
-  els.agencyModeBtn.classList.toggle('search-on', agencyModeOn);
-  els.agencyModeBtn.setAttribute('aria-pressed', agencyModeOn ? 'true' : 'false');
-  els.agencyModeBtn.title = agencyModeOn
-    ? 'Group on — every persona answers, for the chat\'s rounds, your persona first. Tap for solo.'
-    : 'Group — bring every persona into this chat, in rounds.';
+  const inGroup = activeChat()?.kind === 'group';
+  const on = agencyModeOn || inGroup;
+  els.agencyModeBtn.classList.toggle('search-on', on);
+  els.agencyModeBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  els.agencyModeBtn.title = inGroup
+    ? 'Group chat — the whole table answers every message. Tap to turn this chat into a solo chat.'
+    : agencyModeOn
+      ? 'Agency mode on — your selected persona leads and can bring in others by name. Tap to turn off.'
+      : 'Bring in the team — route this chat through the full roster, led by your selected persona.';
 }
 syncAgencyModeBtn();
 
 els.agencyModeBtn?.addEventListener('click', () => {
-  setAgencyMode(!agencyModeOn);
+  const chat = activeChat();
+  if (chat?.kind === 'group') {
+    // Explicit tap while viewing a group chat: make it solo, permanently.
+    // The flag keeps the load-time repair from turning it back into a group.
+    chat.kind = 'chat';
+    chat.groupDowngraded = true;
+    agencyModeOn = false;
+    saveState();
+    renderChatList();
+  } else {
+    agencyModeOn = !agencyModeOn;
+  }
+  try { localStorage.setItem(AGENCY_MODE_PREF_KEY, agencyModeOn ? '1' : '0'); } catch { /* ignore */ }
+  syncAgencyModeBtn();
 });
 
 if (els.attachBtn && els.attachInput) {

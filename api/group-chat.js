@@ -209,6 +209,11 @@ function groupReasoningOff(body, providerId) {
 }
 
 async function callCompletionOnce(resolved, model, messages, { maxTokens, signal, providerId }) {
+  // Cap each call on its own. Without this, one hung model ate the whole
+  // round's budget and every persona queued after it was dropped as "timed out".
+  const callSignal = signal
+    ? AbortSignal.any([signal, AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)])
+    : AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
   const upstream = await fetch(resolved.url, {
     method: 'POST',
     headers: {
@@ -229,7 +234,7 @@ async function callCompletionOnce(resolved, model, messages, { maxTokens, signal
       ),
       providerId || resolved.id,
     )),
-    signal,
+    signal: callSignal,
   });
 
   const rawText = await upstream.text();
@@ -334,11 +339,13 @@ export default async function handler(req, res) {
     personaModels = {},
     providerKeys = {},
     webSearch: wantWebSearch,
+    webSearchQuery,
     personaIds,
     personaTasks = {},
-    // Pin a specific persona as lead instead of letting
-    // rankPersonasByRelevance pick one — the persona you're actually talking
-    // to speaks first no matter what the topic is about.
+    // Orchestrated-only: pin a specific persona as lead instead of letting
+    // rankPersonasByRelevance pick one. This is what turns Orchestrated mode
+    // into "solo chat with a team behind it" — the persona you're actually
+    // talking to stays the lead no matter what the topic is about.
     forcedLeadId,
   } = req.body || {};
 
@@ -417,7 +424,8 @@ export default async function handler(req, res) {
     const lastUser = [...history].reverse().find((m) => m.role === 'user');
 
     // Default query when a persona has no assigned task of its own.
-    const fallbackQuery = (lastUser?.content && String(lastUser.content).trim()) || topicText;
+    const fallbackQuery = (typeof webSearchQuery === 'string' && webSearchQuery.trim())
+      || (lastUser?.content && String(lastUser.content).trim()) || topicText;
 
     // Fetch once for the round, not once per speaker — shared action log is
     // owner-level, not per-persona.
@@ -465,20 +473,19 @@ export default async function handler(req, res) {
     // detectHandoff() the other modes use for reordering, just driving
     // whether someone speaks at all instead of only when they speak.
     const isOrchestrated = mode === 'orchestrated';
-    // A pinned lead (the persona you're talking to) speaks first in every
-    // mode; in Orchestrated it's also the only one queued up front.
-    const pinnedLead = typeof forcedLeadId === 'string'
+    const pinnedLead = isOrchestrated && typeof forcedLeadId === 'string'
       ? speakingOrder.find((p) => p.id === forcedLeadId)
       : null;
     const queue = isOrchestrated
       ? (pinnedLead ? [pinnedLead] : speakingOrder.slice(0, 1))
-      : (pinnedLead
-        ? [pinnedLead, ...speakingOrder.filter((p) => p.id !== pinnedLead.id)]
-        : speakingOrder.slice());
+      : speakingOrder.slice();
     const summonPool = isOrchestrated
       ? speakingOrder.filter((p) => !queue.some((q) => q.id === p.id))
       : [];
     const calledOnBy = new Map(); // personaId -> name of whoever just addressed them
+    // Models the provider said don't exist, learned this round. Every later
+    // persona on the same model goes straight to the fallback — no wasted call.
+    const goneModels = new Set();
 
     while (queue.length) {
       if (controller.signal.aborted) break;
@@ -508,6 +515,12 @@ export default async function handler(req, res) {
           personaName: persona.name,
         });
         continue;
+      }
+
+      if (goneModels.has(turnModel) && turnModel !== defaultModel) {
+        turnResolved = defaultResolved;
+        turnModel = defaultModel;
+        turnProviderId = defaultResolved.id;
       }
 
       sseWrite(res, {
@@ -582,42 +595,71 @@ export default async function handler(req, res) {
           : '',
       ].filter(Boolean).join('\n');
 
+      // One retry per persona on a thrown error (HTTP 4xx/5xx, per-call
+      // timeout, network) or an empty reply, so a single flaky call doesn't
+      // silently cost the table a speaker. If both attempts fail, the persona
+      // is reported by name with the real reason and the round moves on.
       let reply = '';
-      try {
-        reply = await callCompletion(
-          turnResolved,
-          turnModel,
-          [
-            { role: 'system', content: personaPrompt },
-            { role: 'user', content: userPayload },
-          ],
-          {
-            maxTokens: MAX_TOKENS_PER_TURN,
-            signal: controller.signal,
-            providerId: turnProviderId || turnResolved.id,
-          },
-        );
-      } catch (err) {
-        const aborted = err?.name === 'AbortError' || controller.signal.aborted;
-        sseWrite(res, {
-          type: 'error',
-          error: aborted
-            ? 'Group round timed out.'
-            : (err.message || 'Persona turn failed'),
-          personaId: persona.id,
-          personaName: persona.name,
-        });
-        // Skip this persona; continue the round if possible
-        continue;
+      let lastError = '';
+      for (let attempt = 1; attempt <= 2 && !reply; attempt++) {
+        if (controller.signal.aborted) break;
+        if (attempt > 1) {
+          sseWrite(res, { type: 'status', message: `${persona.name}: retrying (${lastError})…` });
+        }
+        try {
+          reply = await callCompletion(
+            turnResolved,
+            turnModel,
+            [
+              { role: 'system', content: personaPrompt },
+              { role: 'user', content: userPayload },
+            ],
+            {
+              maxTokens: MAX_TOKENS_PER_TURN,
+              signal: controller.signal,
+              providerId: turnProviderId || turnResolved.id,
+            },
+          );
+          if (!reply) lastError = 'empty reply';
+        } catch (err) {
+          if (controller.signal.aborted) break;
+          // Provider retired or renamed this persona's saved model (seen live:
+          // Venice dropped e2ee-venice-uncensored-24b-p). Don't lose the
+          // speaker over it: retry on the chat's own model instead.
+          const modelGone = /model not found|model .*does not exist|unknown model|invalid model|no endpoints found|not a valid model/i
+            .test(String(err?.message || ''));
+          if (modelGone && turnModel !== defaultModel) {
+            sseWrite(res, {
+              type: 'status',
+              message: `${persona.name}: ${turnModel} is no longer available — using ${defaultModel}.`,
+            });
+            console.error(`group-chat persona ${persona.id}: ${turnModel} gone, falling back to ${defaultModel}`);
+            goneModels.add(turnModel);
+            turnResolved = defaultResolved;
+            turnModel = defaultModel;
+            turnProviderId = defaultResolved.id;
+            lastError = 'model no longer available';
+            attempt -= 1; // the fallback gets its own two tries
+            continue;
+          }
+          const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+          lastError = timedOut
+            ? `no response in ${UPSTREAM_TIMEOUT_MS / 1000}s`
+            : (err.message || 'request failed');
+          console.error(`group-chat persona ${persona.id} (${turnModel}) attempt ${attempt}:`, lastError);
+        }
       }
 
       if (!reply) {
         sseWrite(res, {
           type: 'error',
-          error: `${persona.name} (${turnModel}) returned an empty reply — pick a non-reasoning model for this persona.`,
+          error: controller.signal.aborted
+            ? 'Group round timed out.'
+            : `${persona.name} (${turnModel}) failed twice: ${lastError}`,
           personaId: persona.id,
           personaName: persona.name,
         });
+        if (controller.signal.aborted) break;
         continue;
       }
 
@@ -760,9 +802,7 @@ export default async function handler(req, res) {
       type: 'done',
       summary: rollingSummary,
       turns: roundSoFar.length,
-      // Orchestrated seats only the lead plus whoever gets named — fewer
-      // speakers there is by design, not failed turns.
-      expectedTurns: isOrchestrated ? undefined : personas.length,
+      expectedTurns: personas.length,
       provider: defaultResolved.label,
       model: defaultModel,
     });
