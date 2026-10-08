@@ -338,10 +338,11 @@ let roleModels = loadRoleModels();
 let pendingUploads = []; // { kind, name, content }
 const modelsCache = {};
 
-// Web search grounding toggle — persists across reloads like the speak toggle.
-const WEB_SEARCH_PREF_KEY = 'webSearchOn';
-let webSearchOn = false;
-try { webSearchOn = localStorage.getItem(WEB_SEARCH_PREF_KEY) === '1'; } catch { /* ignore */ }
+// Web search is asked for in plain words ("search the web for X"), not a
+// toggle — see parseWebSearchRequest. Set per send; null = no search this
+// turn. Clear the old toggle's saved state so nobody is stuck searching.
+let turnSearchQuery = null;
+try { localStorage.removeItem('webSearchOn'); } catch { /* ignore */ }
 
 // "Bring in the team" — solo Chat routes through the same Orchestrated
 // group-chat engine instead of a single model, with whichever persona is
@@ -667,7 +668,6 @@ const els = {
   attachBtn: $('attachBtn'),
   attachInput: $('attachInput'),
   attachPreview: $('attachPreview'),
-  webSearchBtn: $('webSearchBtn'),
   agencyModeBtn: $('agencyModeBtn'),
   smartReplyChips: $('smartReplyChips'),
   micBtn: $('micBtn'),
@@ -2947,7 +2947,8 @@ async function callChat(provider, model, messages, personaId) {
         apiKey: apiKey || undefined,
         paidPassword: loadPaidPassword() || undefined,
         stream: false,
-        webSearch: webSearchOn || undefined,
+        webSearch: turnSearchQuery ? true : undefined,
+        webSearchQuery: turnSearchQuery || undefined,
       }),
       signal: controller.signal,
     });
@@ -2992,7 +2993,8 @@ async function streamChatResponse({ provider, model, messages, personaId, signal
         apiKey: apiKey || undefined,
         paidPassword: loadPaidPassword() || undefined,
         stream: true,
-        webSearch: webSearchOn || undefined,
+        webSearch: turnSearchQuery ? true : undefined,
+        webSearchQuery: turnSearchQuery || undefined,
       }),
       signal,
     });
@@ -3319,6 +3321,8 @@ async function sendMessage(text) {
   // right here in this chat; the next message is a normal reply again.
   const prevUser = [...chat.messages].reverse().filter((m) => m.role === 'user')[1];
   const groupAsk = imageParts.length === 0 ? parseGroupDiscussionRequest(text, prevUser?.content) : null;
+  // "Search the web for X" → this one reply is grounded in live results.
+  turnSearchQuery = groupAsk ? null : parseWebSearchRequest(text, prevUser?.content);
   if (groupAsk) {
     return runInlineGroupDiscussion(chat, groupAsk);
   }
@@ -3743,7 +3747,8 @@ async function callGroupStream(chat, apiMessages, onEvent) {
         paidPassword: loadPaidPassword() || undefined,
         personaModels: personaModelMap,
         providerKeys,
-        webSearch: webSearchOn || undefined,
+        webSearch: turnSearchQuery ? true : undefined,
+        webSearchQuery: turnSearchQuery || undefined,
         personaIds: (Array.isArray(chat.personaIds) && chat.personaIds.length) ? chat.personaIds : undefined,
         personaTasks: (chat.personaTasks && typeof chat.personaTasks === 'object') ? chat.personaTasks : undefined,
         forcedLeadId: chat.forcedLeadId || undefined,
@@ -4104,6 +4109,9 @@ async function sendGroupMessage(text) {
   // Remove any pending "more rounds?" prompt
   els.chat?.querySelector('.rounds-prompt')?.remove();
 
+  const prevGroupUser = [...chat.messages].reverse().find((m) => m.role === 'user');
+  turnSearchQuery = parseWebSearchRequest(displayText, prevGroupUser?.content);
+
   chat.messages.push({ role: 'user', content: displayText, ts: Date.now() });
   chat.provider  = state.activeProvider;
   chat.model     = state.activeModel;
@@ -4197,6 +4205,40 @@ function parseGroupDiscussionRequest(text, previousUserText = '') {
     ? about[1].replace(ROUNDS_RE, '').replace(/[,;:.?!\s]+$/, '').trim()
     : (String(previousUserText || '').trim() || raw);
   return { rounds, topic: topic || raw };
+}
+
+// Web search on request, inside any chat. No button or mode: "search the
+// web for X", "look up X online", "google it" searches for X and the reply
+// cites the results. Anything else is a normal reply.
+const SEARCH_WEB = String.raw`(?:the\s+)?(?:web|internet|net)|online|google`;
+const SEARCH_ASK_RES = [
+  // "search the web for X", "search online about X", "web search X"
+  new RegExp(String.raw`\b(?:search|look\s*up|scour)\s+(?:on\s+)?(?:${SEARCH_WEB})\b(?:\s+(?:for|about|on|to\s+find))?\s*(.*)$`, 'i'),
+  /\bweb[\s-]*search\b[\s:]*(?:(?:for|about|on)\s+)?(.*)$/i,
+  // "look up X online", "search for X on the web"
+  new RegExp(String.raw`\b(?:look\s*up|search(?:\s+for)?)\s+(.+?)\s+(?:online|on\s+(?:the\s+)?(?:web|internet|google)|on\s+line)\b`, 'i'),
+];
+const SEARCH_TRAILING_RE = new RegExp(String.raw`^(.*?)[\s,.;:!?-]*(?:(?:please|pls|and|then|just)\s+)*(?:(?:search|look\s*(?:it|this|that)?\s*up)\s+(?:on\s+)?(?:${SEARCH_WEB})|google\s+(?:it|this|that))\s*[.!?]*$`, 'i');
+
+function parseWebSearchRequest(text, previousUserText = '') {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  let query = null;
+  const trailing = raw.match(SEARCH_TRAILING_RE);
+  if (trailing) query = trailing[1];
+  else {
+    for (const re of SEARCH_ASK_RES) {
+      const m = raw.match(re);
+      if (m) { query = m[1]; break; }
+    }
+  }
+  if (query === null) return null;
+  query = query.replace(/^(?:(?:for|about|on|and|to find|whether)\s+)+/i, '').replace(/[\s,;:.?!]+$/, '').trim();
+  // "search the web for that" / no subject → search the previous message.
+  if (!query || /^(?:it|this|that|this topic|that topic)$/i.test(query)) {
+    query = String(previousUserText || "").trim() || raw;
+  }
+  return query.slice(0, 400);
 }
 
 async function runInlineGroupDiscussion(chat, { rounds, topic }) {
@@ -6286,22 +6328,6 @@ async function readUploadFile(file) {
   });
   return { kind: 'text', name: file.name, content };
 }
-
-function syncWebSearchBtn() {
-  if (!els.webSearchBtn) return;
-  els.webSearchBtn.classList.toggle('search-on', webSearchOn);
-  els.webSearchBtn.setAttribute('aria-pressed', webSearchOn ? 'true' : 'false');
-  els.webSearchBtn.title = webSearchOn
-    ? 'Web search on — the next reply searches live and cites sources. Tap to turn off.'
-    : 'Search the web for this reply and cite sources.';
-}
-syncWebSearchBtn();
-
-els.webSearchBtn?.addEventListener('click', () => {
-  webSearchOn = !webSearchOn;
-  try { localStorage.setItem(WEB_SEARCH_PREF_KEY, webSearchOn ? '1' : '0'); } catch { /* ignore */ }
-  syncWebSearchBtn();
-});
 
 function syncAgencyModeBtn() {
   if (!els.agencyModeBtn) return;

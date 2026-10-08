@@ -339,6 +339,7 @@ export default async function handler(req, res) {
     personaModels = {},
     providerKeys = {},
     webSearch: wantWebSearch,
+    webSearchQuery,
     personaIds,
     personaTasks = {},
     // Orchestrated-only: pin a specific persona as lead instead of letting
@@ -423,7 +424,8 @@ export default async function handler(req, res) {
     const lastUser = [...history].reverse().find((m) => m.role === 'user');
 
     // Default query when a persona has no assigned task of its own.
-    const fallbackQuery = (lastUser?.content && String(lastUser.content).trim()) || topicText;
+    const fallbackQuery = (typeof webSearchQuery === 'string' && webSearchQuery.trim())
+      || (lastUser?.content && String(lastUser.content).trim()) || topicText;
 
     // Fetch once for the round, not once per speaker — shared action log is
     // owner-level, not per-persona.
