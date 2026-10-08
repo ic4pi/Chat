@@ -340,10 +340,10 @@ const WEB_SEARCH_PREF_KEY = 'webSearchOn';
 let webSearchOn = false;
 try { webSearchOn = localStorage.getItem(WEB_SEARCH_PREF_KEY) === '1'; } catch { /* ignore */ }
 
-// "Bring in the team" — solo Chat routes through the same Orchestrated
-// group-chat engine instead of a single model, with whichever persona is
-// selected pinned as lead (see api/group-chat.js's forcedLeadId). Off by
-// default so normal Chat behaves exactly as it always has.
+// 🏢 "Bring in the team" — on, the chat runs as a full group (every
+// persona, in rounds) with the selected persona speaking first (see
+// api/group-chat.js's forcedLeadId). Off by default so normal Chat behaves
+// exactly as it always has.
 const AGENCY_MODE_PREF_KEY = 'agencyModeOn';
 let agencyModeOn = false;
 try { agencyModeOn = localStorage.getItem(AGENCY_MODE_PREF_KEY) === '1'; } catch { /* ignore */ }
@@ -3255,16 +3255,25 @@ async function sendMessage(text) {
   clearSmartReplyChips();
 
   const chat = ensureActiveChat();
-  // The 🏢 toggle must be the one thing that decides group vs. solo, for
-  // every chat — including one created back when "Group" was its own
-  // permanent chat kind, before it folded into this toggle. Without this,
-  // such a chat hit the line below unconditionally, before agencyModeOn
-  // was ever checked, so turning the toggle off did nothing for it. Once
-  // the toggle says off, that's final for this chat too, not just new ones.
-  if (chat.kind === 'group' && !agencyModeOn) {
+  // The 🏢 toggle is the one thing that decides group vs. solo, for every
+  // chat. On: the whole table answers, for the chat's full rounds. Off: a
+  // group chat drops back to solo. An image upload still goes solo for that
+  // one message — the group engine has no vision path.
+  const hasImageUpload = pendingUploads.some((u) => u.kind !== 'text');
+  if (agencyModeOn && chat.kind !== 'group' && !hasImageUpload) {
+    seatWholeTable(chat, text);
+  } else if (!agencyModeOn && chat.kind === 'group') {
     chat.kind = 'chat';
   }
   if (chat.kind === 'group') {
+    const textUploads = pendingUploads.filter((u) => u.kind === 'text');
+    if (textUploads.length) {
+      pendingUploads = pendingUploads.filter((u) => u.kind !== 'text');
+      renderAttachPreview();
+      for (const u of textUploads) {
+        text += `\n\n[Uploaded file: ${u.name}]\n\`\`\`\n${u.content.slice(0, 80_000)}\n\`\`\``;
+      }
+    }
     return sendGroupMessage(text);
   }
 
@@ -3296,16 +3305,6 @@ async function sendMessage(text) {
   renderChatList();
   renderChatTitle();
   renderMessages({ scroll: 'bottom' });
-
-  // Agency mode: route through the Orchestrated group-chat engine instead
-  // of a single model, with the selected persona pinned as lead. Not
-  // supported alongside an image upload this turn — that needs the
-  // vision-prep path solo chat has and group-chat doesn't, so an image
-  // message falls through to the normal single-model flow below instead
-  // of silently dropping the image.
-  if (agencyModeOn && imageParts.length === 0) {
-    return sendAgencyMessage(chat, displayText);
-  }
 
   setGeneratingUi(true);
   activeChatUserStopped = false;
@@ -3995,10 +3994,13 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
 
     if (attempt.data?.summary) chat.groupSummary = attempt.data.summary;
     const expected = attempt.data?.expectedTurns;
-    if (typeof expected === 'number' && spokenThisRound.length < expected) {
+    // The Wrap-up is a 'turn' too, but it isn't a persona — don't let it
+    // hide one that failed.
+    const spokeCount = spokenThisRound.filter((t) => t.personaId !== '_synthesis').length;
+    if (typeof expected === 'number' && spokeCount < expected) {
       chat.messages.push({
         role: 'info',
-        content: `${spokenThisRound.length} of ${expected} personas spoke this round (some turns may have failed).`,
+        content: `${spokeCount} of ${expected} personas spoke this round (some turns may have failed).`,
         ts: Date.now(),
       });
     }
@@ -4038,17 +4040,15 @@ async function runAdditionalRounds(chat, n) {
 
   try {
     for (let i = 1; i <= n; i++) {
-      if (n > 1) updateStatusClock(`Additional round ${i}/${n} — gathering personas`);
+      chat.messages.push({
+        role: 'info',
+        content: `─── Extra round ${i} of ${n} ───`,
+        ts: Date.now(),
+      });
+      renderMessages({ scroll: groupScrollMode('bottom') });
+      updateStatusClock(`Extra round ${i}/${n} — gathering personas`);
       const ok = await runOneRound(chat, updateStatusClock, startedAt, firstPin);
       if (!ok) break;
-      if (i < n) {
-        chat.messages.push({
-          role: 'info',
-          content: `─── Additional round ${i}/${n} complete ───`,
-          ts: Date.now(),
-        });
-        renderMessages({ scroll: groupScrollMode('bottom') });
-      }
     }
     showMoreRoundsPrompt(chat);
   } finally {
@@ -4102,19 +4102,15 @@ async function sendGroupMessage(text) {
 
   try {
     for (let round = 1; round <= totalRounds; round++) {
-      if (totalRounds > 1) {
-        updateStatusClock(`Round ${round}/${totalRounds} — gathering personas`);
-      }
+      chat.messages.push({
+        role: 'info',
+        content: `─── Round ${round} of ${totalRounds} ───`,
+        ts: Date.now(),
+      });
+      renderMessages({ scroll: groupScrollMode('bottom') });
+      updateStatusClock(`Round ${round}/${totalRounds} — gathering personas`);
       const ok = await runOneRound(chat, updateStatusClock, startedAt, overallFirstPin);
       if (!ok) break;
-      if (round < totalRounds) {
-        chat.messages.push({
-          role: 'info',
-          content: `─── Round ${round}/${totalRounds} complete ───`,
-          ts: Date.now(),
-        });
-        renderMessages({ scroll: groupScrollMode('bottom') });
-      }
     }
     // Offer more rounds after all are done
     showMoreRoundsPrompt(chat);
@@ -4129,49 +4125,31 @@ async function sendGroupMessage(text) {
 }
 
 // ---------------------------------------------------------------------------
-// Agency mode: a normal (solo) chat, routed through the Orchestrated
-// group-chat engine with the selected persona pinned as lead. Reuses
-// runOneRound/callGroupStream exactly as sendGroupMessage does — the only
-// difference is this chat never becomes chat.kind === 'group' and only ever
-// runs one round per message, matching how a normal chat feels (send,
-// get a reply, send again) rather than group chat's multi-round table.
+// 🏢 on in a solo chat: turn it into a real group chat — every persona at
+// the table, the chat's full rounds, the selected persona speaking first.
+// This used to run Orchestrated mode for one round, where only the lead
+// speaks unless it names someone — so 1 of 12 answered and nothing more.
+// A group from the Group screen (no forcedLeadId) keeps its own mode/seats.
 // ---------------------------------------------------------------------------
-async function sendAgencyMessage(chat, displayText) {
-  chat.groupMode = 'orchestrated';
-  chat.personaIds = personas.map((p) => p.id);
-  chat.forcedLeadId = state.activePersonaId;
+function seatWholeTable(chat, text) {
+  const fromToggle = !chat.groupMode || !!chat.forcedLeadId;
+  chat.kind = 'group';
+  if (fromToggle) {
+    chat.groupMode = 'brainstorm';
+    chat.personaIds = personas.map((p) => p.id);
+    chat.forcedLeadId = state.activePersonaId;
+  }
   if (!chat.topic) {
     chat.topic = (chat.name && chat.name !== 'New chat' && chat.name !== 'Untitled')
       ? chat.name
-      : displayText.slice(0, 60);
+      : (String(text || '').trim() || 'Open discussion').slice(0, 60);
   }
+}
 
-  setGeneratingUi(true);
-  activeChatUserStopped = false;
-  const startedAt = Date.now();
-  const updateStatusClock = (base) => {
-    const secs = Math.floor((Date.now() - startedAt) / 1000);
-    setTypingActive(true, `${base} · ${secs}s`);
-  };
-  setTypingActive(true, 'Bringing in the team…');
-  const tickTimer = setInterval(() => {
-    const cur = els.typingStatus?.textContent || 'Waiting…';
-    updateStatusClock(cur.replace(/\s·\s\d+s$/, ''));
-  }, 1000);
-
-  try {
-    await runOneRound(chat, updateStatusClock, startedAt, [null]);
-  } finally {
-    clearInterval(tickTimer);
-    setGeneratingUi(false);
-    activeChatUserStopped = false;
-    setTypingActive(false);
-    els.input?.focus();
-    chat.updatedAt = Date.now();
-    saveState();
-    renderChatList();
-    void window.hub?.syncChat?.(chat);
-  }
+function setAgencyMode(on) {
+  agencyModeOn = !!on;
+  try { localStorage.setItem(AGENCY_MODE_PREF_KEY, agencyModeOn ? '1' : '0'); } catch { /* ignore */ }
+  syncAgencyModeBtn();
 }
 
 // ---------------------------------------------------------------------------
@@ -5962,6 +5940,9 @@ els.startGroupBtn?.addEventListener('click', async () => {
     if (t) tasks[id] = t;
   }
   createGroupChat(mode, topic, assigned, rounds, personaIds, tasks);
+  // 🏢 decides group vs. solo on every send — left off, the first follow-up
+  // would quietly turn this new group back into a solo chat.
+  setAgencyMode(true);
   // Clear draft and hide without re-capturing the emptied form.
   clearGroupDraft();
   els.groupModal?.classList.add('hidden');
@@ -6162,15 +6143,13 @@ function syncAgencyModeBtn() {
   els.agencyModeBtn.classList.toggle('search-on', agencyModeOn);
   els.agencyModeBtn.setAttribute('aria-pressed', agencyModeOn ? 'true' : 'false');
   els.agencyModeBtn.title = agencyModeOn
-    ? 'Agency mode on — your selected persona leads and can bring in others by name. Tap to turn off.'
-    : 'Bring in the team — route this chat through the full roster, led by your selected persona.';
+    ? 'Group on — every persona answers, for the chat\'s rounds, your persona first. Tap for solo.'
+    : 'Group — bring every persona into this chat, in rounds.';
 }
 syncAgencyModeBtn();
 
 els.agencyModeBtn?.addEventListener('click', () => {
-  agencyModeOn = !agencyModeOn;
-  try { localStorage.setItem(AGENCY_MODE_PREF_KEY, agencyModeOn ? '1' : '0'); } catch { /* ignore */ }
-  syncAgencyModeBtn();
+  setAgencyMode(!agencyModeOn);
 });
 
 if (els.attachBtn && els.attachInput) {

@@ -336,10 +336,9 @@ export default async function handler(req, res) {
     webSearch: wantWebSearch,
     personaIds,
     personaTasks = {},
-    // Orchestrated-only: pin a specific persona as lead instead of letting
-    // rankPersonasByRelevance pick one. This is what turns Orchestrated mode
-    // into "solo chat with a team behind it" — the persona you're actually
-    // talking to stays the lead no matter what the topic is about.
+    // Pin a specific persona as lead instead of letting
+    // rankPersonasByRelevance pick one — the persona you're actually talking
+    // to speaks first no matter what the topic is about.
     forcedLeadId,
   } = req.body || {};
 
@@ -466,12 +465,16 @@ export default async function handler(req, res) {
     // detectHandoff() the other modes use for reordering, just driving
     // whether someone speaks at all instead of only when they speak.
     const isOrchestrated = mode === 'orchestrated';
-    const pinnedLead = isOrchestrated && typeof forcedLeadId === 'string'
+    // A pinned lead (the persona you're talking to) speaks first in every
+    // mode; in Orchestrated it's also the only one queued up front.
+    const pinnedLead = typeof forcedLeadId === 'string'
       ? speakingOrder.find((p) => p.id === forcedLeadId)
       : null;
     const queue = isOrchestrated
       ? (pinnedLead ? [pinnedLead] : speakingOrder.slice(0, 1))
-      : speakingOrder.slice();
+      : (pinnedLead
+        ? [pinnedLead, ...speakingOrder.filter((p) => p.id !== pinnedLead.id)]
+        : speakingOrder.slice());
     const summonPool = isOrchestrated
       ? speakingOrder.filter((p) => !queue.some((q) => q.id === p.id))
       : [];
@@ -757,7 +760,9 @@ export default async function handler(req, res) {
       type: 'done',
       summary: rollingSummary,
       turns: roundSoFar.length,
-      expectedTurns: personas.length,
+      // Orchestrated seats only the lead plus whoever gets named — fewer
+      // speakers there is by design, not failed turns.
+      expectedTurns: isOrchestrated ? undefined : personas.length,
       provider: defaultResolved.label,
       model: defaultModel,
     });
