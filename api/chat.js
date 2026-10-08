@@ -308,6 +308,9 @@ export default async function handler(req, res) {
     apiKey: clientKey,
     stream: wantStream,
     webSearch: wantWebSearch,
+    // What to search for, when the client pulled it out of a plain-words ask
+    // ("search the web for X" → "X"). Otherwise the last user message.
+    webSearchQuery,
   } = req.body || {};
 
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -370,7 +373,7 @@ export default async function handler(req, res) {
   if (wantWebSearch) {
     try {
       const lastUser = [...chatMessages].reverse().find((m) => m.role === 'user');
-      const query = extractQueryText(lastUser?.content);
+      const query = (typeof webSearchQuery === 'string' && webSearchQuery.trim()) || extractQueryText(lastUser?.content);
       sources = await searchWeb(query);
       const context = formatSearchContext(query, sources);
       effectiveSystemPrompt = [basePrompt, context].filter(Boolean).join('\n\n');
