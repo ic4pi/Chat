@@ -37,7 +37,6 @@ const FALLBACK_PERSONAS = [
 const PROVIDER_FALLBACKS = {
   venice: [
     { id: 'venice-uncensored-1-2', name: 'Venice Uncensored 1.2' },
-    { id: 'e2ee-venice-uncensored-24b-p', name: 'Venice Uncensored 1.1' },
     { id: 'venice-uncensored-role-play', name: 'Venice Role Play Uncensored' },
     { id: 'olafangensan-glm-4.7-flash-heretic', name: 'GLM 4.7 Flash Heretic' },
     { id: 'gemma-4-uncensored', name: 'Gemma 4 Uncensored' },
@@ -137,11 +136,15 @@ const VENICE_UNCENSORED_CHEAP_FIRST = [
   'e2ee-gemma-4-26b-a4b-uncensored-p',  // ~$0.19 / $0.88
   'venice-uncensored-1-2',              // ~$0.20 / $0.90
   'venice-uncensored',                  // Dolphin Mistral 24B Venice Edition
-  'e2ee-venice-uncensored-24b-p',       // ~$0.25 / $1.15
+  // e2ee-venice-uncensored-24b-p removed: Venice retired it (Oct 2026).
   'e2ee-qwen3-6-35b-a3b-uncensored-p',  // ~$0.38 / $1.88
   'venice-uncensored-role-play',        // ~$0.50 / $2.00
 ];
 const VENICE_UNCENSORED_SET = new Set(VENICE_UNCENSORED_CHEAP_FIRST);
+// Venice's live catalog, once /api/models answers. Curated ids missing from
+// it have been retired, so personas never get (or keep) them.
+let liveVeniceModelIds = null;
+const veniceModelIsLive = (id) => !liveVeniceModelIds || liveVeniceModelIds.has(id);
 
 const PROVIDER_IDS = ['venice', 'openrouter', 'cerebras', 'groq', 'xai', 'nvidia'];
 // 'groq' and 'xai' are different companies whose names differ by one letter,
@@ -2028,6 +2031,10 @@ async function loadProviderModels(provider) {
     const raw = models.length ? models : (PROVIDER_FALLBACKS[provider] || []);
     const list = raw.map((m) => enrichModelClient(provider, m));
     if (!key) modelsCache[cacheKey] = list;
+    if (provider === 'venice' && models.length) {
+      liveVeniceModelIds = new Set(models.map((m) => m.id));
+      ensurePersonaModels(personas); // reassign any persona on a retired model
+    }
     return list;
   } catch (err) {
     console.warn(`Could not fetch ${provider} model list:`, err);
@@ -4850,16 +4857,19 @@ function isVeniceUncensoredAssignment(assigned) {
     assigned &&
     assigned.provider === 'venice' &&
     typeof assigned.model === 'string' &&
-    VENICE_UNCENSORED_SET.has(assigned.model)
+    VENICE_UNCENSORED_SET.has(assigned.model) &&
+    veniceModelIsLive(assigned.model)
   );
 }
 
 function pickVeniceUncensoredModel(used) {
-  const free = VENICE_UNCENSORED_CHEAP_FIRST.find((id) => !used.has(id));
+  const live = VENICE_UNCENSORED_CHEAP_FIRST.filter(veniceModelIsLive);
+  const pool = live.length ? live : VENICE_UNCENSORED_CHEAP_FIRST;
+  const free = pool.find((id) => !used.has(id));
   if (free) return free;
   // More personas than curated models — reuse cheapest first.
-  const i = used.size % VENICE_UNCENSORED_CHEAP_FIRST.length;
-  return VENICE_UNCENSORED_CHEAP_FIRST[i];
+  const i = used.size % pool.length;
+  return pool[i];
 }
 
 /**
