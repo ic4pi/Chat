@@ -481,6 +481,9 @@ export default async function handler(req, res) {
       ? speakingOrder.filter((p) => !queue.some((q) => q.id === p.id))
       : [];
     const calledOnBy = new Map(); // personaId -> name of whoever just addressed them
+    // Models the provider said don't exist, learned this round. Every later
+    // persona on the same model goes straight to the fallback — no wasted call.
+    const goneModels = new Set();
 
     while (queue.length) {
       if (controller.signal.aborted) break;
@@ -510,6 +513,12 @@ export default async function handler(req, res) {
           personaName: persona.name,
         });
         continue;
+      }
+
+      if (goneModels.has(turnModel) && turnModel !== defaultModel) {
+        turnResolved = defaultResolved;
+        turnModel = defaultModel;
+        turnProviderId = defaultResolved.id;
       }
 
       sseWrite(res, {
@@ -623,6 +632,7 @@ export default async function handler(req, res) {
               message: `${persona.name}: ${turnModel} is no longer available — using ${defaultModel}.`,
             });
             console.error(`group-chat persona ${persona.id}: ${turnModel} gone, falling back to ${defaultModel}`);
+            goneModels.add(turnModel);
             turnResolved = defaultResolved;
             turnModel = defaultModel;
             turnProviderId = defaultResolved.id;
