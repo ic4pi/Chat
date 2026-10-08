@@ -434,8 +434,9 @@ function migrate(s) {
   merged.chats = merged.chats.map((c) => ({
     id: c.id,
     name: c.name || 'Untitled',
-    kind: c.kind || 'chat',
+    kind: wasSilentlyDowngradedGroup(c) ? 'group' : (c.kind || 'chat'),
     groupMode: c.groupMode || null,
+    groupDowngraded: c.groupDowngraded === true,
     topic: c.topic || null,
     groupSummary: c.groupSummary || '',
     groupRounds: typeof c.groupRounds === 'number' ? c.groupRounds : 3,
@@ -501,6 +502,17 @@ function ensureActiveChat() {
     chat = createChat();
   }
   return chat;
+}
+
+// Group-button chats are named "<Mode label>: <topic>" by createGroupChat().
+// One that reads kind === 'chat' without the explicit groupDowngraded flag was
+// flipped to solo by the old send-time check, not by the user — restore it.
+function wasSilentlyDowngradedGroup(c) {
+  return c.kind === 'chat'
+    && c.groupDowngraded !== true
+    && typeof c.groupMode === 'string'
+    && Array.isArray(c.personaIds) && c.personaIds.length > 0
+    && /^(Boardroom|Brainstorm|Free chat|Orchestrated): /.test(String(c.name || ''));
 }
 
 function createChat(opts = {}) {
@@ -3255,15 +3267,11 @@ async function sendMessage(text) {
   clearSmartReplyChips();
 
   const chat = ensureActiveChat();
-  // The 🏢 toggle must be the one thing that decides group vs. solo, for
-  // every chat — including one created back when "Group" was its own
-  // permanent chat kind, before it folded into this toggle. Without this,
-  // such a chat hit the line below unconditionally, before agencyModeOn
-  // was ever checked, so turning the toggle off did nothing for it. Once
-  // the toggle says off, that's final for this chat too, not just new ones.
-  if (chat.kind === 'group' && !agencyModeOn) {
-    chat.kind = 'chat';
-  }
+  // A group chat stays a group chat on send. Only an explicit tap of the 🏢
+  // toggle while viewing it turns it into a solo chat (see the toggle's click
+  // handler). Downgrading here on agencyModeOn === false — the default —
+  // silently turned every Group-button chat into a one-model solo chat on
+  // its first follow-up: one reply, no rounds, the rest of the table silent.
   if (chat.kind === 'group') {
     return sendGroupMessage(text);
   }
@@ -4301,6 +4309,7 @@ async function renderAll() {
   renderArtifacts();
   renderAttachPreview();
   const chat = activeChat();
+  syncAgencyModeBtn();
   if (els.input) {
     els.input.placeholder = chat?.kind === 'group'
       ? 'Address the table…'
@@ -6159,16 +6168,31 @@ els.webSearchBtn?.addEventListener('click', () => {
 
 function syncAgencyModeBtn() {
   if (!els.agencyModeBtn) return;
-  els.agencyModeBtn.classList.toggle('search-on', agencyModeOn);
-  els.agencyModeBtn.setAttribute('aria-pressed', agencyModeOn ? 'true' : 'false');
-  els.agencyModeBtn.title = agencyModeOn
-    ? 'Agency mode on — your selected persona leads and can bring in others by name. Tap to turn off.'
-    : 'Bring in the team — route this chat through the full roster, led by your selected persona.';
+  const inGroup = activeChat()?.kind === 'group';
+  const on = agencyModeOn || inGroup;
+  els.agencyModeBtn.classList.toggle('search-on', on);
+  els.agencyModeBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  els.agencyModeBtn.title = inGroup
+    ? 'Group chat — the whole table answers every message. Tap to turn this chat into a solo chat.'
+    : agencyModeOn
+      ? 'Agency mode on — your selected persona leads and can bring in others by name. Tap to turn off.'
+      : 'Bring in the team — route this chat through the full roster, led by your selected persona.';
 }
 syncAgencyModeBtn();
 
 els.agencyModeBtn?.addEventListener('click', () => {
-  agencyModeOn = !agencyModeOn;
+  const chat = activeChat();
+  if (chat?.kind === 'group') {
+    // Explicit tap while viewing a group chat: make it solo, permanently.
+    // The flag keeps the load-time repair from turning it back into a group.
+    chat.kind = 'chat';
+    chat.groupDowngraded = true;
+    agencyModeOn = false;
+    saveState();
+    renderChatList();
+  } else {
+    agencyModeOn = !agencyModeOn;
+  }
   try { localStorage.setItem(AGENCY_MODE_PREF_KEY, agencyModeOn ? '1' : '0'); } catch { /* ignore */ }
   syncAgencyModeBtn();
 });

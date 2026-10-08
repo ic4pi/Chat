@@ -209,6 +209,11 @@ function groupReasoningOff(body, providerId) {
 }
 
 async function callCompletionOnce(resolved, model, messages, { maxTokens, signal, providerId }) {
+  // Cap each call on its own. Without this, one hung model ate the whole
+  // round's budget and every persona queued after it was dropped as "timed out".
+  const callSignal = signal
+    ? AbortSignal.any([signal, AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)])
+    : AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
   const upstream = await fetch(resolved.url, {
     method: 'POST',
     headers: {
@@ -229,7 +234,7 @@ async function callCompletionOnce(resolved, model, messages, { maxTokens, signal
       ),
       providerId || resolved.id,
     )),
-    signal,
+    signal: callSignal,
   });
 
   const rawText = await upstream.text();
@@ -579,42 +584,52 @@ export default async function handler(req, res) {
           : '',
       ].filter(Boolean).join('\n');
 
+      // One retry per persona on a thrown error (HTTP 4xx/5xx, per-call
+      // timeout, network) or an empty reply, so a single flaky call doesn't
+      // silently cost the table a speaker. If both attempts fail, the persona
+      // is reported by name with the real reason and the round moves on.
       let reply = '';
-      try {
-        reply = await callCompletion(
-          turnResolved,
-          turnModel,
-          [
-            { role: 'system', content: personaPrompt },
-            { role: 'user', content: userPayload },
-          ],
-          {
-            maxTokens: MAX_TOKENS_PER_TURN,
-            signal: controller.signal,
-            providerId: turnProviderId || turnResolved.id,
-          },
-        );
-      } catch (err) {
-        const aborted = err?.name === 'AbortError' || controller.signal.aborted;
-        sseWrite(res, {
-          type: 'error',
-          error: aborted
-            ? 'Group round timed out.'
-            : (err.message || 'Persona turn failed'),
-          personaId: persona.id,
-          personaName: persona.name,
-        });
-        // Skip this persona; continue the round if possible
-        continue;
+      let lastError = '';
+      for (let attempt = 1; attempt <= 2 && !reply; attempt++) {
+        if (controller.signal.aborted) break;
+        if (attempt > 1) {
+          sseWrite(res, { type: 'status', message: `${persona.name}: retrying (${lastError})…` });
+        }
+        try {
+          reply = await callCompletion(
+            turnResolved,
+            turnModel,
+            [
+              { role: 'system', content: personaPrompt },
+              { role: 'user', content: userPayload },
+            ],
+            {
+              maxTokens: MAX_TOKENS_PER_TURN,
+              signal: controller.signal,
+              providerId: turnProviderId || turnResolved.id,
+            },
+          );
+          if (!reply) lastError = 'empty reply';
+        } catch (err) {
+          if (controller.signal.aborted) break;
+          const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+          lastError = timedOut
+            ? `no response in ${UPSTREAM_TIMEOUT_MS / 1000}s`
+            : (err.message || 'request failed');
+          console.error(`group-chat persona ${persona.id} (${turnModel}) attempt ${attempt}:`, lastError);
+        }
       }
 
       if (!reply) {
         sseWrite(res, {
           type: 'error',
-          error: `${persona.name} (${turnModel}) returned an empty reply — pick a non-reasoning model for this persona.`,
+          error: controller.signal.aborted
+            ? 'Group round timed out.'
+            : `${persona.name} (${turnModel}) failed twice: ${lastError}`,
           personaId: persona.id,
           personaName: persona.name,
         });
+        if (controller.signal.aborted) break;
         continue;
       }
 
