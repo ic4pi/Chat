@@ -612,6 +612,24 @@ export default async function handler(req, res) {
           if (!reply) lastError = 'empty reply';
         } catch (err) {
           if (controller.signal.aborted) break;
+          // Provider retired or renamed this persona's saved model (seen live:
+          // Venice dropped e2ee-venice-uncensored-24b-p). Don't lose the
+          // speaker over it: retry on the chat's own model instead.
+          const modelGone = /model not found|model .*does not exist|unknown model|invalid model|no endpoints found|not a valid model/i
+            .test(String(err?.message || ''));
+          if (modelGone && turnModel !== defaultModel) {
+            sseWrite(res, {
+              type: 'status',
+              message: `${persona.name}: ${turnModel} is no longer available — using ${defaultModel}.`,
+            });
+            console.error(`group-chat persona ${persona.id}: ${turnModel} gone, falling back to ${defaultModel}`);
+            turnResolved = defaultResolved;
+            turnModel = defaultModel;
+            turnProviderId = defaultResolved.id;
+            lastError = 'model no longer available';
+            attempt -= 1; // the fallback gets its own two tries
+            continue;
+          }
           const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
           lastError = timedOut
             ? `no response in ${UPSTREAM_TIMEOUT_MS / 1000}s`

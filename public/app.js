@@ -4208,6 +4208,15 @@ async function runInlineGroupDiscussion(chat, { rounds, topic }) {
   chat.topic = topic;
   chat.groupFocus = topic;
 
+  // Visible right away: the first speaker can take a while (context summary,
+  // seating order), and an empty screen reads as stuck.
+  chat.messages.push({
+    role: 'info',
+    content: `Group discussion · ${rounds} round${rounds > 1 ? 's' : ''} · everyone at the table — starting…`,
+    ts: Date.now(),
+  });
+  renderMessages({ scroll: 'bottom' });
+
   setGeneratingUi(true);
   activeChatUserStopped = false;
   const startedAt = Date.now();
@@ -4434,12 +4443,19 @@ async function renderAll() {
 
 els.inputForm.addEventListener('submit', (e) => {
   e.preventDefault();
+  const text = els.input.value.trim();
   if (chatBusy) {
+    // Typed something while a reply or group discussion is running: keep
+    // the text and keep the run going. Stopping is the Stop / ✋ buttons
+    // or Esc — not a send that happens to land mid-run.
+    if (text) {
+      setTypingActive(true, 'Still working — your message is kept. Tap Stop to cancel.');
+      return;
+    }
     stopActiveChat('Stopped by user');
     setTypingActive(true, 'Stopping…');
     return;
   }
-  const text = els.input.value.trim();
   if (!text && pendingUploads.length === 0) return;
   els.input.value = '';
   els.input.style.height = 'auto';
