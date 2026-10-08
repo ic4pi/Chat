@@ -4048,7 +4048,10 @@ async function runAdditionalRounds(chat, n) {
     for (let i = 1; i <= n; i++) {
       if (n > 1) updateStatusClock(`Additional round ${i}/${n} — gathering personas`);
       const ok = await runOneRound(chat, updateStatusClock, startedAt, firstPin);
-      if (!ok) break;
+      // A failed round is already reported in the chat; only a user Stop
+      // ends the remaining rounds. Breaking on any failure is what cut a
+      // multi-round session down to one round.
+      if (!ok && activeChatUserStopped) break;
       if (i < n) {
         chat.messages.push({
           role: 'info',
@@ -4114,7 +4117,10 @@ async function sendGroupMessage(text) {
         updateStatusClock(`Round ${round}/${totalRounds} — gathering personas`);
       }
       const ok = await runOneRound(chat, updateStatusClock, startedAt, overallFirstPin);
-      if (!ok) break;
+      // A failed round is already reported in the chat; only a user Stop
+      // ends the remaining rounds. Breaking on any failure is what cut a
+      // multi-round session down to one round.
+      if (!ok && activeChatUserStopped) break;
       if (round < totalRounds) {
         chat.messages.push({
           role: 'info',
