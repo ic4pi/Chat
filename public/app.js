@@ -345,8 +345,11 @@ try { webSearchOn = localStorage.getItem(WEB_SEARCH_PREF_KEY) === '1'; } catch {
 // selected pinned as lead (see api/group-chat.js's forcedLeadId). Off by
 // default so normal Chat behaves exactly as it always has.
 const AGENCY_MODE_PREF_KEY = 'agencyModeOn';
+// The 🏢 toggle is gone: one chat, and a group discussion is asked for in
+// plain words (see parseGroupDiscussionRequest). Clear any saved "on" state
+// so nobody is stuck in a mode with no button to leave it.
 let agencyModeOn = false;
-try { agencyModeOn = localStorage.getItem(AGENCY_MODE_PREF_KEY) === '1'; } catch { /* ignore */ }
+try { localStorage.removeItem(AGENCY_MODE_PREF_KEY); } catch { /* ignore */ }
 
 // ---------------------------------------------------------------------------
 // State
@@ -3305,6 +3308,14 @@ async function sendMessage(text) {
   renderChatTitle();
   renderMessages({ scroll: 'bottom' });
 
+  // "Have a three round group discussion about X" → every persona, N rounds,
+  // right here in this chat; the next message is a normal reply again.
+  const prevUser = [...chat.messages].reverse().filter((m) => m.role === 'user')[1];
+  const groupAsk = imageParts.length === 0 ? parseGroupDiscussionRequest(text, prevUser?.content) : null;
+  if (groupAsk) {
+    return runInlineGroupDiscussion(chat, groupAsk);
+  }
+
   // Agency mode: route through the Orchestrated group-chat engine instead
   // of a single model, with the selected persona pinned as lead. Not
   // supported alongside an image upload this turn — that needs the
@@ -3877,6 +3888,9 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
       personaId: m.personaId,
       personaName: m.personaName,
     }));
+  // An in-chat group discussion: personas answer the topic, not the literal
+  // "have a 3 round group discussion" request that started it.
+  if (chat.groupFocus) apiMessages.push({ role: 'user', content: chat.groupFocus });
 
   let currentTs        = null;
   let currentPersonaId = null;
@@ -4138,6 +4152,97 @@ async function sendGroupMessage(text) {
     activeChatUserStopped = false;
     setTypingActive(false);
     els.input?.focus();
+    void window.hub?.syncChat?.(chat);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Group discussion on request, inside a normal chat. No separate mode or
+// screen: "have a 3 round group discussion on pricing" runs every persona
+// for 3 rounds here, then the chat goes back to one reply per message.
+// ---------------------------------------------------------------------------
+const ROUND_WORDS = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+};
+// Explicit phrase ("group discussion", "team debate", "roundtable") or a round
+// count plus who + what ("3 rounds, everyone discuss X").
+const GROUP_PHRASE_RE = /\b(?:group|team|panel|round[\s-]?table)\s+(?:discussion|debate|brainstorm(?:ing)?|chat|conversation|talk)\b|\bround[\s-]?table\b/i;
+const GROUP_WHO_RE = /\b(?:group|team|everyone|everybody|all (?:the )?(?:models|personas|of you)|personas|models|table|panel)\b/i;
+const GROUP_WHAT_RE = /\b(?:discuss(?:ion)?|debate|brainstorm|talk|weigh in)\b/i;
+const ROUNDS_RE = /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)[\s-]*rounds?\b|\brounds?\s*[:=]?\s*(\d{1,2})\b/i;
+
+function parseGroupDiscussionRequest(text, previousUserText = '') {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  const m = raw.match(ROUNDS_RE);
+  const asked = GROUP_PHRASE_RE.test(raw) || (m && GROUP_WHO_RE.test(raw) && GROUP_WHAT_RE.test(raw));
+  if (!asked) return null;
+  let rounds = 3;
+  if (m) {
+    const tok = String(m[1] || m[2]).toLowerCase();
+    rounds = /^\d+$/.test(tok) ? parseInt(tok, 10) : (ROUND_WORDS[tok] || 3);
+  }
+  rounds = Math.min(20, Math.max(1, rounds));
+  // Topic = whatever follows "about/on/regarding …". With none ("have a
+  // 3 round group discussion"), the group discusses the previous message.
+  const about = raw.match(/\b(?:about|on|regarding|re:|discuss(?:ing)?|debate|whether)\s+(?!(?:it|this|that)\b)(.+)$/i);
+  const topic = about
+    ? about[1].replace(ROUNDS_RE, '').replace(/[,;:.?!\s]+$/, '').trim()
+    : (String(previousUserText || '').trim() || raw);
+  return { rounds, topic: topic || raw };
+}
+
+async function runInlineGroupDiscussion(chat, { rounds, topic }) {
+  // runOneRound reads these off the chat; set them for this discussion only
+  // and put the chat back exactly as it was afterwards.
+  const saved = {
+    groupMode: chat.groupMode,
+    personaIds: chat.personaIds,
+    forcedLeadId: chat.forcedLeadId,
+    topic: chat.topic,
+    groupFocus: chat.groupFocus,
+  };
+  chat.groupMode = 'brainstorm'; // everyone speaks each round
+  chat.personaIds = null;        // full roster
+  chat.forcedLeadId = undefined;
+  chat.topic = topic;
+  chat.groupFocus = topic;
+
+  setGeneratingUi(true);
+  activeChatUserStopped = false;
+  const startedAt = Date.now();
+  const firstPin = [null];
+  const updateStatusClock = (base) => {
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    setTypingActive(true, `${base} · ${secs}s`);
+  };
+  setTypingActive(true, 'Gathering the group…');
+  const tickTimer = setInterval(() => {
+    const cur = els.typingStatus?.textContent || 'Waiting…';
+    updateStatusClock(cur.replace(/\s·\s\d+s$/, ''));
+  }, 1000);
+
+  try {
+    for (let round = 1; round <= rounds; round++) {
+      if (rounds > 1) updateStatusClock(`Round ${round}/${rounds} — gathering personas`);
+      const ok = await runOneRound(chat, updateStatusClock, startedAt, firstPin);
+      if (!ok && activeChatUserStopped) break;
+      chat.messages.push({
+        role: 'info',
+        content: `─── Round ${round}/${rounds} complete ───`,
+        ts: Date.now(),
+      });
+      renderMessages({ scroll: groupScrollMode('bottom') });
+    }
+  } finally {
+    Object.assign(chat, saved);
+    clearInterval(tickTimer);
+    setGeneratingUi(false);
+    activeChatUserStopped = false;
+    setTypingActive(false);
+    els.input?.focus();
+    chat.updatedAt = Date.now();
+    saveState();
     void window.hub?.syncChat?.(chat);
   }
 }
