@@ -1,0 +1,6 @@
+openai>=1.40        # AsyncOpenAI; tested on 3.26 (1.x API surface only)
+pydantic>=2.6
+numpy>=1.26
+faiss-cpu>=1.8      # VECTOR_BACKEND=faiss (default)
+# pinecone>=5       # uncomment for VECTOR_BACKEND=pinecone
+# pytest>=8         # tests only

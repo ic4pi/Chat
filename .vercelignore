@@ -10,3 +10,7 @@ sandbox-runner/node_modules/
 # Modal app sources — deployed with `modal deploy`, not part of the Vercel
 # build. Vercel would otherwise try to treat modal/*.py as Python functions.
 modal/
+
+# Standalone Python marketing engine — run on its own, not part of the Vercel
+# build. Vercel would otherwise try to treat agency-engine/*.py as functions.
+agency-engine/
