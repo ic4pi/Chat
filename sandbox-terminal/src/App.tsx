@@ -75,7 +75,9 @@ import { BuildPicker, type BuildChoiceSeats, type TeamOption } from './BuildPick
 import {
   PRESETS,
   SEATS,
+  costStars,
   isUncensoredModel,
+  stars,
   loadTeamPrefs,
   resolvePreset,
   rolesFromSeats,
@@ -693,9 +695,12 @@ export function App() {
     fix: teamPrefs.seats?.fix ?? roleModels.write,
   };
 
-  // Every team's models, labelled with the team, seat and price — the picker's first menu group.
-  const teamOptions = useMemo<TeamOption[]>(() => {
-    if (!teamCatalogs.openrouter?.length) return [];
+  // Every team's models, labelled with team, seat and cost (⭐ free … ⭐⭐⭐⭐ Fable-class)
+  // — the picker's first menu group — plus each team's own cost rating.
+  const { teamOptions, teamStars } = useMemo(() => {
+    const options: TeamOption[] = [];
+    const ratings: Partial<Record<PresetId, number>> = {};
+    if (!teamCatalogs.openrouter?.length) return { teamOptions: options, teamStars: ratings };
     const ctx = { catalogs: teamCatalogs, liveDefaults: teamDefaults, unlocked: true };
     const seen = new Map<string, TeamOption>();
     for (const id of Object.keys(PRESETS) as PresetId[]) {
@@ -703,16 +708,16 @@ export function App() {
       for (const seat of SEATS) {
         const sm = seats[seat.id];
         const k = `${sm.provider}::${sm.model}`;
-        const meta = (teamCatalogs[sm.provider] || []).find(m => m.id === sm.model) as (CatalogModel & { pricing?: { prompt?: string; completion?: string } }) | undefined;
-        const p = meta?.pricing;
-        const cost = sm.provider === 'venice' ? 'Venice'
-          : p && Number(p.prompt) > 0 ? `$${(Number(p.prompt) * 1e6).toFixed(2)}/$${(Number(p.completion) * 1e6).toFixed(2)} per M` : 'free';
+        const meta = (teamCatalogs[sm.provider] || []).find(m => m.id === sm.model);
+        const n = costStars(sm.provider, meta);
+        ratings[id] = Math.max(ratings[id] ?? 0, n);
         const tag = `${PRESETS[id].label} ${seat.label}`;
         const prev = seen.get(k);
-        seen.set(k, { ...sm, label: prev ? prev.label.replace(' · ', `, ${tag} · `) : `${meta?.name || sm.model} — ${tag} · ${cost}` });
+        seen.set(k, { ...sm, label: prev ? prev.label.replace(' · ', `, ${tag} · `) : `${meta?.name || sm.model} — ${tag} · ${stars(n)}` });
       }
     }
-    return [...seen.values()];
+    options.push(...seen.values());
+    return { teamOptions: options, teamStars: ratings };
   }, [teamCatalogs, teamDefaults]);
 
   const applySeats = useCallback((seats: TeamSeats, preset: PresetId | 'custom') => {
@@ -762,6 +767,10 @@ export function App() {
       key={`${teamPrefs.preset}:${teamSeats.build.model}:${teamSeats.fix.model}`}
       seats={teamSeats}
       teamOptions={teamOptions}
+      teamStars={teamStars}
+      lockedNote={!paidUnlocked() && teamPrefs.preset !== 'free' && teamPrefs.preset !== 'custom'
+        ? `🔒 Paid models aren't unlocked on this device, so the ${PRESETS[teamPrefs.preset].label} team is using free stand-ins. Tap Unlock at the top to use the real team.`
+        : undefined}
       preset={teamPrefs.preset}
       catalogs={teamCatalogs}
       unlocked={paidUnlocked()}
@@ -778,7 +787,7 @@ export function App() {
     />
   // eslint-disable-next-line react-hooks/exhaustive-deps
   ), [teamPrefs.preset, teamSeats.build.model, teamSeats.build.provider, teamSeats.fix.model, teamSeats.fix.provider,
-    teamSeats.plan.model, teamSeats.review.model, teamCatalogs, teamOptions, applyPreset, applySeats, withKey]);
+    teamSeats.plan.model, teamSeats.review.model, teamCatalogs, teamOptions, teamStars, applyPreset, applySeats, withKey]);
 
   const setAskFirst = useCallback((askFirst: boolean) => {
     setTeamPrefs(prev => {
@@ -1316,6 +1325,7 @@ export function App() {
               // Both lists carry 🔒 state, so both need the nudge.
               setModels(ms => [...ms]); // re-render disabled state
               setCoderBrands(bs => [...bs]);
+              if (teamPrefsRef.current.preset !== 'custom') applyPreset(teamPrefsRef.current.preset);
               return;
             }
             const pw = window.prompt('Paid models password');
@@ -1331,6 +1341,8 @@ export function App() {
                 savePaidPassword(pw);
                 setModels(ms => [...ms]);
                 setCoderBrands(bs => [...bs]);
+                // The team was on free stand-ins while locked — give it its real seats.
+                if (teamPrefsRef.current.preset !== 'custom') applyPreset(teamPrefsRef.current.preset);
               })
               .catch((err: Error) => window.alert(err.message || 'Unlock failed'));
           }}
@@ -1397,7 +1409,9 @@ export function App() {
                 style={{ background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--border)',
                   borderRadius: 'var(--radius)', padding: '5px 8px', fontFamily: 'inherit', fontSize: 14 }}>
                 {teamPrefs.preset === 'custom' && <option value="">Custom (your picks)</option>}
-                {(Object.keys(PRESETS) as PresetId[]).map(id => <option key={id} value={id}>{PRESETS[id].label}</option>)}
+                {(Object.keys(PRESETS) as PresetId[]).map(id => (
+                  <option key={id} value={id}>{PRESETS[id].label}{teamStars[id] ? ` ${stars(teamStars[id]!)}` : ''}</option>
+                ))}
               </select>
               <span style={{ fontSize: 13, color: 'var(--text-dim)' }}>
                 {teamPrefs.preset === 'custom' ? 'Pick a preset to reset every seat.' : PRESETS[teamPrefs.preset].blurb}
@@ -1410,7 +1424,9 @@ export function App() {
                 <div key={seat.id} style={{ display: 'flex', gap: 8, fontSize: 14, alignItems: 'baseline', flexWrap: 'wrap' }}>
                   <strong style={{ width: 56 }}>{seat.label}</strong>
                   <span style={{ color: 'var(--text)' }}>{sm.model}</span>
-                  <span style={{ fontSize: 12, color: open ? '#34D399' : '#FFB86B' }}>{open ? 'uncensored' : 'filtered'}</span>
+                  <span style={{ fontSize: 12, color: open ? '#34D399' : '#FFB86B' }}>
+                    {open ? 'uncensored' : 'filtered'} · {stars(costStars(sm.provider, (teamCatalogs[sm.provider] || []).find(m => m.id === sm.model)))}
+                  </span>
                   <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>— {seat.job}</span>
                 </div>
               );

@@ -6,7 +6,7 @@
  */
 
 import { useState } from 'react';
-import { PRESETS, isUncensoredModel, type PresetId, type SeatModel, type TeamSeats } from './codingTeam.js';
+import { PRESETS, costStars, isUncensoredModel, stars, type PresetId, type SeatModel, type TeamSeats } from './codingTeam.js';
 import type { CatalogModel } from './providerPrefs.js';
 
 export interface BuildChoiceSeats {
@@ -22,6 +22,10 @@ interface Props {
   seats: TeamSeats;
   /** Every team's models — offered first in each menu. */
   teamOptions?: TeamOption[];
+  /** Each team's cost, ⭐ to ⭐⭐⭐⭐, shown in the Team menu. */
+  teamStars?: Partial<Record<PresetId, number>>;
+  /** Set when paid seats are standing in with free models. */
+  lockedNote?: string;
   preset: PresetId | 'custom';
   catalogs: Record<string, CatalogModel[]>;
   unlocked: boolean;
@@ -52,7 +56,7 @@ function SeatSelect({ value, catalogs, unlocked, onChange, testId, teamOptions =
   return (
     <select data-testid={testId} value={key(value)} onChange={e => onChange(parse(e.target.value))}
       style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838', borderRadius: 4,
-        padding: '4px 6px', fontFamily: 'inherit', fontSize: 14, minWidth: 0, flex: 1, maxWidth: 360 }}>
+        padding: '5px 6px', fontFamily: 'inherit', fontSize: 14, minWidth: 0, flex: '1 1 220px', maxWidth: 440 }}>
       {!known && <option value={key(value)}>{value.model}</option>}
       {teamOptions.length > 0 && (
         <optgroup label="Team picks">
@@ -83,16 +87,17 @@ function SeatSelect({ value, catalogs, unlocked, onChange, testId, teamOptions =
   );
 }
 
-function Tag({ seat }: { seat: SeatModel }) {
+function Tag({ seat, catalogs }: { seat: SeatModel; catalogs: Record<string, CatalogModel[]> }) {
   const open = isUncensoredModel(seat.provider, seat.model);
+  const meta = (catalogs[seat.provider] || []).find(m => m.id === seat.model);
   return (
     <span style={{ fontSize: 12, color: open ? '#34D399' : '#FFB86B', whiteSpace: 'nowrap' }}>
-      {open ? 'uncensored' : 'filtered'}
+      {open ? 'uncensored' : 'filtered'} · {stars(costStars(seat.provider, meta))}
     </span>
   );
 }
 
-export function BuildPicker({ seats, teamOptions, preset, catalogs, unlocked, wantCompare, onPreset, onBuild }: Props) {
+export function BuildPicker({ seats, teamOptions, teamStars = {}, lockedNote, preset, catalogs, unlocked, wantCompare, onPreset, onBuild }: Props) {
   const [builder, setBuilder] = useState<SeatModel>(seats.build);
   const [fixer, setFixer] = useState<SeatModel>(seats.fix);
   const [compare, setCompare] = useState(!!wantCompare);
@@ -128,30 +133,35 @@ export function BuildPicker({ seats, teamOptions, preset, catalogs, unlocked, wa
           style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838', borderRadius: 4,
             padding: '3px 6px', fontFamily: 'inherit', fontSize: 14 }}>
           {preset === 'custom' && <option value="">Custom</option>}
-          {(Object.keys(PRESETS) as PresetId[]).map(id => <option key={id} value={id}>{PRESETS[id].label}</option>)}
+          {(Object.keys(PRESETS) as PresetId[]).map(id => (
+            <option key={id} value={id}>{PRESETS[id].label}{teamStars[id] ? ` ${stars(teamStars[id]!)}` : ''}</option>
+          ))}
         </select>
       </div>
+      {lockedNote && (
+        <div data-testid="locked-note" style={{ fontSize: 13, color: '#FFB86B', lineHeight: 1.4 }}>{lockedNote}</div>
+      )}
       {row('Build', 'Writes the code and all the content in it',
         <SeatSelect testId="seat-build" value={builder} catalogs={catalogs} unlocked={unlocked} onChange={setBuilder} teamOptions={teamOptions} />,
-        <Tag seat={builder} />)}
+        <Tag seat={builder} catalogs={catalogs} />)}
       {row('Fix', 'Repairs what auto-test catches; hands back to the builder if it refuses',
         <SeatSelect testId="seat-fix" value={fixer} catalogs={catalogs} unlocked={unlocked} onChange={setFixer} teamOptions={teamOptions} />,
-        <Tag seat={fixer} />)}
+        <Tag seat={fixer} catalogs={catalogs} />)}
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: '#C9CEDA', cursor: 'pointer' }}>
         <input type="checkbox" data-testid="compare-toggle" checked={compare} onChange={e => setCompare(e.target.checked)} />
         Also build a second version to compare side by side
       </label>
       {compare && row('Build 2', 'A second builder for Compare',
         <SeatSelect testId="seat-second" value={second} catalogs={catalogs} unlocked={unlocked} onChange={setSecond} teamOptions={teamOptions} />,
-        <Tag seat={second} />)}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Tag seat={second} catalogs={catalogs} />)}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <button type="button" data-testid="build-go"
           onClick={() => onBuild({ builder, fixer, second: compare ? second : null })}
           style={{ background: '#FF3D8E', color: '#0B0D12', border: 'none', borderRadius: 4, padding: '6px 16px',
             fontFamily: 'inherit', fontSize: 15, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
           {compare ? 'Build both' : 'Build it'}
         </button>
-        <span style={{ fontSize: 12, color: '#656C7E' }}>
+        <span style={{ fontSize: 12, color: '#656C7E', flex: '1 1 220px' }}>
           {preset === 'custom' ? 'Your own seats.' : PRESETS[preset].blurb}
         </span>
       </div>

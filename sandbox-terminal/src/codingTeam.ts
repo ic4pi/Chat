@@ -115,6 +115,21 @@ export const PRESETS: Record<PresetId, { label: string; blurb: string; seats: Re
   },
 };
 
+/**
+ * Cost as stars, from ⭐ (free) to ⭐⭐⭐⭐ (Fable-class), by output price per
+ * million tokens. Venice is cheap per token but paid: ⭐⭐.
+ */
+export function costStars(provider: string, meta?: { free?: boolean; pricing?: { completion?: string | number } }): number {
+  if (provider === 'venice') return 2;
+  const out = Number(meta?.pricing?.completion || 0) * 1e6;
+  if (!out) return meta?.free === false ? 2 : 1;
+  if (out < 5) return 2;
+  if (out < 30) return 3;
+  return 4;
+}
+
+export const stars = (n: number) => '⭐'.repeat(Math.max(1, Math.min(4, n)));
+
 /** Filtered (guardrailed) seats in the uncensored team — shown as such. */
 export function isUncensoredModel(provider: string, model: string): boolean {
   return provider === 'venice' || /uncensored|heretic|dolphin|abliterated|hermes/i.test(model);
