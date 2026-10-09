@@ -11,6 +11,7 @@ import { resolveProvider, withProviderChatExtras, formatProviderError } from '..
 import { requirePaidAccess } from '../lib/model-meta.js';
 import { prepareImageMessages, hasImageParts } from '../lib/vision.js';
 import { extractQueryText, searchWeb, formatSearchContext } from '../lib/websearch.js';
+import { fetchWithModelFallback } from '../lib/model-health.js';
 
 /**
  * Headroom under vercel.json maxDuration 300. Must stay below the platform
@@ -92,6 +93,8 @@ async function handleStream(req, res, resolved, model, messagesWithSystem, provi
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+  // Set when the chosen model was retired and a current one answered instead.
+  let modelReplaced = null;
   let fullReply = '';
   let fullReasoning = '';
   let finishReason = '';
@@ -110,33 +113,42 @@ async function handleStream(req, res, resolved, model, messagesWithSystem, provi
       timedOut: opts.timedOut || undefined,
       provider: resolved.label,
       model,
+      modelReplaced: modelReplaced || undefined,
       keySource: resolved.keySource,
     });
     return res.end();
   };
 
   try {
-    const upstream = await fetch(resolved.url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${resolved.apiKey}`,
-        Accept: 'text/event-stream',
-        ...resolved.extraHeaders(),
-      },
-      body: JSON.stringify(
-        withProviderChatExtras(
-          {
-            model,
-            messages: messagesWithSystem,
-            stream: true,
-            max_tokens: CHUNK_MAX_TOKENS,
-          },
-          providerId || resolved.id,
+    const fb = await fetchWithModelFallback({
+      providerId: providerId || resolved.id,
+      model,
+      kind: 'chat',
+      canUse: (id) => !requirePaidAccess(req, providerId || resolved.id, id),
+      doFetch: (m) => fetch(resolved.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${resolved.apiKey}`,
+          Accept: 'text/event-stream',
+          ...resolved.extraHeaders(),
+        },
+        body: JSON.stringify(
+          withProviderChatExtras(
+            {
+              model: m,
+              messages: messagesWithSystem,
+              stream: true,
+              max_tokens: CHUNK_MAX_TOKENS,
+            },
+            providerId || resolved.id,
+          ),
         ),
-      ),
-      signal: controller.signal,
+        signal: controller.signal,
+      }),
     });
+    const upstream = fb.res;
+    if (fb.replaced) { modelReplaced = fb.replaced; model = fb.model; }
 
     if (!upstream.ok) {
       const errText = await upstream.text();
@@ -149,6 +161,9 @@ async function handleStream(req, res, resolved, model, messagesWithSystem, provi
       return res.end();
     }
 
+    if (modelReplaced) {
+      sseWrite(res, { type: 'status', message: `${modelReplaced.from} is no longer available — answering with ${modelReplaced.to}.` });
+    }
     sseWrite(res, { type: 'status', message: 'Model is writing…' });
 
     const reader = upstream.body?.getReader();
@@ -219,30 +234,39 @@ async function handleStream(req, res, resolved, model, messagesWithSystem, provi
 }
 
 async function handleJson(req, res, resolved, model, messagesWithSystem, providerId, notice, hadImages, sources) {
+  let modelReplaced = null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
   try {
-    const upstream = await fetch(resolved.url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${resolved.apiKey}`,
-        ...resolved.extraHeaders(),
-      },
-      body: JSON.stringify(
-        withProviderChatExtras(
-          {
-            model,
-            messages: messagesWithSystem,
-            stream: false,
-            max_tokens: CHUNK_MAX_TOKENS,
-          },
-          providerId || resolved.id,
+    const fb = await fetchWithModelFallback({
+      providerId: providerId || resolved.id,
+      model,
+      kind: 'chat',
+      canUse: (id) => !requirePaidAccess(req, providerId || resolved.id, id),
+      doFetch: (m) => fetch(resolved.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${resolved.apiKey}`,
+          ...resolved.extraHeaders(),
+        },
+        body: JSON.stringify(
+          withProviderChatExtras(
+            {
+              model: m,
+              messages: messagesWithSystem,
+              stream: false,
+              max_tokens: CHUNK_MAX_TOKENS,
+            },
+            providerId || resolved.id,
+          ),
         ),
-      ),
-      signal: controller.signal,
+        signal: controller.signal,
+      }),
     });
+    const upstream = fb.res;
+    if (fb.replaced) { modelReplaced = fb.replaced; model = fb.model; }
 
     const rawText = await upstream.text();
     let data;
@@ -274,6 +298,7 @@ async function handleJson(req, res, resolved, model, messagesWithSystem, provide
       incomplete: incomplete || undefined,
       provider: resolved.label,
       model,
+      modelReplaced: modelReplaced || undefined,
       keySource: resolved.keySource,
       sources: sources && sources.length ? sources : undefined,
     });

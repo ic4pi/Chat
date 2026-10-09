@@ -119,9 +119,11 @@ const PROVIDER_FALLBACKS = {
   ],
 };
 
+// Hints only. The real default comes from the live catalogs (defaultChatModel)
+// and is never a coder model — chat and the agency teams talk, they don't code.
 const DEFAULT_MODELS = {
   venice: 'venice-uncensored-1-2',
-  openrouter: 'qwen/qwen3-coder:free',
+  openrouter: 'nvidia/nemotron-3-super-120b-a12b:free',
   cerebras: 'gpt-oss-120b',
   groq: 'llama-3.3-70b-versatile',
   xai: 'grok-4',
@@ -300,10 +302,11 @@ function enrichModelClient(providerId, model = {}) {
   };
 }
 
+// Chat roles talk, they don't code — and openrouter/free can route to a coder.
 const DEFAULT_ROLE_MODELS = {
-  write:  { provider: 'openrouter', model: 'qwen/qwen3-coder:free' },
-  review: { provider: 'openrouter', model: 'openrouter/free' },
-  plan:   { provider: 'openrouter', model: 'openrouter/free' },
+  write:  { provider: 'openrouter', model: DEFAULT_MODELS.openrouter },
+  review: { provider: 'openrouter', model: DEFAULT_MODELS.openrouter },
+  plan:   { provider: 'openrouter', model: DEFAULT_MODELS.openrouter },
 };
 
 function loadProviderKeys() {
@@ -2029,6 +2032,10 @@ async function loadProviderModels(provider) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to load models');
     const models = Array.isArray(data.models) ? data.models.filter((m) => m && m.id) : [];
+    // Only a live list may retire a saved model; a fallback list is a guess.
+    if (models.length && data.source && data.source !== 'fallback') {
+      liveCatalogIds[provider] = new Set(models.map((m) => m.id));
+    }
     const raw = models.length ? models : (PROVIDER_FALLBACKS[provider] || []);
     const list = raw.map((m) => enrichModelClient(provider, m));
     if (!key) modelsCache[cacheKey] = list;
@@ -2050,6 +2057,103 @@ function sortModelsForProvider(provider, models) {
     return (a.name || a.id).localeCompare(b.name || b.id);
   });
 }
+
+// ---------------------------------------------------------------------------
+// Model health. Providers retire models without notice (OpenRouter's free
+// list changes weekly), and a saved choice that no longer exists breaks that
+// chat. The server swaps a retired model on the fly and reports it; this side
+// re-checks every saved choice against the live lists on load and every few
+// hours, and moves anything retired onto the current default chat model.
+// ---------------------------------------------------------------------------
+const liveCatalogIds = {};   // provider → Set of ids, from live (not fallback) lists
+let liveDefaults = {};       // provider → { chat, coder } from /api/models?op=defaults
+const MODEL_RECHECK_MS = 6 * 60 * 60 * 1000;
+
+async function loadLiveDefaults() {
+  try {
+    const res = await fetch('/api/models?op=defaults');
+    if (res.ok) liveDefaults = (await res.json()).defaults || {};
+  } catch { /* keep the last known defaults */ }
+}
+
+/** Current default chat model for a provider — live pick first, never a coder. */
+function defaultChatModel(provider) {
+  const live = liveDefaults[provider]?.chat;
+  if (live) return live;
+  const list = allModelsCatalog.filter((m) => m.provider === provider);
+  const cats = (m) => m.categories || [];
+  const chatty = (m) => !cats(m).includes('coder') && !/cod(?:e|er|ing)\b/i.test(m.id);
+  const general = (m) => chatty(m) && cats(m).includes('general');
+  const freeOk = (m) => provider !== 'openrouter' || m.free;
+  const hint = list.find((m) => m.id === DEFAULT_MODELS[provider]);
+  const pick = hint || list.find((m) => freeOk(m) && general(m)) || list.find((m) => freeOk(m) && chatty(m));
+  return pick?.id || DEFAULT_MODELS[provider] || '';
+}
+
+function modelIsRetired(provider, model) {
+  const ids = liveCatalogIds[provider];
+  return !!(ids && model && !ids.has(model));
+}
+
+/** Point every saved choice of `from` at `to`. Returns how many changed. */
+function replaceSavedModel(provider, from, to) {
+  let n = 0;
+  if (state.activeProvider === provider && state.activeModel === from) { state.activeModel = to; n++; }
+  for (const chat of state.chats || []) {
+    if ((chat.provider || state.activeProvider) === provider && chat.model === from) { chat.model = to; n++; }
+  }
+  for (const role of Object.keys(roleModels)) {
+    if (roleModels[role]?.provider === provider && roleModels[role]?.model === from) {
+      roleModels[role] = { provider, model: to };
+      n++;
+    }
+  }
+  if (n) { saveState(); saveRoleModels(roleModels); }
+  return n;
+}
+
+function noteModelChange(text) {
+  const chat = activeChat();
+  if (!chat) return;
+  chat.messages.push({ role: 'info', content: text, ts: Date.now() });
+  saveState();
+  renderMessages({ scroll: 'bottom' });
+}
+
+function applyModelReplacement(provider, { from, to }) {
+  if (!from || !to || from === to) return;
+  if (replaceSavedModel(provider, from, to)) {
+    noteModelChange(`${from} is no longer available, so this chat moved to ${to}.`);
+    syncHiddenModelSelects(allModelsCatalog);
+    updateModelPickerLabel();
+  }
+}
+
+async function recheckSavedModels() {
+  await loadAllModelsCatalog({ force: true });
+  const saved = new Map(); // "provider|model" → provider
+  const add = (p, m) => { if (p && m) saved.set(`${p}|${m}`, p); };
+  add(state.activeProvider, state.activeModel);
+  for (const chat of state.chats || []) add(chat.provider || state.activeProvider, chat.model);
+  for (const r of Object.values(roleModels)) add(r?.provider, r?.model);
+  const changes = [];
+  for (const [key, provider] of saved) {
+    const model = key.slice(provider.length + 1);
+    if (!modelIsRetired(provider, model)) continue;
+    const to = defaultChatModel(provider);
+    if (to && to !== model && replaceSavedModel(provider, model, to)) changes.push(`${model} → ${to}`);
+  }
+  if (changes.length) {
+    noteModelChange(`Model check: retired models replaced — ${changes.join('; ')}.`);
+    syncHiddenModelSelects(allModelsCatalog);
+    updateModelPickerLabel();
+  }
+}
+
+// First check shortly after load (once the page has settled), then every few
+// hours for as long as the app stays open.
+setTimeout(() => { void recheckSavedModels(); }, 5000);
+setInterval(() => { void recheckSavedModels(); }, MODEL_RECHECK_MS);
 
 /** Full catalog across providers (one complete list). */
 let allModelsCatalog = [];
@@ -2083,12 +2187,17 @@ async function loadAllModelsCatalog({ force = false } = {}) {
   if (!force && allModelsCatalog.length) return allModelsCatalog;
   if (!force && allModelsLoading) return allModelsLoading;
   allModelsLoading = (async () => {
-    const lists = await Promise.all(
-      PROVIDER_IDS.map(async (pid) => {
-        const models = await loadProviderModels(pid);
-        return models.map((m) => enrichModelClient(pid, m));
-      }),
-    );
+    // Defaults arrive with the lists, so a retired model is never swapped for
+    // whatever happens to sort first (which can be a coder).
+    const [lists] = await Promise.all([
+      Promise.all(
+        PROVIDER_IDS.map(async (pid) => {
+          const models = await loadProviderModels(pid);
+          return models.map((m) => enrichModelClient(pid, m));
+        }),
+      ),
+      loadLiveDefaults(),
+    ]);
     allModelsCatalog = lists.flat();
     allModelsLoading = null;
     return allModelsCatalog;
@@ -2291,11 +2400,7 @@ function syncHiddenModelSelects(catalog) {
   }
   if (!available.includes(state.activeModel)) {
     // Prefer a free model when current is missing / locked.
-    const freeFirst = forProvider.find((m) => m.free) || forProvider[0];
-    const fallbackId = available.includes(DEFAULT_MODELS[provider])
-      ? DEFAULT_MODELS[provider]
-      : (freeFirst?.id || DEFAULT_MODELS[provider] || state.activeModel);
-    state.activeModel = fallbackId;
+    state.activeModel = defaultChatModel(provider) || state.activeModel;
     saveState();
   }
   // If active is paid and locked, bounce to a free model.
@@ -3060,6 +3165,7 @@ async function streamChatResponse({ provider, model, messages, personaId, signal
         try { evt = JSON.parse(payload); } catch { continue; }
         if (typeof onEvent === 'function') onEvent(evt);
         if (evt.type === 'done') donePayload = evt;
+        if (evt.type === 'done' && evt.modelReplaced) applyModelReplacement(provider, evt.modelReplaced);
         if (evt.type === 'error') streamError = evt;
       }
     }
@@ -4915,7 +5021,7 @@ els.chatTitle.addEventListener('keydown', (e) => {
 
 els.providerSelect?.addEventListener('change', async () => {
   state.activeProvider = els.providerSelect.value;
-  state.activeModel = DEFAULT_MODELS[state.activeProvider] || state.activeModel;
+  state.activeModel = defaultChatModel(state.activeProvider) || state.activeModel;
   if (state.activeRole && roleModels[state.activeRole]) {
     roleModels[state.activeRole] = {
       provider: state.activeProvider,
@@ -6140,7 +6246,7 @@ async function fillModelSelect(selectEl, provider, selectedModel) {
   const values = Array.from(selectEl.options).map((o) => o.value);
   const pick = values.includes(selectedModel)
     ? selectedModel
-    : (DEFAULT_MODELS[provider] || values[0] || '');
+    : (defaultChatModel(provider) || values[0] || '');
   if (pick) selectEl.value = pick;
 }
 

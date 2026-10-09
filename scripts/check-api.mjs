@@ -35,6 +35,8 @@ const SYNTAX_FILES = [
   'api/hub/[route].js',
   'lib/campaign-engine.js',
   'api/campaign.js',
+  'lib/model-catalog.js',
+  'lib/model-health.js',
 ];
 
 function fail(msg) {
@@ -178,10 +180,13 @@ if (prevPass === undefined) delete process.env.ADMIN_PASSWORD;
 else process.env.ADMIN_PASSWORD = prevPass;
 ok('auth contract');
 
-// 4) models.js still imports the catalog symbols it needs (static parse).
+// 4) The catalog code (lib/model-catalog.js, served by api/models.js) still
+//    imports the symbols it needs (static parse).
 const modelsSrc = readFileSync(path.join(root, 'api/models.js'), 'utf8');
+const catalogSrc = readFileSync(path.join(root, 'lib/model-catalog.js'), 'utf8');
+if (!modelsSrc.includes('getCatalog')) fail('api/models.js must serve lib/model-catalog.js getCatalog');
 for (const sym of ['PROVIDERS', 'FALLBACK_MODELS', 'resolveProvider']) {
-  if (!modelsSrc.includes(sym)) fail(`api/models.js must reference ${sym}`);
+  if (!catalogSrc.includes(sym)) fail(`lib/model-catalog.js must reference ${sym}`);
 }
 ok('api/models.js imports');
 

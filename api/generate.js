@@ -25,6 +25,7 @@
  * SSE events: status | chunk-start | token | chunk-done | done | error
  */
 
+import { fetchWithModelFallback } from '../lib/model-health.js';
 import {
   CHUNK_LIST,
   GENERAL_PURPOSE_MODEL,
@@ -70,27 +71,37 @@ function pickKey(providerKeys, providerId, fallbackKey) {
 }
 
 async function callCompletion(resolved, model, messages, { maxTokens, signal, providerId }) {
-  const upstream = await fetch(resolved.url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${resolved.apiKey}`,
-      ...resolved.extraHeaders(),
-    },
-    body: JSON.stringify(
-      withProviderChatExtras(
-        {
-          model,
-          messages,
-          stream: false,
-          max_tokens: maxTokens,
-          temperature: 0.35,
-        },
-        providerId || resolved.id,
+  // A retired slice model is swapped for the provider's current coder.
+  let modelReplaced = null;
+  const fb = await fetchWithModelFallback({
+    providerId: providerId || resolved.id,
+    model,
+    kind: 'coder',
+    canUse: () => true,
+    doFetch: (m) => fetch(resolved.url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${resolved.apiKey}`,
+        ...resolved.extraHeaders(),
+      },
+      body: JSON.stringify(
+        withProviderChatExtras(
+          {
+            model: m,
+            messages,
+            stream: false,
+            max_tokens: maxTokens,
+            temperature: 0.35,
+          },
+          providerId || resolved.id,
+        ),
       ),
-    ),
-    signal,
+      signal,
+    }),
   });
+  const upstream = fb.res;
+  if (fb.replaced) { modelReplaced = fb.replaced; model = fb.model; }
 
   const rawText = await upstream.text();
   let data;

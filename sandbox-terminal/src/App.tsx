@@ -584,6 +584,46 @@ export function App() {
     return () => { cancelled = true; };
   }, []);
 
+  // Retired models: the server answers on a replacement and says so — keep it.
+  const handleModelReplaced = useCallback((swap: { from: string; to: string }, who: 'persona' | 'coder') => {
+    if (who === 'persona') {
+      setOrchPrefs(prev => {
+        if (prev.model !== swap.from) return prev;
+        const next = { ...prev, model: swap.to };
+        saveOrchestratorPrefs(next);
+        return next;
+      });
+    } else {
+      setModel(m => (m === swap.from ? swap.to : m));
+      setRoleModels(prev => {
+        const next = { ...prev };
+        for (const r of Object.keys(next) as RoleId[]) {
+          if (next[r]?.model === swap.from) next[r] = { ...next[r], model: swap.to };
+        }
+        saveRoleModels(next);
+        return next;
+      });
+    }
+  }, []);
+
+  // On load: a persona model from an old handoff may have been retired since.
+  useEffect(() => {
+    const { provider: p, model: m } = orchPrefs;
+    if (!p || !m) return;
+    let cancelled = false;
+    Promise.all([
+      fetch(`${API_URL}/models?provider=${encodeURIComponent(p)}`).then(r => r.json()),
+      fetch(`${API_URL}/models?op=defaults`).then(r => r.json()),
+    ]).then(([cat, defs]: [{ models?: Array<{ id: string }>; source?: string }, { defaults?: Record<string, { chat?: string }> }]) => {
+      if (cancelled || cat.source === 'fallback' || !cat.models?.length) return;
+      if (cat.models.some(x => x.id === m)) return;
+      const to = defs.defaults?.[p]?.chat;
+      if (to) handleModelReplaced({ from: m, to }, 'persona');
+    }).catch(() => { /* next request still self-heals server-side */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handlePersonaChange = (id: string) => {
     setOrchPrefs(prev => {
       const next = { ...prev, personaId: id };
@@ -1232,6 +1272,7 @@ export function App() {
           model={model}
           role={role}
           persona={orchPersona}
+          onModelReplaced={handleModelReplaced}
           apiKey={activeApiKey || undefined}
           tree={repo.tree}
           contextFiles={repo.contextFiles}

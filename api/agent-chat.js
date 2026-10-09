@@ -19,6 +19,7 @@ import { resolveProvider, withProviderChatExtras, formatProviderError } from '..
 import { prepareImageMessages } from '../lib/vision.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
 import { loadConfig } from '../lib/config.js';
+import { fetchWithModelFallback } from '../lib/model-health.js';
 
 /**
  * Orchestrator turns (body.orchestrate + personaId): the user talks to their
@@ -194,7 +195,7 @@ function sseComment(res, text) {
   res.write(`:${text}\n\n`);
 }
 
-async function handleStream(req, res, resolved, model, messagesWithSystem, providerId, budgeted) {
+async function handleStream(req, res, resolved, model, messagesWithSystem, providerId, budgeted, kind) {
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
@@ -218,6 +219,8 @@ async function handleStream(req, res, resolved, model, messagesWithSystem, provi
   };
   res.on('close', onClose);
 
+  // Set when the chosen model was retired and a current one answered instead.
+  let modelReplaced = null;
   let fullReply = '';
   let fullReasoning = '';
   let finishReason = '';
@@ -238,6 +241,7 @@ async function handleStream(req, res, resolved, model, messagesWithSystem, provi
       timedOut: opts.timedOut || undefined,
       provider: resolved.label,
       model,
+      modelReplaced: modelReplaced || undefined,
       tokens: budgeted.tokens,
       keySource: resolved.keySource,
     });
@@ -245,27 +249,35 @@ async function handleStream(req, res, resolved, model, messagesWithSystem, provi
   };
 
   try {
-    const upstream = await fetch(resolved.url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${resolved.apiKey}`,
-        Accept: 'text/event-stream',
-        ...resolved.extraHeaders(),
-      },
-      body: JSON.stringify(
-        withProviderChatExtras(
-          {
-            model: model || 'dolphin-3.0-mistral-24b',
-            messages: messagesWithSystem,
-            stream: true,
-            max_tokens: CHUNK_MAX_TOKENS,
-          },
-          providerId || resolved.id || 'venice',
+    const fb = await fetchWithModelFallback({
+      providerId: providerId || resolved.id || 'venice',
+      model,
+      kind: kind,
+      canUse: (id) => !requirePaidAccess(req, providerId || resolved.id || 'openrouter', id),
+      doFetch: (m) => fetch(resolved.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${resolved.apiKey}`,
+          Accept: 'text/event-stream',
+          ...resolved.extraHeaders(),
+        },
+        body: JSON.stringify(
+          withProviderChatExtras(
+            {
+              model: m || 'dolphin-3.0-mistral-24b',
+              messages: messagesWithSystem,
+              stream: true,
+              max_tokens: CHUNK_MAX_TOKENS,
+            },
+            providerId || resolved.id || 'venice',
+          ),
         ),
-      ),
-      signal: controller.signal,
+        signal: controller.signal,
+      }),
     });
+    const upstream = fb.res;
+    if (fb.replaced) { modelReplaced = fb.replaced; model = fb.model; }
 
     if (!upstream.ok) {
       const errText = await upstream.text();
@@ -278,6 +290,9 @@ async function handleStream(req, res, resolved, model, messagesWithSystem, provi
       return res.end();
     }
 
+    if (modelReplaced) {
+      sseWrite(res, { type: 'status', message: `${modelReplaced.from} is no longer available — using ${modelReplaced.to}.` });
+    }
     sseWrite(res, { type: 'status', message: 'Model is writing…' });
 
     const reader = upstream.body?.getReader();
@@ -350,31 +365,40 @@ async function handleStream(req, res, resolved, model, messagesWithSystem, provi
   }
 }
 
-async function handleJson(res, resolved, model, messagesWithSystem, providerId, budgeted) {
+async function handleJson(req, res, resolved, model, messagesWithSystem, providerId, budgeted, kind) {
+  let modelReplaced = null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
   try {
-    const upstream = await fetch(resolved.url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${resolved.apiKey}`,
-        ...resolved.extraHeaders(),
-      },
-      body: JSON.stringify(
-        withProviderChatExtras(
-          {
-            model: model || 'dolphin-3.0-mistral-24b',
-            messages: messagesWithSystem,
-            stream: false,
-            max_tokens: CHUNK_MAX_TOKENS,
-          },
-          providerId || resolved.id || 'venice',
+    const fb = await fetchWithModelFallback({
+      providerId: providerId || resolved.id || 'venice',
+      model,
+      kind: kind,
+      canUse: (id) => !requirePaidAccess(req, providerId || resolved.id || 'openrouter', id),
+      doFetch: (m) => fetch(resolved.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${resolved.apiKey}`,
+          ...resolved.extraHeaders(),
+        },
+        body: JSON.stringify(
+          withProviderChatExtras(
+            {
+              model: m || 'dolphin-3.0-mistral-24b',
+              messages: messagesWithSystem,
+              stream: false,
+              max_tokens: CHUNK_MAX_TOKENS,
+            },
+            providerId || resolved.id || 'venice',
+          ),
         ),
-      ),
-      signal: controller.signal,
+        signal: controller.signal,
+      }),
     });
+    const upstream = fb.res;
+    if (fb.replaced) { modelReplaced = fb.replaced; model = fb.model; }
 
     const rawText = await upstream.text();
     let data;
@@ -400,6 +424,7 @@ async function handleJson(res, resolved, model, messagesWithSystem, providerId, 
       reply: out,
       incomplete: incomplete || undefined,
       model,
+      modelReplaced: modelReplaced || undefined,
       provider: resolved.label,
       tokens: budgeted.tokens,
       keySource: resolved.keySource,
@@ -482,8 +507,10 @@ export default async function handler(req, res) {
 
   // Default stream:true — Workspace needs tokens before the function time limit.
   const useStream = wantStream !== false;
+  // A retired model is replaced in kind: the persona with a chat model, the coder with a coder.
+  const kind = orchestrate ? 'chat' : 'coder';
   if (useStream) {
-    return handleStream(req, res, resolved, model, messagesWithSystem, providerId, budgeted);
+    return handleStream(req, res, resolved, model, messagesWithSystem, providerId, budgeted, kind);
   }
-  return handleJson(res, resolved, model, messagesWithSystem, providerId, budgeted);
+  return handleJson(req, res, resolved, model, messagesWithSystem, providerId, budgeted, kind);
 }

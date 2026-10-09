@@ -10,6 +10,7 @@ import { resolveProvider, withProviderChatExtras, formatProviderError } from '..
 import { requirePaidAccess } from '../lib/model-meta.js';
 import { db, HUB_ENABLED, resolveOwner, embedOne, rateLimit } from '../lib/hub.js';
 import { runCampaign, platformsFromText, PLATFORMS } from '../lib/campaign-engine.js';
+import { isModelGoneError, replacementFor } from '../lib/model-health.js';
 
 /** Per model call. Several run per campaign, so each is capped on its own. */
 const CALL_TIMEOUT_MS = 120_000;
@@ -55,7 +56,11 @@ const sleep = (ms, signal) => new Promise((resolve, reject) => {
  * provider asks, timeouts / 5xx / dropped connections back off and retry,
  * auth and bad-request errors fail at once (retrying can't fix them).
  */
-function makeComplete({ resolved, model, providerId, signal, onRetry }) {
+function makeComplete({ resolved, model: chosenModel, providerId, signal, onRetry, canUse }) {
+  // A retired model is swapped once for the provider's current chat model and
+  // the swap sticks for the rest of the run.
+  let model = chosenModel;
+  let swapped = false;
   return async function complete(messages, { temperature = 0.7, maxTokens = 1500 } = {}) {
     let tokens = maxTokens;
     for (let attempt = 0; ; attempt++) {
@@ -84,6 +89,15 @@ function makeComplete({ resolved, model, providerId, signal, onRetry }) {
       }
 
       const raw = await res.text();
+      if (!res.ok && !swapped && isModelGoneError(res.status, raw)) {
+        swapped = true;
+        const next = await replacementFor(providerId, model, 'chat').catch(() => null);
+        if (next && next !== model && canUse(next)) {
+          onRetry(`${model} is no longer available — using ${next}`);
+          model = next;
+          continue;
+        }
+      }
       if (!res.ok) {
         const retryable = res.status === 429 || res.status === 408 || res.status === 409 || res.status >= 500;
         if (!retryable || attempt >= MAX_RETRIES) {
@@ -205,6 +219,7 @@ export default async function handler(req, res) {
       complete: makeComplete({
         resolved, model, providerId, signal: controller.signal,
         onRetry: (message) => onEvent({ type: 'status', message }),
+        canUse: (id) => !requirePaidAccess(req, providerId, id),
       }),
       conversation,
       platforms: platformsFromText(lastUser),

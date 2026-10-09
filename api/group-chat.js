@@ -17,6 +17,7 @@
  */
 
 import { loadConfig } from '../lib/config.js';
+import { fetchWithModelFallback } from '../lib/model-health.js';
 import { resolveProvider, withProviderChatExtras } from '../lib/providers.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
 import { searchWeb, formatSearchContext } from '../lib/websearch.js';
@@ -209,33 +210,44 @@ function groupReasoningOff(body, providerId) {
 }
 
 async function callCompletionOnce(resolved, model, messages, { maxTokens, signal, providerId }) {
+  // A persona whose model was retired still speaks — on the provider's current
+  // chat model (lib/model-health.js) — instead of dropping out of the round.
+  let modelReplaced = null;
   // Cap each call on its own. Without this, one hung model ate the whole
   // round's budget and every persona queued after it was dropped as "timed out".
   const callSignal = signal
     ? AbortSignal.any([signal, AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)])
     : AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
-  const upstream = await fetch(resolved.url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${resolved.apiKey}`,
-      ...resolved.extraHeaders(),
-    },
-    body: JSON.stringify(groupReasoningOff(
-      withProviderChatExtras(
-        {
-          model,
-          messages,
-          stream: false,
-          max_tokens: maxTokens,
-          temperature: 0.75,
-        },
+  const fb = await fetchWithModelFallback({
+    providerId: providerId || resolved.id,
+    model,
+    kind: 'chat',
+    canUse: () => true,
+    doFetch: (m) => fetch(resolved.url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${resolved.apiKey}`,
+        ...resolved.extraHeaders(),
+      },
+      body: JSON.stringify(groupReasoningOff(
+        withProviderChatExtras(
+          {
+            model: m,
+            messages,
+            stream: false,
+            max_tokens: maxTokens,
+            temperature: 0.75,
+          },
+          providerId || resolved.id,
+        ),
         providerId || resolved.id,
-      ),
-      providerId || resolved.id,
-    )),
-    signal: callSignal,
+      )),
+      signal: callSignal,
+    }),
   });
+  const upstream = fb.res;
+  if (fb.replaced) { modelReplaced = fb.replaced; model = fb.model; }
 
   const rawText = await upstream.text();
   let data;
@@ -258,6 +270,7 @@ async function callCompletionOnce(resolved, model, messages, { maxTokens, signal
 
   const choice = data.choices?.[0];
   return {
+    modelReplaced,
     content: String(choice?.message?.content ?? '').trim(),
     truncated: choice?.finish_reason === 'length' || choice?.native_finish_reason === 'length',
   };

@@ -416,7 +416,8 @@ function friendlyError(raw: string): string {
   return raw || 'Request failed';
 }
 
-type AgentReply = { reply: string; incomplete?: boolean; timedOut?: boolean; reasoning?: string };
+type ModelSwap = { from: string; to: string };
+type AgentReply = { reply: string; incomplete?: boolean; timedOut?: boolean; reasoning?: string; modelReplaced?: ModelSwap };
 
 /** True when the model was cut off mid File:/fence — worth one continuation turn. */
 function looksTruncatedReply(text: string): boolean {
@@ -460,9 +461,9 @@ async function readAgentReply(
 ): Promise<AgentReply> {
   const ctype = (res.headers.get('content-type') || '').toLowerCase();
   if (!ctype.includes('text/event-stream') || !res.body) {
-    const data = await res.json() as { reply?: string; error?: string; incomplete?: boolean };
+    const data = await res.json() as { reply?: string; error?: string; incomplete?: boolean; modelReplaced?: ModelSwap };
     if (data.error && !data.reply) throw new Error(data.error);
-    return { reply: data.reply ?? '(empty response)', incomplete: !!data.incomplete };
+    return { reply: data.reply ?? '(empty response)', incomplete: !!data.incomplete, modelReplaced: data.modelReplaced };
   }
 
   const reader = res.body.getReader();
@@ -472,6 +473,7 @@ async function readAgentReply(
   let reasoning = '';
   let incomplete = false;
   let timedOut = false;
+  let modelReplaced: ModelSwap | undefined;
   let streamError: string | null = null;
 
   while (true) {
@@ -495,8 +497,10 @@ async function readAgentReply(
           reasoning?: string;
           incomplete?: boolean;
           timedOut?: boolean;
+          modelReplaced?: ModelSwap;
         };
         try { ev = JSON.parse(payload); } catch { continue; }
+        if (ev.modelReplaced) modelReplaced = ev.modelReplaced;
         onEvent?.(ev);
         if (ev.type === 'token' && typeof ev.text === 'string') {
           reply += ev.text;
@@ -523,10 +527,10 @@ async function readAgentReply(
 
   // Reasoning-only timeout: treat as incomplete so Workspace can continue.
   if (timedOut && !reply.trim() && reasoning.trim()) {
-    return { reply: '', incomplete: true, timedOut: true, reasoning };
+    return { reply: '', incomplete: true, timedOut: true, reasoning, modelReplaced };
   }
   if (streamError && !reply.trim()) throw new Error(streamError);
-  return { reply: reply || '(empty response)', incomplete, timedOut, reasoning: reasoning || undefined };
+  return { reply: reply || '(empty response)', incomplete, timedOut, reasoning: reasoning || undefined, modelReplaced };
 }
 
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
@@ -761,6 +765,8 @@ interface Props {
     hits: SearchHit[];
     files: Map<string, string>;
   } | void>;
+  /** The server swapped a retired model; update the saved choice. */
+  onModelReplaced?:  (swap: ModelSwap, who: 'persona' | 'coder') => void;
   /** From /api/init-repo — whether the sandbox toolchains are actually usable. */
   pythonReady?:      boolean | null;
   pythonDetail?:     string | null;
@@ -773,7 +779,7 @@ interface Props {
 export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   repoRoot, repoUrl, sandboxId, provider, model, role, persona = null, apiKey, tree, contextFiles, autoRun, appliedPaths,
   autoSelectedFiles, searchHits, initialMessages, onMessagesChange,
-  onRunCode, onFileChanges, onUploadText, onBeforeSend,
+  onRunCode, onFileChanges, onUploadText, onBeforeSend, onModelReplaced,
   pythonReady = null, pythonDetail = null,
   rustReady = null, rustDetail = null,
   goReady = null, goDetail = null,
@@ -811,12 +817,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   const latestRef = useRef({
     repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-    rustReady, rustDetail, goReady, goDetail,
+    rustReady, rustDetail, goReady, goDetail, onModelReplaced,
   });
   latestRef.current = {
     repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-    rustReady, rustDetail, goReady, goDetail,
+    rustReady, rustDetail, goReady, goDetail, onModelReplaced,
   };
 
   useEffect(() => {
@@ -932,7 +938,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           }
           throw new Error(`HTTP ${res.status}`);
         }
-        return await readAgentReply(res, (ev) => {
+        const out = await readAgentReply(res, (ev) => {
           if (ev.type === 'thinking' && typeof ev.text === 'string' && ev.text) {
             setLiveThoughts((prev) => prev + ev.text);
             extendDeadlineOnActivity();
@@ -942,6 +948,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             setLiveStatus(phase ? `${phase} · ${ev.message}` : ev.message);
           }
         });
+        if (out.modelReplaced) {
+          latestRef.current.onModelReplaced?.(out.modelReplaced, extra?.orchestrate ? 'persona' : 'coder');
+        }
+        return out;
       } finally {
         clearTimeout(timer);
       }

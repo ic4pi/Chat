@@ -155,6 +155,10 @@
     {
       "path": "/api/cron/run-standing-tasks",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/models?op=refresh",
+      "schedule": "17 */6 * * *"
     }
   ]
 }
