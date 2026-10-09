@@ -37,6 +37,13 @@ history; the server holds every prompt and key.
   back to the client and render as a clickable list under the reply, so a
   citation always points at a real, checkable page (`lib/websearch.js`).
 - Smart-reply chips and conversation summaries via `/api/assist`.
+- **Campaigns** — say "write a campaign for …" in any chat. The brief is read
+  from the conversation; a strategist drafts, an editor sends it back until it
+  scores 8/10 (buzzwords cost points, invented numbers are rejected), then X,
+  LinkedIn, Instagram, Facebook, TikTok and email are written at once. Each
+  post gets Copy, Post to…, and ⭐ Worked, which saves its opening as a proven
+  hook (`campaign_hooks`, pgvector) that later campaigns build on
+  (`lib/campaign-engine.js`, `/api/campaign`).
 
 ### 🧠 Memory — Supabase
 
@@ -123,6 +130,7 @@ history; the server holds every prompt and key.
 | `/api/chat` | Chat completions proxy (SSE or JSON) | none |
 | `/api/agent-chat` | Workspace agent turns | none |
 | `/api/group-chat` | Multi-persona round table (SSE) | none |
+| `/api/campaign` | Campaign engine (SSE); `?op=hook` saves a winner | cookie-scoped hooks |
 | `/api/generate` | Multi-LLM code-slice orchestrator (SSE) | none |
 | `/api/media-generate` | Image / video generation | none |
 | `/api/animate-sequence` | Frame-chain animation → video | none |

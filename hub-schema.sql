@@ -341,3 +341,39 @@ alter table resolutions     enable row level security;
 alter table documents       enable row level security;
 alter table document_topics enable row level security;
 alter table nudges          enable row level security;
+
+-- ---------------------------------------------------------------
+-- CAMPAIGN HOOKS — opening lines that worked, for the campaign engine
+-- ---------------------------------------------------------------
+-- Saved from a campaign post the owner marked as a winner. performance is
+-- whatever number they reported (CTR %, reply rate…), 1 when they only said
+-- it worked. The engine retrieves the relevant ones by embedding, then ranks
+-- them by performance.
+
+create table if not exists campaign_hooks (
+  id          uuid primary key default gen_random_uuid(),
+  owner_id    uuid not null references owners(id) on delete cascade,
+  text        text not null,
+  platform    text not null default 'any',
+  performance real not null default 1 check (performance >= 0),
+  embedding   vector(768),
+  created_at  timestamptz not null default now()
+);
+
+create index if not exists campaign_hooks_owner_idx on campaign_hooks (owner_id, performance desc);
+create index if not exists campaign_hooks_embedding_idx on campaign_hooks
+  using hnsw (embedding vector_cosine_ops);
+
+alter table campaign_hooks enable row level security;
+
+create or replace function match_campaign_hooks(
+  p_owner_id uuid, p_embedding vector(768), p_threshold real, p_limit int
+) returns table (id uuid, text text, platform text, performance real, similarity real) as $$
+  select h.id, h.text, h.platform, h.performance, (1 - (h.embedding <=> p_embedding))::real
+  from campaign_hooks h
+  where h.owner_id = p_owner_id
+    and h.embedding is not null
+    and 1 - (h.embedding <=> p_embedding) > p_threshold
+  order by h.embedding <=> p_embedding
+  limit p_limit;
+$$ language sql stable;

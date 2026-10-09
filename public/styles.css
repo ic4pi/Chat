@@ -428,6 +428,12 @@ body::before {
 .msg-sources a { color: var(--brass); text-decoration: none; word-break: break-word; }
 .msg-sources a:hover { text-decoration: underline; }
 
+.campaign-post { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--border); }
+.campaign-post-head { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 6px; }
+.campaign-post-text { white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+.campaign-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.campaign-failures { margin-top: 8px; font-size: 13px; color: var(--danger); }
+
 .text-btn {
   padding: 9px 16px;
   border-radius: var(--r-sm);

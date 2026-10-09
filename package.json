@@ -6,14 +6,15 @@
   "scripts": {
     "dev": "vercel dev",
     "check": "node scripts/check-api.mjs",
-    "test": "node scripts/check-api.mjs",
+    "test": "node scripts/check-api.mjs && node scripts/check-campaign.mjs",
     "animate": "node scripts/animate-sequence.mjs",
     "test:animate": "node scripts/test-animate-local.mjs",
     "check:packages": "node scripts/check-packages.mjs",
     "check:media": "node scripts/check-media-extract.mjs",
     "check:modal": "node scripts/check-modal-endpoints.mjs",
     "check:video": "node scripts/check-video-persist.mjs",
-    "check:async": "node scripts/check-async-fallback.mjs"
+    "check:async": "node scripts/check-async-fallback.mjs",
+    "check:campaign": "node scripts/check-campaign.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",

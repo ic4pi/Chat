@@ -1,6 +1,7 @@
 # Black Ops Marketing engine
 
 Standalone async Python engine — not part of the Vercel app (excluded in `.vercelignore`).
+The in-app version — what the chat runs when you say "write a campaign for …" — is `lib/campaign-engine.js` + `api/campaign.js`.
 
 brief → hook memory (FAISS or Pinecone) → strategist → editor gate (≥ 8/10, sent back with fixes) → every platform written concurrently
 

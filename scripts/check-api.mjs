@@ -33,6 +33,8 @@ const SYNTAX_FILES = [
   'lib/code-slices.js',
   'lib/hub.js',
   'api/hub/[route].js',
+  'lib/campaign-engine.js',
+  'api/campaign.js',
 ];
 
 function fail(msg) {
@@ -79,6 +81,7 @@ const HANDLER_IMPORTS = [
   'api/admin-config.js',
   'api/hub/[route].js',
   'api/assist.js',
+  'api/campaign.js',
 ];
 for (const rel of HANDLER_IMPORTS) {
   const abs = path.join(root, rel);
@@ -241,7 +244,7 @@ const vercel = JSON.parse(readFileSync(path.join(root, 'vercel.json'), 'utf8'));
     fail(`api/chat.js maxDuration must be 300 (got ${dur}) — thinking streams need headroom`);
   }
 }
-for (const route of ['api/agent-chat.js', 'api/group-chat.js']) {
+for (const route of ['api/agent-chat.js', 'api/group-chat.js', 'api/campaign.js']) {
   const dur = vercel.functions?.[route]?.maxDuration;
   if (dur !== 800) {
     fail(`${route} maxDuration must be 800 (got ${dur}) — Fluid Compute headroom for sequential/reasoning streams`);

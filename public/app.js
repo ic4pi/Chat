@@ -1351,7 +1351,8 @@ function renderMessageInto(container, m, idx) {
       content.appendChild(taskLine);
     }
     const shown = stripContinueMarkers(m.content || '') || (m.streaming ? '…' : '');
-    renderMarkdownInto(content, shown);
+    if (m.campaign?.posts) renderCampaignInto(content, m.campaign);
+    else renderMarkdownInto(content, shown);
     if (Array.isArray(m.sources) && m.sources.length && !m.streaming) {
       const box = document.createElement('div');
       box.className = 'msg-sources';
@@ -3326,6 +3327,11 @@ async function sendMessage(text) {
   if (groupAsk) {
     return runInlineGroupDiscussion(chat, groupAsk);
   }
+  // "Write a campaign for X" → strategist, ruthless editor, every platform.
+  if (imageParts.length === 0 && parseCampaignRequest(text)) {
+    turnSearchQuery = null;
+    return runInlineCampaign(chat);
+  }
 
   // Agency mode: route through the Orchestrated group-chat engine instead
   // of a single model, with the selected persona pinned as lead. Not
@@ -4295,6 +4301,226 @@ async function runInlineGroupDiscussion(chat, { rounds, topic }) {
   } finally {
     Object.assign(chat, saved);
     clearInterval(tickTimer);
+    setGeneratingUi(false);
+    activeChatUserStopped = false;
+    setTypingActive(false);
+    els.input?.focus();
+    chat.updatedAt = Date.now();
+    saveState();
+    void window.hub?.syncChat?.(chat);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Campaign engine on request, inside a normal chat (api/campaign.js).
+// "Write a campaign for my bookkeeping app" → the brief is read from this
+// conversation, a strategist drafts, an editor sends it back until it scores
+// 8/10, then every platform is written at once. Posts that work can be saved
+// as proven hooks, which later campaigns build on.
+// ---------------------------------------------------------------------------
+const CAMPAIGN_RE = /\b(?:write|make|create|build|draft|run|give me|generate|need|want|plan|do)\b[^.?!\n]{0,40}?\b(?:(?:marketing|ad|ads|advertising|promo(?:tional)?|launch|social(?: media)?)\s+(?:campaign|copy|posts?)|campaign(?!\s+(?:speech|trail|manager|finance|fund|rally|promise|staff|office))|ad copy)\b/i;
+const QUESTION_START_RE = /^\s*(?:how|what|why|when|where|which|who)\b/i;
+
+function parseCampaignRequest(text) {
+  const raw = String(text || '').trim();
+  if (!raw || (QUESTION_START_RE.test(raw) && raw.endsWith('?'))) return false;
+  return CAMPAIGN_RE.test(raw);
+}
+
+function campaignMarkdown(result) {
+  if (result.status === 'question') return result.question;
+  const { brief, best, threshold } = result;
+  const head = [];
+  if (result.status === 'rejected') {
+    head.push(`**No draft passed the editor** — best scored ${best.score}/10 (needs ${threshold}) after ${best.attempts} drafts. Nothing was adapted.`);
+    head.push(`**Best draft**\n${best.strategy.masterCopy}\n\n${best.strategy.cta}`);
+    if (best.verdict.fixes.length) head.push(`**What's still wrong**\n${best.verdict.fixes.map((f) => `- ${f}`).join('\n')}`);
+    head.push('Add detail (real numbers, who it’s for, the offer) and ask again.');
+    return head.join('\n\n');
+  }
+  head.push(`**Campaign · ${best.score}/10 from the editor**${best.attempts > 1 ? ` (${best.attempts} drafts)` : ''}`);
+  head.push(`For: ${brief.audience}${brief.audienceAssumed ? ' _(assumed — say who it’s for if that’s wrong)_' : ''}`);
+  head.push(`Core message: ${best.strategy.coreMessage}`);
+  if (result.hooksUsed?.length) head.push(`Built on your proven hooks: ${result.hooksUsed.map((h) => `“${h.text}”`).join(', ')}`);
+  if (!brief.facts.length) head.push('_No numbers or proof in the brief, so the copy makes no claims. Give it real figures for sharper copy._');
+  const posts = result.adaptations.map((a) => `### ${a.label}\n${a.text}${a.hashtags.length ? `\n${a.hashtags.join(' ')}` : ''}`);
+  const fails = result.failures.length
+    ? [`Couldn't write: ${result.failures.map((f) => `${f.label} (${f.error})`).join('; ')}`]
+    : [];
+  return [...head, ...posts, ...fails].join('\n\n');
+}
+
+function campaignSummaryMarkdown(c) {
+  // Everything above the posts — the posts themselves render as cards.
+  const full = c.markdown || '';
+  const cut = full.indexOf('\n### ');
+  return cut === -1 ? full : full.slice(0, cut);
+}
+
+function renderCampaignInto(container, c) {
+  renderMarkdownInto(container, campaignSummaryMarkdown(c));
+  for (const post of c.posts) {
+    const card = document.createElement('div');
+    card.className = 'campaign-post';
+    const headRow = document.createElement('div');
+    headRow.className = 'campaign-post-head';
+    headRow.textContent = `${post.label} · ${post.chars} chars`;
+    const body = document.createElement('div');
+    body.className = 'campaign-post-text';
+    const fullText = post.hashtags.length ? `${post.text}\n${post.hashtags.join(' ')}` : post.text;
+    body.textContent = fullText;
+    const actions = document.createElement('div');
+    actions.className = 'campaign-actions';
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'text-btn msg-speak';
+    copyBtn.textContent = 'Copy';
+    copyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void copyTextToClipboard(fullText).then((ok) => flashButton(copyBtn, ok ? 'Copied' : 'Copy failed'));
+    });
+    actions.appendChild(copyBtn);
+    if (socialAccounts.length) {
+      const postBtn = document.createElement('button');
+      postBtn.type = 'button';
+      postBtn.className = 'text-btn msg-speak';
+      postBtn.textContent = 'Post to…';
+      postBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void handlePostToSocial(fullText, postBtn, 'Campaign');
+      });
+      actions.appendChild(postBtn);
+    }
+    const winBtn = document.createElement('button');
+    winBtn.type = 'button';
+    winBtn.className = 'text-btn msg-speak';
+    winBtn.textContent = '⭐ Worked';
+    winBtn.title = 'Save this post’s opening as a proven hook — future campaigns build on it';
+    winBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void saveCampaignWinner(post, winBtn);
+    });
+    actions.appendChild(winBtn);
+    card.append(headRow, body, actions);
+    container.appendChild(card);
+  }
+  if (c.failures?.length) {
+    const p = document.createElement('p');
+    p.className = 'campaign-failures';
+    p.textContent = `Couldn't write: ${c.failures.map((f) => `${f.label} (${f.error})`).join('; ')}`;
+    container.appendChild(p);
+  }
+}
+
+async function saveCampaignWinner(post, btn) {
+  const raw = prompt(
+    'How did it do? Enter a number, e.g. 3.2 for a 3.2% click rate.\nLeave blank if you just know it worked.',
+    '',
+  );
+  if (raw === null) return;
+  // The hook is the opening: the email subject, or the first line of a post.
+  const lines = post.text.split('\n').map((l) => l.trim()).filter(Boolean);
+  let hook = (lines[0] || '').replace(/^subject:\s*/i, '');
+  if (hook.length < 20 && lines[1]) hook = `${hook} ${lines[1]}`;
+  try {
+    const res = await fetch('/api/campaign?op=hook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: hook, platform: post.platform, performance: raw.trim() }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    flashButton(btn, 'Saved ⭐');
+  } catch (err) {
+    alert(`Could not save it: ${err.message}`);
+  }
+}
+
+async function runInlineCampaign(chat) {
+  const provider = state.activeProvider;
+  const model = state.activeModel;
+  const apiKey = (providerKeys[provider] || '').trim();
+  const headers = paidAuthHeaders({ 'Content-Type': 'application/json', Accept: 'text/event-stream' });
+  if (apiKey) headers['X-Provider-Key'] = apiKey;
+  const conversation = chat.messages
+    .filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+    .slice(-16)
+    .map((m) => ({ role: m.role, content: m.content }));
+
+  const controller = new AbortController();
+  activeChatAbort = controller;
+  activeChatUserStopped = false;
+  setGeneratingUi(true);
+  const startedAt = Date.now();
+  let status = 'Starting the campaign engine…';
+  const paint = () => setTypingActive(true, `${status} · ${Math.floor((Date.now() - startedAt) / 1000)}s`);
+  paint();
+  const tick = setInterval(paint, 1000);
+
+  const push = (msg) => {
+    chat.messages.push({ ts: Date.now(), ...msg });
+    renderMessages({ scroll: 'bottom' });
+  };
+
+  try {
+    const res = await fetch('/api/campaign', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ messages: conversation, provider, model, apiKey: apiKey || undefined, paidPassword: loadPaidPassword() || undefined }),
+      signal: controller.signal,
+    });
+    if (!res.ok || !res.body) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finished = false;
+    while (!finished) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split('\n\n');
+      buffer = blocks.pop() || '';
+      for (const block of blocks) {
+        const line = block.split('\n').find((l) => l.startsWith('data:'));
+        if (!line) continue;
+        let ev;
+        try { ev = JSON.parse(line.slice(5)); } catch { continue; }
+        if (ev.type === 'status' && ev.message) {
+          status = ev.message;
+          paint();
+        } else if (ev.type === 'error') {
+          throw new Error(ev.error || 'Campaign failed');
+        } else if (ev.type === 'done') {
+          const r = ev.result;
+          const markdown = campaignMarkdown(r);
+          push({
+            role: 'assistant',
+            content: markdown,
+            personaName: 'Campaign',
+            model: ev.model,
+            provider: ev.provider,
+            campaign: r.status === 'approved'
+              ? { markdown, posts: r.adaptations, failures: r.failures }
+              : undefined,
+          });
+          if (r.status === 'approved' && !ev.hookMemory) {
+            push({ role: 'info', content: 'Hook memory is off (hub not configured), so ⭐ Worked can’t save winners yet.' });
+          }
+          finished = true;
+        }
+      }
+    }
+    if (!finished) throw new Error('The campaign engine stopped before finishing. Try again, or pick a faster model.');
+  } catch (err) {
+    if (!activeChatUserStopped) {
+      push({ role: 'error', content: `Campaign failed: ${err.message || err}` });
+    }
+  } finally {
+    clearInterval(tick);
+    activeChatAbort = null;
     setGeneratingUi(false);
     activeChatUserStopped = false;
     setTypingActive(false);
