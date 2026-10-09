@@ -302,7 +302,7 @@ function walkApi(dir) {
   }
 }
 walkApi(path.join(root, 'api'));
-const FUNCTION_CAP = 20; // Pro. Was 12 under Hobby.
+const FUNCTION_CAP = 24; // Pro (no platform cap). Raised from 20 when webhooks/meta.js made 21. Was 12 under Hobby.
 if (apiJs.length > FUNCTION_CAP) {
   fail(`Function cap is ${FUNCTION_CAP}; found ${apiJs.length}: ${apiJs.join(', ')}`);
 }
