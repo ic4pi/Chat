@@ -372,4 +372,16 @@ if (!sharedCoderIds.size) {
 }
 ok(`coder-package parity (${sharedCoderIds.size} shared ids)`);
 
+// Export (public/app.js) lists every storage key by constant name. A renamed
+// or deleted constant there threw "X is not defined" on every Export tap.
+{
+  const appSrc = readFileSync(path.join(root, 'public/app.js'), 'utf8');
+  const body = (appSrc.match(/function backupStorageKeys\(\)\s*\{([\s\S]*?)\n\}/) || [])[1] || '';
+  const names = [...body.matchAll(/^\s*([A-Z][A-Z0-9_]+),/gm)].map((m) => m[1]);
+  const missing = names.filter((n) => !new RegExp(`\\b(?:const|let|var)\\s+${n}\\b`).test(appSrc));
+  if (!names.length) fail('Could not read backupStorageKeys() in public/app.js');
+  else if (missing.length) fail(`backupStorageKeys() names undeclared constants: ${missing.join(', ')}`);
+  else ok(`Export keys all declared (${names.length})`);
+}
+
 console.log('check-api: all checks passed');

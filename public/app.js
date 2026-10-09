@@ -4761,13 +4761,18 @@ function backupStorageKeys() {
     PAID_PASS_STORAGE,
     PACKAGES_STORAGE,
     FAVORITE_MODELS_STORAGE,
-    WEB_SEARCH_PREF_KEY,
     AGENCY_MODE_PREF_KEY,
     SPEAK_PREF_KEY,
     VOICE_PREF_KEY,
     PERSONA_VOICES_KEY,
     PERSONA_MODELS_KEY,
     GROUP_DRAFT_KEY,
+    // Workspace (/agent): sessions with their files, coding teams, persona.
+    'agent_sessions_v2',
+    'agent_sessions_active_v2',
+    'workspace_coding_team_v1',
+    'workspace_saved_teams_v1',
+    'workspace_orchestrator_v1',
   ];
 }
 
