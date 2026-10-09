@@ -18,6 +18,63 @@ import { estimateTokens } from '../lib/context-filters.js';
 import { resolveProvider, withProviderChatExtras, formatProviderError } from '../lib/providers.js';
 import { prepareImageMessages } from '../lib/vision.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
+import { loadConfig } from '../lib/config.js';
+
+/**
+ * Orchestrator turns (body.orchestrate + personaId): the user talks to their
+ * persona, and the persona decides what the coding agent is told. The persona
+ * prompt and master prompt are resolved here, same as /api/chat, so neither
+ * ever reaches the browser. The client's systemPrompt carries only the live
+ * workspace state.
+ */
+const ORCHESTRATOR_PROTOCOL = [
+  'WORKSPACE ORCHESTRATOR MODE',
+  'You are still yourself — same character, same voice. The user is talking to YOU inside their coding',
+  'workspace. Behind you is a coding agent that writes files into the user\'s sandbox. The coder cannot see',
+  'this conversation. It sees only the brief you write, so the brief is the entire spec it builds from.',
+  '',
+  'Your job is to be the bridge:',
+  '1. Work out what the user actually wants, using everything you have: this conversation, the earlier',
+  '   chat history, the workspace state below, and every [CODER RESULT] so far. The user\'s wording will',
+  '   often be rough or incomplete — fill the gaps from context. Never make them write a better prompt.',
+  '2. If the request needs code written, changed, fixed, or debugged, write a brief for the coder.',
+  '   If it is a question, discussion, or opinion, just answer — no brief.',
+  '3. Ask the user a question only when a wrong guess would waste real work (two incompatible directions,',
+  '   a missing credential, an unknown target). Otherwise decide, state the assumption in one line, brief it.',
+  '',
+  'Brief format — at most one block per reply, at the very end, exactly these markers:',
+  '<<<BRIEF',
+  'Goal: what the finished result must do, in concrete observable terms.',
+  'Context: every fact from the conversation the coder needs — decisions made, preferences, constraints,',
+  '  style, earlier attempts and why they failed. The coder knows nothing you do not write here.',
+  'Files: real paths from the file tree to change, and any new paths to create.',
+  'Requirements: a numbered list — specific and testable, no vague "make it better".',
+  'Do not: what must stay untouched, approaches to avoid.',
+  'Done when: how the result is checked (what to run, what should appear or pass).',
+  'BRIEF>>>',
+  '',
+  'Text outside the block is what the user reads: short, in your voice — what you are having built and',
+  'any assumption you made. Do not write the code yourself; the coder does that.',
+  'Messages starting with [CODER RESULT] or [AUTO-TEST] are real reports of what the coder and the',
+  'sandbox tests did. Trust them over memory. If the coder failed, missed the point, or broke something,',
+  'say so plainly and write a corrected brief that names exactly what went wrong.',
+].join('\n');
+
+async function resolvePersonaPrompt(personaId) {
+  try {
+    const config = await loadConfig();
+    const persona =
+      config.personas.find((p) => p.id === personaId) ||
+      config.personas.find((p) => p.id === 'nexus') ||
+      config.personas[0];
+    return [config.masterPrompt, persona?.systemPrompt]
+      .filter((s) => typeof s === 'string' && s.trim())
+      .join('\n\n');
+  } catch (err) {
+    console.error('loadConfig failed:', err);
+    return '';
+  }
+}
 
 /** Stay under Venice/Dolphin ~131k with room for the completion. */
 const MAX_INPUT_TOKENS = 100_000;
@@ -373,6 +430,8 @@ export default async function handler(req, res) {
     provider: providerId,
     apiKey: clientKey,
     stream: wantStream,
+    personaId,
+    orchestrate,
   } = req.body || {};
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'messages array required' });
@@ -407,7 +466,14 @@ export default async function handler(req, res) {
     console.error('image preparation failed:', err);
   }
 
-  const budgeted = budgetMessages(systemPrompt, chatMessages);
+  // Persona first so budget truncation (which keeps the head) never drops it.
+  const effectiveSystem = orchestrate && typeof personaId === 'string' && personaId
+    ? [await resolvePersonaPrompt(personaId), ORCHESTRATOR_PROTOCOL, systemPrompt]
+        .filter((s) => typeof s === 'string' && s.trim())
+        .join('\n\n')
+    : systemPrompt;
+
+  const budgeted = budgetMessages(effectiveSystem, chatMessages);
   const messagesWithSystem = budgeted.system
     ? [{ role: 'system', content: budgeted.system }, ...budgeted.messages]
     : budgeted.messages;

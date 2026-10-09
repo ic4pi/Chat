@@ -13,6 +13,8 @@ export interface StoredMessage {
   role: 'user' | 'assistant';
   content: string;
   kind?: string;
+  speaker?: 'persona' | 'coder';
+  to?: 'persona';
 }
 
 export interface StoredSession {

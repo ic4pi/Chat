@@ -46,6 +46,13 @@ import {
 import { copyText, downloadTextFile } from './downloadFile.js';
 import { loadPaidPassword } from './providerPrefs.js';
 import {
+  buildCoderHistory,
+  buildPersonaContext,
+  buildPersonaHistory,
+  splitPersonaReply,
+  type OrchestratorPersona,
+} from './orchestrator.js';
+import {
   cleanForSpeech,
   getSpeechRecognition,
   loadSpeakPref,
@@ -695,8 +702,13 @@ export interface Message {
   id:          string;
   role:        'user' | 'assistant';
   content:     string;
-  /** welcome = UI-only, never sent to the model; retry-inject = verify/nudge loop */
-  kind?:       'user' | 'retry-inject' | 'welcome' | 'imported';
+  /** welcome = UI-only, never sent to the model; retry-inject = verify/nudge loop;
+   *  brief = the persona's instruction to the coder */
+  kind?:       'user' | 'retry-inject' | 'welcome' | 'imported' | 'brief';
+  /** Who wrote an assistant message. Unset = coder (pre-orchestrator sessions). */
+  speaker?:    'persona' | 'coder';
+  /** A user message addressed to the persona rather than the coder. */
+  to?:         'persona';
   segments?:   Segment[];
   fileChanges?: PendingChange[];
 }
@@ -722,6 +734,8 @@ interface Props {
   model:             string;
   /** Active role — plan stays prose-first until user asks to apply. */
   role?:             string;
+  /** Set = the user talks to this persona, which briefs the coder. Null = direct to coder. */
+  persona?:          (OrchestratorPersona & { apiKey?: string }) | null;
   /** BYOK key for the active provider (optional). */
   apiKey?:           string;
   tree:              FileNode[];
@@ -753,7 +767,7 @@ interface Props {
 }
 
 export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
-  repoRoot, repoUrl, sandboxId, provider, model, role, apiKey, tree, contextFiles, autoRun, appliedPaths,
+  repoRoot, repoUrl, sandboxId, provider, model, role, persona = null, apiKey, tree, contextFiles, autoRun, appliedPaths,
   autoSelectedFiles, searchHits, initialMessages, onMessagesChange,
   onRunCode, onFileChanges, onUploadText, onBeforeSend,
   pythonReady = null, pythonDetail = null,
@@ -791,12 +805,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   // Keep latest props in a ref so a send started before auto-context finishes
   // still sees the updated file context afterward.
   const latestRef = useRef({
-    repoRoot, repoUrl, sandboxId, provider, model, role, apiKey, tree, contextFiles, searchHits,
+    repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
     rustReady, rustDetail, goReady, goDetail,
   });
   latestRef.current = {
-    repoRoot, repoUrl, sandboxId, provider, model, role, apiKey, tree, contextFiles, searchHits,
+    repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
     rustReady, rustDetail, goReady, goDetail,
   };
@@ -831,7 +845,14 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
     sendingRef.current = true;
 
     // 1) Show the bubble IMMEDIATELY — never wait on auto-context / network first.
-    const userMsg: Message = { id: uid(), role: 'user', content: text, kind };
+    const orchPersona = latestRef.current.persona;
+    const orchestrated = !!orchPersona && kind === 'user';
+    const userMsg: Message = {
+      id: uid(), role: 'user', content: text, kind,
+      ...(orchestrated ? { to: 'persona' as const } : {}),
+    };
+    // Prefixes server status events so you can tell persona and coder phases apart.
+    let phase = orchestrated ? orchPersona!.name : '';
     setMessages(m => [...m, userMsg]);
     setLoading(true);
     setLiveThoughts('');
@@ -846,6 +867,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       prov: string,
       mod: string,
       key?: string,
+      extra?: Record<string, unknown>,
     ): Promise<AgentReply> => {
       const chatEndpoint = `${API_URL}/agent-chat`;
       const chatHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -894,6 +916,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             apiKey: key || undefined,
             paidPassword: paidPw || undefined,
             stream: true,
+            ...extra,
           }),
           signal: controller.signal,
         });
@@ -912,7 +935,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           } else if (ev.type === 'token' && typeof ev.text === 'string' && ev.text) {
             extendDeadlineOnActivity();
           } else if (ev.type === 'status' && typeof ev.message === 'string' && ev.message) {
-            setLiveStatus(ev.message);
+            setLiveStatus(phase ? `${phase} · ${ev.message}` : ev.message);
           }
         });
       } finally {
@@ -933,16 +956,17 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       prov: string,
       mod: string,
       key?: string,
+      extra?: Record<string, unknown>,
     ): Promise<AgentReply> => {
       try {
-        return await callAgentOnce(history, systemPrompt, sid, prov, mod, key);
+        return await callAgentOnce(history, systemPrompt, sid, prov, mod, key, extra);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (!isTransientNetworkError(msg)) throw err;
         setLiveThoughts('');
         setLiveStatus('Connection dropped — retrying…');
         await new Promise((r) => setTimeout(r, 1200));
-        return callAgentOnce(history, systemPrompt, sid, prov, mod, key);
+        return callAgentOnce(history, systemPrompt, sid, prov, mod, key, extra);
       }
     };
 
@@ -1031,7 +1055,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         messages: prev,
       } = latestRef.current;
 
-      const hits = freshHits ?? propHits;
+      let hits = freshHits ?? propHits;
       const ctx = new Map(pinned);
       if (freshFiles) {
         for (const [p, c] of freshFiles) {
@@ -1042,37 +1066,100 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       // After await, React may already have flushed userMsg into state — don't duplicate.
       // Never send welcome / legacy example blurb to the model.
       const withUser = prev.some(m => m.id === userMsg.id) ? prev : [...prev, userMsg];
-      const history = trimMessageHistory(
-        withUser
-          .filter(m =>
-            (m.role === 'user' || m.role === 'assistant')
-            && m.kind !== 'welcome'
-            && !looksLikeLegacyWelcome(m.content),
-          )
-          .map(m => ({ role: m.role, content: m.content as string | unknown })),
-      );
 
-      // Attach pending images to the latest user turn (vision-capable models).
-      const pendingImages = (latestRef.current as { _pendingImages?: Array<{ type: 'image_url'; image_url: { url: string } }> })._pendingImages;
-      if (pendingImages?.length && history.length > 0) {
-        const last = history[history.length - 1];
-        if (last.role === 'user' && typeof last.content === 'string') {
-          last.content = [
-            { type: 'text', text: last.content },
-            ...pendingImages,
-          ];
+      // Pending images ride on the latest user turn (vision-capable models) —
+      // the persona's and the coder's both, so neither has to guess what you showed.
+      type ImagePart = { type: 'image_url'; image_url: { url: string } };
+      const pendingImages = (latestRef.current as { _pendingImages?: ImagePart[] })._pendingImages;
+      (latestRef.current as { _pendingImages?: unknown })._pendingImages = undefined;
+      const attachImages = (turns: Array<{ role: string; content: string | unknown }>) => {
+        const last = turns[turns.length - 1];
+        if (pendingImages?.length && last?.role === 'user' && typeof last.content === 'string') {
+          last.content = [{ type: 'text', text: last.content }, ...pendingImages];
         }
-        (latestRef.current as { _pendingImages?: unknown })._pendingImages = undefined;
-      }
+        return turns;
+      };
 
+      // ── Persona turn: you talk to the persona; it decides what the coder is told.
+      let convo: Message[] = withUser;
+      let brief: string | null = null;
+      if (orchestrated && orchPersona) {
+        setLiveStatus(`${orchPersona.name} is thinking…`);
+        const personaSystem = buildPersonaContext({
+          repoRoot: root,
+          repoUrl: rUrl,
+          tree: tr,
+          openFiles: [...ctx.keys()],
+          hits,
+          coderLabel: `${prov} / ${mod}`,
+          role: activeRole,
+        });
+        const pProv = orchPersona.provider || prov;
+        const pMod = orchPersona.model || mod;
+        const personaReply = await callAgent(
+          attachImages(trimMessageHistory(buildPersonaHistory(withUser))),
+          personaSystem,
+          sid,
+          pProv,
+          pMod,
+          orchPersona.apiKey || (pProv === prov ? key : undefined),
+          { personaId: orchPersona.id, orchestrate: true },
+        );
+        const raw = personaReply.reply === '(empty response)' ? '' : personaReply.reply.trim();
+        const split = splitPersonaReply(raw);
+        brief = split.brief;
+        const personaMsg: Message = {
+          id: uid(), role: 'assistant', speaker: 'persona', content: raw || '(no reply)',
+        };
+        setMessages(m => [...m, personaMsg]);
+        if (speakOnRef.current && split.say && cleanForSpeech(split.say)) {
+          void speakReply(split.say);
+        }
+        convo = [...withUser, personaMsg];
+        if (!brief) return [];
+
+        const briefMsg: Message = { id: uid(), role: 'user', kind: 'brief', content: brief };
+        setMessages(m => [...m, briefMsg]);
+        convo = [...convo, briefMsg];
+
+        // The brief names real files — pull context for it, not for your raw wording.
+        if (before) {
+          const again = await withTimeout(before(brief), BEFORE_SEND_TIMEOUT_MS);
+          if (again) {
+            if (again.hits.length) hits = again.hits;
+            for (const [p, c] of again.files) {
+              if (!ctx.has(p)) ctx.set(p, c);
+            }
+          }
+        }
+        phase = 'Coder';
+        setLiveThoughts('');
+        setLiveStatus('Coder is working…');
+      }
+      const coderText = brief ?? text;
+
+      const history = attachImages(trimMessageHistory(
+        orchPersona
+          ? buildCoderHistory(convo)
+          : convo
+            .filter(m =>
+              (m.role === 'user' || m.role === 'assistant')
+              && m.kind !== 'welcome'
+              && !looksLikeLegacyWelcome(m.content),
+            )
+            .map(m => ({ role: m.role, content: m.content as string | unknown })),
+      ));
+
+      // A brief is always a build instruction; plan/review mode still holds it to prose.
       const suggestTurn = kind === 'user' && (
-        looksLikeSuggestRequest(text) || activeRole === 'plan' || activeRole === 'review'
+        (!brief && looksLikeSuggestRequest(text)) || activeRole === 'plan' || activeRole === 'review'
       );
-      const applyTurn = kind === 'user' && looksLikeApplyRequest(text) && activeRole !== 'plan';
-      const runTurn = kind === 'user' && !applyTurn && !suggestTurn && looksLikeRunRequest(text) && activeRole !== 'plan';
+      const applyTurn = kind === 'user' && activeRole !== 'plan'
+        && (brief ? !suggestTurn : looksLikeApplyRequest(text));
+      const runTurn = kind === 'user' && !brief && !applyTurn && !suggestTurn && looksLikeRunRequest(text) && activeRole !== 'plan';
 
       // Light chat ("hey", "thanks"): don't paste tree/files into the model.
-      const lightTurn = !needsCodeContext(text);
+      const lightTurn = !needsCodeContext(coderText);
       let systemPrompt = buildSystemPrompt(
         root,
         lightTurn ? [] : tr,
@@ -1095,6 +1182,13 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       } else if (suggestTurn) {
         systemPrompt +=
           '\n\nSUGGEST-ONLY this turn: plain advice, real paths, no File: blocks, no placeholders.';
+      } else if (brief) {
+        systemPrompt +=
+          '\n\nBRIEF this turn: the latest user message is a brief from the user\'s lead, who has the full '
+          + 'conversation and knows what the user wants. Treat it as the complete spec. Build exactly that — every '
+          + 'numbered requirement, nothing outside it. Start with one or two plain sentences saying what you are '
+          + 'changing, then the Edit:/File: blocks. If the brief is impossible as written (a path that does not '
+          + 'exist, a contradiction), say exactly what blocks it instead of guessing.';
       } else if (applyTurn) {
         systemPrompt +=
           '\n\nAPPLY this turn: output complete File: blocks only (FULL files). Stubs are rejected and will not save. '
@@ -1141,7 +1235,8 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       setMessages(m => [...m, {
         id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
       }]);
-      if (speakOnRef.current && kind === 'user' && cleanForSpeech(reply)) {
+      // In orchestrator mode the persona is the voice; the coder stays on screen.
+      if (speakOnRef.current && kind === 'user' && !orchestrated && cleanForSpeech(reply)) {
         void speakReply(reply);
       }
 
@@ -1187,7 +1282,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         setMessages(m => [...m, {
           id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
         }]);
-        if (speakOnRef.current && cleanForSpeech(reply)) {
+        if (speakOnRef.current && !orchestrated && cleanForSpeech(reply)) {
           void speakReply(reply);
         }
         if (report.rejected.length > 0) {
@@ -1360,7 +1455,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         background: '#0B0D12', flexShrink: 0, display: 'flex',
         alignItems: 'center', gap: 10 }}>
         <span style={{ color: '#FF3D8E', fontSize: 14, letterSpacing: '0.1em',
-          textTransform: 'uppercase' }}>// agent</span>
+          textTransform: 'uppercase' }}>{persona ? `// ${persona.name} → coder` : '// agent'}</span>
         {(autoSelectedFiles.length > 0 || contextFiles.size > 0) && (
           <span style={{ fontSize: 14, color: '#656C7E' }}>
             reading {Math.max(autoSelectedFiles.length, contextFiles.size)} file
@@ -1387,12 +1482,14 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
         {messages.length === 0 && !loading && (
           <div style={{ fontSize: 16, color: '#323A50', lineHeight: 1.5 }}>
-            {repoRoot ? 'Ask for a change.' : 'Start a blank project or open a GitHub URL, then ask.'}
+            {persona
+              ? `Talk to ${persona.name}. It knows your chat and this workspace, and briefs the coder for you.`
+              : repoRoot ? 'Ask for a change.' : 'Start a blank project or open a GitHub URL, then ask.'}
           </div>
         )}
         {messages.map(msg => (
           <div key={msg.id} data-testid={msg.role === 'user' ? 'user-msg' : 'assistant-msg'} style={{
-            alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+            alignSelf: msg.role === 'user' && msg.kind !== 'brief' ? 'flex-end' : 'flex-start',
             maxWidth: msg.role === 'user' ? '75%' : '100%',
             width: msg.role === 'assistant' ? '100%' : undefined,
           }}>
@@ -1406,6 +1503,18 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 </span>
                 {msg.content.slice(0, 500)}{msg.content.length > 500 ? '…' : ''}
               </div>
+            ) : msg.role === 'user' && msg.kind === 'brief' ? (
+              <details data-testid="brief-msg" style={{ background: '#12151D',
+                border: '1px solid #323A50', borderRadius: 6, padding: '6px 10px' }}>
+                <summary style={{ cursor: 'pointer', fontSize: 14, fontWeight: 700,
+                  letterSpacing: '0.08em', textTransform: 'uppercase', color: '#9198AA' }}>
+                  Brief → coder
+                </summary>
+                <pre style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  fontSize: 15, lineHeight: 1.5, color: '#C9CEDA', fontFamily: 'inherit' }}>
+                  {msg.content}
+                </pre>
+              </details>
             ) : msg.role === 'user' ? (
               <div style={{
                 background: 'rgba(52,211,153,.16)',
@@ -1445,6 +1554,20 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
               }}>
                 {msg.content}
               </div>
+            ) : msg.speaker === 'persona' || (persona && msg.kind === 'imported') ? (
+              <div data-testid="persona-msg">
+                <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: '0.08em',
+                  textTransform: 'uppercase', color: '#FF9FC4', marginBottom: 4 }}>
+                  {persona?.name || 'Persona'}
+                </div>
+                <p style={{ margin: '4px 0', fontSize: 18, lineHeight: 1.6, color: '#ECEEF3',
+                  whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  {(() => {
+                    const { say, brief } = splitPersonaReply(msg.content);
+                    return say || (brief ? 'Briefing the coder.' : msg.content);
+                  })()}
+                </p>
+              </div>
             ) : (
               <div>
                 <div style={{
@@ -1455,7 +1578,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                   color: '#34D399',
                   marginBottom: 4,
                 }}>
-                  Agent
+                  {persona ? 'Coder' : 'Agent'}
                 </div>
                 <AssistantBody msg={msg} appliedPaths={appliedPaths} onRunCode={onRunCode} />
               </div>
@@ -1563,7 +1686,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           onChange={e => setInput(e.target.value)}
           placeholder={loading ? 'Waiting for reply…'
             : listening ? (speakOn ? 'Listening — will send…' : 'Listening…')
-            : 'What should change?'}
+            : persona ? `Talk to ${persona.name}…` : 'What should change?'}
           disabled={loading}
           style={{ flex: 1, background: '#12151D', color: '#ECEEF3',
             border: '1px solid #232838', borderRadius: 4,

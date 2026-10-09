@@ -13,6 +13,8 @@ export interface WorkspaceHandoff {
   provider?: string;
   model?: string;
   role?: string;
+  /** Main-chat persona — becomes the Workspace orchestrator. */
+  personaId?: string;
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
   createdAt: number;
 }

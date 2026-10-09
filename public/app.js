@@ -5795,6 +5795,9 @@ function openInWorkspace() {
     provider: state.activeProvider,
     model: state.activeModel,
     role: state.activeRole === 'plan' ? 'write' : state.activeRole,
+    // The persona you were talking to stays your voice in Workspace — it
+    // orchestrates the coder instead of you prompting the coder directly.
+    personaId: state.activePersonaId,
     messages,
     createdAt: Date.now(),
   };

@@ -38,6 +38,11 @@ import {
 import { copyText } from './downloadFile.js';
 import { peekWorkspaceHandoff } from './workspaceHandoff.js';
 import {
+  loadOrchestratorPrefs,
+  saveOrchestratorPrefs,
+  type OrchestratorPrefs,
+} from './orchestrator.js';
+import {
   PROVIDER_LIST,
   ROLE_LIST,
   type RoleId,
@@ -282,6 +287,22 @@ export function App() {
         }));
       // Always open THIS chat’s workspace thread — never keep a previous chat’s convo.
       const prev = loadSession(id);
+      // The chat persona becomes the orchestrator and keeps thinking on the chat
+      // model; the coder stays on a coding model instead of inheriting it.
+      const orchestrated = !!handoff.personaId;
+      if (orchestrated) {
+        saveOrchestratorPrefs({
+          personaId: handoff.personaId!,
+          provider: handoff.provider || '',
+          model: handoff.model || '',
+        });
+      }
+      const coderProvider = orchestrated
+        ? prev?.provider || roleModelsRef.current.write.provider
+        : handoff.provider || prev?.provider || roleModelsRef.current.write.provider;
+      const coderModel = orchestrated
+        ? prev?.model || roleModelsRef.current.write.model
+        : handoff.model || prev?.model || roleModelsRef.current.write.model;
       const session: StoredSession = {
         v: 2,
         id,
@@ -289,8 +310,8 @@ export function App() {
         savedAt: Date.now(),
         repoUrl: prev?.repoUrl ?? null,
         sandboxId: prev?.sandboxId ?? null,
-        provider: handoff.provider || prev?.provider || roleModelsRef.current.write.provider || 'openrouter',
-        model: handoff.model || prev?.model || roleModelsRef.current.write.model || 'openrouter/free',
+        provider: coderProvider || 'openrouter',
+        model: coderModel || 'openrouter/free',
         autoApplyOn: prev?.autoApplyOn ?? true,
         messages: imported.length ? imported : [],
         pendingChanges: imported.length ? [] : (prev?.pendingChanges || []),
@@ -338,6 +359,9 @@ export function App() {
   const [autoVerifyOn, setAutoVerifyOn] = useState(true);
   const [applying,     setApplying]     = useState(false);
   const [appliedPaths, setAppliedPaths] = useState<Set<string>>(new Set());
+  // Read after boot so a handoff's persona (saved above) wins.
+  const [orchPrefs, setOrchPrefs] = useState<OrchestratorPrefs>(() => loadOrchestratorPrefs());
+  const [personaList, setPersonaList] = useState<Array<{ id: string; name: string }>>([]);
   const [applyResults, setApplyResults] = useState<Array<{ path: string; ok: boolean; error?: string }>>([]);
   const [autoCtxFiles, setAutoCtxFiles] = useState<string[]>([]);
   const [searchHits,   setSearchHits]   = useState<SearchHit[]>([]);
@@ -371,6 +395,8 @@ export function App() {
       role: x.role,
       content: x.content,
       kind: x.kind as Message['kind'],
+      speaker: x.speaker,
+      to: x.to,
     }));
   });
   const [fromChat] = useState(() => boot.fromChat);
@@ -471,7 +497,7 @@ export function App() {
       autoApplyOn,
       fromChat,
       messages: chatMessages.map(m => ({
-        id: m.id, role: m.role, content: m.content, kind: m.kind,
+        id: m.id, role: m.role, content: m.content, kind: m.kind, speaker: m.speaker, to: m.to,
       })),
       pendingChanges: repo.pendingChanges,
     });
@@ -494,6 +520,8 @@ export function App() {
       role: x.role,
       content: x.content,
       kind: x.kind as Message['kind'],
+      speaker: x.speaker,
+      to: x.to,
     })));
     setPushError(null);
     setPushOk(null);
@@ -523,6 +551,36 @@ export function App() {
     saveSession(session);
     openStoredSession(session);
   }, [provider, model, autoApplyOn, openStoredSession]);
+
+  // Names/ids only — prompts stay on the server and are resolved per request.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_URL}/public-config`)
+      .then(r => (r.ok ? r.json() : null))
+      .then((d: { personas?: Array<{ id: string; name: string }> } | null) => {
+        if (!cancelled && Array.isArray(d?.personas)) setPersonaList(d.personas);
+      })
+      .catch(() => { /* picker falls back to the saved id */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  const handlePersonaChange = (id: string) => {
+    setOrchPrefs(prev => {
+      const next = { ...prev, personaId: id };
+      saveOrchestratorPrefs(next);
+      return next;
+    });
+  };
+
+  const orchPersona = orchPrefs.personaId
+    ? {
+        id: orchPrefs.personaId,
+        name: personaList.find(p => p.id === orchPrefs.personaId)?.name || orchPrefs.personaId,
+        provider: orchPrefs.provider || provider,
+        model: orchPrefs.provider ? orchPrefs.model : model,
+        apiKey: (keys[orchPrefs.provider || provider] || '').trim() || undefined,
+      }
+    : null;
 
   const handleProviderChange = (p: string) => {
     setProvider(p);
@@ -938,6 +996,19 @@ export function App() {
             Delete
           </button>
         )}
+        <select value={orchPrefs.personaId} onChange={e => handlePersonaChange(e.target.value)}
+          data-testid="persona-select"
+          title={orchPersona
+            ? `You talk to ${orchPersona.name} (on ${orchPersona.model}); it briefs the coder below`
+            : 'Off — your messages go straight to the coder'}
+          style={{ background: orchPersona ? 'rgba(255,61,142,.12)' : '#12151D', color: '#ECEEF3',
+            border: `1px solid ${orchPersona ? '#C81F6B' : '#232838'}`,
+            borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 15, cursor: 'pointer' }}>
+          {(personaList.length ? personaList : orchPrefs.personaId
+            ? [{ id: orchPrefs.personaId, name: orchPrefs.personaId }] : []
+          ).map(p => <option key={p.id} value={p.id}>🎭 {p.name}</option>)}
+          <option value="">No persona — coder direct</option>
+        </select>
         <select value={role} onChange={e => handleRoleChange(e.target.value as RoleId)}
           title="Role — uses the model you assigned for write / review / plan"
           style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
@@ -1131,6 +1202,7 @@ export function App() {
           provider={provider}
           model={model}
           role={role}
+          persona={orchPersona}
           apiKey={activeApiKey || undefined}
           tree={repo.tree}
           contextFiles={repo.contextFiles}
