@@ -1002,8 +1002,15 @@ export function App() {
 
   const handleApplyAndVerify = useCallback(async (files?: PendingChange[]) => {
     const results = await handleApply(files);
-    if (results.some(r => r.ok) && autoVerifyOn && (repo.root || repo.sandboxId)) {
-      await runVerify();
+    const written = results.filter(r => r.ok).map(r => r.path);
+    if (written.length && autoVerifyOn && (repo.root || repo.sandboxId) && !verifyingRef.current) {
+      const outcome = await runVerify();
+      // The persona reads notes: it reports the real test result instead of
+      // "presumed done".
+      const failed = results.filter(r => !r.ok).map(r => r.path);
+      const files = `${written.join(', ')}${failed.length ? `; couldn't write ${failed.join(', ')}` : ''}`;
+      if (outcome === 'passed') chatRef.current?.addNote(`Auto-test passed (wrote ${files}).`);
+      else if (outcome === 'failed') chatRef.current?.addNote(`Auto-test still failing after the fix attempts (wrote ${files}). The last output is in the Terminal.`);
     }
     return results;
   }, [handleApply, autoVerifyOn, repo.root, repo.sandboxId, runVerify]);

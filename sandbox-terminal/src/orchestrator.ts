@@ -114,9 +114,31 @@ export function splitPersonaReply(raw: string): { say: string; brief: string | n
  * talked about the coder or handed you a prompt to pass along. Worth a
  * second, structured attempt rather than leaving you to relay it.
  */
+/**
+ * "What did the coder build? List the files." — asking about work, not for
+ * it. A question first, and no "fix it / build it / go ahead" after it.
+ */
+export function asksAboutWork(userText: string): boolean {
+  const t = userText.trim().toLowerCase();
+  const asks = /^(?:what|which|why|how|did|does|do|is|are|was|were|where|when|who|has|have)\b[^?]*\?/.test(t);
+  const orders = /\b(?:fix (?:it|this|that|them)|build (?:it|this|that|me|a|an)|go ahead|do it|make (?:it|this|that|a|an)|change (?:it|this|that)|add (?:a|an|the|some)|implement|redo|rewrite|apply)\b/.test(t);
+  return asks && !orders;
+}
+
+/** The persona saying it's handing work over — not merely mentioning the coder. */
+const HANDOFF_RE = new RegExp([
+  String.raw`\b(?:I(?:'ll| will|'m going to| am going to)|let me|going to|about to)\s+(?:\w+\s+){0,4}?(?:send|hand|pass|brief|get|have|ask|tell|build)\b`,
+  String.raw`\b(?:copy|paste)\s+(?:this|it|the (?:prompt|brief|following))\b`,
+  String.raw`\bhere(?:'s| is) (?:the|a|your) (?:prompt|brief)\b`,
+  String.raw`\b(?:prompt|brief) (?:for|to) (?:the )?(?:coder|coding agent|developer)\b`,
+  String.raw`\b(?:sending|handing|passing) (?:this|it|that)\b`,
+  String.raw`\bbuilding (?:it|this|that) now\b`,
+].join('|'), 'i');
+
 export function personaMeantToBrief(userText: string, personaSay: string): boolean {
+  if (asksAboutWork(userText)) return false;
   if (looksLikeApplyRequest(userText)) return true;
-  return /\b(?:coder|coding agent|developer|prompt|paste|copy (?:this|it|the)|hand(?:ing)? (?:this|it) (?:off|over)|send(?:ing)? (?:this|it) (?:to|over)|build(?:ing)? (?:it|this|that))\b/i.test(personaSay);
+  return HANDOFF_RE.test(personaSay);
 }
 
 export const NO_BRIEF = 'NO_BRIEF';
