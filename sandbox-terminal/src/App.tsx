@@ -409,6 +409,8 @@ export function App() {
   }, []);
   const [pushing,      setPushing]      = useState(false);
   const [restoreNote,  setRestoreNote]  = useState<string | null>(null);
+  const queuedFilesRef = useRef<PendingChange[]>([]);
+  const [queueTick, setQueueTick] = useState(0);
   const [pushError,    setPushError]    = useState<string | null>(null);
   const [pushOk,       setPushOk]       = useState<string | null>(null);
   const [sessionId, setSessionId] = useState(
@@ -502,12 +504,39 @@ export function App() {
     return () => { cancelled = true; };
   }, [modelScope, keys]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── A project for the build to land in ────────────────────────────────────
+  // Coming from chat there is no project open, and the coder's files used to
+  // stay stuck in the chat: no editor, no preview, no auto-test. Build now
+  // opens a blank project (while the coder writes) and the files go into it.
+  const restoringRef = useRef<Promise<{ kind: string }> | null>(null);
+  const blankStartRef = useRef<Promise<string | null> | null>(null);
+  const liveRepo = useRef({ root: repo.root, sandboxId: repo.sandboxId });
+  liveRepo.current = { root: repo.root, sandboxId: repo.sandboxId };
+  const ensureProject = useCallback(async (): Promise<string | null> => {
+    if (restoringRef.current) {
+      const out = await restoringRef.current.catch(() => ({ kind: 'failed' }));
+      if (out.kind !== 'failed') return liveRepo.current.sandboxId || 'restored';
+    }
+    if (liveRepo.current.root && liveRepo.current.sandboxId) return liveRepo.current.sandboxId;
+    if (!blankStartRef.current) {
+      setRestoreNote('Opening a blank project for this build…');
+      blankStartRef.current = repo.startBlankProject('untitled-project').then(sid => {
+        setRestoreNote(sid ? null : "Couldn't open a project for the build — tap Start blank, then ask the coder to write it again.");
+        if (!sid) blankStartRef.current = null;
+        return sid;
+      });
+    }
+    return blankStartRef.current;
+  }, [repo]);
+
   // Bring a saved project back — blank projects too, which used to stay
   // disconnected after any reload even while their sandbox was still alive.
   const restoreSaved = useCallback(async (s: StoredSession) => {
     if (!s.repoUrl && !s.sandboxId && !(s.files && Object.keys(s.files).length)) return;
     setRestoreNote('Reopening your project…');
-    const out = await repo.restoreProject({ sandboxId: s.sandboxId, repoUrl: s.repoUrl, files: s.files });
+    const pending = repo.restoreProject({ sandboxId: s.sandboxId, repoUrl: s.repoUrl, files: s.files });
+    restoringRef.current = pending;
+    const out = await pending.finally(() => { if (restoringRef.current === pending) restoringRef.current = null; });
     if (out.kind === 'reconnected') setRestoreNote(null);
     else if (out.kind === 'rebuilt') {
       setRestoreNote(out.restored
@@ -834,11 +863,13 @@ export function App() {
         if (!same(c.builder, teamSeats.build) || !same(c.fixer, teamSeats.fix)) {
           applySeats({ ...teamSeats, build: c.builder, fix: c.fixer }, 'custom');
         }
+        // The sandbox starts while the coder writes, so the files have somewhere to go.
+        if (!c.second) void ensureProject();
         args.onBuild({ builder: withKey(c.builder), second: c.second ? withKey(c.second) : null });
       }}
     />
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ), [teamPrefs.preset, teamPrefs.savedId, savedTeamMenu, pickSavedTeam, saveTeamAs, teamSeats.build.model, teamSeats.build.provider, teamSeats.fix.model, teamSeats.fix.provider,
+  ), [teamPrefs.preset, teamPrefs.savedId, savedTeamMenu, pickSavedTeam, saveTeamAs, ensureProject, teamSeats.build.model, teamSeats.build.provider, teamSeats.fix.model, teamSeats.fix.provider,
     teamSeats.plan.model, teamSeats.review.model, teamCatalogs, teamOptions, teamStars, applyPreset, applySeats, withKey]);
 
   const setAskFirst = useCallback((askFirst: boolean) => {
@@ -927,13 +958,19 @@ export function App() {
 
   // ── Compare: the persona's brief to two coders, and the chosen version back ──
   const compareRef = useRef<CompareHandle>(null);
+  const queuedCompareRef = useRef<{ brief: string; picks?: { a: SeatModel; b: SeatModel } } | null>(null);
   const handleCompareBrief = useCallback((brief: string, picks?: { a: SeatModel; b: SeatModel }) => {
-    if (!repo.sandboxId) {
-      setRestoreNote('Open a blank project or a GitHub repo first — Compare needs a sandbox for its two previews.');
-      return;
-    }
     setShowCompare(true);
-    compareRef.current?.runBrief(brief, picks);
+    if (repo.sandboxId) { compareRef.current?.runBrief(brief, picks); return; }
+    // Compare's two previews need a sandbox: open one, then run.
+    queuedCompareRef.current = { brief, picks };
+    void ensureProject().then(sid => { if (!sid) queuedCompareRef.current = null; });
+  }, [repo.sandboxId, ensureProject]);
+  useEffect(() => {
+    if (!repo.sandboxId || !queuedCompareRef.current) return;
+    const q = queuedCompareRef.current;
+    queuedCompareRef.current = null;
+    compareRef.current?.runBrief(q.brief, q.picks);
   }, [repo.sandboxId]);
 
   const handleUseBuild = useCallback(async (build: BuildChoice) => {
@@ -1040,6 +1077,16 @@ export function App() {
   }, [repo.root, repo.sandboxId, repo.tree, repo.contextFiles]);
 
   const handleFileChanges = useCallback(async (changes: PendingChange[]) => {
+    if (autoApplyOn && (!repo.root || !repo.sandboxId)) {
+      // No project open (you came from chat): hold the files until the one
+      // Build started is ready, then write and test them as usual.
+      const sid = await ensureProject();
+      if (sid) {
+        queuedFilesRef.current.push(...changes);
+        setQueueTick(t => t + 1);
+        return;
+      }
+    }
     // Group by path — multiple Edit: blocks against the same file must apply
     // in order, each against the previous one's result, not all independently
     // against the same starting content.
@@ -1110,7 +1157,16 @@ export function App() {
         await handleApplyAndVerify(resolved);
       }
     }
-  }, [repo, autoVerify, autoApplyOn, handleApply, handleApplyAndVerify]);
+  }, [repo, autoVerify, autoApplyOn, handleApply, handleApplyAndVerify, ensureProject]);
+
+  useEffect(() => {
+    if (!repo.root || !repo.sandboxId) return;
+    blankStartRef.current = null;
+    if (!queuedFilesRef.current.length) return;
+    const queued = queuedFilesRef.current;
+    queuedFilesRef.current = [];
+    void handleFileChanges(queued);
+  }, [repo.root, repo.sandboxId, queueTick, handleFileChanges]);
 
   const handleRunCode = useCallback((code: string, lang: string) => {
     // Run in the background terminal without stealing the Chat tab.
