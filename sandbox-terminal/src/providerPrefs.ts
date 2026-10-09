@@ -135,7 +135,7 @@ export const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string }>
 };
 
 export const DEFAULT_MODELS: Record<string, string> = {
-  venice: 'gemma-4-uncensored',
+  venice: 'e2ee-gemma-4-26b-a4b-uncensored-p',
   openrouter: 'qwen/qwen3-coder:free',
   cerebras: 'llama-3.3-70b',
   groq: 'llama-3.3-70b-versatile',

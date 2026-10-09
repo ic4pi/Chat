@@ -15,8 +15,13 @@ export interface BuildChoiceSeats {
   second: SeatModel | null;
 }
 
+/** A model one of the teams uses, labelled for the menu. */
+export interface TeamOption extends SeatModel { label: string }
+
 interface Props {
   seats: TeamSeats;
+  /** Every team's models — offered first in each menu. */
+  teamOptions?: TeamOption[];
   preset: PresetId | 'custom';
   catalogs: Record<string, CatalogModel[]>;
   unlocked: boolean;
@@ -38,17 +43,27 @@ const PROVIDER_GROUPS: Array<{ provider: string; label: string; keep: (m: Catalo
   { provider: 'openrouter', label: 'OpenRouter — coders (paid)', keep: m => m.free === false && (m.categories || []).includes('coder') },
 ];
 
-function SeatSelect({ value, catalogs, unlocked, onChange, testId }: {
+function SeatSelect({ value, catalogs, unlocked, onChange, testId, teamOptions = [] }: {
   value: SeatModel; catalogs: Record<string, CatalogModel[]>; unlocked: boolean;
-  onChange: (s: SeatModel) => void; testId: string;
+  onChange: (s: SeatModel) => void; testId: string; teamOptions?: TeamOption[];
 }) {
-  const known = PROVIDER_GROUPS.some(g => (catalogs[g.provider] || []).some(m => g.keep(m) && m.id === value.model && g.provider === value.provider));
+  const inTeams = teamOptions.some(o => key(o) === key(value));
+  const known = inTeams || PROVIDER_GROUPS.some(g => (catalogs[g.provider] || []).some(m => g.keep(m) && m.id === value.model && g.provider === value.provider));
   return (
     <select data-testid={testId} value={key(value)} onChange={e => onChange(parse(e.target.value))}
       style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838', borderRadius: 4,
         padding: '4px 6px', fontFamily: 'inherit', fontSize: 14, minWidth: 0, flex: 1, maxWidth: 360 }}>
       {!known && <option value={key(value)}>{value.model}</option>}
-      {PROVIDER_GROUPS.map(g => {
+      {teamOptions.length > 0 && (
+        <optgroup label="Team picks">
+          {teamOptions.map(o => {
+            const meta = (catalogs[o.provider] || []).find(m => m.id === o.model);
+            const locked = !!meta && meta.free === false && !unlocked;
+            return <option key={`team:${key(o)}`} value={key(o)} disabled={locked}>{o.label}{locked ? ' 🔒' : ''}</option>;
+          })}
+        </optgroup>
+      )}
+      {PROVIDER_GROUPS.filter(g => !teamOptions.length || g.provider === 'venice' || g.label.includes('free')).map(g => {
         const list = (catalogs[g.provider] || []).filter(g.keep);
         if (!list.length) return null;
         return (
@@ -77,7 +92,7 @@ function Tag({ seat }: { seat: SeatModel }) {
   );
 }
 
-export function BuildPicker({ seats, preset, catalogs, unlocked, wantCompare, onPreset, onBuild }: Props) {
+export function BuildPicker({ seats, teamOptions, preset, catalogs, unlocked, wantCompare, onPreset, onBuild }: Props) {
   const [builder, setBuilder] = useState<SeatModel>(seats.build);
   const [fixer, setFixer] = useState<SeatModel>(seats.fix);
   const [compare, setCompare] = useState(!!wantCompare);
@@ -117,17 +132,17 @@ export function BuildPicker({ seats, preset, catalogs, unlocked, wantCompare, on
         </select>
       </div>
       {row('Build', 'Writes the code and all the content in it',
-        <SeatSelect testId="seat-build" value={builder} catalogs={catalogs} unlocked={unlocked} onChange={setBuilder} />,
+        <SeatSelect testId="seat-build" value={builder} catalogs={catalogs} unlocked={unlocked} onChange={setBuilder} teamOptions={teamOptions} />,
         <Tag seat={builder} />)}
       {row('Fix', 'Repairs what auto-test catches; hands back to the builder if it refuses',
-        <SeatSelect testId="seat-fix" value={fixer} catalogs={catalogs} unlocked={unlocked} onChange={setFixer} />,
+        <SeatSelect testId="seat-fix" value={fixer} catalogs={catalogs} unlocked={unlocked} onChange={setFixer} teamOptions={teamOptions} />,
         <Tag seat={fixer} />)}
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: '#C9CEDA', cursor: 'pointer' }}>
         <input type="checkbox" data-testid="compare-toggle" checked={compare} onChange={e => setCompare(e.target.checked)} />
         Also build a second version to compare side by side
       </label>
       {compare && row('Build 2', 'A second builder for Compare',
-        <SeatSelect testId="seat-second" value={second} catalogs={catalogs} unlocked={unlocked} onChange={setSecond} />,
+        <SeatSelect testId="seat-second" value={second} catalogs={catalogs} unlocked={unlocked} onChange={setSecond} teamOptions={teamOptions} />,
         <Tag seat={second} />)}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <button type="button" data-testid="build-go"
@@ -137,9 +152,7 @@ export function BuildPicker({ seats, preset, catalogs, unlocked, wantCompare, on
           {compare ? 'Build both' : 'Build it'}
         </button>
         <span style={{ fontSize: 12, color: '#656C7E' }}>
-          {preset === 'uncensored' || preset === 'custom'
-            ? 'Fix is the only seat that may be filtered — it only sees error output.'
-            : PRESETS[preset].blurb}
+          {preset === 'custom' ? 'Your own seats.' : PRESETS[preset].blurb}
         </span>
       </div>
     </div>

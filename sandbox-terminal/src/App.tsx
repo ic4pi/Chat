@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FileTree }         from './FileTree.js';
 import { ChatPane }         from './ChatPane.js';
 import type { ChatHandle, Message }  from './ChatPane.js';
@@ -71,7 +71,7 @@ import {
 import type { GenerateChunkResult } from './ChunkModelPanel.js';
 import { SettingsPanel } from './SettingsPanel.js';
 import { ComparePanel, type BuildChoice, type CompareHandle } from './ComparePanel.js';
-import { BuildPicker, type BuildChoiceSeats } from './BuildPicker.js';
+import { BuildPicker, type BuildChoiceSeats, type TeamOption } from './BuildPicker.js';
 import {
   PRESETS,
   SEATS,
@@ -693,6 +693,28 @@ export function App() {
     fix: teamPrefs.seats?.fix ?? roleModels.write,
   };
 
+  // Every team's models, labelled with the team, seat and price — the picker's first menu group.
+  const teamOptions = useMemo<TeamOption[]>(() => {
+    if (!teamCatalogs.openrouter?.length) return [];
+    const ctx = { catalogs: teamCatalogs, liveDefaults: teamDefaults, unlocked: true };
+    const seen = new Map<string, TeamOption>();
+    for (const id of Object.keys(PRESETS) as PresetId[]) {
+      const seats = resolvePreset(id, ctx);
+      for (const seat of SEATS) {
+        const sm = seats[seat.id];
+        const k = `${sm.provider}::${sm.model}`;
+        const meta = (teamCatalogs[sm.provider] || []).find(m => m.id === sm.model) as (CatalogModel & { pricing?: { prompt?: string; completion?: string } }) | undefined;
+        const p = meta?.pricing;
+        const cost = sm.provider === 'venice' ? 'Venice'
+          : p && Number(p.prompt) > 0 ? `$${(Number(p.prompt) * 1e6).toFixed(2)}/$${(Number(p.completion) * 1e6).toFixed(2)} per M` : 'free';
+        const tag = `${PRESETS[id].label} ${seat.label}`;
+        const prev = seen.get(k);
+        seen.set(k, { ...sm, label: prev ? prev.label.replace(' · ', `, ${tag} · `) : `${meta?.name || sm.model} — ${tag} · ${cost}` });
+      }
+    }
+    return [...seen.values()];
+  }, [teamCatalogs, teamDefaults]);
+
   const applySeats = useCallback((seats: TeamSeats, preset: PresetId | 'custom') => {
     const roles = rolesFromSeats(seats);
     setRoleModels(roles);
@@ -739,6 +761,7 @@ export function App() {
     <BuildPicker
       key={`${teamPrefs.preset}:${teamSeats.build.model}:${teamSeats.fix.model}`}
       seats={teamSeats}
+      teamOptions={teamOptions}
       preset={teamPrefs.preset}
       catalogs={teamCatalogs}
       unlocked={paidUnlocked()}
@@ -755,7 +778,7 @@ export function App() {
     />
   // eslint-disable-next-line react-hooks/exhaustive-deps
   ), [teamPrefs.preset, teamSeats.build.model, teamSeats.build.provider, teamSeats.fix.model, teamSeats.fix.provider,
-    teamSeats.plan.model, teamSeats.review.model, teamCatalogs, applyPreset, applySeats, withKey]);
+    teamSeats.plan.model, teamSeats.review.model, teamCatalogs, teamOptions, applyPreset, applySeats, withKey]);
 
   const setAskFirst = useCallback((askFirst: boolean) => {
     setTeamPrefs(prev => {
