@@ -17,6 +17,7 @@
  */
 
 import type { CatalogModel, RoleId, RoleModel } from './providerPrefs.js';
+import { noteSettingsChanged } from './settingsSync.js';
 
 export type SeatId = 'plan' | 'build' | 'review' | 'fix';
 export type PresetId = 'uncensored' | 'best' | 'budget' | 'value' | 'free';
@@ -28,7 +29,12 @@ export interface TeamPrefs {
   seats: TeamSeats | null;   // null until first resolved from the live catalogs
   /** Show "Who builds this?" before any code is written. */
   askFirst: boolean;
+  /** The saved team these seats came from, while they still match it. */
+  savedId?: string | null;
 }
+
+/** A team you named and kept: fixed seats, exactly as you picked them. */
+export interface SavedTeam { id: string; name: string; seats: TeamSeats; savedAt: number }
 
 export const SEATS: Array<{ id: SeatId; label: string; job: string }> = [
   { id: 'plan', label: 'Plan', job: 'Architecture and steps — no code (Plan role).' },
@@ -203,6 +209,7 @@ export function loadTeamPrefs(): TeamPrefs {
         preset: p.preset && (p.preset === 'custom' || p.preset in PRESETS) ? p.preset : 'uncensored',
         seats: p.seats && p.seats.build ? p.seats : null,
         askFirst: p.askFirst !== false,
+        savedId: typeof p.savedId === 'string' ? p.savedId : null,
       };
     }
   } catch { /* ignore */ }
@@ -211,6 +218,57 @@ export function loadTeamPrefs(): TeamPrefs {
 
 export function saveTeamPrefs(p: TeamPrefs): void {
   try { localStorage.setItem(KEY, JSON.stringify(p)); } catch { /* ignore */ }
+  noteSettingsChanged();
+}
+
+const SAVED_KEY = 'workspace_saved_teams_v1';
+
+export function loadSavedTeams(): SavedTeam[] {
+  try {
+    const list = JSON.parse(localStorage.getItem(SAVED_KEY) || '[]') as SavedTeam[];
+    return Array.isArray(list) ? list.filter(t => t && t.id && t.name && t.seats?.build && t.seats?.fix) : [];
+  } catch { return []; }
+}
+
+export function saveSavedTeams(list: SavedTeam[]): void {
+  try { localStorage.setItem(SAVED_KEY, JSON.stringify(list)); } catch { /* ignore */ }
+  noteSettingsChanged();
+}
+
+/** Same name replaces that team; a new name adds one. Returns the new list and the team. */
+export function upsertSavedTeam(list: SavedTeam[], name: string, seats: TeamSeats): { list: SavedTeam[]; team: SavedTeam } {
+  const clean = name.trim().slice(0, 60);
+  const prev = list.find(t => t.name.toLowerCase() === clean.toLowerCase());
+  const team: SavedTeam = { id: prev?.id || Math.random().toString(36).slice(2, 10), name: clean, seats, savedAt: Date.now() };
+  return { list: prev ? list.map(t => (t.id === prev.id ? team : t)) : [...list, team], team };
+}
+
+/** A retired model, swapped for its replacement in every saved team. */
+export function renameModelInTeams(list: SavedTeam[], from: string, to: string): SavedTeam[] | null {
+  let changed = false;
+  const next = list.map(t => {
+    const seats = { ...t.seats };
+    for (const id of Object.keys(seats) as SeatId[]) {
+      if (seats[id].model === from) { seats[id] = { ...seats[id], model: to }; changed = true; }
+    }
+    return { ...t, seats };
+  });
+  return changed ? next : null;
+}
+
+/** A team's cost: its priciest seat, ⭐ to ⭐⭐⭐⭐. */
+export function seatsStars(seats: TeamSeats, catalogs: Record<string, CatalogModel[]>): number {
+  return Math.max(...SEATS.map(({ id }) =>
+    costStars(seats[id].provider, (catalogs[seats[id].provider] || []).find(m => m.id === seats[id].model))));
+}
+
+/** Paid seats that can't run on this device until it's unlocked. */
+export function lockedSeats(seats: TeamSeats, catalogs: Record<string, CatalogModel[]>): SeatId[] {
+  return SEATS.map(s => s.id).filter(id => {
+    const sm = seats[id];
+    const meta = (catalogs[sm.provider] || []).find(m => m.id === sm.model);
+    return meta ? meta.free === false : sm.provider === 'venice';
+  });
 }
 
 /** "Refuses taboo or illegal stuff" — the signal to hand a fix back to the builder. */

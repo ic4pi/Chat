@@ -13,6 +13,7 @@
 import type { FileNode } from './types.js';
 import { formatSearchHits, type SearchHit } from './contextBudget.js';
 import { looksLikeApplyRequest, looksLikeLegacyWelcome } from './agentParse.js';
+import { noteSettingsChanged } from './settingsSync.js';
 
 export interface OrchestratorPersona {
   id: string;
@@ -64,6 +65,7 @@ export function loadOrchestratorPrefs(): OrchestratorPrefs {
 
 export function saveOrchestratorPrefs(p: OrchestratorPrefs): void {
   try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch { /* ignore */ }
+  noteSettingsChanged();
 }
 
 // ── brief parsing ────────────────────────────────────────────────────────

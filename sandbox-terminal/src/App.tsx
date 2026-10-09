@@ -82,7 +82,14 @@ import {
   resolvePreset,
   rolesFromSeats,
   saveTeamPrefs,
+  loadSavedTeams,
+  saveSavedTeams,
+  upsertSavedTeam,
+  renameModelInTeams,
+  seatsStars,
+  lockedSeats,
   type PresetId,
+  type SavedTeam,
   type SeatModel,
   type TeamPrefs,
   type TeamSeats,
@@ -382,6 +389,7 @@ export function App() {
   const [appliedPaths, setAppliedPaths] = useState<Set<string>>(new Set());
   // Read after boot so a handoff's persona (saved above) wins.
   const [orchPrefs, setOrchPrefs] = useState<OrchestratorPrefs>(() => loadOrchestratorPrefs());
+  const [savedTeams, setSavedTeams] = useState<SavedTeam[]>(() => loadSavedTeams());
   const [personaList, setPersonaList] = useState<Array<{ id: string; name: string }>>([]);
   const [applyResults, setApplyResults] = useState<Array<{ path: string; ok: boolean; error?: string }>>([]);
   const [autoCtxFiles, setAutoCtxFiles] = useState<string[]>([]);
@@ -628,6 +636,12 @@ export function App() {
         saveRoleModels(next);
         return next;
       });
+      setSavedTeams(prev => {
+        const next = renameModelInTeams(prev, swap.from, swap.to);
+        if (!next) return prev;
+        saveSavedTeams(next);
+        return next;
+      });
     }
   }, []);
 
@@ -720,18 +734,49 @@ export function App() {
     return { teamOptions: options, teamStars: ratings };
   }, [teamCatalogs, teamDefaults]);
 
-  const applySeats = useCallback((seats: TeamSeats, preset: PresetId | 'custom') => {
+  const applySeats = useCallback((seats: TeamSeats, preset: PresetId | 'custom', savedId: string | null = null) => {
     const roles = rolesFromSeats(seats);
     setRoleModels(roles);
     saveRoleModels(roles);
     const cur = roles[role];
     if (cur) { setProvider(cur.provider); setModel(cur.model); }
     setTeamPrefs(prev => {
-      const next = { ...prev, preset, seats };
+      const next = { ...prev, preset, seats, savedId };
       saveTeamPrefs(next);
       return next;
     });
   }, [role]);
+
+  // ── Your named teams: fixed seats, kept here and on the server ────────────
+  const pickSavedTeam = useCallback((id: string) => {
+    const team = savedTeams.find(t => t.id === id);
+    if (team) applySeats(team.seats, 'custom', team.id);
+  }, [savedTeams, applySeats]);
+
+  const saveTeamAs = useCallback((name: string, seats: TeamSeats) => {
+    const { list, team } = upsertSavedTeam(savedTeams, name, seats);
+    setSavedTeams(list);
+    saveSavedTeams(list);
+    applySeats(team.seats, 'custom', team.id);
+  }, [savedTeams, applySeats]);
+
+  const deleteSavedTeam = useCallback((id: string) => {
+    const list = savedTeams.filter(t => t.id !== id);
+    setSavedTeams(list);
+    saveSavedTeams(list);
+    if (teamPrefsRef.current.savedId === id) {
+      setTeamPrefs(prev => {
+        const next = { ...prev, savedId: null };
+        saveTeamPrefs(next);
+        return next;
+      });
+    }
+  }, [savedTeams]);
+
+  const savedTeamMenu = useMemo(
+    () => savedTeams.map(t => ({ id: t.id, name: t.name, stars: seatsStars(t.seats, teamCatalogs) })),
+    [savedTeams, teamCatalogs],
+  );
 
   const applyPreset = useCallback((id: PresetId) => {
     applySeats(resolvePreset(id, { catalogs: teamCatalogs, liveDefaults: teamDefaults, unlocked: paidUnlocked() }), id);
@@ -749,8 +794,8 @@ export function App() {
   /** Changing a model by hand makes the team yours. */
   const markTeamCustom = useCallback(() => {
     setTeamPrefs(prev => {
-      if (prev.preset === 'custom' || !prev.seats) return prev;
-      const next = { ...prev, preset: 'custom' as const };
+      if ((prev.preset === 'custom' && !prev.savedId) || !prev.seats) return prev;
+      const next = { ...prev, preset: 'custom' as const, savedId: null };
       saveTeamPrefs(next);
       return next;
     });
@@ -764,17 +809,24 @@ export function App() {
     brief: string; wantCompare: boolean; onBuild: (req: BuildRequest) => void;
   }) => (
     <BuildPicker
-      key={`${teamPrefs.preset}:${teamSeats.build.model}:${teamSeats.fix.model}`}
+      key={`${teamPrefs.preset}:${teamPrefs.savedId || ''}:${teamSeats.build.model}:${teamSeats.fix.model}`}
       seats={teamSeats}
       teamOptions={teamOptions}
       teamStars={teamStars}
-      lockedNote={!paidUnlocked() && teamPrefs.preset !== 'free' && teamPrefs.preset !== 'custom'
-        ? `🔒 Paid models aren't unlocked on this device, so the ${PRESETS[teamPrefs.preset].label} team is using free stand-ins. Tap Unlock at the top to use the real team.`
-        : undefined}
+      lockedNote={paidUnlocked() || teamPrefs.preset === 'free' ? undefined
+        : teamPrefs.preset !== 'custom'
+          ? `🔒 Paid models aren't unlocked on this device, so the ${PRESETS[teamPrefs.preset].label} team is using free stand-ins. Tap Unlock at the top to use the real team.`
+          : lockedSeats(teamSeats, teamCatalogs).length
+            ? `🔒 ${lockedSeats(teamSeats, teamCatalogs).map(id => SEATS.find(x => x.id === id)!.label).join(', ')} ${lockedSeats(teamSeats, teamCatalogs).length > 1 ? 'use paid models' : 'uses a paid model'} — tap Unlock at the top first.`
+            : undefined}
       preset={teamPrefs.preset}
       catalogs={teamCatalogs}
       unlocked={paidUnlocked()}
       wantCompare={args.wantCompare}
+      savedTeams={savedTeamMenu}
+      savedId={teamPrefs.savedId}
+      onSavedTeam={pickSavedTeam}
+      onSaveTeam={saveTeamAs}
       onPreset={applyPreset}
       onBuild={(c: BuildChoiceSeats) => {
         // What you pick becomes the team's Build and Fix seats from here on.
@@ -786,7 +838,7 @@ export function App() {
       }}
     />
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ), [teamPrefs.preset, teamSeats.build.model, teamSeats.build.provider, teamSeats.fix.model, teamSeats.fix.provider,
+  ), [teamPrefs.preset, teamPrefs.savedId, savedTeamMenu, pickSavedTeam, saveTeamAs, teamSeats.build.model, teamSeats.build.provider, teamSeats.fix.model, teamSeats.fix.provider,
     teamSeats.plan.model, teamSeats.review.model, teamCatalogs, teamOptions, teamStars, applyPreset, applySeats, withKey]);
 
   const setAskFirst = useCallback((askFirst: boolean) => {
@@ -1404,17 +1456,34 @@ export function App() {
         teamSection={
           <div data-testid="team-settings" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <select value={teamPrefs.preset === 'custom' ? '' : teamPrefs.preset}
-                onChange={e => applyPreset(e.target.value as PresetId)}
+              <select data-testid="team-settings-select"
+                value={teamPrefs.preset !== 'custom' ? teamPrefs.preset
+                  : teamPrefs.savedId && savedTeams.some(t => t.id === teamPrefs.savedId) ? `saved:${teamPrefs.savedId}` : ''}
+                onChange={e => {
+                  const v = e.target.value;
+                  if (v.startsWith('saved:')) pickSavedTeam(v.slice(6));
+                  else if (v) applyPreset(v as PresetId);
+                }}
                 style={{ background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius)', padding: '5px 8px', fontFamily: 'inherit', fontSize: 14 }}>
-                {teamPrefs.preset === 'custom' && <option value="">Custom (your picks)</option>}
-                {(Object.keys(PRESETS) as PresetId[]).map(id => (
-                  <option key={id} value={id}>{PRESETS[id].label}{teamStars[id] ? ` ${stars(teamStars[id]!)}` : ''}</option>
-                ))}
+                  borderRadius: 'var(--radius)', padding: '5px 8px', fontFamily: 'inherit', fontSize: 14, maxWidth: '100%' }}>
+                {teamPrefs.preset === 'custom' && !(teamPrefs.savedId && savedTeams.some(t => t.id === teamPrefs.savedId)) &&
+                  <option value="">Custom (your picks)</option>}
+                <optgroup label="Teams">
+                  {(Object.keys(PRESETS) as PresetId[]).map(id => (
+                    <option key={id} value={id}>{PRESETS[id].label}{teamStars[id] ? ` ${stars(teamStars[id]!)}` : ''}</option>
+                  ))}
+                </optgroup>
+                {savedTeamMenu.length > 0 && (
+                  <optgroup label="Your teams">
+                    {savedTeamMenu.map(t => <option key={t.id} value={`saved:${t.id}`}>{t.name} {stars(t.stars)}</option>)}
+                  </optgroup>
+                )}
               </select>
               <span style={{ fontSize: 13, color: 'var(--text-dim)' }}>
-                {teamPrefs.preset === 'custom' ? 'Pick a preset to reset every seat.' : PRESETS[teamPrefs.preset].blurb}
+                {teamPrefs.preset !== 'custom' ? PRESETS[teamPrefs.preset].blurb
+                  : savedTeams.find(t => t.id === teamPrefs.savedId)
+                    ? `Your team “${savedTeams.find(t => t.id === teamPrefs.savedId)!.name}”.`
+                    : 'Pick a team to reset every seat.'}
               </span>
             </div>
             {SEATS.map(seat => {
@@ -1435,6 +1504,41 @@ export function App() {
               <input type="checkbox" checked={teamPrefs.askFirst} onChange={e => setAskFirst(e.target.checked)} />
               Ask me who builds it before any code is written
             </label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <button type="button" data-testid="team-settings-save"
+                onClick={() => {
+                  const current = savedTeams.find(t => t.id === teamPrefs.savedId)?.name || '';
+                  const name = window.prompt('Name this team', current)?.trim();
+                  if (name) saveTeamAs(name, teamSeats);
+                }}
+                style={{ background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius)', padding: '5px 10px', fontFamily: 'inherit', fontSize: 14, cursor: 'pointer' }}>
+                ★ Save these seats as a team
+              </button>
+              <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+                Teams and seat picks are kept on the server too, so clearing this browser doesn't lose them.
+              </span>
+            </div>
+            {savedTeams.map(t => (
+              <div key={t.id} data-testid="saved-team-row" style={{ display: 'flex', gap: 8, fontSize: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+                <strong>{t.name}</strong>
+                <span style={{ fontSize: 12 }}>{stars(seatsStars(t.seats, teamCatalogs))}</span>
+                <span style={{ fontSize: 12, color: 'var(--text-dim)', flex: '1 1 200px' }}>
+                  {SEATS.map(x => `${x.label}: ${t.seats[x.id].model}`).join(' · ')}
+                </span>
+                <button type="button" onClick={() => pickSavedTeam(t.id)}
+                  style={{ background: 'transparent', color: 'var(--text)', border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius)', padding: '3px 8px', fontFamily: 'inherit', fontSize: 13, cursor: 'pointer' }}>
+                  Use
+                </button>
+                <button type="button" data-testid="saved-team-delete"
+                  onClick={() => { if (window.confirm(`Delete the team “${t.name}”?`)) deleteSavedTeam(t.id); }}
+                  style={{ background: 'transparent', color: '#FF6B6B', border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius)', padding: '3px 8px', fontFamily: 'inherit', fontSize: 13, cursor: 'pointer' }}>
+                  Delete
+                </button>
+              </div>
+            ))}
           </div>
         }
       />

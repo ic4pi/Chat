@@ -31,7 +31,14 @@ interface Props {
   unlocked: boolean;
   /** Pre-tick "second version" — you asked for two. */
   wantCompare?: boolean;
+  /** Your named teams, with their cost rating. */
+  savedTeams?: Array<{ id: string; name: string; stars: number }>;
+  /** The saved team the seats came from, if they still match it. */
+  savedId?: string | null;
   onPreset: (id: PresetId) => void;
+  onSavedTeam?: (id: string) => void;
+  /** Keep these seats (with this Build and Fix) as a named team. */
+  onSaveTeam?: (name: string, seats: TeamSeats) => void;
   onBuild: (choice: BuildChoiceSeats) => void;
 }
 
@@ -97,7 +104,8 @@ function Tag({ seat, catalogs }: { seat: SeatModel; catalogs: Record<string, Cat
   );
 }
 
-export function BuildPicker({ seats, teamOptions, teamStars = {}, lockedNote, preset, catalogs, unlocked, wantCompare, onPreset, onBuild }: Props) {
+export function BuildPicker({ seats, teamOptions, teamStars = {}, lockedNote, preset, catalogs, unlocked, wantCompare,
+  savedTeams = [], savedId, onPreset, onSavedTeam, onSaveTeam, onBuild }: Props) {
   const [builder, setBuilder] = useState<SeatModel>(seats.build);
   const [fixer, setFixer] = useState<SeatModel>(seats.fix);
   const [compare, setCompare] = useState(!!wantCompare);
@@ -124,18 +132,26 @@ export function BuildPicker({ seats, teamOptions, teamStars = {}, lockedNote, pr
         </strong>
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: 13, color: '#9198AA' }}>Team</span>
-        <select data-testid="team-preset" value={preset === 'custom' ? '' : preset}
+        <select data-testid="team-preset" value={preset !== 'custom' ? preset : savedId && savedTeams.some(t => t.id === savedId) ? `saved:${savedId}` : ''}
           onChange={e => {
-            const id = e.target.value as PresetId;
-            onPreset(id);
+            const v = e.target.value;
+            if (v.startsWith('saved:')) onSavedTeam?.(v.slice(6));
+            else if (v) onPreset(v as PresetId);
           }}
           title={preset === 'custom' ? 'Your own seats' : PRESETS[preset].blurb}
           style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838', borderRadius: 4,
-            padding: '3px 6px', fontFamily: 'inherit', fontSize: 14 }}>
-          {preset === 'custom' && <option value="">Custom</option>}
-          {(Object.keys(PRESETS) as PresetId[]).map(id => (
-            <option key={id} value={id}>{PRESETS[id].label}{teamStars[id] ? ` ${stars(teamStars[id]!)}` : ''}</option>
-          ))}
+            padding: '3px 6px', fontFamily: 'inherit', fontSize: 14, maxWidth: '100%' }}>
+          {preset === 'custom' && !(savedId && savedTeams.some(t => t.id === savedId)) && <option value="">Custom</option>}
+          <optgroup label="Teams">
+            {(Object.keys(PRESETS) as PresetId[]).map(id => (
+              <option key={id} value={id}>{PRESETS[id].label}{teamStars[id] ? ` ${stars(teamStars[id]!)}` : ''}</option>
+            ))}
+          </optgroup>
+          {savedTeams.length > 0 && (
+            <optgroup label="Your teams">
+              {savedTeams.map(t => <option key={t.id} value={`saved:${t.id}`}>{t.name} {stars(t.stars)}</option>)}
+            </optgroup>
+          )}
         </select>
       </div>
       {lockedNote && (
@@ -161,8 +177,22 @@ export function BuildPicker({ seats, teamOptions, teamStars = {}, lockedNote, pr
             fontFamily: 'inherit', fontSize: 15, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
           {compare ? 'Build both' : 'Build it'}
         </button>
+        {onSaveTeam && (
+          <button type="button" data-testid="team-save"
+            title="Keep these seats as a named team — saved on this device and the server"
+            onClick={() => {
+              const current = savedTeams.find(t => t.id === savedId)?.name || '';
+              const name = window.prompt('Name this team', current)?.trim();
+              if (name) onSaveTeam(name, { ...seats, build: builder, fix: fixer });
+            }}
+            style={{ background: 'transparent', color: '#FF9FC4', border: '1px solid rgba(255,61,142,.45)', borderRadius: 4,
+              padding: '5px 10px', fontFamily: 'inherit', fontSize: 14, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
+            ★ Save team
+          </button>
+        )}
         <span style={{ fontSize: 12, color: '#656C7E', flex: '1 1 220px' }}>
-          {preset === 'custom' ? 'Your own seats.' : PRESETS[preset].blurb}
+          {preset !== 'custom' ? PRESETS[preset].blurb
+            : savedTeams.find(t => t.id === savedId) ? `Your team “${savedTeams.find(t => t.id === savedId)!.name}”.` : 'Your own seats.'}
         </span>
       </div>
     </div>

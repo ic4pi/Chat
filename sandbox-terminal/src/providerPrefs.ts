@@ -3,6 +3,8 @@
  * Same localStorage keys as main chat (public/app.js) so prefs carry over.
  */
 
+import { noteSettingsChanged } from './settingsSync.js';
+
 export const PROVIDER_LIST = [
   { id: 'venice', label: 'Venice' },
   { id: 'openrouter', label: 'OpenRouter' },
@@ -186,6 +188,7 @@ export function saveRoleModels(roles: Record<RoleId, RoleModel>): void {
   try {
     localStorage.setItem(ROLES_STORAGE, JSON.stringify(roles));
   } catch { /* ignore */ }
+  noteSettingsChanged();
 }
 
 export interface CatalogModel {

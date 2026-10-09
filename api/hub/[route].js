@@ -788,6 +788,8 @@ function extractAsset(result) {
  *   POST /api/hub/state?action=dismiss    { nudgeId }
  *   POST /api/hub/state?action=register   { localId?, type, title, messages? } -> threadId
  *   POST /api/hub/state?action=append     { threadId, messages } -> inserted count
+ *   GET  /api/hub/state?action=settings   -> { settings, updatedAt } (Workspace teams)
+ *   POST /api/hub/state?action=settings   { settings } -> { updatedAt }
  *
  * `register` exists because the app stores chats in localStorage. A thread has
  * to exist in the hub before anything can be promoted out of it, or the links
@@ -888,7 +890,17 @@ async function handle_state(req, res) {
       return res.end(md);
     }
 
-    return fail(res, 400, 'unknown action', ['nudges', 'topics', 'inbox', 'joke-bank-raw']);
+    if (action === 'settings') {
+      const { data, error } = await db
+        .from('workspace_settings')
+        .select('data, updated_at')
+        .eq('owner_id', ownerId)
+        .maybeSingle();
+      if (error) return fail(res, 503, 'memory database unreachable', error.message);
+      return res.json({ settings: data?.data || null, updatedAt: data?.updated_at || null });
+    }
+
+    return fail(res, 400, 'unknown action', ['nudges', 'topics', 'inbox', 'joke-bank-raw', 'settings']);
   }
 
   if (req.method === 'POST') {
@@ -1067,8 +1079,25 @@ async function handle_state(req, res) {
       });
     }
 
+    if (action === 'settings') {
+      // Workspace coding teams and seat picks. One blob per owner, last write
+      // wins; the client keeps localStorage as the fast copy and this as the
+      // one that survives the browser wiping it.
+      const settings = req.body?.settings;
+      if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+        return fail(res, 400, 'settings object required');
+      }
+      if (JSON.stringify(settings).length > 64 * 1024) return fail(res, 413, 'settings too large');
+      const updatedAt = new Date().toISOString();
+      const { error } = await db
+        .from('workspace_settings')
+        .upsert({ owner_id: ownerId, data: settings, updated_at: updatedAt }, { onConflict: 'owner_id' });
+      if (error) return fail(res, 503, 'memory database unreachable', error.message);
+      return res.json({ ok: true, updatedAt });
+    }
+
     return fail(res, 400, 'unknown action', [
-      'dismiss', 'register', 'append', 'turn', 'sweep-thread',
+      'dismiss', 'register', 'append', 'turn', 'sweep-thread', 'settings',
     ]);
   }
 

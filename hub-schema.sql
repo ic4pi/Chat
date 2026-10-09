@@ -377,3 +377,18 @@ create or replace function match_campaign_hooks(
   order by h.embedding <=> p_embedding
   limit p_limit;
 $$ language sql stable;
+
+-- ---------------------------------------------------------------
+-- WORKSPACE SETTINGS — coding teams and seat picks, per owner
+-- ---------------------------------------------------------------
+-- One JSON blob per owner: the chosen team, saved custom teams, role models,
+-- orchestrator prefs. Lives here so it survives the browser wiping
+-- localStorage (Safari's 7-day rule, "clear site data" on the app storage).
+
+create table if not exists workspace_settings (
+  owner_id   uuid primary key references owners(id) on delete cascade,
+  data       jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
+alter table workspace_settings enable row level security;
