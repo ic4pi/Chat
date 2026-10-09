@@ -40,6 +40,14 @@ await check('chat default is never a coder; coder default is a coder', () => {
   assert.notEqual(pickDefault(enriched, 'coder', { providerId: 'openrouter' }), 'qwen/qwen3-coder');
 });
 
+await check('Venice chat default is Venice Uncensored (tagged creative, not general)', () => {
+  const venice = [
+    { id: 'olafangensan-glm-4.7-flash-heretic', free: false, categories: ['creative', 'uncensored', 'general'] },
+    { id: 'venice-uncensored-1-2', free: false, categories: ['creative', 'uncensored'] },
+  ];
+  assert.equal(pickDefault(venice, 'chat', { providerId: 'venice' }), 'venice-uncensored-1-2');
+});
+
 await check('retired-model errors recognised; rate limits and auth are not', () => {
   assert.ok(isModelGoneError(404, '{"error":{"message":"This model is unavailable for free. The paid version is available now"}}'));
   assert.ok(isModelGoneError(404, 'No endpoints found for qwen/qwen3-coder:free.'));
