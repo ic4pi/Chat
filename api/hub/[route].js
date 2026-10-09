@@ -13,6 +13,7 @@
  * trade when they share every dependency. One dynamic route, same behaviour.
  */
 
+import { randomBytes } from 'node:crypto';
 import {
   db,
   llm,
@@ -31,6 +32,9 @@ import {
   requireHub,
   fail,
   rateLimit,
+  adoptOwner,
+  normalizeLinkCode,
+  hashLinkCode,
   storeMediaAsset,
   decodeDataUrl,
 } from '../../lib/hub.js';
@@ -790,6 +794,12 @@ function extractAsset(result) {
  *   POST /api/hub/state?action=append     { threadId, messages } -> inserted count
  *   GET  /api/hub/state?action=settings   -> { settings, updatedAt } (Workspace teams)
  *   POST /api/hub/state?action=settings   { settings } -> { updatedAt }
+ *   POST /api/hub/state?action=link-create            -> { code, expiresAt } (10 min)
+ *   POST /api/hub/state?action=link-claim { code }     -> this browser joins that owner
+ *   GET  /api/hub/state?action=workspace-list          -> [{ session_id, saved_at, deleted, updated_at }]
+ *   GET  /api/hub/state?action=workspace-get&id=       -> { session, updatedAt }
+ *   POST /api/hub/state?action=workspace-save { session }
+ *   POST /api/hub/state?action=workspace-delete { id }
  *
  * `register` exists because the app stores chats in localStorage. A thread has
  * to exist in the hub before anything can be promoted out of it, or the links
@@ -900,7 +910,35 @@ async function handle_state(req, res) {
       return res.json({ settings: data?.data || null, updatedAt: data?.updated_at || null });
     }
 
-    return fail(res, 400, 'unknown action', ['nudges', 'topics', 'inbox', 'joke-bank-raw', 'settings']);
+    if (action === 'workspace-list') {
+      // Ids and stamps only — the client fetches the bodies it doesn't have.
+      const { data, error } = await db
+        .from('workspace_sessions')
+        .select('session_id, title, saved_at, deleted, updated_at')
+        .eq('owner_id', ownerId)
+        .order('updated_at', { ascending: false })
+        .limit(100);
+      if (error) return fail(res, 503, 'memory database unreachable', error.message);
+      return res.json({ sessions: data || [] });
+    }
+
+    if (action === 'workspace-get') {
+      const id = String(req.query?.id || '');
+      if (!id) return fail(res, 400, 'id required');
+      const { data, error } = await db
+        .from('workspace_sessions')
+        .select('data, updated_at, deleted')
+        .eq('owner_id', ownerId)
+        .eq('session_id', id)
+        .maybeSingle();
+      if (error) return fail(res, 503, 'memory database unreachable', error.message);
+      if (!data || data.deleted) return fail(res, 404, 'no such session');
+      return res.json({ session: data.data, updatedAt: data.updated_at });
+    }
+
+    return fail(res, 400, 'unknown action', [
+      'nudges', 'topics', 'inbox', 'joke-bank-raw', 'settings', 'workspace-list', 'workspace-get',
+    ]);
   }
 
   if (req.method === 'POST') {
@@ -1096,8 +1134,78 @@ async function handle_state(req, res) {
       return res.json({ ok: true, updatedAt });
     }
 
+    if (action === 'link-create') {
+      // A short code another device enters to become this same owner: your
+      // memory, coding teams and Workspace follow it. Ten minutes, one use.
+      if (!(await rateLimit(req, res, { bucket: 'link-create', limit: 10, windowSeconds: 600 }))) return;
+      const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O, 1/I/L
+      const bytes = randomBytes(8);
+      const raw = [...bytes].map((b) => ALPHABET[b % ALPHABET.length]).join('');
+      const code = `${raw.slice(0, 4)}-${raw.slice(4)}`;
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+      await db.from('device_link_codes').delete().eq('owner_id', ownerId);
+      const { error } = await db
+        .from('device_link_codes')
+        .insert({ code_hash: hashLinkCode(code), owner_id: ownerId, expires_at: expiresAt });
+      if (error) return fail(res, 503, 'memory database unreachable', error.message);
+      return res.json({ code, expiresAt });
+    }
+
+    if (action === 'link-claim') {
+      if (!(await rateLimit(req, res, { bucket: 'link-claim', limit: 10, windowSeconds: 600 }))) return;
+      const code = normalizeLinkCode(req.body?.code);
+      if (code.length !== 8) return fail(res, 400, 'Enter the 8-character code from your other device');
+      const { data: row, error } = await db
+        .from('device_link_codes')
+        .select('owner_id, expires_at')
+        .eq('code_hash', hashLinkCode(code))
+        .maybeSingle();
+      if (error) return fail(res, 503, 'memory database unreachable', error.message);
+      if (!row || Date.parse(row.expires_at) < Date.now()) {
+        return fail(res, 404, 'That code is wrong or expired — make a new one on your other device');
+      }
+      await db.from('device_link_codes').delete().eq('code_hash', hashLinkCode(code));
+      if (row.owner_id === ownerId) return res.json({ ok: true, alreadyLinked: true });
+      await adoptOwner(res, row.owner_id);
+      return res.json({ ok: true });
+    }
+
+    if (action === 'workspace-save') {
+      // One Workspace session (messages + the files the agent wrote), so a
+      // linked device or a wiped browser gets it back. Last write wins.
+      const session = req.body?.session;
+      const id = typeof session?.id === 'string' ? session.id.slice(0, 200) : '';
+      if (!id || !Array.isArray(session.messages)) return fail(res, 400, 'session with id and messages required');
+      if (JSON.stringify(session).length > 3 * 1024 * 1024) return fail(res, 413, 'session too large');
+      const updatedAt = new Date().toISOString();
+      const { error } = await db.from('workspace_sessions').upsert({
+        owner_id: ownerId,
+        session_id: id,
+        title: String(session.title || 'Workspace').slice(0, 200),
+        data: session,
+        saved_at: Number(session.savedAt) || Date.now(),
+        deleted: false,
+        updated_at: updatedAt,
+      }, { onConflict: 'owner_id,session_id' });
+      if (error) return fail(res, 503, 'memory database unreachable', error.message);
+      return res.json({ ok: true, updatedAt });
+    }
+
+    if (action === 'workspace-delete') {
+      // Kept as a marker, so other devices drop their copy instead of re-uploading it.
+      const id = String(req.body?.id || '').slice(0, 200);
+      if (!id) return fail(res, 400, 'id required');
+      const updatedAt = new Date().toISOString();
+      const { error } = await db.from('workspace_sessions').upsert({
+        owner_id: ownerId, session_id: id, data: {}, deleted: true, saved_at: Date.now(), updated_at: updatedAt,
+      }, { onConflict: 'owner_id,session_id' });
+      if (error) return fail(res, 503, 'memory database unreachable', error.message);
+      return res.json({ ok: true, updatedAt });
+    }
+
     return fail(res, 400, 'unknown action', [
       'dismiss', 'register', 'append', 'turn', 'sweep-thread', 'settings',
+      'link-create', 'link-claim', 'workspace-save', 'workspace-delete',
     ]);
   }
 

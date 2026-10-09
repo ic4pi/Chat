@@ -6832,6 +6832,62 @@ els.artifactDownloadBtn.addEventListener('click', () => {
 });
 
 els.exportBtn.addEventListener('click', exportData);
+
+// ---- Link a device --------------------------------------------------------
+// Your identity is this browser's owner cookie. A one-time code lets another
+// device become the same owner (its own cookie, same memory, teams and
+// Workspace). Chats are still per device — Export / Import moves those.
+{
+  const $l = (id) => document.getElementById(id);
+  const modal = $l('linkModal');
+  const status = (t) => { $l('linkStatus').textContent = t || ''; };
+  const open = () => { status(''); $l('linkCodeBox').classList.add('hidden'); modal.classList.remove('hidden'); };
+  const close = () => modal.classList.add('hidden');
+  $l('linkDeviceBtn')?.addEventListener('click', open);
+  $l('closeLinkModal')?.addEventListener('click', close);
+  modal?.addEventListener('click', (e) => { if (e.target === modal) close(); });
+
+  $l('linkMakeBtn')?.addEventListener('click', async () => {
+    status('Making a code…');
+    try {
+      const res = await fetch('/api/hub/state?action=link-create', { method: 'POST', credentials: 'include' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.code) throw new Error(data.error || `HTTP ${res.status}`);
+      $l('linkCode').textContent = data.code;
+      $l('linkCodeBox').classList.remove('hidden');
+      status('');
+    } catch (err) {
+      status(`Couldn't make a code: ${err.message || err}`);
+    }
+  });
+
+  $l('linkClaimBtn')?.addEventListener('click', async () => {
+    const code = $l('linkCodeInput').value.trim();
+    if (!code) { status('Enter the code shown on your other device.'); return; }
+    status('Linking…');
+    try {
+      const res = await fetch('/api/hub/state?action=link-claim', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (data.alreadyLinked) { status('This device is already linked to that one.'); return; }
+      // This browser's sync stamps belong to its old identity: start fresh so
+      // the linked device's teams and Workspace come down, and anything only
+      // this browser has goes up to join them.
+      for (const k of ['workspace_settings_sync_v1', 'workspace_sessions_sync_v1']) {
+        try { localStorage.removeItem(k); } catch { /* ignore */ }
+      }
+      status('Linked. Reloading…');
+      setTimeout(() => location.reload(), 600);
+    } catch (err) {
+      status(err.message || String(err));
+    }
+  });
+}
 els.importBtn.addEventListener('click', () => els.importFile.click());
 els.importFile.addEventListener('change', (e) => {
   const file = e.target.files?.[0];

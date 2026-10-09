@@ -392,3 +392,39 @@ create table if not exists workspace_settings (
 );
 
 alter table workspace_settings enable row level security;
+
+-- ---------------------------------------------------------------
+-- LINKED DEVICES + WORKSPACE SESSIONS
+-- ---------------------------------------------------------------
+-- A one-time code (10 min) lets another browser become the same owner with
+-- its own cookie secret. Workspace sessions (chat + files the agent wrote)
+-- are kept per owner so a linked device or a wiped browser gets them back;
+-- a delete stays as a marker so other devices drop their copy.
+
+create table if not exists owner_devices (
+  token_hash  text primary key,
+  owner_id    uuid not null references owners(id) on delete cascade,
+  created_at  timestamptz not null default now()
+);
+create index if not exists owner_devices_owner_idx on owner_devices (owner_id);
+alter table owner_devices enable row level security;
+
+create table if not exists device_link_codes (
+  code_hash   text primary key,
+  owner_id    uuid not null references owners(id) on delete cascade,
+  expires_at  timestamptz not null,
+  created_at  timestamptz not null default now()
+);
+alter table device_link_codes enable row level security;
+
+create table if not exists workspace_sessions (
+  owner_id    uuid not null references owners(id) on delete cascade,
+  session_id  text not null,
+  title       text,
+  data        jsonb not null,
+  saved_at    bigint not null default 0,
+  deleted     boolean not null default false,
+  updated_at  timestamptz not null default now(),
+  primary key (owner_id, session_id)
+);
+alter table workspace_sessions enable row level security;

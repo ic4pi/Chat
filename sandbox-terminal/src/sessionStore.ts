@@ -42,6 +42,11 @@ interface SessionStore {
   sessions: Record<string, StoredSession>;
 }
 
+/** workspaceSync listens here, so saves and deletes reach the server copy. */
+type SyncListener = { saved(id: string): void; deleted(id: string): void };
+let syncListener: SyncListener | null = null;
+export function setSessionSyncListener(l: SyncListener | null): void { syncListener = l; }
+
 function emptyStore(): SessionStore {
   return { v: 2, sessions: {} };
 }
@@ -105,6 +110,12 @@ function writeStore(store: SessionStore): void {
     .filter((s) => (s.savedAt || 0) >= cutoff)
     .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0))
     .slice(0, 40);
+  // Deleting the last session must still write: an empty loop here left it
+  // in storage, so it came straight back.
+  if (!entries.length) {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(emptyStore())); } catch { /* ignore */ }
+    return;
+  }
   // When storage is full, the write used to fail silently and *nothing* was
   // saved from then on. Drop the oldest sessions until the newest ones fit.
   while (entries.length) {
@@ -160,6 +171,11 @@ export function setActiveSessionId(id: string | null): void {
     if (!id) localStorage.removeItem(ACTIVE_KEY);
     else localStorage.setItem(ACTIVE_KEY, id);
   } catch { /* ignore */ }
+}
+
+/** As stored, untouched — what sync compares and uploads. */
+export function getStoredSession(id: string): StoredSession | null {
+  return readStore().sessions[id] ?? null;
 }
 
 /** Exactly this session, or null — no falling back to some other one. */
@@ -227,6 +243,23 @@ export function saveSession(
   store.sessions[partial.id] = payload;
   writeStore(store);
   setActiveSessionId(partial.id);
+  syncListener?.saved(partial.id);
+}
+
+/** A copy from the server: stored as-is, not echoed back. */
+export function putSyncedSession(session: StoredSession): void {
+  const store = readStore();
+  store.sessions[session.id] = session;
+  writeStore(store);
+}
+
+/** Deleted on another device: drop it here without telling the server again. */
+export function dropSyncedSession(id: string): void {
+  const store = readStore();
+  if (!store.sessions[id]) return;
+  delete store.sessions[id];
+  writeStore(store);
+  if (getActiveSessionId() === id) setActiveSessionId(listSessions()[0]?.id || null);
 }
 
 export function clearSession(id?: string | null): void {
@@ -235,6 +268,7 @@ export function clearSession(id?: string | null): void {
   if (target && store.sessions[target]) {
     delete store.sessions[target];
     writeStore(store);
+    syncListener?.deleted(target);
   }
   if (target && getActiveSessionId() === target) {
     const next = listSessions()[0];

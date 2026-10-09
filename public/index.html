@@ -71,6 +71,7 @@
         <div class="sidebar-footer">
           <button id="exportBtn" class="text-btn" title="Export all data as JSON">Export</button>
           <button id="importBtn" class="text-btn" title="Import data from JSON">Import</button>
+          <button id="linkDeviceBtn" class="text-btn" title="Use your memory, coding teams and Workspace on another device">Link device</button>
           <input id="importFile" type="file" accept="application/json" hidden />
           <button id="clearChatsBtn" class="text-btn danger" title="Delete chat history only — personas &amp; settings stay">Clear chats</button>
           <button id="clearAllBtn" class="text-btn" title="Reset local settings too (personas are server-side and stay)">Reset settings</button>
@@ -306,6 +307,29 @@
 </div>
 
 <!-- Persona / role / voice sheet (reliable on mobile — topbar selects can miss taps) -->
+<div id="linkModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="linkModalTitle">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="linkModalTitle">Link a device</h2>
+      <button id="closeLinkModal" class="icon-btn" title="Close">×</button>
+    </div>
+    <p class="keys-hint">Linked devices share your memory, coding teams and Workspace (projects and their files). Chats stay on each device — move those with Export / Import.</p>
+    <p class="sheet-label">On this device</p>
+    <button id="linkMakeBtn" class="text-btn primary" type="button">Show a code</button>
+    <div id="linkCodeBox" class="hidden" style="margin:12px 0 18px">
+      <div id="linkCode" data-testid="link-code" style="font-size:34px;font-weight:700;letter-spacing:.12em;color:var(--brass-lt);font-family:var(--display)"></div>
+      <p class="keys-hint" style="margin:6px 0 0">Valid 10 minutes, one use. On the other device open this site, tap <b>Link device</b> and enter it.</p>
+    </div>
+    <p class="sheet-label" style="margin-top:18px">Code from another device</p>
+    <label>
+      Code
+      <input id="linkCodeInput" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" placeholder="ABCD-EFGH" maxlength="12" />
+    </label>
+    <button id="linkClaimBtn" class="text-btn primary" type="button">Link this device</button>
+    <p id="linkStatus" class="keys-hint" role="status" style="margin-top:12px"></p>
+  </div>
+</div>
+
 <div id="toneModal" class="modal-overlay hidden" role="dialog" aria-modal="true">
   <div class="modal tone-modal">
     <div class="modal-header">
