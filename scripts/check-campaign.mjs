@@ -98,6 +98,9 @@ await check('approved campaign: brief from earlier turns, platforms adapted', as
   assert.equal(r.best.score, 9);
   assert.deepEqual(r.adaptations.map((a) => a.platform), ['x', 'email']);
   assert.match(m.of('brief')[0].messages[1].content, /LedgerLite, a bookkeeping app/); // earlier turn included
+  const edited = m.of('editor')[0].messages[1].content;
+  assert.match(edited, /COPY:\nHeadline: Close your month in 20 minutes\./);
+  assert.doesNotMatch(edited, /time back|positioning/); // working notes never reach the editor
 });
 
 await check('editor sends a weak draft back with its fixes', async () => {
