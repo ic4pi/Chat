@@ -190,13 +190,29 @@ export function getSession(id: string): StoredSession | null {
  * that are new since last time. If the chat's history changed underneath
  * (edited, regenerated, trimmed), refresh that part and still keep the work.
  */
+/**
+ * Back from chat into the same project: what you said in chat since last
+ * time goes at the END, after the Workspace's own work — it's the newest
+ * thing, and the persona has to read it as such.
+ *
+ * Matching is by role + the start of the text, not exact equality: saved
+ * messages are cut at 40k characters and only the last 120 are kept, and an
+ * exact prefix check failed on both — which put the whole chat back above
+ * the Workspace work, so your new plans read as old history.
+ */
 export function mergeHandoffMessages(prev: StoredMessage[], imported: StoredMessage[]): StoredMessage[] {
   if (!prev.length) return imported;
   const prevImported = prev.filter((m) => m.kind === 'imported');
-  const same = (a: StoredMessage, b: StoredMessage) => a.role === b.role && a.content === b.content;
-  const continues = prevImported.length <= imported.length && prevImported.every((m, i) => same(m, imported[i]));
-  if (continues) return [...prev, ...imported.slice(prevImported.length)];
-  return [...imported, ...prev.filter((m) => m.kind !== 'imported')];
+  if (!prevImported.length) return [...imported, ...prev];
+  const key = (m: StoredMessage) => `${m.role}:${String(m.content || '').trim().slice(0, 500)}`;
+  const known = new Set(prevImported.map(key));
+  // Where the chat picks up: the latest chat message this project already has.
+  let last = -1;
+  for (let i = imported.length - 1; i >= 0; i--) {
+    if (known.has(key(imported[i]))) { last = i; break; }
+  }
+  const fresh = last >= 0 ? imported.slice(last + 1) : imported.filter((m) => !known.has(key(m)));
+  return fresh.length ? [...prev, ...fresh] : prev;
 }
 
 export function loadSession(id?: string | null): StoredSession | null {
