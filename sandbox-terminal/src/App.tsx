@@ -70,7 +70,7 @@ import {
 } from './coderModels.js';
 import type { GenerateChunkResult } from './ChunkModelPanel.js';
 import { SettingsPanel } from './SettingsPanel.js';
-import { ComparePanel } from './ComparePanel.js';
+import { ComparePanel, type BuildChoice, type CompareHandle } from './ComparePanel.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
@@ -715,6 +715,34 @@ export function App() {
     } finally { setApplying(false); }
   }, [repo]);
 
+  // ── Compare: the persona's brief to two coders, and the chosen version back ──
+  const compareRef = useRef<CompareHandle>(null);
+  const handleCompareBrief = useCallback((brief: string) => {
+    if (!repo.sandboxId) {
+      setRestoreNote('Open a blank project or a GitHub repo first — Compare needs a sandbox for its two previews.');
+      return;
+    }
+    setShowCompare(true);
+    compareRef.current?.runBrief(brief);
+  }, [repo.sandboxId]);
+
+  const handleUseBuild = useCallback(async (build: BuildChoice) => {
+    if (!repo.sandboxId) {
+      setRestoreNote('Open a blank project or a GitHub repo first, then use the build again.');
+      return;
+    }
+    const results = await handleApply(Object.entries(build.files).map(([path, content]) => ({ path, content })));
+    const ok = results.filter(r => r.ok).map(r => r.path);
+    const failed = results.filter(r => !r.ok).map(r => r.path);
+    setShowCompare(false);
+    setMobileTab('chat');
+    chatRef.current?.addNote(
+      `Took "${build.title}" (${build.model}) from Compare into the project — ${ok.length} file${ok.length === 1 ? '' : 's'}: ${ok.join(', ')}.`
+      + (failed.length ? ` Couldn't write: ${failed.join(', ')}.` : '')
+      + ' Keep building on this version.',
+    );
+  }, [repo.sandboxId, handleApply]);
+
   const autoVerify = useAutoVerify(repo.root, repo.sandboxId, termRef, chatRef, repo.applyChanges);
 
   const runVerify = useCallback(async () => {
@@ -1273,6 +1301,7 @@ export function App() {
           role={role}
           persona={orchPersona}
           onModelReplaced={handleModelReplaced}
+          onCompareBrief={handleCompareBrief}
           apiKey={activeApiKey || undefined}
           tree={repo.tree}
           contextFiles={repo.contextFiles}
@@ -1411,7 +1440,8 @@ export function App() {
         </div>
       )}
 
-      <ComparePanel open={showCompare} onClose={() => setShowCompare(false)} sandboxId={repo.sandboxId} />
+      <ComparePanel ref={compareRef} open={showCompare} onClose={() => setShowCompare(false)}
+        sandboxId={repo.sandboxId} onUseBuild={handleUseBuild} />
 
       {!isMobile ? (
         /* ── Desktop: 3-column grid (single ChatPane + Terminal) ── */

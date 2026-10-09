@@ -192,6 +192,10 @@ export function buildPersonaHistory(msgs: OrchMessage[]): Turn[] {
     if (skip(m)) continue;
     if (m.role === 'user') {
       if (m.kind === 'brief') continue; // already inside the persona's own reply
+      if (m.kind === 'note') {
+        turns.push({ role: 'user', content: `[NOTE] ${m.content}` });
+        continue;
+      }
       if (m.kind === 'retry-inject') {
         turns.push({ role: 'user', content: `[AUTO-TEST → coder] ${clip(m.content, 800)}` });
         continue;
@@ -212,7 +216,7 @@ export function buildCoderHistory(msgs: OrchMessage[]): Turn[] {
     .filter((m) => {
       if (skip(m)) return false;
       if (m.role === 'user') {
-        if (m.kind === 'brief' || m.kind === 'retry-inject') return true;
+        if (m.kind === 'brief' || m.kind === 'retry-inject' || m.kind === 'note') return true;
         // Direct-mode asks from earlier in this session still belong to the coder.
         return m.kind !== 'imported' && m.to !== 'persona';
       }

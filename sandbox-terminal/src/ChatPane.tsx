@@ -81,6 +81,9 @@ export interface ChatHandle {
   /** Send a message programmatically (e.g. from the verify loop injecting test
    *  failure output). Returns the file changes the model proposed, if any. */
   programmaticSend: (text: string, role?: 'retry-inject' | 'user') => Promise<PendingChange[]>;
+  /** Record something that happened outside this chat (e.g. a version picked
+   *  in Compare) so the persona and coder both know about it. */
+  addNote: (text: string) => void;
 }
 
 const API_URL =
@@ -116,6 +119,11 @@ const CONTINUE_LOOP_BUDGET_MS = 900_000;
  *  for the better part of an hour. */
 const EMPTY_THINK_MAX_CONTINUES = 3;
 const MID_OUTPUT_MAX_CONTINUES = 2;
+
+/** Plain-words ask for two takes at once — routed to Compare. */
+function wantsTwoVersions(text: string): boolean {
+  return /\b(?:two|2|both|a couple of)\s+(?:different\s+)?(?:versions?|takes|options|builds|designs)\b|\bside[- ]by[- ]side\b|\b(?:dual|two)[- ](?:agents?|coders?|models?)\b|\bcompare (?:two|2|models|versions)\b/i.test(text);
+}
 
 // ---------------------------------------------------------------------------
 // System prompt
@@ -712,7 +720,7 @@ export interface Message {
   content:     string;
   /** welcome = UI-only, never sent to the model; retry-inject = verify/nudge loop;
    *  brief = the persona's instruction to the coder */
-  kind?:       'user' | 'retry-inject' | 'welcome' | 'imported' | 'brief';
+  kind?:       'user' | 'retry-inject' | 'welcome' | 'imported' | 'brief' | 'note';
   /** Who wrote an assistant message. Unset = coder (pre-orchestrator sessions). */
   speaker?:    'persona' | 'coder';
   /** A user message addressed to the persona rather than the coder. */
@@ -765,6 +773,8 @@ interface Props {
     hits: SearchHit[];
     files: Map<string, string>;
   } | void>;
+  /** Send a brief to both Compare coders instead of (or as well as) this one. */
+  onCompareBrief?:   (brief: string) => void;
   /** The server swapped a retired model; update the saved choice. */
   onModelReplaced?:  (swap: ModelSwap, who: 'persona' | 'coder') => void;
   /** From /api/init-repo — whether the sandbox toolchains are actually usable. */
@@ -779,7 +789,7 @@ interface Props {
 export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   repoRoot, repoUrl, sandboxId, provider, model, role, persona = null, apiKey, tree, contextFiles, autoRun, appliedPaths,
   autoSelectedFiles, searchHits, initialMessages, onMessagesChange,
-  onRunCode, onFileChanges, onUploadText, onBeforeSend, onModelReplaced,
+  onRunCode, onFileChanges, onUploadText, onBeforeSend, onModelReplaced, onCompareBrief,
   pythonReady = null, pythonDetail = null,
   rustReady = null, rustDetail = null,
   goReady = null, goDetail = null,
@@ -817,12 +827,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   const latestRef = useRef({
     repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-    rustReady, rustDetail, goReady, goDetail, onModelReplaced,
+    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onCompareBrief,
   });
   latestRef.current = {
     repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-    rustReady, rustDetail, goReady, goDetail, onModelReplaced,
+    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onCompareBrief,
   };
 
   useEffect(() => {
@@ -1155,6 +1165,17 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         setMessages(m => [...m, briefMsg]);
         convo = [...convo, briefMsg];
 
+        // "Two versions" / "side by side": both Compare coders build it.
+        const toCompare = latestRef.current.onCompareBrief;
+        if (toCompare && wantsTwoVersions(text)) {
+          toCompare(brief);
+          setMessages(m => [...m, {
+            id: uid(), role: 'user', kind: 'note',
+            content: 'Sent the brief to Compare — two coders are building it side by side.',
+          }]);
+          return [];
+        }
+
         // The brief names real files — pull context for it, not for your raw wording.
         if (before) {
           const again = await withTimeout(before(brief), BEFORE_SEND_TIMEOUT_MS);
@@ -1360,6 +1381,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   // Expose imperative handle to parent (used by the verify loop)
   useImperativeHandle(ref, () => ({
     programmaticSend: (text, role = 'retry-inject') => sendText(text, role),
+    addNote: (text) => setMessages(m => [...m, { id: uid(), role: 'user', kind: 'note', content: text }]),
   }), [sendText]);
 
   const send = useCallback(async () => {
@@ -1536,18 +1558,35 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 </span>
                 {msg.content.slice(0, 500)}{msg.content.length > 500 ? '…' : ''}
               </div>
+            ) : msg.kind === 'note' ? (
+              <div data-testid="note-msg" style={{ fontSize: 14, color: '#9198AA', fontStyle: 'italic',
+                padding: '2px 4px' }}>
+                {msg.content}
+              </div>
             ) : msg.role === 'user' && msg.kind === 'brief' ? (
-              <details data-testid="brief-msg" style={{ background: '#12151D',
+              <div data-testid="brief-msg" style={{ background: '#12151D',
                 border: '1px solid #323A50', borderRadius: 6, padding: '6px 10px' }}>
-                <summary style={{ cursor: 'pointer', fontSize: 14, fontWeight: 700,
-                  letterSpacing: '0.08em', textTransform: 'uppercase', color: '#9198AA' }}>
-                  Brief → coder
-                </summary>
-                <pre style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                  fontSize: 15, lineHeight: 1.5, color: '#C9CEDA', fontFamily: 'inherit' }}>
-                  {msg.content}
-                </pre>
-              </details>
+                <details>
+                  <summary style={{ cursor: 'pointer', fontSize: 14, fontWeight: 700,
+                    letterSpacing: '0.08em', textTransform: 'uppercase', color: '#9198AA' }}>
+                    Brief → coder
+                  </summary>
+                  <pre style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                    fontSize: 15, lineHeight: 1.5, color: '#C9CEDA', fontFamily: 'inherit' }}>
+                    {msg.content}
+                  </pre>
+                </details>
+                {onCompareBrief && (
+                  <button type="button" data-testid="brief-compare-btn"
+                    onClick={() => onCompareBrief(msg.content)}
+                    title="Two coders build this brief side by side — pick the one you like"
+                    style={{ marginTop: 6, background: 'transparent', color: '#FF9FC4',
+                      border: '1px solid rgba(255,61,142,.5)', borderRadius: 4, padding: '3px 10px',
+                      cursor: 'pointer', fontFamily: 'inherit', fontSize: 14 }}>
+                    ⇄ Build two versions
+                  </button>
+                )}
+              </div>
             ) : msg.role === 'user' ? (
               <div style={{
                 background: 'rgba(52,211,153,.16)',
