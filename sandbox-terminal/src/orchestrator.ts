@@ -29,6 +29,7 @@ export interface OrchMessage {
   kind?: string;
   speaker?: 'persona' | 'coder';
   to?: 'persona';
+  pending?: boolean;
 }
 
 type Turn = { role: 'user' | 'assistant'; content: string };
@@ -216,7 +217,8 @@ export function buildCoderHistory(msgs: OrchMessage[]): Turn[] {
     .filter((m) => {
       if (skip(m)) return false;
       if (m.role === 'user') {
-        if (m.kind === 'brief' || m.kind === 'retry-inject' || m.kind === 'note') return true;
+        if (m.kind === 'brief') return !m.pending; // never built — not the coder's business
+        if (m.kind === 'retry-inject' || m.kind === 'note') return true;
         // Direct-mode asks from earlier in this session still belong to the coder.
         return m.kind !== 'imported' && m.to !== 'persona';
       }

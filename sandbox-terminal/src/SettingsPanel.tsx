@@ -24,6 +24,8 @@ interface Props {
   sandboxReady: boolean;
   contextText: string;
   onSliceComplete: (results: GenerateChunkResult[], combined: string) => void;
+  /** The coding team: seats per phase, preset, ask-before-build. */
+  teamSection?: React.ReactNode;
 }
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
@@ -54,7 +56,7 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
 export function SettingsPanel(props: Props) {
   const { open, onClose, keys, onKeySave, roleSummary,
     autoApplyOn, setAutoApplyOn, autoRun, setAutoRun, autoVerifyOn, setAutoVerifyOn,
-    sandboxReady, contextText, onSliceComplete } = props;
+    sandboxReady, contextText, onSliceComplete, teamSection } = props;
 
   if (!open) return null;
 
@@ -82,6 +84,11 @@ export function SettingsPanel(props: Props) {
           </button>
         </div>
 
+        {teamSection && (
+          <Section title="Coding team" hint="One agent per coding phase. Your persona plans the brief; these build, review and fix it.">
+            {teamSection}
+          </Section>
+        )}
         <Section title="API keys" hint="Stay in this browser only. Used when set; otherwise the server's own key is used.">
           <div style={{ display: 'grid', gap: 10 }}>
             {PROVIDER_LIST.map(p => (

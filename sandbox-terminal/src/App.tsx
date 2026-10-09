@@ -71,6 +71,21 @@ import {
 import type { GenerateChunkResult } from './ChunkModelPanel.js';
 import { SettingsPanel } from './SettingsPanel.js';
 import { ComparePanel, type BuildChoice, type CompareHandle } from './ComparePanel.js';
+import { BuildPicker, type BuildChoiceSeats } from './BuildPicker.js';
+import {
+  PRESETS,
+  SEATS,
+  isUncensoredModel,
+  loadTeamPrefs,
+  resolvePreset,
+  rolesFromSeats,
+  saveTeamPrefs,
+  type PresetId,
+  type SeatModel,
+  type TeamPrefs,
+  type TeamSeats,
+} from './codingTeam.js';
+import type { BuildRequest, SeatPick } from './ChatPane.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
@@ -402,6 +417,9 @@ export function App() {
       kind: x.kind as Message['kind'],
       speaker: x.speaker,
       to: x.to,
+      pending: x.pending,
+      wantCompare: x.wantCompare,
+      builtBy: x.builtBy,
     }));
   });
   const [fromChat] = useState(() => boot.fromChat);
@@ -456,7 +474,8 @@ export function App() {
         const locked = current && !current.free && !paidUnlocked();
         // Land on something runnable: keep the current pick if it is a coder
         // the user can actually use, else take the package's default.
-        if (!current || locked) {
+        // A coding team owns the seats — never swap its builder for a package default.
+        if ((!current || locked) && !teamPrefsRef.current.seats) {
           const pick = pickDefaultCoder(brands, paidUnlocked());
           if (pick) {
             setProvider(pick.provider);
@@ -516,6 +535,7 @@ export function App() {
       fromChat,
       messages: chatMessages.map(m => ({
         id: m.id, role: m.role, content: m.content, kind: m.kind, speaker: m.speaker, to: m.to,
+        pending: m.pending, wantCompare: m.wantCompare, builtBy: m.builtBy,
       })),
       pendingChanges: repo.pendingChanges,
       files: repo.snapshot,
@@ -541,6 +561,9 @@ export function App() {
       kind: x.kind as Message['kind'],
       speaker: x.speaker,
       to: x.to,
+      pending: x.pending,
+      wantCompare: x.wantCompare,
+      builtBy: x.builtBy,
     })));
     setPushError(null);
     setPushOk(null);
@@ -642,7 +665,108 @@ export function App() {
       }
     : null;
 
+  // ── Coding team: one agent per phase (codingTeam.ts) ───────────────────────
+  const [teamPrefs, setTeamPrefs] = useState<TeamPrefs>(() => loadTeamPrefs());
+  const teamPrefsRef = useRef(teamPrefs);
+  teamPrefsRef.current = teamPrefs;
+  const [teamCatalogs, setTeamCatalogs] = useState<Record<string, CatalogModel[]>>({});
+  const [teamDefaults, setTeamDefaults] = useState<Record<string, { chat?: string; coder?: string }>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      fetchModels('venice', (keys.venice || '').trim() || undefined),
+      fetchModels('openrouter', (keys.openrouter || '').trim() || undefined),
+      fetch(`${API_URL}/models?op=defaults`).then(r => r.json()).catch(() => ({})),
+    ]).then(([venice, openrouter, d]) => {
+      if (cancelled) return;
+      setTeamCatalogs({ venice, openrouter });
+      setTeamDefaults((d as { defaults?: Record<string, { chat?: string; coder?: string }> }).defaults || {});
+    }).catch(() => { /* seats keep their saved models */ });
+    return () => { cancelled = true; };
+  }, [keys.venice, keys.openrouter]);
+
+  const teamSeats: TeamSeats = {
+    plan: roleModels.plan,
+    build: roleModels.write,
+    review: roleModels.review,
+    fix: teamPrefs.seats?.fix ?? roleModels.write,
+  };
+
+  const applySeats = useCallback((seats: TeamSeats, preset: PresetId | 'custom') => {
+    const roles = rolesFromSeats(seats);
+    setRoleModels(roles);
+    saveRoleModels(roles);
+    const cur = roles[role];
+    if (cur) { setProvider(cur.provider); setModel(cur.model); }
+    setTeamPrefs(prev => {
+      const next = { ...prev, preset, seats };
+      saveTeamPrefs(next);
+      return next;
+    });
+  }, [role]);
+
+  const applyPreset = useCallback((id: PresetId) => {
+    applySeats(resolvePreset(id, { catalogs: teamCatalogs, liveDefaults: teamDefaults, unlocked: paidUnlocked() }), id);
+  }, [applySeats, teamCatalogs, teamDefaults]);
+
+  // Once the catalogs are in: a preset team is re-resolved (a retired model
+  // just moves its seat on); the first run starts on the Uncensored team.
+  const teamResolved = useRef(false);
+  useEffect(() => {
+    if (teamResolved.current || !teamCatalogs.venice?.length || !teamCatalogs.openrouter?.length) return;
+    teamResolved.current = true;
+    if (teamPrefs.preset !== 'custom') applyPreset(teamPrefs.preset);
+  }, [teamCatalogs, teamPrefs.preset, applyPreset]);
+
+  /** Changing a model by hand makes the team yours. */
+  const markTeamCustom = useCallback(() => {
+    setTeamPrefs(prev => {
+      if (prev.preset === 'custom' || !prev.seats) return prev;
+      const next = { ...prev, preset: 'custom' as const };
+      saveTeamPrefs(next);
+      return next;
+    });
+  }, []);
+
+  const withKey = useCallback((sm: SeatModel): SeatPick => ({
+    ...sm, apiKey: (keys[sm.provider] || '').trim() || undefined,
+  }), [keys]);
+
+  const renderBuildPicker = useCallback((args: {
+    brief: string; wantCompare: boolean; onBuild: (req: BuildRequest) => void;
+  }) => (
+    <BuildPicker
+      key={`${teamPrefs.preset}:${teamSeats.build.model}:${teamSeats.fix.model}`}
+      seats={teamSeats}
+      preset={teamPrefs.preset}
+      catalogs={teamCatalogs}
+      unlocked={paidUnlocked()}
+      wantCompare={args.wantCompare}
+      onPreset={applyPreset}
+      onBuild={(c: BuildChoiceSeats) => {
+        // What you pick becomes the team's Build and Fix seats from here on.
+        const same = (x: SeatModel, y: SeatModel) => x.provider === y.provider && x.model === y.model;
+        if (!same(c.builder, teamSeats.build) || !same(c.fixer, teamSeats.fix)) {
+          applySeats({ ...teamSeats, build: c.builder, fix: c.fixer }, 'custom');
+        }
+        args.onBuild({ builder: withKey(c.builder), second: c.second ? withKey(c.second) : null });
+      }}
+    />
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ), [teamPrefs.preset, teamSeats.build.model, teamSeats.build.provider, teamSeats.fix.model, teamSeats.fix.provider,
+    teamSeats.plan.model, teamSeats.review.model, teamCatalogs, applyPreset, applySeats, withKey]);
+
+  const setAskFirst = useCallback((askFirst: boolean) => {
+    setTeamPrefs(prev => {
+      const next = { ...prev, askFirst };
+      saveTeamPrefs(next);
+      return next;
+    });
+  }, []);
+
   const handleProviderChange = (p: string) => {
+    markTeamCustom();
     setProvider(p);
     const fallback = DEFAULT_MODELS[p] || FALLBACK_MODELS[p]?.[0]?.id || '';
     setModel(fallback);
@@ -654,6 +778,7 @@ export function App() {
   };
 
   const handleModelChange = (m: string) => {
+    markTeamCustom();
     setModel(m);
     setRoleModels(prev => {
       const next = { ...prev, [role]: { provider, model: m } };
@@ -666,6 +791,7 @@ export function App() {
   const handleCoderChange = (key: string) => {
     const { provider: p, id } = parseCoderKey(key);
     if (!p || !id) return;
+    markTeamCustom();
     setProvider(p);
     setModel(id);
     setRoleModels(prev => {
@@ -717,13 +843,13 @@ export function App() {
 
   // ── Compare: the persona's brief to two coders, and the chosen version back ──
   const compareRef = useRef<CompareHandle>(null);
-  const handleCompareBrief = useCallback((brief: string) => {
+  const handleCompareBrief = useCallback((brief: string, picks?: { a: SeatModel; b: SeatModel }) => {
     if (!repo.sandboxId) {
       setRestoreNote('Open a blank project or a GitHub repo first — Compare needs a sandbox for its two previews.');
       return;
     }
     setShowCompare(true);
-    compareRef.current?.runBrief(brief);
+    compareRef.current?.runBrief(brief, picks);
   }, [repo.sandboxId]);
 
   const handleUseBuild = useCallback(async (build: BuildChoice) => {
@@ -1240,6 +1366,38 @@ export function App() {
           ].filter(Boolean).join('\n')
         }
         onSliceComplete={handleSliceGenerateComplete}
+        teamSection={
+          <div data-testid="team-settings" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <select value={teamPrefs.preset === 'custom' ? '' : teamPrefs.preset}
+                onChange={e => applyPreset(e.target.value as PresetId)}
+                style={{ background: 'var(--surface-2)', color: 'var(--text)', border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius)', padding: '5px 8px', fontFamily: 'inherit', fontSize: 14 }}>
+                {teamPrefs.preset === 'custom' && <option value="">Custom (your picks)</option>}
+                {(Object.keys(PRESETS) as PresetId[]).map(id => <option key={id} value={id}>{PRESETS[id].label}</option>)}
+              </select>
+              <span style={{ fontSize: 13, color: 'var(--text-dim)' }}>
+                {teamPrefs.preset === 'custom' ? 'Pick a preset to reset every seat.' : PRESETS[teamPrefs.preset].blurb}
+              </span>
+            </div>
+            {SEATS.map(seat => {
+              const sm = teamSeats[seat.id];
+              const open = isUncensoredModel(sm.provider, sm.model);
+              return (
+                <div key={seat.id} style={{ display: 'flex', gap: 8, fontSize: 14, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                  <strong style={{ width: 56 }}>{seat.label}</strong>
+                  <span style={{ color: 'var(--text)' }}>{sm.model}</span>
+                  <span style={{ fontSize: 12, color: open ? '#34D399' : '#FFB86B' }}>{open ? 'uncensored' : 'filtered'}</span>
+                  <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>— {seat.job}</span>
+                </div>
+              );
+            })}
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 14, cursor: 'pointer' }}>
+              <input type="checkbox" checked={teamPrefs.askFirst} onChange={e => setAskFirst(e.target.checked)} />
+              Ask me who builds it before any code is written
+            </label>
+          </div>
+        }
       />
     </div>
   );
@@ -1302,6 +1460,9 @@ export function App() {
           persona={orchPersona}
           onModelReplaced={handleModelReplaced}
           onCompareBrief={handleCompareBrief}
+          askBeforeBuild={teamPrefs.askFirst}
+          buildPicker={renderBuildPicker}
+          fixer={teamPrefs.seats ? withKey(teamSeats.fix) : null}
           apiKey={activeApiKey || undefined}
           tree={repo.tree}
           contextFiles={repo.contextFiles}

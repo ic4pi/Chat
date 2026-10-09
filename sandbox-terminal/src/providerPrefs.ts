@@ -91,15 +91,13 @@ const DEFAULT_ROLE_MODELS: Record<RoleId, RoleModel> = {
 
 export const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string }>> = {
   venice: [
-    { id: 'venice-uncensored', name: 'Venice Uncensored (Dolphin 24B)' },
+    { id: 'gemma-4-uncensored', name: 'Gemma 4 Uncensored (26B, 256k)' },
     { id: 'olafangensan-glm-4.7-flash-heretic', name: 'GLM 4.7 Flash Heretic (200k)' },
-    { id: 'dolphin-2.9.2-qwen2-72b', name: 'Dolphin 2.9.2 Qwen2 72B' },
-    { id: 'hermes-3-llama-3.1-405b', name: 'Hermes 3 Llama 3.1 405B' },
-    { id: 'qwen3-235b-a22b-instruct-2507', name: 'Qwen3 235B Instruct' },
-    { id: 'qwen3-coder-480b-a35b-instruct', name: 'Qwen3 Coder 480B' },
-    { id: 'qwen3-next-80b', name: 'Qwen3 Next 80B' },
-    { id: 'llama-3.3-70b', name: 'Llama 3.3 70B' },
-    { id: 'mistral-31-24b', name: 'Mistral 3.1 24B' },
+    { id: 'e2ee-qwen3-6-35b-a3b-uncensored-p', name: 'Qwen3.6 35B A3B Uncensored' },
+    { id: 'venice-uncensored-1-2', name: 'Venice Uncensored 1.2' },
+    { id: 'venice-uncensored-role-play', name: 'Venice Role Play Uncensored' },
+    { id: 'e2ee-gemma-4-26b-a4b-uncensored-p', name: 'Gemma 4 26B A4B Uncensored (TEE)' },
+    { id: 'venice-uncensored', name: 'Dolphin Mistral 24B Venice Edition' },
   ],
   openrouter: [
     { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free', name: 'Dolphin-Venice 24B (free)' },
@@ -137,7 +135,7 @@ export const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string }>
 };
 
 export const DEFAULT_MODELS: Record<string, string> = {
-  venice: 'venice-uncensored',
+  venice: 'gemma-4-uncensored',
   openrouter: 'qwen/qwen3-coder:free',
   cerebras: 'llama-3.3-70b',
   groq: 'llama-3.3-70b-versatile',

@@ -122,7 +122,7 @@ const PROVIDER_FALLBACKS = {
 // Hints only. The real default comes from the live catalogs (defaultChatModel)
 // and is never a coder model — chat and the agency teams talk, they don't code.
 const DEFAULT_MODELS = {
-  venice: 'venice-uncensored-1-2',
+  venice: 'gemma-4-uncensored',
   openrouter: 'nvidia/nemotron-3-super-120b-a12b:free',
   cerebras: 'gpt-oss-120b',
   groq: 'llama-3.3-70b-versatile',

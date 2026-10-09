@@ -15,6 +15,9 @@ export interface StoredMessage {
   kind?: string;
   speaker?: 'persona' | 'coder';
   to?: 'persona';
+  pending?: boolean;
+  wantCompare?: boolean;
+  builtBy?: string;
 }
 
 export interface StoredSession {
@@ -209,6 +212,9 @@ export function saveSession(
       // back to it as coder results and the handoff falls apart.
       speaker: m.speaker,
       to: m.to,
+      pending: m.pending,
+      wantCompare: m.wantCompare,
+      builtBy: m.builtBy,
     })),
     pendingChanges: (partial.pendingChanges || []).slice(0, 30).map((c) => ({
       path: c.path,

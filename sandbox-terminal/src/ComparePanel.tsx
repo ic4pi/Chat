@@ -44,8 +44,9 @@ export interface BuildChoice {
 }
 
 export interface CompareHandle {
-  /** Send a brief (usually from the persona) to both coders. */
-  runBrief: (brief: string) => void;
+  /** Send a brief (usually from the persona) to both coders — on the models
+   *  you picked for A and B, when you picked them. */
+  runBrief: (brief: string, picks?: { a: { provider: string; model: string }; b: { provider: string; model: string } }) => void;
 }
 
 interface Props {
@@ -65,6 +66,8 @@ interface SideState {
   busy: boolean;
   previewKick: number;
   note: string;
+  /** Bumped to send pendingSend once a model change has rendered. */
+  kick: number;
 }
 
 const selectStyle: React.CSSProperties = {
@@ -139,6 +142,7 @@ function useSide(slot: 'a' | 'b') {
     busy: false,
     previewKick: 0,
     note: '',
+    kick: 0,
   }));
   const [catalog, setCatalog] = useState<CatalogModel[]>([]);
   const [loading, setLoading] = useState(false);
@@ -242,13 +246,22 @@ function useSide(slot: 'a' | 'b') {
     reset({});
   }, [state.lastPrompt, state.busy, reset]);
 
-  // After a re-run remounts the side's chat, send the same prompt again.
+  // After a re-run remounts the side's chat (or a picked model has rendered),
+  // send the waiting prompt.
   useEffect(() => {
     const text = pendingSend.current;
     if (!text || !ref.current) return;
     pendingSend.current = null;
     void send(text);
-  }, [state.run, send]);
+  }, [state.run, state.kick, send]);
+
+  /** Send on a specific model: switch first, send once the switch has rendered. */
+  const sendOn = useCallback((text: string, pick: { provider: string; model: string }) => {
+    touchedModel.current = true;
+    pendingSend.current = text;
+    setState(s => ({ ...s, provider: pick.provider, model: pick.model, kick: s.kick + 1 }));
+    loadCatalog(pick.provider);
+  }, [loadCatalog]);
 
   const loadBuild = useCallback(async (build: SavedBuild, sandboxId: string | null) => {
     touchedModel.current = true;
@@ -261,7 +274,7 @@ function useSide(slot: 'a' | 'b') {
 
   return {
     state, dir, catalog, loading, ref, filesRef,
-    setProvider, setModel, setDefaultModel, onFileChanges, send, rerun, loadBuild, loadCatalog, flash,
+    setProvider, setModel, setDefaultModel, onFileChanges, send, sendOn, rerun, loadBuild, loadCatalog, flash,
   };
 }
 
@@ -312,8 +325,14 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
   }, [sending, sandboxId, a, b]);
 
   useImperativeHandle(handleRef, () => ({
-    runBrief: (brief: string) => { void sendToBoth(asBuildPrompt(brief)); },
-  }), [sendToBoth]);
+    runBrief: (brief, picks) => {
+      const text = asBuildPrompt(brief);
+      if (!picks) { void sendToBoth(text); return; }
+      if (!sandboxId) return;
+      a.sendOn(text, picks.a);
+      b.sendOn(text, picks.b);
+    },
+  }), [sendToBoth, sandboxId, a, b]);
 
   const save = useCallback(async (s: Side) => {
     const files = s.filesRef.current;

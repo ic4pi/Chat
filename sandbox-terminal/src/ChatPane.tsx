@@ -56,6 +56,7 @@ import {
   splitPersonaReply,
   type OrchestratorPersona,
 } from './orchestrator.js';
+import { looksLikeRefusal } from './codingTeam.js';
 import {
   cleanForSpeech,
   getSpeechRecognition,
@@ -714,6 +715,11 @@ function AssistantBody({ msg, appliedPaths, onRunCode }: {
 // Types
 // ---------------------------------------------------------------------------
 
+/** An agent the user picked for a seat; apiKey is their BYOK key for it. */
+export interface SeatPick { provider: string; model: string; apiKey?: string }
+/** What "Who builds this?" hands back. */
+export interface BuildRequest { builder: SeatPick; second: SeatPick | null }
+
 export interface Message {
   id:          string;
   role:        'user' | 'assistant';
@@ -725,6 +731,12 @@ export interface Message {
   speaker?:    'persona' | 'coder';
   /** A user message addressed to the persona rather than the coder. */
   to?:         'persona';
+  /** A brief waiting for you to pick its agents ("Who builds this?"). */
+  pending?:    boolean;
+  /** You asked for two versions — the picker opens with Compare ticked. */
+  wantCompare?: boolean;
+  /** Who built a brief, once you picked. */
+  builtBy?:    string;
   segments?:   Segment[];
   fileChanges?: PendingChange[];
 }
@@ -774,7 +786,13 @@ interface Props {
     files: Map<string, string>;
   } | void>;
   /** Send a brief to both Compare coders instead of (or as well as) this one. */
-  onCompareBrief?:   (brief: string) => void;
+  onCompareBrief?:   (brief: string, picks?: { a: SeatPick; b: SeatPick }) => void;
+  /** Hold persona briefs until you pick who builds them. */
+  askBeforeBuild?:   boolean;
+  /** Renders "Who builds this?" under a pending brief. */
+  buildPicker?:      (args: { brief: string; wantCompare: boolean; onBuild: (req: BuildRequest) => void }) => React.ReactNode;
+  /** The Fix seat: answers auto-test failures; the builder takes over if it refuses. */
+  fixer?:            SeatPick | null;
   /** The server swapped a retired model; update the saved choice. */
   onModelReplaced?:  (swap: ModelSwap, who: 'persona' | 'coder') => void;
   /** From /api/init-repo — whether the sandbox toolchains are actually usable. */
@@ -790,6 +808,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   repoRoot, repoUrl, sandboxId, provider, model, role, persona = null, apiKey, tree, contextFiles, autoRun, appliedPaths,
   autoSelectedFiles, searchHits, initialMessages, onMessagesChange,
   onRunCode, onFileChanges, onUploadText, onBeforeSend, onModelReplaced, onCompareBrief,
+  askBeforeBuild = false, buildPicker, fixer = null,
   pythonReady = null, pythonDetail = null,
   rustReady = null, rustDetail = null,
   goReady = null, goDetail = null,
@@ -817,6 +836,17 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   // there was previously NO way to bail out of a slow model mid-request;
   // the only option was to sit and wait out the full timeout.
   const activeControllerRef = useRef<AbortController | null>(null);
+  // Each send's number; only the newest may clear the busy state, so a send
+  // that started while an older one was applying files is never cut short.
+  const turnRef = useRef(0);
+  const releaseTurn = useCallback((turn: number) => {
+    if (turnRef.current !== turn) return;
+    setLoading(false);
+    setLiveThoughts('');
+    setLiveStatus('');
+    sendingRef.current = false;
+    activeControllerRef.current = null;
+  }, []);
   const userCancelledRef = useRef(false);
   const recognitionRef = useRef<ReturnType<typeof getSpeechRecognition>>(null);
   const speakOnRef = useRef(speakOn);
@@ -827,12 +857,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   const latestRef = useRef({
     repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onCompareBrief,
+    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onCompareBrief, askBeforeBuild, fixer,
   });
   latestRef.current = {
     repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onCompareBrief,
+    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onCompareBrief, askBeforeBuild, fixer,
   };
 
   useEffect(() => {
@@ -859,10 +889,15 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   // ── shared send implementation ─────────────────────────────────────────────
   const sendText = useCallback(async (
     text: string,
-    kind: 'user' | 'retry-inject' = 'user',
+    kind: 'user' | 'retry-inject' | 'brief' = 'user',
+    opts?: { builder?: SeatPick },
   ): Promise<PendingChange[]> => {
     if (!text || sendingRef.current) return [];
     sendingRef.current = true;
+    const turn = ++turnRef.current;
+    // 'brief': a brief you just picked agents for — it's already on screen,
+    // so straight to the coder you chose, no new bubble, no persona turn.
+    const goBrief = kind === 'brief';
 
     // 1) Show the bubble IMMEDIATELY — never wait on auto-context / network first.
     const orchPersona = latestRef.current.persona;
@@ -872,8 +907,8 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       ...(orchestrated ? { to: 'persona' as const } : {}),
     };
     // Prefixes server status events so you can tell persona and coder phases apart.
-    let phase = orchestrated ? orchPersona!.name : '';
-    setMessages(m => [...m, userMsg]);
+    let phase = orchestrated ? orchPersona!.name : goBrief ? 'Coder' : '';
+    if (!goBrief) setMessages(m => [...m, userMsg]);
     setLoading(true);
     setLiveThoughts('');
     setLiveStatus('Connecting…');
@@ -1064,7 +1099,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       let freshHits: SearchHit[] | null = null;
       let freshFiles: Map<string, string> | null = null;
       const before = latestRef.current.onBeforeSend;
-      if (before && kind === 'user') {
+      if (before && (kind === 'user' || goBrief)) {
         const result = await withTimeout(before(text), BEFORE_SEND_TIMEOUT_MS);
         if (result) {
           freshHits = result.hits;
@@ -1073,11 +1108,18 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       }
 
       const {
-        repoRoot: root, repoUrl: rUrl, sandboxId: sid, provider: prov, model: mod,
-        role: activeRole, apiKey: key, tree: tr, contextFiles: pinned, searchHits: propHits,
+        repoRoot: root, repoUrl: rUrl, sandboxId: sid, provider: builderProv, model: builderMod,
+        role: activeRole, apiKey: builderKey, tree: tr, contextFiles: pinned, searchHits: propHits,
         autoRun: ar, onRunCode: run, onFileChanges: onFc,
         messages: prev,
       } = latestRef.current;
+      // Who writes this turn: the builder you picked, the Fix seat for a test
+      // failure, otherwise the header's model.
+      const fixSeat = kind === 'retry-inject' ? latestRef.current.fixer : null;
+      const seat = opts?.builder ?? fixSeat;
+      let prov = seat?.provider ?? builderProv;
+      let mod = seat?.model ?? builderMod;
+      let key = seat ? seat.apiKey : builderKey;
 
       let hits = freshHits ?? propHits;
       const ctx = new Map(pinned);
@@ -1089,7 +1131,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       // After await, React may already have flushed userMsg into state — don't duplicate.
       // Never send welcome / legacy example blurb to the model.
-      const withUser = prev.some(m => m.id === userMsg.id) ? prev : [...prev, userMsg];
+      const withUser = goBrief || prev.some(m => m.id === userMsg.id) ? prev : [...prev, userMsg];
 
       // Pending images ride on the latest user turn (vision-capable models) —
       // the persona's and the coder's both, so neither has to guess what you showed.
@@ -1106,7 +1148,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       // ── Persona turn: you talk to the persona; it decides what the coder is told.
       let convo: Message[] = withUser;
-      let brief: string | null = null;
+      let brief: string | null = goBrief ? text : null;
       if (orchestrated && orchPersona) {
         setLiveStatus(`${orchPersona.name} is thinking…`);
         const personaSystem = buildPersonaContext({
@@ -1161,6 +1203,15 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         }
         if (!brief) return [];
 
+        // You pick the agents before any code: the brief waits on "Who builds this?".
+        if (latestRef.current.askBeforeBuild) {
+          setMessages(m => [...m, {
+            id: uid(), role: 'user', kind: 'brief', content: brief!, pending: true,
+            wantCompare: wantsTwoVersions(text) || undefined,
+          }]);
+          return [];
+        }
+
         const briefMsg: Message = { id: uid(), role: 'user', kind: 'brief', content: brief };
         setMessages(m => [...m, briefMsg]);
         convo = [...convo, briefMsg];
@@ -1205,12 +1256,13 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       ));
 
       // A brief is always a build instruction; plan/review mode still holds it to prose.
-      const suggestTurn = kind === 'user' && (
+      const userish = kind === 'user' || goBrief;
+      const suggestTurn = userish && (
         (!brief && looksLikeSuggestRequest(text)) || activeRole === 'plan' || activeRole === 'review'
       );
-      const applyTurn = kind === 'user' && activeRole !== 'plan'
+      const applyTurn = userish && activeRole !== 'plan'
         && (brief ? !suggestTurn : looksLikeApplyRequest(text));
-      const runTurn = kind === 'user' && !brief && !applyTurn && !suggestTurn && looksLikeRunRequest(text) && activeRole !== 'plan';
+      const runTurn = userish && !brief && !applyTurn && !suggestTurn && looksLikeRunRequest(text) && activeRole !== 'plan';
 
       // Light chat ("hey", "thanks"): don't paste tree/files into the model.
       const lightTurn = !needsCodeContext(coderText);
@@ -1266,6 +1318,18 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       // Always hit agent-chat — it accepts systemPrompt. /api/chat ignores it
       // and is the main-chat persona endpoint, not the agent.
       let reply = await callAgentWithContinue(history, systemPrompt, sid, prov, mod, key);
+      // A filtered Fix seat that refuses never blocks you: the builder fixes it.
+      if (fixSeat && !opts?.builder && looksLikeRefusal(reply)
+        && (fixSeat.provider !== builderProv || fixSeat.model !== builderMod)) {
+        setMessages(m => [...m, {
+          id: uid(), role: 'user', kind: 'note',
+          content: `Fix agent ${fixSeat.model} declined — the builder (${builderMod}) is fixing it instead.`,
+        }]);
+        prov = builderProv; mod = builderMod; key = builderKey;
+        setLiveThoughts('');
+        setLiveStatus('Builder is fixing it…');
+        reply = await callAgentWithContinue(history, systemPrompt, sid, prov, mod, key);
+      }
       let segs  = parseSegments(reply);
       let report = extractFileChangeReport(reply);
       // Full-file writes (new files / explicit rewrites) + unresolved Edit:
@@ -1305,7 +1369,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       // Skip if the first call already used most of the Pro time window (avoids a second timeout).
       const rejectedFirst = report.rejected;
       const shouldNudge = (fc.length === 0 || rejectedFirst.length > 0)
-        && kind === 'user'
+        && userish
         && applyTurn
         && !suggestTurn
         && (!!root || ctx.size > 0)
@@ -1345,6 +1409,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         }
       }
 
+      // The model's turn is over: release the chat before files are applied
+      // and tested. Auto-test sends its failures back through this same
+      // chat — while the lock was still held here, those fix requests were
+      // silently dropped and the test just re-ran unchanged.
+      releaseTurn(turn);
+
       // Never write files on a suggest turn. Never write rejected stubs.
       if (fc.length > 0 && !suggestTurn) await onFc(fc);
 
@@ -1365,13 +1435,25 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       setMessages(m => [...m, { id: uid(), role: 'assistant', content: `⚠ ${msg}` }]);
       return [];
     } finally {
-      setLoading(false);
-      setLiveThoughts('');
-      setLiveStatus('');
-      sendingRef.current = false;
-      activeControllerRef.current = null;
+      releaseTurn(turn);
     }
   }, []);
+
+  /** You picked agents for a waiting brief: build it with them. */
+  const buildPending = useCallback((msgId: string, brief: string, req: BuildRequest) => {
+    if (sendingRef.current) return;
+    const label = req.second ? `${req.builder.model} vs ${req.second.model}` : req.builder.model;
+    setMessages(m => m.map(x => (x.id === msgId ? { ...x, pending: false, wantCompare: undefined, builtBy: label } : x)));
+    if (req.second) {
+      latestRef.current.onCompareBrief?.(brief, { a: req.builder, b: req.second });
+      setMessages(m => [...m, {
+        id: uid(), role: 'user', kind: 'note',
+        content: `Sent to Compare — A: ${req.builder.model}, B: ${req.second!.model}.`,
+      }]);
+      return;
+    }
+    void sendText(brief, 'brief', { builder: req.builder });
+  }, [sendText]);
 
   const cancelSend = useCallback(() => {
     userCancelledRef.current = true;
@@ -1576,7 +1658,14 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                     {msg.content}
                   </pre>
                 </details>
-                {onCompareBrief && (
+                {msg.pending && buildPicker ? buildPicker({
+                  brief: msg.content,
+                  wantCompare: !!msg.wantCompare,
+                  onBuild: (req) => buildPending(msg.id, msg.content, req),
+                }) : msg.builtBy ? (
+                  <div style={{ fontSize: 13, color: '#9198AA', marginTop: 4 }}>Built by {msg.builtBy}</div>
+                ) : null}
+                {onCompareBrief && !msg.pending && (
                   <button type="button" data-testid="brief-compare-btn"
                     onClick={() => onCompareBrief(msg.content)}
                     title="Two coders build this brief side by side — pick the one you like"

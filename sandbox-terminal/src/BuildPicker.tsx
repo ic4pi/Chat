@@ -1,0 +1,147 @@
+/**
+ * "Who builds this?" — shown under a persona's brief before any code is
+ * written. Pick the team, the builder and the fixer, and optionally a second
+ * builder to compare two versions side by side (off unless you ask for it —
+ * a simple site doesn't need two).
+ */
+
+import { useState } from 'react';
+import { PRESETS, isUncensoredModel, type PresetId, type SeatModel, type TeamSeats } from './codingTeam.js';
+import type { CatalogModel } from './providerPrefs.js';
+
+export interface BuildChoiceSeats {
+  builder: SeatModel;
+  fixer: SeatModel;
+  second: SeatModel | null;
+}
+
+interface Props {
+  seats: TeamSeats;
+  preset: PresetId | 'custom';
+  catalogs: Record<string, CatalogModel[]>;
+  unlocked: boolean;
+  /** Pre-tick "second version" — you asked for two. */
+  wantCompare?: boolean;
+  onPreset: (id: PresetId) => void;
+  onBuild: (choice: BuildChoiceSeats) => void;
+}
+
+const key = (s: SeatModel) => `${s.provider}::${s.model}`;
+const parse = (k: string): SeatModel => {
+  const i = k.indexOf('::');
+  return { provider: k.slice(0, i), model: k.slice(i + 2) };
+};
+
+const PROVIDER_GROUPS: Array<{ provider: string; label: string; keep: (m: CatalogModel) => boolean }> = [
+  { provider: 'venice', label: 'Venice — uncensored', keep: () => true },
+  { provider: 'openrouter', label: 'OpenRouter — free', keep: m => m.free !== false },
+  { provider: 'openrouter', label: 'OpenRouter — coders (paid)', keep: m => m.free === false && (m.categories || []).includes('coder') },
+];
+
+function SeatSelect({ value, catalogs, unlocked, onChange, testId }: {
+  value: SeatModel; catalogs: Record<string, CatalogModel[]>; unlocked: boolean;
+  onChange: (s: SeatModel) => void; testId: string;
+}) {
+  const known = PROVIDER_GROUPS.some(g => (catalogs[g.provider] || []).some(m => g.keep(m) && m.id === value.model && g.provider === value.provider));
+  return (
+    <select data-testid={testId} value={key(value)} onChange={e => onChange(parse(e.target.value))}
+      style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838', borderRadius: 4,
+        padding: '4px 6px', fontFamily: 'inherit', fontSize: 14, minWidth: 0, flex: 1, maxWidth: 360 }}>
+      {!known && <option value={key(value)}>{value.model}</option>}
+      {PROVIDER_GROUPS.map(g => {
+        const list = (catalogs[g.provider] || []).filter(g.keep);
+        if (!list.length) return null;
+        return (
+          <optgroup key={g.label} label={g.label}>
+            {list.map(m => {
+              const locked = m.free === false && !unlocked;
+              return (
+                <option key={`${g.provider}:${m.id}`} value={key({ provider: g.provider, model: m.id })} disabled={locked}>
+                  {m.name || m.id}{locked ? ' 🔒' : ''}
+                </option>
+              );
+            })}
+          </optgroup>
+        );
+      })}
+    </select>
+  );
+}
+
+function Tag({ seat }: { seat: SeatModel }) {
+  const open = isUncensoredModel(seat.provider, seat.model);
+  return (
+    <span style={{ fontSize: 12, color: open ? '#34D399' : '#FFB86B', whiteSpace: 'nowrap' }}>
+      {open ? 'uncensored' : 'filtered'}
+    </span>
+  );
+}
+
+export function BuildPicker({ seats, preset, catalogs, unlocked, wantCompare, onPreset, onBuild }: Props) {
+  const [builder, setBuilder] = useState<SeatModel>(seats.build);
+  const [fixer, setFixer] = useState<SeatModel>(seats.fix);
+  const [compare, setCompare] = useState(!!wantCompare);
+  // A different take than the builder by default — the review seat's model.
+  const [second, setSecond] = useState<SeatModel>(
+    key(seats.review) !== key(seats.build) ? seats.review : seats.plan,
+  );
+
+  const row = (label: string, hint: string, control: React.ReactNode, tag?: React.ReactNode) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <span style={{ width: 52, fontSize: 13, fontWeight: 700, color: '#C9CEDA' }} title={hint}>{label}</span>
+      {control}
+      {tag}
+    </div>
+  );
+
+  return (
+    <div data-testid="build-picker" style={{ marginTop: 8, padding: '10px 12px', borderRadius: 6,
+      border: '1px solid rgba(255,61,142,.45)', background: 'rgba(255,61,142,.05)', display: 'flex',
+      flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <strong style={{ fontSize: 13, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#FF9FC4' }}>
+          Who builds this?
+        </strong>
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 13, color: '#9198AA' }}>Team</span>
+        <select data-testid="team-preset" value={preset === 'custom' ? '' : preset}
+          onChange={e => {
+            const id = e.target.value as PresetId;
+            onPreset(id);
+          }}
+          title={preset === 'custom' ? 'Your own seats' : PRESETS[preset].blurb}
+          style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838', borderRadius: 4,
+            padding: '3px 6px', fontFamily: 'inherit', fontSize: 14 }}>
+          {preset === 'custom' && <option value="">Custom</option>}
+          {(Object.keys(PRESETS) as PresetId[]).map(id => <option key={id} value={id}>{PRESETS[id].label}</option>)}
+        </select>
+      </div>
+      {row('Build', 'Writes the code and all the content in it',
+        <SeatSelect testId="seat-build" value={builder} catalogs={catalogs} unlocked={unlocked} onChange={setBuilder} />,
+        <Tag seat={builder} />)}
+      {row('Fix', 'Repairs what auto-test catches; hands back to the builder if it refuses',
+        <SeatSelect testId="seat-fix" value={fixer} catalogs={catalogs} unlocked={unlocked} onChange={setFixer} />,
+        <Tag seat={fixer} />)}
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: '#C9CEDA', cursor: 'pointer' }}>
+        <input type="checkbox" data-testid="compare-toggle" checked={compare} onChange={e => setCompare(e.target.checked)} />
+        Also build a second version to compare side by side
+      </label>
+      {compare && row('Build 2', 'A second builder for Compare',
+        <SeatSelect testId="seat-second" value={second} catalogs={catalogs} unlocked={unlocked} onChange={setSecond} />,
+        <Tag seat={second} />)}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <button type="button" data-testid="build-go"
+          onClick={() => onBuild({ builder, fixer, second: compare ? second : null })}
+          style={{ background: '#FF3D8E', color: '#0B0D12', border: 'none', borderRadius: 4, padding: '6px 16px',
+            fontFamily: 'inherit', fontSize: 15, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
+          {compare ? 'Build both' : 'Build it'}
+        </button>
+        <span style={{ fontSize: 12, color: '#656C7E' }}>
+          {preset === 'uncensored' || preset === 'custom'
+            ? 'Fix is the only seat that may be filtered — it only sees error output.'
+            : PRESETS[preset].blurb}
+        </span>
+      </div>
+    </div>
+  );
+}
