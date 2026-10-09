@@ -3318,6 +3318,16 @@ async function sendMessage(text) {
   renderChatTitle();
   renderMessages({ scroll: 'bottom' });
 
+  // Answer to "marketing meeting first?" — only the very next message counts;
+  // anything that isn't a yes/no is a normal message (they moved on).
+  const pendingCampaign = chat.pendingCampaign;
+  if (pendingCampaign) {
+    delete chat.pendingCampaign;
+    const choice = imageParts.length === 0 ? parseMeetingChoice(text) : null;
+    if (choice === 'meeting') return runMarketingMeetingThenCampaign(chat, pendingCampaign.request, text);
+    if (choice === 'skip') return runInlineCampaign(chat);
+  }
+
   // "Have a three round group discussion about X" → every persona, N rounds,
   // right here in this chat; the next message is a normal reply again.
   const prevUser = [...chat.messages].reverse().filter((m) => m.role === 'user')[1];
@@ -3327,10 +3337,13 @@ async function sendMessage(text) {
   if (groupAsk) {
     return runInlineGroupDiscussion(chat, groupAsk);
   }
-  // "Write a campaign for X" → strategist, ruthless editor, every platform.
+  // "Write a campaign for X" → offer a marketing meeting first (unless the
+  // ask already says), then strategist, ruthless editor, every platform.
   if (imageParts.length === 0 && parseCampaignRequest(text)) {
     turnSearchQuery = null;
-    return runInlineCampaign(chat);
+    if (NO_MEETING_RE.test(text)) return runInlineCampaign(chat);
+    if (MEETING_RE.test(text)) return runMarketingMeetingThenCampaign(chat, text, text);
+    return askMarketingMeeting(chat, text);
   }
 
   // Agency mode: route through the Orchestrated group-chat engine instead
@@ -4286,11 +4299,15 @@ async function runInlineGroupDiscussion(chat, { rounds, topic }) {
     updateStatusClock(cur.replace(/\s·\s\d+s$/, ''));
   }, 1000);
 
+  let stopped = false;
   try {
     for (let round = 1; round <= rounds; round++) {
       if (rounds > 1) updateStatusClock(`Round ${round}/${rounds} — gathering personas`);
       const ok = await runOneRound(chat, updateStatusClock, startedAt, firstPin);
-      if (!ok && activeChatUserStopped) break;
+      if (!ok && activeChatUserStopped) {
+        stopped = true;
+        break;
+      }
       chat.messages.push({
         role: 'info',
         content: `─── Round ${round}/${rounds} complete ───`,
@@ -4309,6 +4326,7 @@ async function runInlineGroupDiscussion(chat, { rounds, topic }) {
     saveState();
     void window.hub?.syncChat?.(chat);
   }
+  return !stopped;
 }
 
 // ---------------------------------------------------------------------------
@@ -4320,6 +4338,46 @@ async function runInlineGroupDiscussion(chat, { rounds, topic }) {
 // ---------------------------------------------------------------------------
 const CAMPAIGN_RE = /\b(?:write|make|create|build|draft|run|give me|generate|need|want|plan|do)\b[^.?!\n]{0,40}?\b(?:(?:marketing|ad|ads|advertising|promo(?:tional)?|launch|social(?: media)?)\s+(?:campaign|copy|posts?)|campaign(?!\s+(?:speech|trail|manager|finance|fund|rally|promise|staff|office))|ad copy)\b/i;
 const QUESTION_START_RE = /^\s*(?:how|what|why|when|where|which|who)\b/i;
+
+// A campaign ask that already settles the meeting question.
+const MEETING_RE = /\b(?:marketing|team|strategy|planning)\s+meeting\b|\bmeeting first\b|\b(?:have|hold|run)\s+(?:a|the)\s+meeting\b|\b(?:discuss|talk about|debate) (?:it|this|that) first\b/i;
+const NO_MEETING_RE = /\b(?:no|skip|without)\s+(?:the\s+|a\s+)?meeting\b|\bjust write\b|\bstraight to\b/i;
+// Replies to "meeting first?".
+const MEETING_SKIP_RE = /\b(?:no|nope|nah|skip|just write|write it|straight|no thanks|not now|without)\b/i;
+const MEETING_YES_RE = /\b(?:yes|yeah|yep|yup|sure|ok(?:ay)?|meet(?:ing)?|let'?s|discuss|team|please)\b/i;
+
+function parseMeetingChoice(text) {
+  const t = String(text || '').trim();
+  if (NO_MEETING_RE.test(t) || MEETING_SKIP_RE.test(t)) return 'skip';
+  if (MEETING_YES_RE.test(t)) return 'meeting';
+  return null;
+}
+
+function askMarketingMeeting(chat, request) {
+  chat.pendingCampaign = { request, askedAt: Date.now() };
+  chat.messages.push({
+    role: 'assistant',
+    personaName: 'Campaign',
+    content: 'Want a marketing meeting on this first? Your personas talk it through — who it\u2019s for, the angle, the offer, the proof — and I write the campaign from what they decide. Or I write it now.',
+    ts: Date.now(),
+  });
+  chat.updatedAt = Date.now();
+  saveState();
+  renderMessages({ scroll: 'bottom' });
+  renderSmartReplyChips(['Meeting first', 'Just write it']);
+  els.input?.focus();
+}
+
+async function runMarketingMeetingThenCampaign(chat, request, reply) {
+  const m = String(reply || '').match(ROUNDS_RE);
+  const tok = m ? String(m[1] || m[2]).toLowerCase() : '';
+  const rounds = Math.min(5, Math.max(1, tok ? (/^\d+$/.test(tok) ? parseInt(tok, 10) : (ROUND_WORDS[tok] || 2)) : 2));
+  const topic = `Marketing meeting before we write this campaign: "${request.slice(0, 600)}". `
+    + 'Agree on who it is for, the one angle that will sell it, the offer, and the strongest real proof we have. '
+    + 'Be specific and blunt. Do not invent numbers or results. End with the decisions.';
+  const finished = await runInlineGroupDiscussion(chat, { rounds, topic });
+  if (finished) await runInlineCampaign(chat);
+}
 
 function parseCampaignRequest(text) {
   const raw = String(text || '').trim();
@@ -4442,10 +4500,12 @@ async function runInlineCampaign(chat) {
   const apiKey = (providerKeys[provider] || '').trim();
   const headers = paidAuthHeaders({ 'Content-Type': 'application/json', Accept: 'text/event-stream' });
   if (apiKey) headers['X-Provider-Key'] = apiKey;
+  // Long enough to hold the ask and a whole marketing meeting about it; the
+  // name tells the brief reader which turns were the team talking.
   const conversation = chat.messages
     .filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
-    .slice(-16)
-    .map((m) => ({ role: m.role, content: m.content }));
+    .slice(-30)
+    .map((m) => ({ role: m.role, content: m.content, ...(m.personaId && m.personaName ? { name: m.personaName } : {}) }));
 
   const controller = new AbortController();
   activeChatAbort = controller;

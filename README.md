@@ -37,8 +37,11 @@ history; the server holds every prompt and key.
   back to the client and render as a clickable list under the reply, so a
   citation always points at a real, checkable page (`lib/websearch.js`).
 - Smart-reply chips and conversation summaries via `/api/assist`.
-- **Campaigns** — say "write a campaign for …" in any chat. The brief is read
-  from the conversation; a strategist drafts, an editor sends it back until it
+- **Campaigns** — say "write a campaign for …" in any chat. It first offers a
+  marketing meeting (Meeting first / Just write it): the personas debate the
+  audience, angle, offer and proof for 2 rounds, and what they agree steers
+  the copy — never as facts. The brief is read from the conversation; a
+  strategist drafts, an editor sends it back until it
   scores 8/10 (buzzwords cost points, invented numbers are rejected), then X,
   LinkedIn, Instagram, Facebook, TikTok and email are written at once. Each
   post gets Copy, Post to…, and ⭐ Worked, which saves its opening as a proven

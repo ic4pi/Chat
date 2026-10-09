@@ -150,6 +150,25 @@ await check('brief reader cannot invent facts the user never said', async () => 
   assert.match(m.of('brief')[1].messages.at(-1).content, /figures the user never stated: 40/);
 });
 
+await check('a team meeting steers the strategist as direction, never as facts', async () => {
+  const meeting = [
+    ...CONVO,
+    { role: 'assistant', name: 'Mara', content: 'Lead with the lost weekend, not features. Promise 90% less admin.' },
+    { role: 'assistant', name: 'Rook', content: 'Agreed: weekend angle, audience is solo electricians and plumbers.' },
+  ];
+  const m = fakeModel({ brief: [{ ...BRIEF, direction: 'Lead with the lost weekend, not features. Audience: solo trades.' }] });
+  await runCampaign({ complete: m.complete, conversation: meeting });
+  assert.match(m.of('brief')[0].messages[1].content, /Mara \(team member\): Lead with the lost weekend/);
+  assert.match(m.of('strategist')[0].messages[1].content, /DIRECTION \(agreed in the conversation[^\n]*\n Lead with the lost weekend|DIRECTION \(agreed in the conversation[^\n]*\nLead with the lost weekend/);
+});
+
+await check('a persona\'s guessed number never becomes a fact', async () => {
+  const meeting = [...CONVO, { role: 'assistant', name: 'Mara', content: 'Promise 90% less admin.' }];
+  const m = fakeModel({ brief: [{ ...BRIEF, facts: [...BRIEF.facts, '90% less admin'] }, BRIEF] });
+  await runCampaign({ complete: m.complete, conversation: meeting });
+  assert.match(m.of('brief')[1].messages.at(-1).content, /figures the user never stated: 90%/);
+});
+
 await check('unclear product → one question back, no drafting', async () => {
   const m = fakeModel({ brief: [{ product: '', question: 'What are you selling, and to whom?' }] });
   const r = await runCampaign({ complete: m.complete, conversation: [{ role: 'user', content: 'write a campaign' }] });

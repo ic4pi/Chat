@@ -193,7 +193,11 @@ export default async function handler(req, res) {
 
   const conversation = messages
     .filter((m) => (m?.role === 'user' || m?.role === 'assistant') && typeof m.content === 'string')
-    .map((m) => ({ role: m.role, content: m.content }));
+    .map((m) => ({
+      role: m.role,
+      content: m.content,
+      ...(typeof m.name === 'string' && m.name ? { name: m.name.slice(0, 60) } : {}),
+    }));
   const lastUser = [...conversation].reverse().find((m) => m.role === 'user')?.content || '';
 
   try {
