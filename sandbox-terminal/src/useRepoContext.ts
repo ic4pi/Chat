@@ -60,12 +60,29 @@ export interface RepoContextState {
   rustDetail:     string | null;
   goReady:        boolean | null;
   goDetail:       string | null;
+  /** Every file the agent wrote this session, path → content. Saved with the
+   *  session so the work survives the sandbox VM expiring. */
+  snapshot:       Record<string, string>;
 }
 
+/** Keep the saved copy small enough for browser storage. */
+const SNAPSHOT_MAX_FILE = 300_000;
+const SNAPSHOT_MAX_TOTAL = 1_000_000;
+
+export type RestoreOutcome =
+  | { kind: 'reconnected' }
+  | { kind: 'rebuilt'; restored: number; failed: string[] }
+  | { kind: 'failed'; error: string };
+
 export interface RepoContextActions {
-  openRepo:        (rootPathOrUrl: string) => Promise<void>;
+  /** Resolves to the sandbox id it opened, or null when it failed. */
+  openRepo:        (rootPathOrUrl: string) => Promise<string | null>;
   /** Start an empty sandbox project — no GitHub clone required. */
-  startBlankProject: (name?: string) => Promise<void>;
+  startBlankProject: (name?: string) => Promise<string | null>;
+  /** Reopen a saved project: reconnect if its sandbox is alive, else rebuild
+   *  it (clone or blank) and rewrite the saved files. */
+  restoreProject:  (saved: { sandboxId: string | null; repoUrl: string | null; files?: Record<string, string> }) => Promise<RestoreOutcome>;
+
   addToContext:    (relPath: string, opts?: { force?: boolean })  => Promise<void>;
   /** Inject an uploaded / pasted file into model context (not from the repo tree). */
   injectContextFile: (relPath: string, content: string) => void;
@@ -94,6 +111,7 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
   const [rustDetail,     setRustDetail]     = useState<string | null>(null);
   const [goReady,        setGoReady]        = useState<boolean | null>(null);
   const [goDetail,       setGoDetail]       = useState<string | null>(null);
+  const [snapshot,       setSnapshot]       = useState<Record<string, string>>({});
 
   /** Build fetch headers — adds X-Sandbox-Session when we have a remote session */
   const sessionHeaders = useCallback((extra?: Record<string, string>): Record<string, string> => {
@@ -178,6 +196,7 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
         setTree(data.tree ?? []);
         setTotalFiles(data.totalFiles ?? 0);
         applyStackStatus(data);
+        return data.sandboxId ?? null;
       } else {
         // Local mode: direct /files endpoint on sandbox-runner
         setSandboxId(null);
@@ -189,9 +208,11 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
         setRoot(rootPathOrUrl);
         setTree(data.tree ?? []);
         setTotalFiles(data.totalFiles ?? 0);
+        return null;
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
+      return null;
     } finally {
       setLoading(false);
     }
@@ -228,12 +249,59 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
       setTree(data.tree ?? []);
       setTotalFiles(data.totalFiles ?? 0);
       applyStackStatus(data);
+      return data.sandboxId ?? null;
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
+      return null;
     } finally {
       setLoading(false);
     }
   }, [sandboxId, applyStackStatus]);
+
+  const refreshTree = useCallback(async (sid: string) => {
+    const res = await fetch(`${API_URL}/files`, { headers: { 'X-Sandbox-Session': sid } });
+    const data = await res.json().catch(() => ({})) as { root?: string; tree?: FileNode[]; totalFiles?: number; error?: string };
+    if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+    setRoot(data.root ?? '/vercel/sandbox/repo');
+    setTree(data.tree ?? []);
+    setTotalFiles(data.totalFiles ?? 0);
+  }, []);
+
+  const restoreProject = useCallback(async (saved: {
+    sandboxId: string | null; repoUrl: string | null; files?: Record<string, string>;
+  }): Promise<RestoreOutcome> => {
+    const files = saved.files ?? {};
+    setSnapshot(files);
+    // Still alive? Then nothing was lost — just reconnect.
+    if (saved.sandboxId) {
+      try {
+        await refreshTree(saved.sandboxId);
+        setSandboxId(saved.sandboxId);
+        setIsRemote(true);
+        setRepoUrl(saved.repoUrl);
+        return { kind: 'reconnected' };
+      } catch { /* expired — rebuild below */ }
+    }
+    if (!saved.repoUrl && !Object.keys(files).length) return { kind: 'failed', error: 'nothing saved to restore' };
+
+    const sid = saved.repoUrl ? await openRepo(saved.repoUrl) : await startBlankProject('restored-project');
+    if (!sid) return { kind: 'failed', error: 'could not start a new sandbox' };
+    const paths = Object.keys(files);
+    if (!paths.length) return { kind: 'rebuilt', restored: 0, failed: [] };
+    try {
+      const res = await fetch(`${API_URL}/write-files`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Sandbox-Session': sid },
+        body: JSON.stringify({ files: paths.map(path => ({ path, content: files[path] })) }),
+      });
+      const data = await res.json().catch(() => ({})) as { results?: Array<{ path: string; written: boolean }> };
+      const ok = new Set((data.results ?? []).filter(r => r.written).map(r => r.path));
+      await refreshTree(sid).catch(() => {});
+      return { kind: 'rebuilt', restored: ok.size, failed: paths.filter(p => !ok.has(p)) };
+    } catch (err: unknown) {
+      return { kind: 'failed', error: err instanceof Error ? err.message : String(err) };
+    }
+  }, [openRepo, startBlankProject, refreshTree]);
 
   const addToContext = useCallback(async (relPath: string, opts?: { force?: boolean }) => {
     // force=true reloads from disk after a write — otherwise the model keeps
@@ -302,6 +370,24 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     const data = await res.json() as { results: Array<{ path: string; written: boolean; error?: string }> };
     const results = (data.results ?? []).map(r => ({ path: r.path, ok: r.written, error: r.error }));
     const written = new Set(results.filter(r => r.ok).map(r => r.path));
+    if (written.size > 0) {
+      setSnapshot(prev => {
+        const next = { ...prev };
+        for (const c of toWrite) {
+          if (!written.has(c.path)) continue;
+          delete next[c.path]; // re-insert so the newest write is kept last
+          if (c.content.length <= SNAPSHOT_MAX_FILE) next[c.path] = c.content;
+        }
+        // Over budget: drop the files written longest ago.
+        let total = Object.values(next).reduce((n, v) => n + v.length, 0);
+        for (const k of Object.keys(next)) {
+          if (total <= SNAPSHOT_MAX_TOTAL) break;
+          total -= next[k].length;
+          delete next[k];
+        }
+        return next;
+      });
+    }
     // Immediately refresh open-context entries with the bytes we just wrote.
     // Re-fetch alone used to no-op when the path was already in the Map.
     if (written.size > 0) {
@@ -329,8 +415,9 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     contextFiles, pendingChanges, loading, error,
     pythonReady, pythonDetail,
     rustReady, rustDetail,
-    goReady, goDetail,
-    openRepo, startBlankProject, addToContext, injectContextFile, removeFromContext, clearContext,
+    goReady, goDetail, snapshot,
+    openRepo, startBlankProject, restoreProject,
+    addToContext, injectContextFile, removeFromContext, clearContext,
     setPendingChanges, applyChanges, clearChanges,
   };
 }

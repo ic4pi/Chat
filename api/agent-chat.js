@@ -55,6 +55,8 @@ const ORCHESTRATOR_PROTOCOL = [
   '',
   'Text outside the block is what the user reads: short, in your voice — what you are having built and',
   'any assumption you made. Do not write the code yourself; the coder does that.',
+  'You CAN reach the coder: the app hands your BRIEF block to it the moment you reply. Never ask the user',
+  'to copy, paste or relay a prompt, and never say you cannot talk to the coder — write the BRIEF block.',
   'Messages starting with [CODER RESULT] or [AUTO-TEST] are real reports of what the coder and the',
   'sandbox tests did. Trust them over memory. If the coder failed, missed the point, or broke something,',
   'say so plainly and write a corrected brief that names exactly what went wrong.',

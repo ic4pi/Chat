@@ -12,7 +12,7 @@
 
 import type { FileNode } from './types.js';
 import { formatSearchHits, type SearchHit } from './contextBudget.js';
-import { looksLikeLegacyWelcome } from './agentParse.js';
+import { looksLikeApplyRequest, looksLikeLegacyWelcome } from './agentParse.js';
 
 export interface OrchestratorPersona {
   id: string;
@@ -69,13 +69,78 @@ export function saveOrchestratorPrefs(p: OrchestratorPrefs): void {
 
 /** Closed block, or an unterminated one running to the end (cut-off reply). */
 const BRIEF_RE = /<<<\s*BRIEF\b[^\n]*\n?([\s\S]*?)(?:\n?\s*BRIEF\s*>>>|$)/i;
+/** ```brief … ``` — models that fence everything. */
+const FENCED_BRIEF_RE = /```\s*brief[^\n]*\n([\s\S]*?)(?:```|$)/i;
+/** A "Brief for the coder:" style heading followed by the spec. */
+const HEADED_BRIEF_RE = /^[ \t]*(?:#{1,4}[ \t]*|\*\*)?[ \t]*(?:coder'?s?[ \t]+)?brief(?:[ \t]+(?:for|to)[ \t]+(?:the[ \t]+)?coder)?[ \t]*:?[ \t]*(?:\*\*)?[ \t]*$/im;
+/** No markers at all, but a spec that starts "Goal:" and has requirements. */
+const BARE_SPEC_RE = /^[ \t]*(?:\*\*)?Goal(?:\*\*)?[ \t]*:/im;
 
+/**
+ * The persona's words and its brief for the coder. Models follow the
+ * <<<BRIEF … BRIEF>>> format unevenly, so the fenced, headed and bare-spec
+ * shapes count too — a brief the persona clearly wrote is never dropped
+ * because of how it was wrapped.
+ */
 export function splitPersonaReply(raw: string): { say: string; brief: string | null } {
-  const m = BRIEF_RE.exec(raw);
-  if (!m) return { say: raw.trim(), brief: null };
-  const brief = (m[1] || '').trim();
-  const say = (raw.slice(0, m.index) + raw.slice(m.index + m[0].length)).trim();
-  return { say, brief: brief || null };
+  const text = String(raw || '');
+  for (const re of [BRIEF_RE, FENCED_BRIEF_RE]) {
+    const m = re.exec(text);
+    if (m) {
+      const brief = (m[1] || '').trim();
+      const say = (text.slice(0, m.index) + text.slice(m.index + m[0].length)).trim();
+      if (brief) return { say, brief };
+    }
+  }
+  const headed = HEADED_BRIEF_RE.exec(text);
+  if (headed) {
+    const brief = text.slice(headed.index + headed[0].length).trim();
+    if (/\bGoal\b/i.test(brief)) return { say: text.slice(0, headed.index).trim(), brief };
+  }
+  const bare = BARE_SPEC_RE.exec(text);
+  if (bare) {
+    const brief = text.slice(bare.index).trim();
+    if (/\b(?:Requirements|Files|Done when)\b/i.test(brief)) return { say: text.slice(0, bare.index).trim(), brief };
+  }
+  return { say: text.trim(), brief: null };
+}
+
+/**
+ * The persona answered without a usable brief, but the turn was clearly
+ * meant to get something built: either you asked for work, or the persona
+ * talked about the coder or handed you a prompt to pass along. Worth a
+ * second, structured attempt rather than leaving you to relay it.
+ */
+export function personaMeantToBrief(userText: string, personaSay: string): boolean {
+  if (looksLikeApplyRequest(userText)) return true;
+  return /\b(?:coder|coding agent|developer|prompt|paste|copy (?:this|it|the)|hand(?:ing)? (?:this|it) (?:off|over)|send(?:ing)? (?:this|it) (?:to|over)|build(?:ing)? (?:it|this|that))\b/i.test(personaSay);
+}
+
+export const NO_BRIEF = 'NO_BRIEF';
+
+/** Written by the coder model when the persona's own model fumbled the format. */
+export const BRIEF_WRITER_SYSTEM = [
+  'You write the brief a coding agent works from. The coder cannot see the conversation: the brief is its whole spec.',
+  'Read the conversation and the lead\'s latest reply. If the latest request does not need any code written,',
+  `changed or debugged, reply with exactly ${NO_BRIEF} and nothing else.`,
+  'Otherwise reply with ONLY the brief, in this shape:',
+  'Goal: what the finished result must do, in concrete observable terms.',
+  'Context: every fact from the conversation the coder needs — decisions, preferences, constraints, earlier failures.',
+  'Files: real paths from the file tree to change, and new paths to create.',
+  'Requirements: a numbered list, specific and testable.',
+  'Do not: what must stay untouched, approaches to avoid.',
+  'Done when: how the result is checked.',
+].join('\n');
+
+/** Turns for the brief writer: the persona's view of the conversation plus its latest reply. */
+export function buildBriefWriterTurns(personaTurns: Turn[], personaReply: string): Turn[] {
+  const transcript = personaTurns
+    .map((t) => `${t.role === 'user' ? 'USER' : 'LEAD'}: ${t.content}`)
+    .join('\n\n');
+  return [{
+    role: 'user',
+    content: `${transcript}\n\nLEAD (latest reply): ${personaReply || '(no reply)'}\n\nWrite the brief now, or ${NO_BRIEF}.`,
+  }];
 }
 
 // ── history builders ─────────────────────────────────────────────────────

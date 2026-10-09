@@ -30,6 +30,8 @@ export interface StoredSession {
   messages: StoredMessage[];
   pendingChanges: Array<{ path: string; content: string; original?: string }>;
   fromChat?: boolean;
+  /** Files the agent wrote (path → content), to rebuild an expired sandbox. */
+  files?: Record<string, string>;
 }
 
 interface SessionStore {
@@ -94,19 +96,47 @@ function readStore(): SessionStore {
 }
 
 function writeStore(store: SessionStore): void {
-  try {
-    // Drop sessions older than 30 days / keep newest 40
-    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-    const entries = Object.values(store.sessions)
-      .filter((s) => (s.savedAt || 0) >= cutoff)
-      .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0))
-      .slice(0, 40);
+  // Drop sessions older than 30 days / keep newest 40
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  let entries = Object.values(store.sessions)
+    .filter((s) => (s.savedAt || 0) >= cutoff)
+    .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0))
+    .slice(0, 40);
+  // When storage is full, the write used to fail silently and *nothing* was
+  // saved from then on. Drop the oldest sessions until the newest ones fit.
+  while (entries.length) {
     const next: SessionStore = { v: 2, sessions: {} };
     for (const s of entries) next.sessions[s.id] = s;
-    localStorage.setItem(STORE_KEY, JSON.stringify(next));
-  } catch {
-    // Quota / private mode — ignore
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify(next));
+      return;
+    } catch {
+      if (entries.length === 1) break;
+      entries = entries.slice(0, Math.max(1, Math.floor(entries.length * 0.75)));
+    }
   }
+}
+
+/**
+ * Sessions saved before speaker/to were persisted lost them. In a session that
+ * used the persona (it has briefs), the coder only ever answers a brief or a
+ * test failure — so an answer straight after one of your messages is the
+ * persona's, and that message was addressed to it.
+ */
+export function repairOrchestratorTags(messages: StoredMessage[]): StoredMessage[] {
+  if (!messages.some((m) => m.kind === 'brief')) return messages;
+  if (messages.some((m) => m.speaker || m.to)) return messages; // already tagged
+  return messages.map((m, i) => {
+    const prev = messages[i - 1];
+    const next = messages[i + 1];
+    if (m.role === 'assistant' && prev?.role === 'user' && (!prev.kind || prev.kind === 'user')) {
+      return { ...m, speaker: 'persona' as const };
+    }
+    if (m.role === 'user' && (!m.kind || m.kind === 'user') && next?.role === 'assistant') {
+      return { ...m, to: 'persona' as const };
+    }
+    return m;
+  });
 }
 
 export function listSessions(): StoredSession[] {
@@ -129,12 +159,33 @@ export function setActiveSessionId(id: string | null): void {
   } catch { /* ignore */ }
 }
 
+/** Exactly this session, or null — no falling back to some other one. */
+export function getSession(id: string): StoredSession | null {
+  const hit = readStore().sessions[id];
+  return hit ? { ...hit, messages: repairOrchestratorTags(hit.messages || []) } : null;
+}
+
+/**
+ * Re-opening Workspace from the same chat: keep everything done here
+ * (workspace messages, drafts, files, sandbox) and add only the chat turns
+ * that are new since last time. If the chat's history changed underneath
+ * (edited, regenerated, trimmed), refresh that part and still keep the work.
+ */
+export function mergeHandoffMessages(prev: StoredMessage[], imported: StoredMessage[]): StoredMessage[] {
+  if (!prev.length) return imported;
+  const prevImported = prev.filter((m) => m.kind === 'imported');
+  const same = (a: StoredMessage, b: StoredMessage) => a.role === b.role && a.content === b.content;
+  const continues = prevImported.length <= imported.length && prevImported.every((m, i) => same(m, imported[i]));
+  if (continues) return [...prev, ...imported.slice(prevImported.length)];
+  return [...imported, ...prev.filter((m) => m.kind !== 'imported')];
+}
+
 export function loadSession(id?: string | null): StoredSession | null {
   const store = readStore();
   const target = id || getActiveSessionId();
-  if (target && store.sessions[target]) return store.sessions[target];
   const list = Object.values(store.sessions).sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
-  return list[0] || null;
+  const hit = (target && store.sessions[target]) || list[0] || null;
+  return hit ? { ...hit, messages: repairOrchestratorTags(hit.messages || []) } : null;
 }
 
 export function saveSession(
@@ -147,13 +198,17 @@ export function saveSession(
     savedAt: Date.now(),
     ...partial,
     title: partial.title || prev?.title || 'Workspace',
-    messages: (partial.messages || []).slice(-40).map((m) => ({
+    messages: (partial.messages || []).slice(-120).map((m) => ({
       id: m.id,
       role: m.role,
       content: m.content.length > 40_000
         ? m.content.slice(0, 40_000) + '\n/* …truncated for session save … */'
         : m.content,
       kind: m.kind,
+      // Who said it — without these, a reload feeds the persona's own replies
+      // back to it as coder results and the handoff falls apart.
+      speaker: m.speaker,
+      to: m.to,
     })),
     pendingChanges: (partial.pendingChanges || []).slice(0, 30).map((c) => ({
       path: c.path,

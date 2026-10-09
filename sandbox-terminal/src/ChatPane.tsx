@@ -46,9 +46,13 @@ import {
 import { copyText, downloadTextFile } from './downloadFile.js';
 import { loadPaidPassword } from './providerPrefs.js';
 import {
+  BRIEF_WRITER_SYSTEM,
+  NO_BRIEF,
+  buildBriefWriterTurns,
   buildCoderHistory,
   buildPersonaContext,
   buildPersonaHistory,
+  personaMeantToBrief,
   splitPersonaReply,
   type OrchestratorPersona,
 } from './orchestrator.js';
@@ -1096,8 +1100,9 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         });
         const pProv = orchPersona.provider || prov;
         const pMod = orchPersona.model || mod;
+        const personaTurns = trimMessageHistory(buildPersonaHistory(withUser));
         const personaReply = await callAgent(
-          attachImages(trimMessageHistory(buildPersonaHistory(withUser))),
+          attachImages(personaTurns.map(t => ({ ...t }))),
           personaSystem,
           sid,
           pProv,
@@ -1116,6 +1121,24 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           void speakReply(split.say);
         }
         convo = [...withUser, personaMsg];
+
+        // The persona's model ignored the format (or handed you a prompt to
+        // paste) on a turn that was meant to build something: the coder model
+        // writes the brief from the conversation instead. It may decline.
+        if (!brief && personaMeantToBrief(text, split.say)) {
+          phase = 'Coder';
+          setLiveThoughts('');
+          setLiveStatus('Writing the brief for the coder…');
+          const written = await callAgent(
+            buildBriefWriterTurns(personaTurns, raw),
+            `${BRIEF_WRITER_SYSTEM}\n\n${personaSystem}`,
+            sid, prov, mod, key,
+          );
+          const out = (written.reply === '(empty response)' ? '' : written.reply).trim();
+          if (out && !out.startsWith(NO_BRIEF) && out.length > 20) {
+            brief = splitPersonaReply(out).brief ?? out;
+          }
+        }
         if (!brief) return [];
 
         const briefMsg: Message = { id: uid(), role: 'user', kind: 'brief', content: brief };

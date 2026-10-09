@@ -32,6 +32,9 @@ import {
   clearSession,
   listSessions,
   setActiveSessionId,
+  repairOrchestratorTags,
+  getSession,
+  mergeHandoffMessages,
   buildPushShellCommands,
   type StoredSession,
 } from './sessionStore.js';
@@ -285,8 +288,8 @@ export function App() {
           content: m.content,
           kind: 'imported',
         }));
-      // Always open THIS chat’s workspace thread — never keep a previous chat’s convo.
-      const prev = loadSession(id);
+      // This chat's own workspace thread — never another chat's repo or sandbox.
+      const prev = getSession(id);
       // The chat persona becomes the orchestrator and keeps thinking on the chat
       // model; the coder stays on a coding model instead of inheriting it.
       const orchestrated = !!handoff.personaId;
@@ -313,8 +316,9 @@ export function App() {
         provider: coderProvider || 'openrouter',
         model: coderModel || 'openrouter/free',
         autoApplyOn: prev?.autoApplyOn ?? true,
-        messages: imported.length ? imported : [],
-        pendingChanges: imported.length ? [] : (prev?.pendingChanges || []),
+        messages: mergeHandoffMessages(prev?.messages || [], imported),
+        pendingChanges: prev?.pendingChanges || [],
+        files: prev?.files,
         fromChat: true,
       };
       saveSession(session);
@@ -379,6 +383,7 @@ export function App() {
     }
   }, []);
   const [pushing,      setPushing]      = useState(false);
+  const [restoreNote,  setRestoreNote]  = useState<string | null>(null);
   const [pushError,    setPushError]    = useState<string | null>(null);
   const [pushOk,       setPushOk]       = useState<string | null>(null);
   const [sessionId, setSessionId] = useState(
@@ -468,19 +473,32 @@ export function App() {
     return () => { cancelled = true; };
   }, [modelScope, keys]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Re-open last GitHub repo + restore pending file drafts once on mount.
+  // Bring a saved project back — blank projects too, which used to stay
+  // disconnected after any reload even while their sandbox was still alive.
+  const restoreSaved = useCallback(async (s: StoredSession) => {
+    if (!s.repoUrl && !s.sandboxId && !(s.files && Object.keys(s.files).length)) return;
+    setRestoreNote('Reopening your project…');
+    const out = await repo.restoreProject({ sandboxId: s.sandboxId, repoUrl: s.repoUrl, files: s.files });
+    if (out.kind === 'reconnected') setRestoreNote(null);
+    else if (out.kind === 'rebuilt') {
+      setRestoreNote(out.restored
+        ? `Your sandbox had expired, so it was rebuilt and your ${out.restored} file${out.restored === 1 ? '' : 's'} put back.`
+          + (out.failed.length ? ` Couldn't restore: ${out.failed.join(', ')}.` : '')
+        : 'Your sandbox had expired, so it was rebuilt from the repo.');
+    } else setRestoreNote(`Couldn't reopen the project: ${out.error}. Start a blank project or open the repo again.`);
+  }, [repo]);
+
+  // Restore the project + pending file drafts once on mount.
   useEffect(() => {
     const s = restored.current;
     if (!s) return;
     let cancelled = false;
     (async () => {
-      if (s.repoUrl) {
-        await repo.openRepo(s.repoUrl);
-      }
+      await restoreSaved(s);
       if (!cancelled && s.pendingChanges?.length) {
         repo.setPendingChanges(s.pendingChanges);
       }
-    })().catch(() => { /* open may fail if sandbox expired */ });
+    })().catch(() => { /* reported through restoreNote */ });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -500,11 +518,12 @@ export function App() {
         id: m.id, role: m.role, content: m.content, kind: m.kind, speaker: m.speaker, to: m.to,
       })),
       pendingChanges: repo.pendingChanges,
+      files: repo.snapshot,
     });
     setHomeList(listSessions());
   }, [
     sessionId, sessionTitle, fromChat,
-    repo.repoUrl, repo.sandboxId, repo.pendingChanges,
+    repo.repoUrl, repo.sandboxId, repo.pendingChanges, repo.snapshot,
     provider, model, autoApplyOn, chatMessages,
   ]);
 
@@ -515,7 +534,7 @@ export function App() {
     setProvider(s.provider || 'openrouter');
     setModel(s.model || 'openrouter/free');
     setAutoApplyOn(s.autoApplyOn ?? true);
-    setChatMessages((s.messages || []).map(x => ({
+    setChatMessages(repairOrchestratorTags(s.messages || []).map(x => ({
       id: x.id,
       role: x.role,
       content: x.content,
@@ -527,10 +546,11 @@ export function App() {
     setPushOk(null);
     setShowHome(false);
     setSessionKey(k => k + 1);
-    if (s.pendingChanges?.length) repo.setPendingChanges(s.pendingChanges);
-    else repo.clearChanges();
-    if (s.repoUrl) void repo.openRepo(s.repoUrl);
-  }, [repo]);
+    void restoreSaved(s).then(() => {
+      if (s.pendingChanges?.length) repo.setPendingChanges(s.pendingChanges);
+      else repo.clearChanges();
+    });
+  }, [repo, restoreSaved]);
 
   const startFreshHome = useCallback(() => {
     const id = `home-${Date.now()}`;
@@ -1189,6 +1209,15 @@ export function App() {
   // ── the ChatPane column (always has input at bottom) ──────────────────────
   const chatColumn = (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+      {restoreNote && (
+        <div data-testid="restore-note" style={{ padding: '8px 12px', background: 'rgba(52,211,153,.12)',
+          borderBottom: '1px solid rgba(52,211,153,.3)', color: '#C9F2E0', fontSize: 15,
+          display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
+          <span style={{ flex: 1 }}>{restoreNote}</span>
+          <button type="button" onClick={() => setRestoreNote(null)}
+            style={{ background: 'transparent', border: 'none', color: '#9198AA', cursor: 'pointer', fontSize: 16 }}>✕</button>
+        </div>
+      )}
       {applyBanner}
       {/* flex:1 + minHeight:0 lets the messages scroll without pushing the form off */}
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden',
