@@ -432,6 +432,15 @@ export function App() {
   }, []);
   const [pushing,      setPushing]      = useState(false);
   const [restoreNote,  setRestoreNote]  = useState<string | null>(null);
+  // WIP backup to GitHub: a safety net so a VM reset never loses progress,
+  // even while the app is broken. Off by default; needs a token (reused from
+  // Push). Pushes to a throwaway branch, labelled ok/broken by the check.
+  const [wipBackupOn, setWipBackupOn] = useState(() => {
+    try { return localStorage.getItem('workspace_wip_backup_v1') === '1'; } catch { return false; }
+  });
+  const [backupNote, setBackupNote] = useState<string | null>(null);
+  const backupBusyRef = useRef(false);
+  const backupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const queuedFilesRef = useRef<PendingChange[]>([]);
   const [queueTick, setQueueTick] = useState(0);
   const [pushError,    setPushError]    = useState<string | null>(null);
@@ -1075,6 +1084,62 @@ export function App() {
     return results;
   }, [handleApply, autoVerifyOn, repo.root, repo.sandboxId, runVerify]);
 
+  // ── WIP backup to GitHub ──────────────────────────────────────────────────
+  const runWipBackup = useCallback(async (reason?: string) => {
+    if (!repo.sandboxId || backupBusyRef.current) return;
+    let token = '';
+    try { token = (localStorage.getItem('gh_push_token') || '').trim(); } catch { /* ignore */ }
+    if (!token) { setBackupNote('Backups need a GitHub token once — open Push and paste one, then turn this on.'); return; }
+    backupBusyRef.current = true;
+    setBackupNote('Backing up to GitHub…');
+    try {
+      const res = await fetch(`${API_URL}/git-push`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Sandbox-Session': repo.sandboxId },
+        body: JSON.stringify({ wip: true, token, message: reason || sessionTitle || 'Workspace progress', repoName: sessionTitle }),
+      });
+      const data = await res.json().catch(() => ({})) as { pushed?: boolean; branch?: string; checkPassed?: boolean; createdRepoUrl?: string; error?: string };
+      if (!res.ok) { setBackupNote(`Backup failed: ${data.error || `HTTP ${res.status}`}`); return; }
+      if (!data.pushed) { setBackupNote('Up to date — nothing new to back up.'); return; }
+      const at = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      setBackupNote(
+        `Backed up to “${data.branch}”${data.checkPassed === false ? ' (flagged broken/incomplete)' : ' (tests passed)'} at ${at}.`
+        + (data.createdRepoUrl ? ` Repo: ${data.createdRepoUrl}` : ''),
+      );
+    } catch (e) {
+      setBackupNote(`Backup failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      backupBusyRef.current = false;
+    }
+  }, [repo.sandboxId, sessionTitle]);
+
+  const scheduleBackup = useCallback(() => {
+    if (!wipBackupOn || !repo.sandboxId) return;
+    if (backupTimerRef.current) clearTimeout(backupTimerRef.current);
+    backupTimerRef.current = setTimeout(() => { void runWipBackup(); }, 4000);
+  }, [wipBackupOn, repo.sandboxId, runWipBackup]);
+
+  const toggleWipBackup = useCallback((on: boolean) => {
+    setWipBackupOn(on);
+    try { localStorage.setItem('workspace_wip_backup_v1', on ? '1' : '0'); } catch { /* ignore */ }
+    if (on) void runWipBackup('Enabled backup');
+    else setBackupNote(null);
+  }, [runWipBackup]);
+
+  // After files are written (snapshot changes), debounce a backup.
+  useEffect(() => {
+    if (!wipBackupOn || !repo.sandboxId) return;
+    scheduleBackup();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo.snapshot]);
+
+  // And a periodic safety net while a project is open.
+  useEffect(() => {
+    if (!wipBackupOn || !repo.sandboxId) return;
+    const id = setInterval(() => { void runWipBackup(); }, 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [wipBackupOn, repo.sandboxId, runWipBackup]);
+
   const handleAutoContext = useCallback(async (query: string): Promise<{
     hits: SearchHit[];
     files: Map<string, string>;
@@ -1402,6 +1467,24 @@ export function App() {
             fontFamily: 'inherit', fontSize: 14 }}>
           New
         </button>
+        <button type="button" data-testid="wip-backup-toggle"
+          onClick={() => toggleWipBackup(!wipBackupOn)}
+          title={wipBackupOn
+            ? 'Auto-backup to GitHub is ON — saves your progress to a branch (flagged broken when tests fail) after each change and every few minutes. Tap to turn off.'
+            : 'Auto-backup to GitHub: keep your progress safe from a VM reset even while the app is broken. Needs a GitHub token (paste once in Push). Tap to turn on.'}
+          style={{ background: wipBackupOn ? 'rgba(96,165,250,.16)' : 'transparent',
+            color: wipBackupOn ? '#8CC2FF' : '#9198AA', border: `1px solid ${wipBackupOn ? '#2B6CB0' : '#232838'}`,
+            borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 14, whiteSpace: 'nowrap' }}>
+          {wipBackupOn ? '⟲ Backup on' : '⟲ Backup'}
+        </button>
+        {wipBackupOn && repo.sandboxId && (
+          <button type="button" data-testid="wip-backup-now" onClick={() => { void runWipBackup('Manual backup'); }}
+            title="Back up right now"
+            style={{ background: 'transparent', color: '#8CC2FF', border: '1px solid #2B6CB0',
+              borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 14 }}>
+            Now
+          </button>
+        )}
         {(repo.repoUrl || chatMessages.length > 0) && (
           <button type="button"
             onClick={() => {
@@ -1707,6 +1790,15 @@ export function App() {
           display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
           <span style={{ flex: 1 }}>{restoreNote}</span>
           <button type="button" onClick={() => setRestoreNote(null)}
+            style={{ background: 'transparent', border: 'none', color: '#9198AA', cursor: 'pointer', fontSize: 16 }}>✕</button>
+        </div>
+      )}
+      {backupNote && (
+        <div data-testid="backup-note" style={{ padding: '8px 12px', background: 'rgba(96,165,250,.12)',
+          borderBottom: '1px solid rgba(96,165,250,.3)', color: '#CBE2FF', fontSize: 15,
+          display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
+          <span style={{ flex: 1 }}>{backupNote}</span>
+          <button type="button" onClick={() => setBackupNote(null)}
             style={{ background: 'transparent', border: 'none', color: '#9198AA', cursor: 'pointer', fontSize: 16 }}>✕</button>
         </div>
       )}
