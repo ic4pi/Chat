@@ -474,15 +474,20 @@ export function App() {
     { path: string; error: string; loading: false } | null
   >(null);
   const [viewerCopied, setViewerCopied] = useState(false);
+  // Always read through the LATEST repo. With empty deps this captured the
+  // first render's repo — whose sandboxId was still null — so every file
+  // open ran with no sandbox header and the viewer only ever showed
+  // "No active sandbox session" (and never the Copy / Download buttons).
+  const readFileRef = useRef(repo.readFile);
+  readFileRef.current = repo.readFile;
   const openFileViewer = useCallback((node: FileNode) => {
     if (node.type !== 'file') return;
     setViewerCopied(false);
     setViewingFile({ path: node.path, content: null, loading: true });
-    void repo.readFile(node.path).then(result => {
+    void readFileRef.current(node.path).then(result => {
       if ('error' in result) setViewingFile({ path: node.path, error: result.error, loading: false });
       else setViewingFile({ path: node.path, content: result.content, loading: false });
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [homeList, setHomeList] = useState<StoredSession[]>(() => listSessions());
   const [sessionKey,   setSessionKey]   = useState(0);
@@ -1058,23 +1063,6 @@ export function App() {
     compareRef.current?.runBrief(q.brief, q.picks);
   }, [repo.sandboxId]);
 
-  const handleUseBuild = useCallback(async (build: BuildChoice) => {
-    if (!repo.sandboxId) {
-      setRestoreNote('Open a blank project or a GitHub repo first, then use the build again.');
-      return;
-    }
-    const results = await handleApply(Object.entries(build.files).map(([path, content]) => ({ path, content })));
-    const ok = results.filter(r => r.ok).map(r => r.path);
-    const failed = results.filter(r => !r.ok).map(r => r.path);
-    setShowCompare(false);
-    setMobileTab('chat');
-    chatRef.current?.addNote(
-      `Took "${build.title}" (${build.model}) from Compare into the project — ${ok.length} file${ok.length === 1 ? '' : 's'}: ${ok.join(', ')}.`
-      + (failed.length ? ` Couldn't write: ${failed.join(', ')}.` : '')
-      + ' Keep building on this version.',
-    );
-  }, [repo.sandboxId, handleApply]);
-
   const autoVerify = useAutoVerify(repo.root, repo.sandboxId, termRef, chatRef, repo.applyChanges);
 
   const runVerify = useCallback(async () => {
@@ -1099,6 +1087,26 @@ export function App() {
     }
     return results;
   }, [handleApply, autoVerifyOn, repo.root, repo.sandboxId, runVerify]);
+
+  const handleUseBuild = useCallback(async (build: BuildChoice) => {
+    if (!repo.sandboxId) {
+      setRestoreNote('Open a blank project or a GitHub repo first, then use the build again.');
+      return;
+    }
+    // Same path as a normal build: write, then auto-test, so the orchestrator
+    // hears the real pass/fail for the version you picked (it used to only get
+    // a filename note and no test result).
+    const results = await handleApplyAndVerify(Object.entries(build.files).map(([path, content]) => ({ path, content })));
+    const ok = results.filter(r => r.ok).map(r => r.path);
+    const failed = results.filter(r => !r.ok).map(r => r.path);
+    setShowCompare(false);
+    setMobileTab('chat');
+    chatRef.current?.addNote(
+      `Took "${build.title}" (${build.model}) from Compare into the project — ${ok.length} file${ok.length === 1 ? '' : 's'}: ${ok.join(', ')}.`
+      + (failed.length ? ` Couldn't write: ${failed.join(', ')}.` : '')
+      + ' This is the live version now — keep building on it.',
+    );
+  }, [repo.sandboxId, handleApplyAndVerify]);
 
   // ── WIP backup to GitHub ──────────────────────────────────────────────────
   const runWipBackup = useCallback(async (reason?: string) => {
