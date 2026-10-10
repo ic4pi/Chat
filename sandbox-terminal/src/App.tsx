@@ -40,6 +40,7 @@ import {
 } from './sessionStore.js';
 import { copyText } from './downloadFile.js';
 import { peekWorkspaceHandoff } from './workspaceHandoff.js';
+import { readChatConversation, mirrorToChat } from './chatBridge.js';
 import {
   loadOrchestratorPrefs,
   saveOrchestratorPrefs,
@@ -304,7 +305,11 @@ export function App() {
     if (handoff) {
       const id = handoff.chatId || `handoff-${handoff.createdAt || Date.now()}`;
       const title = handoff.title || 'From chat';
-      const imported = (handoff.messages || [])
+      // One conversation: the chat's LIVE messages (shared localStorage) win
+      // over the handoff snapshot, which is stale or missing on a re-entry.
+      const live = readChatConversation(id);
+      const source = live?.messages?.length ? live.messages : (handoff.messages || []);
+      const imported = source
         .filter(m => m.role === 'user' || m.role === 'assistant')
         .map(m => ({
           id: Math.random().toString(36).slice(2, 10),
@@ -350,7 +355,25 @@ export function App() {
       bootRef.current = { session, fromChat: true };
     } else {
       const session = loadSession();
-      if (session) setActiveSessionId(session.id);
+      if (session) {
+        setActiveSessionId(session.id);
+        // Re-entered without a fresh handoff (back button, reload, a second
+        // visit): fold in whatever was said in the chat since, so the
+        // Workspace is never behind the conversation.
+        const live = readChatConversation(session.id);
+        if (live?.messages?.length) {
+          const imported = live.messages
+            .filter(m => m.role === 'user' || m.role === 'assistant')
+            .map(m => ({
+              id: Math.random().toString(36).slice(2, 10),
+              role: m.role as 'user' | 'assistant',
+              content: m.content,
+              kind: 'imported' as const,
+            }));
+          session.messages = mergeHandoffMessages(session.messages || [], imported);
+          saveSession(session);
+        }
+      }
       bootRef.current = { session, fromChat: false };
     }
   }
@@ -585,6 +608,43 @@ export function App() {
     repo.repoUrl, repo.sandboxId, repo.pendingChanges, repo.snapshot,
     provider, model, autoApplyOn, chatMessages,
   ]);
+
+  // ── One conversation, kept in step with the main chat ─────────────────────
+  // The persona's replies and your messages here are written back into the
+  // chat (shared localStorage), so "← Chat" shows the same discussion. Only
+  // human-facing turns cross over — not the coder's output, briefs or notes.
+  // Gate on the session being chat-linked (its id is a chat id), not on this
+  // particular load arriving via a handoff — a back-button re-entry has no
+  // handoff but is still the same conversation. mirrorToChat / readChat
+  // no-op when no chat matches the id (a Workspace-only project).
+  useEffect(() => {
+    if (!sessionId) return;
+    const crossOver = chatMessages
+      .filter(m =>
+        (m.role === 'user' && m.kind !== 'welcome' && m.kind !== 'retry-inject' && m.kind !== 'note')
+        || (m.role === 'assistant' && m.speaker === 'persona'))
+      .map(m => ({ role: m.role, content: m.content }));
+    if (crossOver.length) mirrorToChat(sessionId, crossOver);
+  }, [chatMessages, sessionId]);
+
+  // Came back to this tab after talking in the chat: pull anything new in and
+  // put it at the end, so the persona is never answering stale history.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return;
+      const live = readChatConversation(sessionId);
+      if (!live?.messages?.length) return;
+      // Through the chat pane's handle so the visible thread updates — it owns
+      // its own message list and wouldn't see a plain state append here.
+      chatRef.current?.syncExternal(live.messages);
+    };
+    document.addEventListener('visibilitychange', refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('focus', refresh);
+    };
+  }, [sessionId]);
 
   const openStoredSession = useCallback((s: StoredSession) => {
     setActiveSessionId(s.id);

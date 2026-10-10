@@ -57,6 +57,7 @@ import {
   type OrchestratorPersona,
 } from './orchestrator.js';
 import { looksLikeRefusal } from './codingTeam.js';
+import { sigOf } from './chatBridge.js';
 import {
   cleanForSpeech,
   getSpeechRecognition,
@@ -85,6 +86,9 @@ export interface ChatHandle {
   /** Record something that happened outside this chat (e.g. a version picked
    *  in Compare) so the persona and coder both know about it. */
   addNote: (text: string) => void;
+  /** Fold in messages said in the main chat (shared conversation) that this
+   *  thread doesn't have yet — appended in order, deduped by content. */
+  syncExternal: (messages: Array<{ role: 'user' | 'assistant'; content: string }>) => void;
 }
 
 const API_URL =
@@ -1464,6 +1468,13 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   useImperativeHandle(ref, () => ({
     programmaticSend: (text, role = 'retry-inject') => sendText(text, role),
     addNote: (text) => setMessages(m => [...m, { id: uid(), role: 'user', kind: 'note', content: text }]),
+    syncExternal: (incoming) => setMessages(m => {
+      const have = new Set(m.map(x => sigOf(x.role, x.content)));
+      const add = incoming
+        .filter(x => !have.has(sigOf(x.role, x.content)))
+        .map(x => ({ id: uid(), role: x.role, content: x.content, kind: 'imported' as const }));
+      return add.length ? [...m, ...add] : m;
+    }),
   }), [sendText]);
 
   const send = useCallback(async () => {
