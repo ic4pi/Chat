@@ -38,7 +38,7 @@ import {
   buildPushShellCommands,
   type StoredSession,
 } from './sessionStore.js';
-import { copyText } from './downloadFile.js';
+import { copyText, downloadTextFile } from './downloadFile.js';
 import { peekWorkspaceHandoff } from './workspaceHandoff.js';
 import { readChatConversation, mirrorToChat } from './chatBridge.js';
 import {
@@ -468,6 +468,22 @@ export function App() {
   });
   const [fromChat] = useState(() => boot.fromChat);
   const [showHome, setShowHome] = useState(false);
+  const [viewingFile, setViewingFile] = useState<
+    { path: string; content: string; loading: false } |
+    { path: string; content: null; loading: true } |
+    { path: string; error: string; loading: false } | null
+  >(null);
+  const [viewerCopied, setViewerCopied] = useState(false);
+  const openFileViewer = useCallback((node: FileNode) => {
+    if (node.type !== 'file') return;
+    setViewerCopied(false);
+    setViewingFile({ path: node.path, content: null, loading: true });
+    void repo.readFile(node.path).then(result => {
+      if ('error' in result) setViewingFile({ path: node.path, error: result.error, loading: false });
+      else setViewingFile({ path: node.path, content: result.content, loading: false });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [homeList, setHomeList] = useState<StoredSession[]>(() => listSessions());
   const [sessionKey,   setSessionKey]   = useState(0);
   const isMobile = useIsMobile();
@@ -1896,6 +1912,7 @@ export function App() {
       onStartBlank={() => { void repo.startBlankProject(); }}
       onAddToContext={repo.addToContext}
       onRemoveFromContext={repo.removeFromContext} onClearContext={repo.clearContext}
+      onViewFile={openFileViewer}
     />
   );
 
@@ -1955,6 +1972,59 @@ export function App() {
                 ))}
               </ul>
             )}
+          </div>
+        </div>
+      )}
+
+      {viewingFile && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 40, background: 'rgba(0,0,0,0.72)',
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '24px 16px 16px' }}
+          onClick={() => setViewingFile(null)}>
+          <div role="dialog" aria-label={viewingFile.path}
+            onClick={e => e.stopPropagation()}
+            style={{ width: 'min(860px, 100%)', maxHeight: '90dvh', display: 'flex', flexDirection: 'column',
+              background: '#12151D', border: '1px solid #FF3D8E', borderRadius: 8, padding: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexShrink: 0 }}>
+              <h2 style={{ margin: 0, flex: 1, fontSize: 16, color: '#FF3D8E',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {viewingFile.path}
+              </h2>
+              {!viewingFile.loading && 'content' in viewingFile && (
+                <>
+                  <button type="button"
+                    onClick={async () => {
+                      const ok = await copyText(viewingFile.content);
+                      if (ok) { setViewerCopied(true); setTimeout(() => setViewerCopied(false), 1500); }
+                    }}
+                    style={{ background: 'rgba(212,255,63,0.12)', color: '#FF3D8E', border: '1px solid #C81F6B',
+                      borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
+                      fontSize: 14, fontWeight: 700 }}>{viewerCopied ? 'Copied ✓' : 'Copy'}</button>
+                  <button type="button"
+                    onClick={() => downloadTextFile(viewingFile.path, viewingFile.content)}
+                    style={{ background: 'rgba(212,255,63,0.12)', color: '#FF3D8E', border: '1px solid #C81F6B',
+                      borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
+                      fontSize: 14, fontWeight: 700 }}>Download</button>
+                </>
+              )}
+              <button type="button" onClick={() => setViewingFile(null)}
+                style={{ background: 'transparent', color: '#9198AA', border: '1px solid #232838',
+                  borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
+                  fontSize: 14 }}>Close</button>
+            </div>
+            <div style={{ flex: 1, overflow: 'auto', background: '#0B0D12', border: '1px solid #232838',
+              borderRadius: 6, padding: 10 }}>
+              {viewingFile.loading ? (
+                <div style={{ color: '#656C7E', fontSize: 15 }}>Loading…</div>
+              ) : 'error' in viewingFile ? (
+                <div style={{ color: '#ff6a6a', fontSize: 15 }}>✗ {viewingFile.error}</div>
+              ) : (
+                <pre style={{ margin: 0, color: '#ECEEF3', fontSize: 14, lineHeight: 1.5,
+                  whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  fontFamily: '"JetBrains Mono",ui-monospace,monospace' }}>
+                  {viewingFile.content || '(empty file)'}
+                </pre>
+              )}
+            </div>
           </div>
         </div>
       )}
