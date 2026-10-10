@@ -66,11 +66,15 @@ export interface RepoContextActions {
   openRepo:        (rootPathOrUrl: string) => Promise<void>;
   /** Start an empty sandbox project — no GitHub clone required. */
   startBlankProject: (name?: string) => Promise<void>;
+  /** Reattach to an already-running sandbox by id (restoring a saved session). */
+  reconnectSandbox: (id: string, knownRepoUrl: string | null) => Promise<void>;
   addToContext:    (relPath: string, opts?: { force?: boolean })  => Promise<void>;
   /** Inject an uploaded / pasted file into model context (not from the repo tree). */
   injectContextFile: (relPath: string, content: string) => void;
   removeFromContext: (relPath: string) => void;
   clearContext:    () => void;
+  /** Read a file's full content for viewing — does not pin it into LLM context. */
+  readFile:        (relPath: string) => Promise<{ content: string } | { error: string }>;
   setPendingChanges: (changes: PendingChange[]) => void;
   /** Write pending (or explicitly provided) changes to disk/sandbox. */
   applyChanges:    (files?: PendingChange[]) => Promise<{ path: string; ok: boolean; error?: string }[]>;
@@ -197,6 +201,40 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     }
   }, [sandboxId, applyStackStatus]);
 
+  /**
+   * Reattach to a sandbox that already exists (restoring a saved session),
+   * instead of cloning/creating a new one. Without this, a saved sandboxId
+   * for a blank (no-GitHub-URL) project was never read back — the tree came
+   * back empty and nothing in the UI (chat, apply, keepalive) carried the
+   * session id forward, so the workspace silently lost access to every file
+   * the sandbox had already produced. Fails soft (e.g. sandbox TTL expired)
+   * by leaving sandboxId null so the caller can offer "start blank" again.
+   */
+  const reconnectSandbox = useCallback(async (id: string, knownRepoUrl: string | null) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_URL}/files`, { headers: { 'X-Sandbox-Session': id } });
+      const data = await res.json() as { root?: string; tree?: FileNode[]; totalFiles?: number; error?: string };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setSandboxId(id);
+      setIsRemote(true);
+      setRepoUrl(knownRepoUrl);
+      setRoot(data.root ?? 'blank');
+      setTree(data.tree ?? []);
+      setTotalFiles(data.totalFiles ?? 0);
+    } catch (err: unknown) {
+      // Sandbox likely expired (TTL) — surface it rather than leaving the
+      // tree looking merely empty, which reads as "no files were ever made".
+      setError(
+        `Previous sandbox is gone (${err instanceof Error ? err.message : String(err)}). ` +
+        'Start a blank project or reopen the repo to get a fresh one.',
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const startBlankProject = useCallback(async (name?: string) => {
     setLoading(true);
     setError(null);
@@ -261,6 +299,25 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
       setContextFiles(m => new Map(m).set(relPath, truncateForContext(raw)));
     } catch (err: unknown) {
       console.error('addToContext failed:', err);
+    }
+  }, [root, sandboxId, contextFiles]);
+
+  const readFile = useCallback(async (relPath: string): Promise<{ content: string } | { error: string }> => {
+    // Already fetched for context (or just written back)? Reuse it — same
+    // bytes, no extra round trip to the sandbox.
+    const cached = contextFiles.get(relPath);
+    if (cached !== undefined) return { content: cached };
+    try {
+      const headers = sandboxId ? { 'X-Sandbox-Session': sandboxId } : undefined;
+      const url = sandboxId
+        ? `${API_URL}/file?path=${encodeURIComponent(relPath)}`
+        : `${API_URL}/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(relPath)}`;
+      const res = await fetch(url, { headers });
+      const data = await res.json() as { content?: string; error?: string };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      return { content: data.content ?? '' };
+    } catch (err: unknown) {
+      return { error: err instanceof Error ? err.message : String(err) };
     }
   }, [root, sandboxId, contextFiles]);
 
@@ -330,7 +387,8 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     pythonReady, pythonDetail,
     rustReady, rustDetail,
     goReady, goDetail,
-    openRepo, startBlankProject, addToContext, injectContextFile, removeFromContext, clearContext,
+    openRepo, startBlankProject, reconnectSandbox, addToContext, injectContextFile, removeFromContext, clearContext,
+    readFile,
     setPendingChanges, applyChanges, clearChanges,
   };
 }
