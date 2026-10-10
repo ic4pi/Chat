@@ -49,11 +49,20 @@ export interface CompareHandle {
   runBrief: (brief: string, picks?: { a: { provider: string; model: string }; b: { provider: string; model: string } }) => void;
 }
 
+/** Both sides' finished output — handed to the orchestrator so it can answer
+ *  questions about the two versions if you ask. */
+export interface CompareVersions {
+  a: { model: string; files: string[] };
+  b: { model: string; files: string[] };
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
   sandboxId: string | null;
   onUseBuild: (build: BuildChoice) => void | Promise<void>;
+  /** Fires once when both versions have finished building. */
+  onVersionsReady?: (v: CompareVersions) => void;
 }
 
 interface SideState {
@@ -285,7 +294,7 @@ function treeOf(files: Record<string, string>): FileNode[] {
 }
 
 export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePanel(
-  { open, onClose, sandboxId, onUseBuild }, handleRef,
+  { open, onClose, sandboxId, onUseBuild, onVersionsReady }, handleRef,
 ) {
   const a = useSide('a');
   const b = useSide('b');
@@ -294,6 +303,24 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
   const [showSaved, setShowSaved] = useState(false);
   const [storageError, setStorageError] = useState<string | null>(null);
   const sending = a.state.busy || b.state.busy;
+
+  // When both versions have finished, hand their shape to the orchestrator so
+  // it can answer "what are my two options?" if asked. Fires once per result
+  // pair (keyed by the two run ids), never mid-build.
+  const lastReported = useRef('');
+  useEffect(() => {
+    if (!onVersionsReady) return;
+    const aFiles = Object.keys(a.state.files);
+    const bFiles = Object.keys(b.state.files);
+    if (a.state.busy || b.state.busy || !aFiles.length || !bFiles.length) return;
+    const key = `${a.state.run}|${b.state.run}`;
+    if (lastReported.current === key) return;
+    lastReported.current = key;
+    onVersionsReady({
+      a: { model: a.state.model, files: aFiles },
+      b: { model: b.state.model, files: bFiles },
+    });
+  }, [a.state.busy, b.state.busy, a.state.files, b.state.files, a.state.run, b.state.run, a.state.model, b.state.model, onVersionsReady]);
 
   const refreshBuilds = useCallback(() => {
     listBuilds().then(setBuilds).catch((err: Error) => setStorageError(`Saved builds unavailable: ${err.message}`));

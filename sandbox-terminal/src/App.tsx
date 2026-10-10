@@ -2038,7 +2038,16 @@ export function App() {
       )}
 
       <ComparePanel ref={compareRef} open={showCompare} onClose={() => setShowCompare(false)}
-        sandboxId={repo.sandboxId} onUseBuild={handleUseBuild} />
+        sandboxId={repo.sandboxId} onUseBuild={handleUseBuild}
+        onVersionsReady={(v) => {
+          // Give the orchestrator the two versions so it can answer about them
+          // if you ask — it does not jump in on its own.
+          chatRef.current?.addNote(
+            `Compare has two versions ready. A — ${v.a.model}: ${v.a.files.join(', ')}. `
+            + `B — ${v.b.model}: ${v.b.files.join(', ')}. `
+            + `If I'm asked which to use or how they differ, compare them; otherwise wait for the pick.`,
+          );
+        }} />
 
       {!isMobile ? (
         /* ── Desktop: 3-column grid (single ChatPane + Terminal) ── */
