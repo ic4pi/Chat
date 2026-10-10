@@ -31,6 +31,7 @@ import {
   type CatalogModel,
 } from './providerPrefs.js';
 import { deleteBuild, listBuilds, saveBuild, type SavedBuild } from './savedBuilds.js';
+import { copyText, downloadTextFile } from './downloadFile.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
@@ -304,6 +305,11 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
   const [storageError, setStorageError] = useState<string | null>(null);
   const sending = a.state.busy || b.state.busy;
 
+  // Read a version's file as a document. Content is already in memory (the
+  // side's files), so this needs no sandbox round-trip.
+  const [viewing, setViewing] = useState<{ path: string; content: string } | null>(null);
+  const [viewCopied, setViewCopied] = useState(false);
+
   // When both versions have finished, hand their shape to the orchestrator so
   // it can answer "what are my two options?" if asked. Fires once per result
   // pair (keyed by the two run ids), never mid-build.
@@ -440,6 +446,23 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
           <PreviewPanel key={s.dir} sandboxId={sandboxId} detectedPort={null} defaultPort={port}
             dir={s.dir} autoStartKey={s.state.previewKick} />
         </div>
+        {hasFiles && (
+          <div style={{ flexShrink: 0, borderTop: '1px solid #191D27', maxHeight: 120, overflowY: 'auto',
+            padding: '4px 0', background: '#0B0D12' }}>
+            <div style={{ fontSize: 12, color: '#656C7E', letterSpacing: '0.08em', textTransform: 'uppercase',
+              padding: '2px 10px' }}>// files — tap to read</div>
+            {Object.keys(s.state.files).sort().map(path => (
+              <div key={path} onClick={() => { setViewCopied(false); setViewing({ path, content: s.state.files[path] ?? '' }); }}
+                title="Open as a document"
+                style={{ padding: '3px 10px', fontSize: 14, color: '#ECEEF3', cursor: 'pointer',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                onMouseEnter={e => (e.currentTarget.style.background = '#191D27')}
+                onMouseLeave={e => (e.currentTarget.style.background = '')}>
+                {path}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     );
   };
@@ -449,6 +472,38 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
       position: 'fixed', inset: 0, zIndex: 50, background: '#0B0D12',
       display: open ? 'flex' : 'none', flexDirection: 'column',
     }}>
+      {viewing && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.72)',
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '24px 16px 16px' }}
+          onClick={() => setViewing(null)}>
+          <div role="dialog" aria-label={viewing.path} onClick={e => e.stopPropagation()}
+            style={{ width: 'min(860px, 100%)', maxHeight: '90dvh', display: 'flex', flexDirection: 'column',
+              background: '#12151D', border: '1px solid #FF3D8E', borderRadius: 8, padding: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexShrink: 0 }}>
+              <h2 style={{ margin: 0, flex: 1, fontSize: 16, color: '#FF3D8E',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{viewing.path}</h2>
+              <button type="button"
+                onClick={async () => { const okd = await copyText(viewing.content); if (okd) { setViewCopied(true); setTimeout(() => setViewCopied(false), 1500); } }}
+                style={{ background: 'rgba(212,255,63,0.12)', color: '#FF3D8E', border: '1px solid #C81F6B',
+                  borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 14, fontWeight: 700 }}>
+                {viewCopied ? 'Copied ✓' : 'Copy'}</button>
+              <button type="button" onClick={() => downloadTextFile(viewing.path, viewing.content)}
+                style={{ background: 'rgba(212,255,63,0.12)', color: '#FF3D8E', border: '1px solid #C81F6B',
+                  borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 14, fontWeight: 700 }}>Download</button>
+              <button type="button" onClick={() => setViewing(null)}
+                style={{ background: 'transparent', color: '#9198AA', border: '1px solid #232838',
+                  borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 14 }}>Close</button>
+            </div>
+            <div style={{ flex: 1, overflow: 'auto', background: '#0B0D12', border: '1px solid #232838',
+              borderRadius: 6, padding: 10 }}>
+              <pre style={{ margin: 0, color: '#ECEEF3', fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word', fontFamily: '"JetBrains Mono",ui-monospace,monospace' }}>
+                {viewing.content || '(empty file)'}
+              </pre>
+            </div>
+          </div>
+        </div>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
         borderBottom: '1px solid #191D27', flexShrink: 0, flexWrap: 'wrap' }}>
         <strong style={{ color: '#FF3D8E', fontSize: 15, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
