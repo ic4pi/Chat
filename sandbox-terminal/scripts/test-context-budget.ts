@@ -56,6 +56,11 @@ assert(hist[hist.length - 1]!.content === 'latest question', 'keeps latest user 
 
 assert(looksLikeSuggestRequest('suggest additions and fixes'), 'suggest additions = suggest');
 assert(looksLikeSuggestRequest('audit and recommend changes/fixes'), 'audit = suggest');
+assert(!looksLikeSuggestRequest('Create a full HTML file for an interactive Kybalion explorer. Review the source texts for accuracy, add ideas for each principle. Code only.'), 'explicit build order with incidental review/ideas words is not suggest-only');
+assert(!looksLikeSuggestRequest('build me a landing page, any feedback on layout welcome'), 'build order wins over incidental feedback');
+assert(looksLikeApplyRequest('Generate a full HTML file for a Kybalion explorer. Code only.'), 'explicit build order = apply');
+assert(looksLikeSuggestRequest('review the page and suggest improvements, do not change anything'), 'review-only stays suggest');
+assert(looksLikeSuggestRequest('just suggest ideas for a single page app'), '"just suggest" stays suggest');
 assert(!looksLikeApplyRequest('suggest additions and fixes'), 'suggest is not apply');
 assert(looksLikeApplyRequest('apply that fix now'), 'apply that fix = apply');
 assert(looksLikeApplyRequest('fix the login bug'), 'fix the bug = apply');

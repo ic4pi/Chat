@@ -205,9 +205,24 @@ export function looksLikeLegacyWelcome(text: string): boolean {
  * User wants ideas / review / recommendations — NOT automatic code writes.
  * "suggest additions and fixes" must stay here.
  */
+/**
+ * The ask names something to be produced — "a full HTML file", "build a page",
+ * "code only". Long content briefs say "review", "ideas" or "how would" in
+ * passing; that must not turn a build order into advice-only.
+ */
+export function hasExplicitBuildIntent(text: string): boolean {
+  const t = text.toLowerCase();
+  // Said outright that nothing should be written.
+  if (/\b(just|only) (suggest|advise|review|audit|discuss)|\b(don'?t|do not) (write|change|modify|build|create|apply)|\bwithout (changing|writing|editing|building)|\b(review|audit|suggest)[- ]only\b/.test(t)) return false;
+  if (/\b(code only|only (the )?code|just (the )?code|only code output|output only (the )?code|no explanation)\b/.test(t)) return true;
+  if (/\b(full|complete|entire|whole|single)\b[^.\n]{0,30}\b(html|file|page|webpage|app|site|script|component|document)\b/.test(t)) return true;
+  return /\b(build|create|generate|make|write|produce|give me|code up)\b[^.\n]{0,60}\b(html|webpage|web page|landing page|page|app|website|site|game|tool|component|script|file)\b/.test(t);
+}
+
 export function looksLikeSuggestRequest(text: string): boolean {
   const t = text.toLowerCase();
   if (t.length < 4) return false;
+  if (hasExplicitBuildIntent(t)) return false;
   return /\b(suggest|suggestion|recommend|recommendation|advice|advise|ideas?|feedback|audit|review|assess(?:ment)?|analy[sz]e|inspect|improvements?|additions?|what should|how (can|should|would)|tell me what|look at (the )?repo|read (the )?repo|what('?s| is) wrong)\b/.test(t);
 }
 
@@ -219,6 +234,7 @@ export function looksLikeApplyRequest(text: string): boolean {
   if (looksLikeSuggestRequest(t)) {
     return /\b(apply (it|them|this|the changes)|implement (it|them|this|now)|go ahead and (fix|change|write)|do it now|write the (fix|code|files)|save (it|them|the fix))\b/.test(t);
   }
+  if (hasExplicitBuildIntent(t)) return true;
   return /\b(apply|implement|write the|do it|go ahead|ship it|save (it|the)|patch it|fix (it|this|my|the)|build|create|add|update|refactor|rewrite|replace|delete|remove|rename|make the)\b/.test(t);
 }
 
