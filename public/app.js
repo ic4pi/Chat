@@ -1371,6 +1371,24 @@ function renderMessageInto(container, m, idx) {
     const shown = stripContinueMarkers(m.content || '') || (m.streaming ? '…' : '');
     if (m.campaign?.posts) renderCampaignInto(content, m.campaign);
     else renderMarkdownInto(content, shown);
+    if (m.meetingAsk && !m.meetingAsk.answered && !m.streaming) {
+      const row = document.createElement('div');
+      row.className = 'meeting-ask';
+      const mk = (label, mp3) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'text-btn' + (mp3 === false ? ' primary' : '');
+        b.textContent = label;
+        b.addEventListener('click', (e) => {
+          e.preventDefault();
+          void answerMeetingAsk(m, mp3);
+        });
+        return b;
+      };
+      row.append(mk('Summary', false), mk('Summary + MP3', true), mk('No thanks', null));
+      content.appendChild(row);
+    }
+    if (m.audioId && !m.streaming) content.appendChild(renderSavedAudio(m));
     if (Array.isArray(m.sources) && m.sources.length && !m.streaming) {
       const box = document.createElement('div');
       box.className = 'msg-sources';
@@ -3526,8 +3544,23 @@ async function sendMessage(text) {
               ],
             };
           }
+          // Meeting turns carry the speaker, so "what did Rico think?" works.
+          if (m.role === 'assistant' && m.personaId && m.personaName && typeof m.content === 'string') {
+            return { role: m.role, content: `[${m.personaName}]: ${m.content}` };
+          }
           return { role: m.role, content: m.content };
-        });
+        })
+        // Strict chat templates reject same-role turns back to back, and a
+        // meeting is a long run of assistant turns — fold them together.
+        .reduce((acc, m) => {
+          const last = acc[acc.length - 1];
+          if (last && last.role === m.role && typeof last.content === 'string' && typeof m.content === 'string') {
+            last.content += `\n\n${m.content}`;
+          } else {
+            acc.push({ ...m });
+          }
+          return acc;
+        }, []);
 
       const assistantTs = Date.now();
       if (firstAssistantTs == null) firstAssistantTs = assistantTs;
@@ -4397,6 +4430,134 @@ function parseWebSearchRequest(text, previousUserText = '') {
     query = String(previousUserText || "").trim() || raw;
   }
   return query.slice(0, 400);
+}
+
+// ---------------------------------------------------------------------------
+// After a meeting: the persona you're talking to offers a summary. Nothing is
+// generated until you say yes. The summary ends with where the group landed
+// and what to do next, and can also be kept as an MP3 inside the app.
+// ---------------------------------------------------------------------------
+const MEETING_SUMMARY_PROMPT = 'The group meeting above just finished. Give me a short summary in your own voice '
+  + '(no name tag or brackets): what was discussed and the key points, and where they disagreed. '
+  + 'Then end with two things: where the group landed (their consensus \u2014 and if they did not agree, say so plainly and '
+  + 'give each side), and what we should do next (concrete next steps).';
+
+function activePersonaName() {
+  return personas.find((p) => p.id === state.activePersonaId)?.name || 'Assistant';
+}
+
+function askMeetingSummary(chat) {
+  chat.messages.push({
+    role: 'assistant',
+    personaName: activePersonaName(),
+    content: 'The meeting is over. Want a summary \u2014 what was said, where the group landed, and what to do next? I can also make it an MP3 and keep it here in the app.',
+    meetingAsk: { chatId: chat.id },
+    ts: Date.now(),
+  });
+  chat.updatedAt = Date.now();
+  renderMessages({ scroll: 'bottom' });
+  saveState();
+}
+
+async function answerMeetingAsk(msg, mp3) {
+  if (!msg.meetingAsk || msg.meetingAsk.answered) return;
+  msg.meetingAsk.answered = true;
+  const chat = activeChat();
+  saveState();
+  renderMessages({ scroll: 'bottom' });
+  if (mp3 === null || !chat) return; // "No thanks"
+  await sendMessage(MEETING_SUMMARY_PROMPT);
+  if (!mp3) return;
+  const reply = [...chat.messages].reverse().find((m) => m.role === 'assistant' && m.content && !m.meetingAsk && !m.streaming);
+  if (reply) await saveSummaryAudio(chat, reply);
+}
+
+// MP3s live in IndexedDB (too big for localStorage); the chat message only
+// keeps an id, so the clip survives reloads on this device.
+const AUDIO_DB = 'uncensored_audio_v1';
+function openAudioDb() {
+  return new Promise((resolve, reject) => {
+    const r = indexedDB.open(AUDIO_DB, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('clips');
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+}
+async function putClip(id, blob) {
+  const db = await openAudioDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction('clips', 'readwrite');
+    tx.objectStore('clips').put(blob, id);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+}
+async function getClip(id) {
+  const db = await openAudioDb();
+  const blob = await new Promise((resolve, reject) => {
+    const req = db.transaction('clips').objectStore('clips').get(id);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+  db.close();
+  return blob;
+}
+
+async function saveSummaryAudio(chat, replyMsg) {
+  const note = { role: 'info', content: 'Making the MP3\u2026', ts: Date.now() };
+  chat.messages.push(note);
+  renderMessages({ scroll: 'bottom' });
+  const dropNote = () => {
+    const i = chat.messages.indexOf(note);
+    if (i !== -1) chat.messages.splice(i, 1);
+  };
+  try {
+    const text = cleanForSpeech(stripContinueMarkers(replyMsg.content));
+    const voice = voiceForPersona(state.activePersonaId);
+    const parts = [];
+    for (const chunk of chunkSpeech(text)) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try { parts.push(await fetchNeuralAudio(chunk, voice)); break; }
+        catch { await new Promise((r) => setTimeout(r, 600 * (attempt + 1))); }
+      }
+    }
+    if (!parts.length) throw new Error('The voice service did not respond.');
+    const id = 'clip-' + Date.now().toString(36);
+    await putClip(id, new Blob(parts, { type: 'audio/mpeg' }));
+    replyMsg.audioId = id;
+    replyMsg.audioName = `meeting-summary-${new Date().toISOString().slice(0, 10)}.mp3`;
+    dropNote();
+  } catch (err) {
+    dropNote();
+    chat.messages.push({ role: 'error', content: `Could not make the MP3: ${err.message || err}`, ts: Date.now() });
+  }
+  chat.updatedAt = Date.now();
+  saveState();
+  renderMessages({ scroll: 'bottom' });
+}
+
+function renderSavedAudio(m) {
+  const box = document.createElement('div');
+  box.className = 'saved-audio';
+  const label = document.createElement('div');
+  label.className = 'saved-audio-label';
+  label.textContent = 'Summary MP3 \u00b7 saved in the app';
+  box.appendChild(label);
+  getClip(m.audioId).then((blob) => {
+    if (!blob) { label.textContent = 'Summary MP3 \u00b7 not on this device'; return; }
+    const url = URL.createObjectURL(blob);
+    const audio = document.createElement('audio');
+    audio.controls = true;
+    audio.src = url;
+    const dl = document.createElement('a');
+    dl.href = url;
+    dl.download = m.audioName || 'meeting-summary.mp3';
+    dl.textContent = 'Download';
+    dl.className = 'text-btn';
+    box.append(audio, dl);
+  }).catch(() => { label.textContent = 'Summary MP3 \u00b7 unavailable'; });
+  return box;
 }
 
 async function runInlineGroupDiscussion(chat, { rounds, topic, mode, personaIds, personaTasks, teamPrompt, teamName }) {
@@ -6743,9 +6904,10 @@ els.startGroupBtn?.addEventListener('click', async () => {
     pendingMeeting = null;
     const team = getTeams().find((t) => t.id === teamId);
     els.groupModal?.classList.add('hidden');
-    await runInlineGroupDiscussion(chat, {
+    const finished = await runInlineGroupDiscussion(chat, {
       rounds, topic, mode, personaIds, personaTasks: tasks, teamPrompt, teamName: team?.name,
     });
+    if (finished) askMeetingSummary(chat);
     return;
   }
   createGroupChat(mode, topic, assigned, rounds, personaIds, tasks, teamPrompt);
