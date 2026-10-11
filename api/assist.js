@@ -7,7 +7,7 @@
  * OpenRouter wrapper the Hub sweep already uses (lib/hub.js) — needs only
  * OPENROUTER_API_KEY, no Supabase/Hub dependency.
  *
- * Body: { mode: 'summary' | 'smart-replies', messages: [{role, content}] }
+ * Body: { mode: 'summary' | 'smart-replies' | 'music-explain', messages: [{role, content}] }
  */
 
 import { llmJSON, UTILITY_MODEL } from '../lib/hub.js';
@@ -36,6 +36,23 @@ person, plausible as their actual next line — not a question posed to them,
 not a description of what they could say. Keep each under ~12 words. If the
 conversation just ended cleanly (thanks, goodbye, resolved) it's fine to
 return fewer than 3, or none.`;
+
+// OpenRouter model for the Music coach. Needs reliable JSON + music-theory
+// reasoning at low cost; override with MUSIC_COACH_MODEL (e.g. anthropic/claude-sonnet-4.5).
+const MUSIC_MODEL = process.env.MUSIC_COACH_MODEL || 'anthropic/claude-haiku-4.5';
+
+const MUSIC_EXPLAIN_PROMPT = `You are a warm, precise music-production teacher. You receive JSON measured
+from a MIDI humanizer run: per-track stats (timing offsets in ms, velocity
+spread before/after, length change, ghost notes, chord spread) and the
+settings used. Explain what the humanizer did and why it makes the music feel
+played by a person, using ONLY the numbers given — never invent values.
+
+Return JSON: { "explanation": "...", "lesson": ["...", "..."] }
+
+EXPLANATION: 3-6 short sentences, plain language, naming specific numbers.
+LESSON: 3-5 ordered steps the user can follow in any DAW to recreate this by
+hand (e.g. nudging snare late, velocity accents, shortening notes, swing %).
+Each step is one sentence with a concrete amount.`;
 
 function transcript(messages, maxChars) {
   return messages
@@ -93,7 +110,20 @@ export default async function handler(req, res) {
       return res.status(200).json({ replies });
     }
 
-    return res.status(400).json({ error: "mode must be 'summary' or 'smart-replies'" });
+    if (mode === 'music-explain') {
+      const out = await llmJSON({
+        model: MUSIC_MODEL,
+        system: MUSIC_EXPLAIN_PROMPT,
+        messages: [{ role: 'user', content: transcript(messages, 6000) }],
+        maxTokens: 900,
+      });
+      return res.status(200).json({
+        explanation: typeof out?.explanation === 'string' ? out.explanation : '',
+        lesson: Array.isArray(out?.lesson) ? out.lesson.filter((l) => typeof l === 'string').slice(0, 6) : [],
+      });
+    }
+
+    return res.status(400).json({ error: "mode must be 'summary', 'smart-replies' or 'music-explain'" });
   } catch (err) {
     return res.status(500).json({ error: err.message || 'Server error' });
   }

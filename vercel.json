@@ -20,6 +20,10 @@
       "destination": "/media/index.html"
     },
     {
+      "source": "/music",
+      "destination": "/music/index.html"
+    },
+    {
       "source": "/media/",
       "destination": "/media/index.html"
     },
