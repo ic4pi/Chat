@@ -64,6 +64,8 @@ interface Props {
   onUseBuild: (build: BuildChoice) => void | Promise<void>;
   /** Fires once when both versions have finished building. */
   onVersionsReady?: (v: CompareVersions) => void;
+  /** You sent a prompt with no sandbox open — open a project, then run it. */
+  onNeedSandbox?: (text: string) => void;
 }
 
 interface SideState {
@@ -295,7 +297,7 @@ function treeOf(files: Record<string, string>): FileNode[] {
 }
 
 export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePanel(
-  { open, onClose, sandboxId, onUseBuild, onVersionsReady }, handleRef,
+  { open, onClose, sandboxId, onUseBuild, onVersionsReady, onNeedSandbox }, handleRef,
 ) {
   const a = useSide('a');
   const b = useSide('b');
@@ -352,10 +354,11 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
 
   const sendToBoth = useCallback(async (text: string) => {
     const t = text.trim();
-    if (!t || sending || !sandboxId) return;
+    if (!t || sending) return;
     setPrompt('');
+    if (!sandboxId) { onNeedSandbox?.(t); return; }
     await Promise.all([a.send(t), b.send(t)]);
-  }, [sending, sandboxId, a, b]);
+  }, [sending, sandboxId, a, b, onNeedSandbox]);
 
   useImperativeHandle(handleRef, () => ({
     runBrief: (brief, picks) => {
@@ -511,7 +514,7 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
         </strong>
         {!sandboxId && (
           <span style={{ fontSize: 14, color: '#ffcc66' }}>
-            Open a blank project or GitHub repo first — Compare needs a sandbox to run both previews.
+            No project open yet — one starts automatically when you send.
           </span>
         )}
         <div style={{ flex: 1, display: 'flex', gap: 8, minWidth: 240 }}>
@@ -520,12 +523,12 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
             onChange={e => setPrompt(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendToBoth(prompt); } }}
             placeholder="Describe what to build — or send a brief from your persona with ⇄"
-            disabled={sending || !sandboxId}
+            disabled={sending}
             style={{ flex: 1, background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
               borderRadius: 4, padding: '7px 10px', fontFamily: 'inherit', fontSize: 15, minWidth: 0 }}
           />
-          <button type="button" onClick={() => void sendToBoth(prompt)} disabled={sending || !prompt.trim() || !sandboxId}
-            style={smallBtn(!sending && !!prompt.trim() && !!sandboxId, true)}>
+          <button type="button" onClick={() => void sendToBoth(prompt)} disabled={sending || !prompt.trim()}
+            style={smallBtn(!sending && !!prompt.trim(), true)}>
             {sending ? 'Building…' : 'Send to both'}
           </button>
         </div>
