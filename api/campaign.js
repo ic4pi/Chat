@@ -11,6 +11,9 @@ import { requirePaidAccess } from '../lib/model-meta.js';
 import { db, HUB_ENABLED, resolveOwner, embedOne, rateLimit } from '../lib/hub.js';
 import { runCampaign, platformsFromText, PLATFORMS } from '../lib/campaign-engine.js';
 import { isModelGoneError, replacementFor } from '../lib/model-health.js';
+import { loadConfig } from '../lib/config.js';
+import { writeMarketingPlan } from '../lib/marketing-plan.js';
+import { isAccountReady } from '../lib/scheduled-posts.js';
 
 /** Per model call. Several run per campaign, so each is capped on its own. */
 const CALL_TIMEOUT_MS = 120_000;
@@ -166,9 +169,59 @@ async function saveHook(req, res) {
   }
 }
 
+/**
+ * POST /api/campaign?op=plan — the marketing team's executable plan, from
+ * the project conversation plus their meeting. JSON: { brief, plan } or
+ * { question } when it can't tell what is being sold.
+ */
+async function planHandler(req, res) {
+  const { messages, provider: providerId = 'openrouter', model, apiKey, personaIds } = req.body || {};
+  if (!Array.isArray(messages) || !messages.some((m) => m?.role === 'user')) {
+    return res.status(400).json({ error: 'messages with at least one user turn are required' });
+  }
+  if (!model || typeof model !== 'string') return res.status(400).json({ error: 'model is required' });
+  const paidGate = requirePaidAccess(req, providerId, model);
+  if (paidGate) return res.status(paidGate.status).json({ error: paidGate.error, paidLocked: true });
+  if (!(await rateLimit(req, res, { bucket: 'campaign-plan', limit: 20, windowSeconds: 3600 }))) return;
+
+  let resolved;
+  try {
+    resolved = resolveProvider(providerId, apiKey || req.headers['x-provider-key']);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+  const controller = new AbortController();
+  const onClose = () => { if (!res.writableEnded) controller.abort(); };
+  res.on('close', onClose);
+  try {
+    const config = await loadConfig();
+    const wanted = Array.isArray(personaIds) ? personaIds.filter((id) => typeof id === 'string') : [];
+    const team = wanted.length ? config.personas.filter((p) => wanted.includes(p.id)) : config.personas;
+    const conversation = messages
+      .filter((m) => (m?.role === 'user' || m?.role === 'assistant') && typeof m.content === 'string')
+      .slice(-40)
+      .map((m) => ({ role: m.role, content: m.content, ...(typeof m.name === 'string' && m.name ? { name: m.name.slice(0, 60) } : {}) }));
+    const out = await writeMarketingPlan(makeComplete({
+      resolved, model, providerId, signal: controller.signal,
+      onRetry: () => {},
+      canUse: (id) => !requirePaidAccess(req, providerId, id),
+    }), {
+      conversation,
+      team: team.length ? team : config.personas,
+      accounts: (config.socialAccounts || []).filter(isAccountReady),
+    });
+    return res.status(200).json(out);
+  } catch (err) {
+    return res.status(502).json({ error: err.message || 'Plan failed' });
+  } finally {
+    res.off('close', onClose);
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
   if (req.query?.op === 'hook') return saveHook(req, res);
+  if (req.query?.op === 'plan') return planHandler(req, res);
 
   const { messages, provider: providerId = 'openrouter', model, apiKey } = req.body || {};
   if (!Array.isArray(messages) || !messages.some((m) => m?.role === 'user')) {

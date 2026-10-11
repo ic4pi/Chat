@@ -1378,6 +1378,7 @@ function renderMessageInto(container, m, idx) {
       content.appendChild(box);
     }
     if (!m.streaming) renderTurnToolsInto(content, m);
+    if (m.launch && !m.streaming) renderLaunchInto(content, m);
     if (m.content && !m.streaming) {
       const speak = document.createElement('button');
       speak.type = 'button';
@@ -1869,14 +1870,21 @@ async function fetchPersonas() {
  * account, via /api/social-post. Gated behind the same unlock password as
  * paid models — this triggers a real, public, irreversible action.
  */
+/** The connected account a draft's "where" line names: label first, then platform. */
+function matchAccount(whereText) {
+  const where = String(whereText || '').toLowerCase().replace(/[·|,-]?\s*day\s*\d+.*$/, '').trim();
+  if (!where) return null;
+  return socialAccounts.find((a) => a.label.toLowerCase() === where)
+    || socialAccounts.find((a) => where.includes(a.label.toLowerCase()))
+    || socialAccounts.find((a) => (a.platform === 'twitter' ? /\b(?:x|twitter)\b/ : new RegExp(`\\b${a.platform}\\b`)).test(where))
+    || null;
+}
+
 async function handlePostToSocial(text, triggerBtn, personaName, opts = {}) {
   if (!socialAccounts.length) return false;
   let accountId = socialAccounts[0].id;
   // A draft that names where it goes ("Instagram", "Main page") skips the picker.
-  const where = String(opts.where || '').toLowerCase();
-  const named = where && (socialAccounts.find((a) => a.label.toLowerCase() === where)
-    || socialAccounts.find((a) => where.includes(a.label.toLowerCase()))
-    || socialAccounts.find((a) => (a.platform === 'twitter' ? /\b(?:x|twitter)\b/ : new RegExp(`\\b${a.platform}\\b`)).test(where)));
+  const named = matchAccount(opts.where);
   if (named) {
     accountId = named.id;
   } else if (socialAccounts.length > 1) {
@@ -3458,6 +3466,12 @@ async function sendMessage(text) {
   // ask already says), then strategist, ruthless editor, every platform.
   // Calling your team for it is already a yes to the meeting.
   const teamAsk = imageParts.length === 0 ? parseTeamCall(text, prevUser?.content) : null;
+  // "Plan and execute a marketing plan for X" → the whole mission, start to launch.
+  const missionAsk = imageParts.length === 0 ? parseMarketingMission(text) : null;
+  if (missionAsk) {
+    turnSearchQuery = null;
+    return runMarketingMission(chat, missionAsk);
+  }
   if (imageParts.length === 0 && parseCampaignRequest(text)) {
     turnSearchQuery = null;
     if (NO_MEETING_RE.test(text)) return runInlineCampaign(chat);
@@ -4043,7 +4057,7 @@ function showMoreRoundsPrompt(chat) {
 const IMAGE_TOOL_RE = /<<<\s*IMAGE\b[ \t:]*([^\n]*?)[ \t]*>>>/gi;
 const POST_TOOL_RE = /<<<\s*POST\b[ \t:]*([^\n]*)\n([\s\S]*?)(?:\n?[ \t]*POST\s*>>>|$)/gi;
 const STRAY_TOOL_RE = /<<<\s*(?:SEARCH|IMAGE|POST)\b[^\n]*?>>>|^[ \t]*POST\s*>>>[ \t]*$/gim;
-const MAX_TURN_IMAGES = 2;
+const MAX_TURN_IMAGES = 4;
 /** Images that came back as bytes (no storage configured) — shown this session, not saved. */
 const turnImageData = new Map();
 
@@ -4638,6 +4652,383 @@ function parseWebSearchRequest(text, previousUserText = '') {
     query = String(previousUserText || "").trim() || raw;
   }
   return query.slice(0, 400);
+}
+
+// ---------------------------------------------------------------------------
+// Marketing mission: "plan and execute a marketing plan for X". The marketing
+// team meets on it, a plan assigns each task to one member, each member does
+// their task with their tools, and every post lands in a launch queue you
+// approve once — the hourly cron then publishes each on its day.
+// ---------------------------------------------------------------------------
+const MISSION_WHAT_RE = /\bmarketing\s+(?:plan|strategy|push|launch|for)\b|\bgo[- ]to[- ]market\b|\blaunch\s+plan\b|\bmarket\s+(?:it|this|my|our|the)\b/i;
+const MISSION_DO_RE = /\b(?:execute|run|launch|carry (?:it |this )?out|implement|make it happen|roll (?:it |this )?out|kick (?:it |this )?off|put (?:it |this )?(?:into action|to work)|plan and (?:do|run|execute|launch))\b/i;
+
+function parseMarketingMission(text) {
+  const raw = String(text || '').trim();
+  const team = detectTeam(raw);
+  const what = MISSION_WHAT_RE.test(raw) || (team?.key === 'marketing' && /\bplan\b/i.test(raw));
+  if (!what || !MISSION_DO_RE.test(raw)) return null;
+  return { ask: raw };
+}
+
+/** What the rest of this chat's project says about the product. */
+function projectContext(chat, maxChars = 6000) {
+  if (!chat.projectId) return '';
+  const project = state.projects.find((p) => p.id === chat.projectId);
+  const others = state.chats
+    .filter((c) => c.projectId === chat.projectId && c.id !== chat.id)
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    .slice(0, 6);
+  const parts = [];
+  let left = maxChars;
+  for (const c of others) {
+    const lines = (c.messages || [])
+      .filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
+      .slice(-10)
+      .map((m) => `${m.role === 'user' ? 'USER' : (m.personaName || 'AI')}: ${m.content.replace(/\s+/g, ' ').slice(0, 500)}`);
+    if (!lines.length) continue;
+    const block = `## ${c.name || 'Chat'}\n${lines.join('\n')}`.slice(0, left);
+    parts.push(block);
+    left -= block.length;
+    if (left <= 200) break;
+  }
+  return parts.length ? `Project "${project?.name || 'this project'}":\n${parts.join('\n\n')}` : '';
+}
+
+function dayFromWhere(where) {
+  const m = String(where || '').match(/\bday\s*(\d{1,2})\b/i);
+  return m ? Math.min(30, parseInt(m[1], 10)) : null;
+}
+
+function planMarkdown(brief, plan) {
+  const lines = [
+    `**Goal:** ${plan.goal}`,
+    `**For:** ${plan.audience || brief.audience}${brief.audienceAssumed ? ' _(assumed — say who it’s for if that’s wrong)_' : ''}`,
+    plan.positioning ? `**Positioning:** ${plan.positioning}` : '',
+    plan.offer || brief.offer ? `**Offer:** ${plan.offer || brief.offer}` : '',
+    plan.channels.length ? `**Channels:** ${plan.channels.join(', ')}` : '',
+    plan.kpis.length ? `**Measure:** ${plan.kpis.join('; ')}` : '',
+    '',
+    '**Tasks**',
+    ...plan.tasks.map((t, i) => `${i + 1}. Day ${t.day} · ${shortPersonaName(personas.find((p) => p.id === t.owner)) || t.ownerName} — ${t.title}: ${t.deliverable}`),
+  ];
+  if (!brief.facts.length) lines.push('', '_No numbers or proof given, so nothing makes claims. Add real figures to the project for sharper copy._');
+  return lines.filter((l, i, a) => l !== '' || a[i - 1] !== '').join('\n');
+}
+
+function taskPrompt(brief, plan, task, i) {
+  return [
+    `We are executing our marketing plan for ${brief.product}, today.`,
+    `Goal: ${plan.goal}`,
+    `Audience: ${plan.audience || brief.audience}`,
+    plan.positioning ? `Positioning: ${plan.positioning}` : '',
+    plan.offer || brief.offer ? `Offer: ${plan.offer || brief.offer}` : '',
+    `Facts you may use (nothing else — never invent numbers, results or quotes): ${brief.facts.length ? brief.facts.join(' | ') : 'none'}`,
+    '',
+    `YOUR TASK (${i + 1} of ${plan.tasks.length}): ${task.title}`,
+    `Deliver: ${task.deliverable}`,
+    `Goes live: day ${task.day}`,
+    '',
+    'Do the work now and hand over the finished thing — not a plan for it, not advice about it.',
+    '- Need a fact first? Use <<<SEARCH …>>>.',
+    '- Every post or email goes in its own block, first line = platform · day it goes out:',
+    '<<<POST Instagram · day 3',
+    'the exact text, ready to publish',
+    'POST>>>',
+    '- A visual post gets <<<IMAGE what it shows>>> right after it.',
+    '- Bring in a teammate by name only if you truly need their part.',
+  ].filter((l) => l !== '').join('\n');
+}
+
+async function fetchMarketingPlan(chat, personaIds, context, signal) {
+  const provider = state.activeProvider;
+  const apiKey = (providerKeys[provider] || '').trim();
+  const headers = paidAuthHeaders({ 'Content-Type': 'application/json' });
+  if (apiKey) headers['X-Provider-Key'] = apiKey;
+  const messages = [
+    ...(context ? [{ role: 'user', content: `Project notes (USER = me; other speakers are AI replies, not confirmed facts):\n${context}` }] : []),
+    ...chat.messages
+      .filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
+      .slice(-30)
+      .map((m) => ({ role: m.role, content: m.content, ...(m.personaId && m.personaName ? { name: m.personaName } : {}) })),
+  ];
+  const res = await fetch('/api/campaign?op=plan', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      messages, provider, model: state.activeModel, apiKey: apiKey || undefined,
+      paidPassword: loadPaidPassword() || undefined, personaIds,
+    }),
+    signal,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+function nextLaunchStart() {
+  const d = new Date();
+  d.setMinutes(0, 0, 0);
+  d.setHours(d.getHours() + 1);
+  return d.getTime();
+}
+
+/** Every post the mission produced, with its day, in one queue to approve. */
+function buildLaunchQueue(chat, fromIdx) {
+  const items = [];
+  chat.messages.slice(fromIdx).forEach((m) => {
+    (m.toolPosts || []).forEach((post, idx) => items.push({ ts: m.ts, idx }));
+  });
+  return { items, startAt: nextLaunchStart() };
+}
+
+function launchItems(chat, launch) {
+  return launch.items.map((it) => {
+    const m = chat.messages.find((x) => x.ts === it.ts);
+    const post = m?.toolPosts?.[it.idx];
+    if (!post) return null;
+    const imgs = (m.toolImages || []).filter((img) => img.url);
+    const imageUrl = (m.toolImages?.[it.idx]?.url) || imgs[0]?.url || undefined;
+    const day = post.day ?? dayFromWhere(post.where) ?? 0;
+    return {
+      ref: `${it.ts}:${it.idx}`, m, post, day, imageUrl,
+      at: new Date(launch.startAt + day * 86_400_000),
+      account: matchAccount(post.where),
+    };
+  }).filter(Boolean).sort((a, b) => a.day - b.day);
+}
+
+async function scheduleLaunch(chat, msg, btn) {
+  const rows = launchItems(chat, msg.launch).filter((r) => !r.post.scheduledId && !r.post.posted);
+  const sendable = [];
+  for (const r of rows) {
+    if (!r.account) r.post.scheduleError = `no connected account for "${r.post.where || 'unknown'}"`;
+    else if (r.account.platform === 'email') r.post.scheduleError = 'email — send it from its card (needs a recipient)';
+    else { delete r.post.scheduleError; sendable.push(r); }
+  }
+  if (!sendable.length) { saveState(); renderMessages(); return; }
+  const when = (d) => d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric' });
+  if (!confirm(`Schedule ${sendable.length} post${sendable.length > 1 ? 's' : ''}? They publish on their own, `
+    + `from ${when(sendable[0].at)} to ${when(sendable[sendable.length - 1].at)}. You can cancel any time before.`)) return;
+  let pw = loadPaidPassword();
+  if (!pw) {
+    pw = (prompt('Unlock password required to publish:') || '').trim();
+    if (!pw) return;
+    savePaidPassword(pw);
+  }
+  flashButton(btn, 'Scheduling…');
+  try {
+    const res = await fetch('/api/social-post?op=schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Paid-Password': pw },
+      body: JSON.stringify({
+        posts: sendable.map((r) => ({
+          ref: r.ref, accountId: r.account.id, message: r.post.text, imageUrl: r.imageUrl,
+          at: r.at.toISOString(), personaName: r.m.personaName,
+        })),
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    const byRef = new Map(sendable.map((r) => [r.ref, r]));
+    for (const q of data.queued || []) {
+      const r = byRef.get(q.ref);
+      if (r) { r.post.scheduledId = q.id; r.post.at = q.at; r.post.account = q.label; }
+    }
+    for (const f of data.refused || []) {
+      const r = byRef.get(f.ref);
+      if (r) r.post.scheduleError = f.error;
+    }
+    flashButton(btn, `Scheduled ${data.queued?.length || 0} ✓`);
+  } catch (err) {
+    alert(`Scheduling failed: ${err.message || err}`);
+  }
+  chat.updatedAt = Date.now();
+  saveState();
+  renderMessages();
+}
+
+async function cancelLaunch(chat, msg, btn) {
+  const rows = launchItems(chat, msg.launch).filter((r) => r.post.scheduledId);
+  if (!rows.length || !confirm(`Cancel ${rows.length} scheduled post${rows.length > 1 ? 's' : ''}?`)) return;
+  try {
+    const res = await fetch('/api/social-post?op=unschedule', {
+      method: 'POST',
+      headers: paidAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ ids: rows.map((r) => r.post.scheduledId) }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    rows.forEach((r) => { delete r.post.scheduledId; delete r.post.at; });
+    flashButton(btn, 'Cancelled');
+  } catch (err) {
+    alert(`Cancel failed: ${err.message || err}`);
+  }
+  saveState();
+  renderMessages();
+}
+
+function renderLaunchInto(content, m) {
+  const chat = activeChat();
+  if (!chat || !m.launch) return;
+  const rows = launchItems(chat, m.launch);
+  const box = document.createElement('div');
+  box.className = 'launch-queue';
+  const when = (d) => d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  rows.forEach((r) => {
+    const row = document.createElement('div');
+    row.className = 'launch-row';
+    const head = document.createElement('div');
+    head.className = 'campaign-post-head';
+    const target = r.account ? `${r.account.label} (${r.account.platform})` : (r.post.where || 'no channel');
+    const state2 = r.post.posted ? 'posted ✓'
+      : r.post.scheduledId ? `scheduled ${when(new Date(r.post.at))}`
+        : r.post.scheduleError ? `not scheduled — ${r.post.scheduleError}`
+          : `day ${r.day} · ${when(r.at)}`;
+    head.textContent = `${target} · ${r.m.personaName || ''} · ${state2}`;
+    row.appendChild(head);
+    const body = document.createElement('div');
+    body.className = 'launch-row-text';
+    body.textContent = r.post.text.length > 240 ? `${r.post.text.slice(0, 240)}…` : r.post.text;
+    row.appendChild(body);
+    box.appendChild(row);
+  });
+  const actions = document.createElement('div');
+  actions.className = 'tool-post-actions';
+  const pending = rows.filter((r) => !r.post.scheduledId && !r.post.posted);
+  const scheduled = rows.filter((r) => r.post.scheduledId);
+  if (!socialAccounts.length) {
+    const hint = document.createElement('span');
+    hint.className = 'tool-post-hint';
+    hint.textContent = 'Connect your accounts in /admin, then come back and approve — every post above is ready.';
+    actions.appendChild(hint);
+  } else if (pending.length) {
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'text-btn launch-approve';
+    go.textContent = `Approve & schedule all (${pending.length})`;
+    go.addEventListener('click', (e) => { e.preventDefault(); void scheduleLaunch(chat, m, go); });
+    actions.appendChild(go);
+  }
+  if (scheduled.length) {
+    const stop = document.createElement('button');
+    stop.type = 'button';
+    stop.className = 'text-btn';
+    stop.textContent = `Cancel scheduled (${scheduled.length})`;
+    stop.addEventListener('click', (e) => { e.preventDefault(); void cancelLaunch(chat, m, stop); });
+    actions.appendChild(stop);
+  }
+  box.appendChild(actions);
+  content.appendChild(box);
+}
+
+async function runMarketingMission(chat, { ask }) {
+  const roster = rosterFor(ask);
+  const team = teamByKey('marketing');
+  const ids = roster?.personaIds?.length ? roster.personaIds : (team?.personaIds || personas.map((p) => p.id));
+  const teamLabel = roster?.label || team?.label || 'Everyone';
+  const context = projectContext(chat);
+  const saved = {
+    groupMode: chat.groupMode, personaIds: chat.personaIds, forcedLeadId: chat.forcedLeadId,
+    topic: chat.topic, groupFocus: chat.groupFocus,
+  };
+  const startIdx = chat.messages.length;
+  const push = (msg) => {
+    chat.messages.push({ ts: Date.now() + Math.random(), ...msg });
+    renderMessages({ scroll: groupScrollMode('bottom') });
+  };
+  push({
+    role: 'info',
+    content: `Marketing mission · ${teamLabel}: ${ids.map((id) => shortPersonaName(personas.find((p) => p.id === id))).join(', ')}`
+      + ` — meeting → plan → each does their part → launch queue${context ? ' · using this project’s chats' : ''}`,
+  });
+
+  setGeneratingUi(true);
+  activeChatUserStopped = false;
+  const startedAt = Date.now();
+  const firstPin = [null];
+  let base = 'Team meeting';
+  const updateStatusClock = (b) => {
+    if (b) base = b;
+    setTypingActive(true, `${base} · ${Math.floor((Date.now() - startedAt) / 1000)}s`);
+  };
+  updateStatusClock('Team meeting');
+  const tickTimer = setInterval(() => updateStatusClock(), 1000);
+
+  try {
+    chat.groupMode = 'brainstorm';
+    chat.personaIds = ids;
+    chat.forcedLeadId = undefined;
+    chat.topic = `Marketing plan: ${ask.slice(0, 300)}`;
+    chat.groupFocus = [
+      `Plan the marketing for this — then we execute it today: ${ask}`,
+      context ? `What we know from the project:\n${context.slice(0, 3000)}` : '',
+      'Each of you: what you would do, for whom, on which channel, and what must be checked first. '
+        + 'SEARCH if a fact matters. Specific, blunt, no invented numbers.',
+    ].filter(Boolean).join('\n\n');
+    const met = await runOneRound(chat, updateStatusClock, startedAt, firstPin);
+    if (!met && activeChatUserStopped) return;
+
+    updateStatusClock('Writing the plan');
+    const controller = new AbortController();
+    activeChatAbort = controller;
+    let out;
+    try {
+      out = await fetchMarketingPlan(chat, ids, context, controller.signal);
+    } catch (err) {
+      if (activeChatUserStopped) return;
+      push({ role: 'error', content: `Plan failed: ${err.message || err}` });
+      return;
+    }
+    if (out.question) {
+      push({ role: 'assistant', personaName: 'Marketing plan', content: out.question });
+      return;
+    }
+    const { brief, plan } = out;
+    push({ role: 'assistant', personaName: 'Marketing plan', content: planMarkdown(brief, plan), mission: { brief, plan } });
+
+    for (const [i, task] of plan.tasks.entries()) {
+      if (activeChatUserStopped) break;
+      const owner = shortPersonaName(personas.find((p) => p.id === task.owner)) || task.ownerName;
+      push({ role: 'info', content: `Task ${i + 1}/${plan.tasks.length} · ${owner} — ${task.title}` });
+      updateStatusClock(`Task ${i + 1}/${plan.tasks.length} · ${owner}`);
+      chat.groupMode = 'orchestrated';
+      chat.forcedLeadId = task.owner;
+      chat.groupFocus = taskPrompt(brief, plan, task, i);
+      const before = chat.messages.length;
+      const ok = await runOneRound(chat, updateStatusClock, startedAt, firstPin);
+      for (const m of chat.messages.slice(before)) {
+        for (const post of m.toolPosts || []) if (post.day == null) post.day = dayFromWhere(post.where) ?? task.day;
+      }
+      if (!ok && activeChatUserStopped) break;
+    }
+
+    const launch = buildLaunchQueue(chat, startIdx);
+    if (launch.items.length) {
+      const days = new Set(launchItems(chat, launch).map((r) => r.day));
+      push({
+        role: 'assistant',
+        personaName: 'Launch queue',
+        content: `${launch.items.length} post${launch.items.length > 1 ? 's' : ''} ready over ${days.size} day${days.size > 1 ? 's' : ''}. `
+          + (socialAccounts.length
+            ? 'Approve once and each goes out on its day; cancel any time before.'
+            : 'Connect your accounts in /admin to publish them; each is ready to copy now.'),
+        launch,
+      });
+    } else {
+      push({ role: 'info', content: 'Mission done — no posts were drafted this time, so nothing to schedule.' });
+    }
+  } finally {
+    Object.assign(chat, saved);
+    clearInterval(tickTimer);
+    setGeneratingUi(false);
+    activeChatUserStopped = false;
+    setTypingActive(false);
+    chat.updatedAt = Date.now();
+    saveState();
+    renderMessages({ scroll: groupScrollMode('bottom') });
+    void window.hub?.syncChat?.(chat);
+  }
 }
 
 async function runInlineGroupDiscussion(chat, { rounds, topic, personaIds = null, teamLabel = '' }) {

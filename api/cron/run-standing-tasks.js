@@ -4,6 +4,7 @@
 import { checkAdminAuth } from '../../lib/auth.js';
 import { listStandingTasks, saveStandingTasks, isTaskDue } from '../../lib/standing-tasks.js';
 import { runStandingTask } from '../../lib/run-standing-task.js';
+import { publishDuePosts } from '../../lib/scheduled-posts.js';
 
 export default async function handler(req, res) {
   // Vercel signs real cron invocations with this header; an admin-authed
@@ -32,5 +33,13 @@ export default async function handler(req, res) {
 
   if (due.length) await saveStandingTasks(tasks);
 
-  return res.status(200).json({ checked: tasks.length, ran: due.length, results });
+  // Launch posts you approved go out when their time comes.
+  let posts = [];
+  try {
+    posts = await publishDuePosts();
+  } catch (err) {
+    posts = [{ status: 'failed', error: err.message || String(err) }];
+  }
+
+  return res.status(200).json({ checked: tasks.length, ran: due.length, results, posts });
 }

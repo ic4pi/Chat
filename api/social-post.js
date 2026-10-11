@@ -11,6 +11,36 @@ import { paidPasswordFromRequest, verifyPaidPassword, paidUnlockConfigured } fro
 import { publishToAccount } from '../lib/social.js';
 import { resolveOwner } from '../lib/hub.js';
 import { logTeamAction } from '../lib/team-log.js';
+import { schedulePosts, cancelScheduledPosts, listScheduledPosts } from '../lib/scheduled-posts.js';
+
+/**
+ * ?op=schedule { posts:[{ref, accountId, message, imageUrl, at, personaName}] }
+ * ?op=unschedule { ids:[…] }   ?op=list
+ * Approving a launch once queues its posts; the hourly cron publishes each
+ * when its time comes. Same unlock password as posting now.
+ */
+async function scheduleOps(req, res, op) {
+  try {
+    if (op === 'list') {
+      const ownerId = await resolveOwner(req, res).catch(() => null);
+      const posts = (await listScheduledPosts()).filter((p) => !ownerId || !p.ownerId || p.ownerId === ownerId);
+      return res.status(200).json({ posts: posts.map(({ ownerId: _o, ...p }) => p) });
+    }
+    if (op === 'unschedule') {
+      return res.status(200).json({ ok: true, cancelled: await cancelScheduledPosts(req.body?.ids) });
+    }
+    const config = await loadConfig();
+    const ownerId = await resolveOwner(req, res).catch(() => null);
+    const out = await schedulePosts(req.body?.posts, { ownerId, accounts: config.socialAccounts || [] });
+    return res.status(200).json({
+      ok: true,
+      queued: out.queued.map((p) => ({ id: p.id, ref: p.ref, at: p.at, label: p.label, platform: p.platform })),
+      refused: out.refused,
+    });
+  } catch (err) {
+    return res.status(502).json({ error: err.message || 'Scheduling failed' });
+  }
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -28,6 +58,8 @@ export default async function handler(req, res) {
   if (!verifyPaidPassword(submitted)) {
     return res.status(403).json({ error: 'Wrong or missing unlock password.' });
   }
+  const op = req.query?.op;
+  if (op === 'schedule' || op === 'unschedule' || op === 'list') return scheduleOps(req, res, op);
 
   const { accountId, message, imageUrl, to, subject, personaName } = req.body || {};
   if (!accountId || typeof accountId !== 'string') {
