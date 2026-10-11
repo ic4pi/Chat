@@ -20,11 +20,14 @@ Done = `[x]` + ~~struck through~~. Updated with every change that ships.
 ## Current work
 
 - [x] ~~Settings → Tokens section (GitHub + named tokens) — merged #109~~
-- [ ] Verify Tokens section is live on production (owner checking)
+- [x] ~~Rebuild Workspace bundle so Tokens UI actually ships (was source-only in #109)~~
+- [x] ~~Build plan: Plan panel in Workspace, orchestrator reads + maintains it~~
+- [ ] Verify Tokens + Plan panel are live on production (owner checking)
 - [ ] Use the saved extra tokens (Vercel/Render/Supabase) somewhere — stored only for now
 
 ## Done log (newest first)
 
+- ~~Workspace Plan panel + orchestrator-owned build plan~~
 - ~~GitHub backup for work in progress~~
 - ~~Open/copy/download a file from the file tree~~
 - ~~Compare: read a file in either version as a document~~

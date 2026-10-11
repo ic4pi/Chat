@@ -71,6 +71,8 @@ import {
 } from './coderModels.js';
 import type { GenerateChunkResult } from './ChunkModelPanel.js';
 import { SettingsPanel } from './SettingsPanel.js';
+import { PlanPanel } from './PlanPanel.js';
+import { loadPlan, savePlan, parsePlan } from './buildPlan.js';
 import { ComparePanel, type BuildChoice, type CompareHandle } from './ComparePanel.js';
 import { BuildPicker, type BuildChoiceSeats, type TeamOption } from './BuildPicker.js';
 import {
@@ -403,6 +405,7 @@ export function App() {
   const [keys,         setKeys]         = useState(() => loadProviderKeys());
   const [showSettings, setShowSettings] = useState(false);
   const [showCompare,  setShowCompare]  = useState(false);
+  const [showPlan,     setShowPlan]     = useState(false);
   const [roleModels,   setRoleModels]   = useState(() => loadRoleModels());
   // Auto-save ON — generated files go to the sandbox immediately so you can download/push.
   const [autoRun,      setAutoRun]      = useState(false);
@@ -491,6 +494,13 @@ export function App() {
   }, []);
   const [homeList, setHomeList] = useState<StoredSession[]>(() => listSessions());
   const [sessionKey,   setSessionKey]   = useState(0);
+  // Build plan: the orchestrator's checklist for this workspace session.
+  const [buildPlan, setBuildPlan] = useState(() => loadPlan(sessionId));
+  useEffect(() => { setBuildPlan(loadPlan(sessionId)); }, [sessionId]);
+  const handleBuildPlan = useCallback((md: string) => {
+    savePlan(sessionId, md);
+    setBuildPlan(md);
+  }, [sessionId]);
   const isMobile = useIsMobile();
   const activeApiKey = (keys[provider] || '').trim();
 
@@ -1640,13 +1650,22 @@ export function App() {
             overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 120 }}
             title={repo.sandboxId}>● {repo.sandboxId.slice(0, 20)}</span>
         )}
+        <button type="button" className="ws-btn" onClick={() => setShowPlan(true)}
+          title="Build plan — the checklist the orchestrator keeps for this build"
+          aria-haspopup="dialog" aria-expanded={showPlan}
+          style={{ background: 'var(--surface-2)', color: 'var(--text-muted)',
+            border: '1px solid var(--border)', borderRadius: 'var(--radius)',
+            height: 30, padding: '0 9px', display: 'flex', alignItems: 'center', gap: 5,
+            cursor: 'pointer', fontSize: 13, marginLeft: 'auto' }}>
+          ☑{(() => { const p = parsePlan(buildPlan); return p.total ? ` ${p.done}/${p.total}` : ''; })()}
+        </button>
         <button type="button" className="ws-btn" onClick={() => setShowCompare(true)}
           title="Compare — two models, one prompt, two live previews"
           aria-haspopup="dialog" aria-expanded={showCompare}
           style={{ background: 'var(--surface-2)', color: 'var(--text-muted)',
             border: '1px solid var(--border)', borderRadius: 'var(--radius)',
             width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: 'pointer', fontSize: 15, marginLeft: 'auto' }}>
+            cursor: 'pointer', fontSize: 15 }}>
           ⇄
         </button>
         <button type="button" className="ws-btn" onClick={() => setShowSettings(true)}
@@ -1660,6 +1679,7 @@ export function App() {
           ⚙
         </button>
       </div>
+      <PlanPanel open={showPlan} onClose={() => setShowPlan(false)} plan={buildPlan} onChange={handleBuildPlan} />
       <SettingsPanel
         open={showSettings}
         onClose={() => setShowSettings(false)}
@@ -1842,6 +1862,8 @@ export function App() {
           persona={orchPersona}
           onModelReplaced={handleModelReplaced}
           onCompareBrief={handleCompareBrief}
+          buildPlan={buildPlan}
+          onBuildPlan={handleBuildPlan}
           askBeforeBuild={teamPrefs.askFirst}
           buildPicker={renderBuildPicker}
           fixer={teamPrefs.seats ? withKey(teamSeats.fix) : null}
