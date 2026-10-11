@@ -1253,3 +1253,6 @@ body.kb-open .context-row { padding: 0; }
 .msg-reasoning { margin: 0 0 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); }
 .msg-reasoning summary { cursor: pointer; padding: 6px 10px; font-size: 12px; color: var(--muted); user-select: none; }
 .msg-reasoning pre { margin: 0; padding: 8px 10px 10px; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 12px/1.5 inherit; color: var(--muted); border-top: 1px solid var(--border); }
+.group-team-row { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 8px; }
+.group-team-label { flex: 1; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.group-team-label select { padding: 8px 10px; }
