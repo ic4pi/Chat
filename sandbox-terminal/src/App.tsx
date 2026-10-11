@@ -467,6 +467,7 @@ export function App() {
       pending: x.pending,
       wantCompare: x.wantCompare,
       builtBy: x.builtBy,
+      reasoning: x.reasoning,
     }));
   });
   const [fromChat] = useState(() => boot.fromChat);
@@ -637,7 +638,7 @@ export function App() {
       fromChat,
       messages: chatMessages.map(m => ({
         id: m.id, role: m.role, content: m.content, kind: m.kind, speaker: m.speaker, to: m.to,
-        pending: m.pending, wantCompare: m.wantCompare, builtBy: m.builtBy,
+        pending: m.pending, wantCompare: m.wantCompare, builtBy: m.builtBy, reasoning: m.reasoning,
       })),
       pendingChanges: repo.pendingChanges,
       files: repo.snapshot,
@@ -703,6 +704,7 @@ export function App() {
       pending: x.pending,
       wantCompare: x.wantCompare,
       builtBy: x.builtBy,
+      reasoning: x.reasoning,
     })));
     setPushError(null);
     setPushOk(null);
