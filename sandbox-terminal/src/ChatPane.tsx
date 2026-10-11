@@ -725,6 +725,21 @@ export interface SeatPick { provider: string; model: string; apiKey?: string }
 /** What "Who builds this?" hands back. */
 export interface BuildRequest { builder: SeatPick; second: SeatPick | null }
 
+/** "Thinking" under a reply: the model's reasoning, collapsed until you open it. */
+function ReasoningToggle({ text }: { text?: string }) {
+  if (!text) return null;
+  return (
+    <details data-testid="reasoning" style={{ margin: '2px 0 8px', border: '1px solid #232838',
+      borderRadius: 6, background: 'rgba(255,255,255,.02)' }}>
+      <summary style={{ cursor: 'pointer', padding: '5px 10px', fontSize: 14, color: '#9198AA',
+        userSelect: 'none' }}>Thinking</summary>
+      <pre style={{ margin: 0, padding: '8px 10px', maxHeight: 260, overflow: 'auto',
+        whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 14, lineHeight: 1.45,
+        color: '#9198AA', borderTop: '1px solid #232838', fontFamily: 'inherit' }}>{text}</pre>
+    </details>
+  );
+}
+
 export interface Message {
   id:          string;
   role:        'user' | 'assistant';
@@ -744,6 +759,15 @@ export interface Message {
   builtBy?:    string;
   segments?:   Segment[];
   fileChanges?: PendingChange[];
+  /** What the model reasoned before answering — kept so it can be opened later. */
+  reasoning?:  string;
+}
+
+const MAX_SAVED_REASONING = 20_000;
+function keepReasoning(t?: string): string | undefined {
+  const x = (t || '').trim();
+  if (!x) return undefined;
+  return x.length > MAX_SAVED_REASONING ? `${x.slice(0, MAX_SAVED_REASONING)}\n… (trimmed)` : x;
 }
 
 let _id = 0;
@@ -1040,6 +1064,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
     const sendStartedAt = Date.now();
 
+    let coderReasoning: string | undefined;
     const callAgentWithContinue = async (
       history: Array<{ role: string; content: string | unknown }>,
       systemPrompt: string,
@@ -1049,6 +1074,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       key?: string,
     ): Promise<string> => {
       let result = await callAgent(history, systemPrompt, sid, prov, mod, key);
+      coderReasoning = keepReasoning(result.reasoning);
       let reply = result.reply;
       let continues = 0;
       let emptyThink = result.timedOut && (!reply.trim() || reply === '(empty response)');
@@ -1095,6 +1121,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           : mergeContinuation(reply, result.reply);
         emptyThink = result.timedOut && (!reply.trim() || reply === '(empty response)');
         hadReasoningEvidence = !!result.reasoning?.trim();
+        coderReasoning = keepReasoning(result.reasoning) ?? coderReasoning;
         if (!result.incomplete && !looksTruncatedReply(result.reply) && result.reply.trim() && result.reply !== '(empty response)') {
           break;
         }
@@ -1190,6 +1217,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         brief = split.brief;
         const personaMsg: Message = {
           id: uid(), role: 'assistant', speaker: 'persona', content: raw || '(no reply)',
+          reasoning: keepReasoning(personaReply.reasoning),
         };
         setMessages(m => [...m, personaMsg]);
         if (speakOnRef.current && split.say && cleanForSpeech(split.say)) {
@@ -1364,7 +1392,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       }
 
       setMessages(m => [...m, {
-        id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
+        id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc, reasoning: coderReasoning,
       }]);
       // In orchestrator mode the persona is the voice; the coder stays on screen.
       if (speakOnRef.current && kind === 'user' && !orchestrated && cleanForSpeech(reply)) {
@@ -1411,7 +1439,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         ];
 
         setMessages(m => [...m, {
-          id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc,
+          id: uid(), role: 'assistant', content: reply, segments: segs, fileChanges: fc, reasoning: coderReasoning,
         }]);
         if (speakOnRef.current && !orchestrated && cleanForSpeech(reply)) {
           void speakReply(reply);
@@ -1741,6 +1769,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                   textTransform: 'uppercase', color: '#FF9FC4', marginBottom: 4 }}>
                   {persona?.name || 'Persona'}
                 </div>
+                <ReasoningToggle text={msg.reasoning} />
                 <p style={{ margin: '4px 0', fontSize: 18, lineHeight: 1.6, color: '#ECEEF3',
                   whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                   {(() => {
@@ -1761,6 +1790,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 }}>
                   {persona ? 'Coder' : 'Agent'}
                 </div>
+                <ReasoningToggle text={msg.reasoning} />
                 <AssistantBody msg={msg} appliedPaths={appliedPaths} onRunCode={onRunCode} />
               </div>
             )}

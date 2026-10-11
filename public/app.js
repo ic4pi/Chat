@@ -1358,6 +1358,16 @@ function renderMessageInto(container, m, idx) {
       taskLine.textContent = `Task: ${m.task}`;
       content.appendChild(taskLine);
     }
+    if (m.reasoning && !m.streaming) {
+      const det = document.createElement('details');
+      det.className = 'msg-reasoning';
+      const sum = document.createElement('summary');
+      sum.textContent = 'Thinking';
+      const pre = document.createElement('pre');
+      pre.textContent = m.reasoning;
+      det.append(sum, pre);
+      content.appendChild(det);
+    }
     const shown = stripContinueMarkers(m.content || '') || (m.streaming ? '…' : '');
     if (m.campaign?.posts) renderCampaignInto(content, m.campaign);
     else renderMarkdownInto(content, shown);
@@ -3259,6 +3269,15 @@ function setTypingActive(on, statusText) {
   }
 }
 
+// Keep what the model reasoned so it stays viewable under the reply.
+// Capped so a long chain of thought can't blow the localStorage budget.
+const MAX_SAVED_REASONING = 20000;
+function keepReasoning(text) {
+  const t = String(text || '').trim();
+  if (!t) return undefined;
+  return t.length > MAX_SAVED_REASONING ? t.slice(0, MAX_SAVED_REASONING) + '\n… (trimmed)' : t;
+}
+
 function appendTypingThought(text) {
   if (!els.typingThoughts || !text) return;
   els.typingThoughts.classList.remove('hidden');
@@ -3516,6 +3535,7 @@ async function sendMessage(text) {
       let streamBuf = '';
       let spokenUpTo = 0;
       let turnSources = [];
+      let turnThoughts = '';
       chat.messages.push({
         role: 'assistant',
         content: '',
@@ -3567,6 +3587,7 @@ async function sendMessage(text) {
           } else if (evt.type === 'status') {
             updateStatusClock(evt.message || 'Working…');
           } else if (evt.type === 'thinking') {
+            turnThoughts += evt.text || '';
             appendTypingThought(evt.text || '');
             updateStatusClock('Thinking');
           } else if (evt.type === 'token') {
@@ -3591,6 +3612,7 @@ async function sendMessage(text) {
           // belongs to the discarded attempt, same as the bubble reset below.
           stopNeuralSpeech();
           streamBuf = '';
+          turnThoughts = '';
           spokenUpTo = 0;
           refreshStreamingBubble();
           const retry = await callChatStream(
@@ -3601,7 +3623,7 @@ async function sendMessage(text) {
             (evt) => {
               if (evt.type === 'sources') turnSources = Array.isArray(evt.sources) ? evt.sources : [];
               else if (evt.type === 'status') updateStatusClock(evt.message || 'Working…');
-              else if (evt.type === 'thinking') appendTypingThought(evt.text || '');
+              else if (evt.type === 'thinking') { turnThoughts += evt.text || ''; appendTypingThought(evt.text || ''); }
               else if (evt.type === 'token') {
                 streamBuf += evt.text || '';
                 updateStatusClock('Writing');
@@ -3622,6 +3644,9 @@ async function sendMessage(text) {
       if (idx !== -1) chat.messages.splice(idx, 1);
 
       const data = attempt.data || {};
+      const savedReasoning = keepReasoning(
+        (typeof data.reasoning === 'string' && data.reasoning.trim()) ? data.reasoning : turnThoughts,
+      );
       const rawReply = (attempt.ok ? (data.reply || streamBuf) : (streamBuf || data.partialReply || '')).trim();
       const timedOut = Boolean(data.timedOut) || (!attempt.ok && isTimeoutLikeError(data.error || attempt.errText));
       const hadReasoning = Boolean(
@@ -3696,6 +3721,7 @@ async function sendMessage(text) {
           provider: data.provider,
           model: data.model || state.activeModel,
           sources: turnSources.length ? turnSources : undefined,
+          reasoning: savedReasoning,
         });
         if (attempt.stopped || activeChatUserStopped) {
           chat.messages.push({ role: 'info', content: 'Stopped.', ts: Date.now() });
@@ -3736,6 +3762,7 @@ async function sendMessage(text) {
         model: data.model || state.activeModel,
         chunk: autoRound + 1,
         sources: turnSources.length ? turnSources : undefined,
+        reasoning: savedReasoning,
       });
 
       const newArts = extractArtifacts(displayReply, { role: state.activeRole || 'plan' });
