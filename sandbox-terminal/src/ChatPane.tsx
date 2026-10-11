@@ -22,6 +22,7 @@
  * are rendered as runnable snippets with "▶ Run in Sandbox".
  */
 
+import { extractPlanBlock } from './buildPlan.js';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { PendingChange } from './useRepoContext.js';
 import type { FileNode } from './types.js';
@@ -791,6 +792,9 @@ interface Props {
   } | void>;
   /** Send a brief to both Compare coders instead of (or as well as) this one. */
   onCompareBrief?:   (brief: string, picks?: { a: SeatPick; b: SeatPick }) => void;
+  /** The build plan (markdown) and where the orchestrator's updates go. */
+  buildPlan?:        string;
+  onBuildPlan?:      (md: string) => void;
   /** Hold persona briefs until you pick who builds them. */
   askBeforeBuild?:   boolean;
   /** Renders "Who builds this?" under a pending brief. */
@@ -812,6 +816,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   repoRoot, repoUrl, sandboxId, provider, model, role, persona = null, apiKey, tree, contextFiles, autoRun, appliedPaths,
   autoSelectedFiles, searchHits, initialMessages, onMessagesChange,
   onRunCode, onFileChanges, onUploadText, onBeforeSend, onModelReplaced, onCompareBrief,
+  buildPlan = '', onBuildPlan,
   askBeforeBuild = false, buildPicker, fixer = null,
   pythonReady = null, pythonDetail = null,
   rustReady = null, rustDetail = null,
@@ -861,12 +866,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   const latestRef = useRef({
     repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onCompareBrief, askBeforeBuild, fixer,
+    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onCompareBrief, askBeforeBuild, fixer, buildPlan, onBuildPlan,
   });
   latestRef.current = {
     repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onCompareBrief, askBeforeBuild, fixer,
+    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onCompareBrief, askBeforeBuild, fixer, buildPlan, onBuildPlan,
   };
 
   useEffect(() => {
@@ -1163,6 +1168,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           hits,
           coderLabel: `${prov} / ${mod}`,
           role: activeRole,
+          plan: latestRef.current.buildPlan,
         });
         const pProv = orchPersona.provider || prov;
         const pMod = orchPersona.model || mod;
@@ -1176,7 +1182,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           orchPersona.apiKey || (pProv === prov ? key : undefined),
           { personaId: orchPersona.id, orchestrate: true },
         );
-        const raw = personaReply.reply === '(empty response)' ? '' : personaReply.reply.trim();
+        const rawFull = personaReply.reply === '(empty response)' ? '' : personaReply.reply.trim();
+        // The orchestrator keeps the build plan current with a <<<PLAN>>> block.
+        const { text: raw, plan: newPlan } = extractPlanBlock(rawFull);
+        if (newPlan) latestRef.current.onBuildPlan?.(newPlan);
         const split = splitPersonaReply(raw);
         brief = split.brief;
         const personaMsg: Message = {
