@@ -563,7 +563,7 @@ const GROUP_MODE_LABELS = {
   orchestrated: 'Orchestrated',
 };
 
-function createGroupChat(mode, topic, personaModels = {}, rounds = 3, personaIds = null, personaTasks = {}) {
+function createGroupChat(mode, topic, personaModels = {}, rounds = 3, personaIds = null, personaTasks = {}, teamPrompt = '') {
   const label = GROUP_MODE_LABELS[mode] || 'Group';
   const chat = createChat({
     kind: 'group',
@@ -572,6 +572,7 @@ function createGroupChat(mode, topic, personaModels = {}, rounds = 3, personaIds
     personaModels,
     personaIds,
     personaTasks,
+    teamPrompt: teamPrompt || undefined,
     groupRounds: rounds,
     name: `${label}: ${topic.slice(0, 36)}`,
     messages: [],
@@ -663,6 +664,10 @@ const els = {
   closeGroupModal: $('closeGroupModal'),
   cancelGroupBtn: $('cancelGroupBtn'),
   groupTopicInput: $('groupTopicInput'),
+  groupTeamSelect: $('groupTeamSelect'),
+  groupTeamPrompt: $('groupTeamPrompt'),
+  saveTeamBtn: $('saveTeamBtn'),
+  groupModalTitle: $('groupModalTitle'),
   groupPersonaModels: $('groupPersonaModels'),
   startGroupBtn: $('startGroupBtn'),
   roundsMinus: $('roundsMinus'),
@@ -3441,7 +3446,7 @@ async function sendMessage(text) {
   // "Search the web for X" → this one reply is grounded in live results.
   turnSearchQuery = groupAsk ? null : parseWebSearchRequest(text, prevUser?.content);
   if (groupAsk) {
-    return runInlineGroupDiscussion(chat, groupAsk);
+    return openGroupMeeting(chat, groupAsk);
   }
   // "Write a campaign for X" → offer a marketing meeting first (unless the
   // ask already says), then strategist, ruthless editor, every platform.
@@ -3876,6 +3881,7 @@ async function callGroupStream(chat, apiMessages, onEvent) {
         webSearchQuery: turnSearchQuery || undefined,
         personaIds: (Array.isArray(chat.personaIds) && chat.personaIds.length) ? chat.personaIds : undefined,
         personaTasks: (chat.personaTasks && typeof chat.personaTasks === 'object') ? chat.personaTasks : undefined,
+        teamPrompt: chat.teamPrompt || undefined,
         forcedLeadId: chat.forcedLeadId || undefined,
       }),
       signal: controller.signal,
@@ -4366,18 +4372,22 @@ function parseWebSearchRequest(text, previousUserText = '') {
   return query.slice(0, 400);
 }
 
-async function runInlineGroupDiscussion(chat, { rounds, topic }) {
+async function runInlineGroupDiscussion(chat, { rounds, topic, mode, personaIds, personaTasks, teamPrompt, teamName }) {
   // runOneRound reads these off the chat; set them for this discussion only
   // and put the chat back exactly as it was afterwards.
   const saved = {
     groupMode: chat.groupMode,
     personaIds: chat.personaIds,
+    personaTasks: chat.personaTasks,
+    teamPrompt: chat.teamPrompt,
     forcedLeadId: chat.forcedLeadId,
     topic: chat.topic,
     groupFocus: chat.groupFocus,
   };
-  chat.groupMode = 'brainstorm'; // everyone speaks each round
-  chat.personaIds = null;        // full roster
+  chat.groupMode = mode || 'brainstorm'; // everyone speaks each round
+  chat.personaIds = Array.isArray(personaIds) && personaIds.length ? personaIds : null; // null = full roster
+  chat.personaTasks = personaTasks && Object.keys(personaTasks).length ? personaTasks : undefined;
+  chat.teamPrompt = teamPrompt || undefined;
   chat.forcedLeadId = undefined;
   chat.topic = topic;
   chat.groupFocus = topic;
@@ -4386,7 +4396,7 @@ async function runInlineGroupDiscussion(chat, { rounds, topic }) {
   // seating order), and an empty screen reads as stuck.
   chat.messages.push({
     role: 'info',
-    content: `Group discussion · ${rounds} round${rounds > 1 ? 's' : ''} · everyone at the table — starting…`,
+    content: `Group meeting · ${teamName || 'everyone at the table'} · ${rounds} round${rounds > 1 ? 's' : ''} — starting…`,
     ts: Date.now(),
   });
   renderMessages({ scroll: 'bottom' });
@@ -6476,16 +6486,134 @@ function clearGroupDraft() {
   if (els.roundsPlus) els.roundsPlus.disabled = false;
 }
 
-async function openGroupModal() {
+// ---------------------------------------------------------------------------
+// Teams: named sets of personas with their own editable prompt, so "group
+// discussion about my ad campaign" seats the marketing people, not everyone.
+// Browser-stored. A built-in team with no saved roster picks its members by
+// matching persona id/name/description; check boxes + "Save team" fixes it.
+// ---------------------------------------------------------------------------
+const TEAMS_KEY = 'uncensored_teams_v1';
+const BUILTIN_TEAMS = [
+  {
+    id: 'marketing',
+    name: 'Marketing Agency',
+    personaRe: /market|brand|campaign|copy|content|social|seo|advertis|\bads?\b|growth|guerr?illa|promo|creative|media|pr\b|strateg/i,
+    routeRe: /\b(?:market(?:ing)?|brand(?:ing)?|campaigns?|ad copy|advertis\w*|promo(?:tion|tional)?|launch|go[- ]to[- ]market|audience|social media|seo|content calendar|positioning|customers?|clients?|slogan|tagline|influencer|guerr?illa)\b/i,
+    prompt: 'You are an agency team working one client brief. Open with the strategist\'s read of audience, angle and offer. The creative and the guerrilla marketer push for ideas that would actually get noticed; the analyst and the editor challenge anything vague or unproven. Disagree openly, then converge. End with concrete deliverables the client can use, each with an owner.',
+  },
+  {
+    id: 'security',
+    name: 'White-Hat Security',
+    idRe: /^sec-/i,
+    personaRe: /security|pentest|recon|malware|exploit|vulnerab|infosec|red team|blue team|reverse engineer/i,
+    routeRe: /\b(?:security|vulnerab\w*|pentest|penetration|exploit\w*|hack\w*|malware|owasp|attack surface|threat model|breach|firewall|cve|xss|sql injection|ctf|red team|recon)\b/i,
+    prompt: 'You are an authorized white-hat team assessing a target the user owns or is cleared to test. Recon maps the surface first; web, network and malware specialists then dig into their areas. Every finding states the exact weakness, the exploit path and the fix, ranked by real impact. End with a prioritized remediation list.',
+  },
+];
+
+function readTeamStore() {
+  try {
+    const o = JSON.parse(localStorage.getItem(TEAMS_KEY) || '{}');
+    return o && typeof o === 'object' ? o : {};
+  } catch { return {}; }
+}
+function writeTeamStore(o) {
+  try { localStorage.setItem(TEAMS_KEY, JSON.stringify(o)); } catch { /* ignore */ }
+}
+/** Built-in teams plus custom ones, saved edits applied, rosters resolved. */
+function getTeams() {
+  const store = readTeamStore();
+  const ids = new Set(personas.map((p) => p.id));
+  const out = [];
+  for (const b of BUILTIN_TEAMS) {
+    const saved = store[b.id] || {};
+    let personaIds = Array.isArray(saved.personaIds) ? saved.personaIds.filter((id) => ids.has(id)) : null;
+    if (!personaIds) {
+      personaIds = personas
+        .filter((p) => (b.idRe && b.idRe.test(p.id)) || b.personaRe.test(`${p.name} ${p.description || ''}`))
+        .map((p) => p.id);
+    }
+    out.push({ id: b.id, name: b.name, prompt: typeof saved.prompt === 'string' ? saved.prompt : b.prompt, personaIds, routeRe: b.routeRe });
+  }
+  for (const [id, t] of Object.entries(store)) {
+    if (!t || !t.custom) continue;
+    out.push({
+      id, name: t.name || id, prompt: t.prompt || '',
+      personaIds: (t.personaIds || []).filter((x) => ids.has(x)), routeRe: null,
+    });
+  }
+  return out;
+}
+/** Best team for a piece of text, or null when nothing fits. */
+function matchTeamForText(text) {
+  const t = String(text || '');
+  let best = null;
+  let bestHits = 0;
+  for (const team of getTeams()) {
+    if (!team.routeRe || !team.personaIds.length) continue;
+    const hits = (t.match(new RegExp(team.routeRe.source, 'gi')) || []).length;
+    if (hits > bestHits) { best = team; bestHits = hits; }
+  }
+  return best;
+}
+function fillTeamSelect(selectedId) {
+  const sel = els.groupTeamSelect;
+  if (!sel) return;
+  sel.innerHTML = '';
+  const add = (value, label) => {
+    const o = document.createElement('option');
+    o.value = value; o.textContent = label; sel.appendChild(o);
+  };
+  add('', 'Everyone (all personas)');
+  for (const t of getTeams()) add(t.id, `${t.name} (${t.personaIds.length})`);
+  add('__new', '+ New team…');
+  sel.value = [...sel.options].some((o) => o.value === selectedId) ? selectedId : '';
+}
+/** Check exactly the team's members in the roster and load its prompt. */
+function applyTeamToForm(teamId) {
+  const host = els.groupPersonaModels;
+  const team = getTeams().find((t) => t.id === teamId);
+  if (els.groupTeamPrompt) els.groupTeamPrompt.value = team ? team.prompt : '';
+  if (!host) return;
+  host.querySelectorAll('.group-persona-row').forEach((row) => {
+    const box = row.querySelector('.group-persona-include');
+    if (!box) return;
+    box.checked = team ? team.personaIds.includes(row.dataset.personaId) : true;
+    box.dispatchEvent(new Event('change'));
+  });
+}
+
+// A group discussion asked for in chat opens this meeting setup first, so
+// you confirm the team, roster, models and rounds before anyone speaks.
+let pendingMeeting = null;
+async function openGroupMeeting(chat, ask) {
+  pendingMeeting = { chat, rounds: ask.rounds || 3 };
+  const team = matchTeamForText(ask.topic);
+  await openGroupModal({ meeting: true, topic: ask.topic, rounds: pendingMeeting.rounds, teamId: team ? team.id : '' });
+}
+
+async function openGroupModal(opts = {}) {
   if (!els.groupModal) return;
   els.groupModal.classList.remove('hidden');
+  if (!opts.meeting) pendingMeeting = null;
+  if (els.groupModalTitle) els.groupModalTitle.textContent = opts.meeting ? 'Group meeting' : 'Group table';
+  if (els.startGroupBtn) els.startGroupBtn.textContent = opts.meeting ? 'Start meeting' : 'Start group';
   // Restore draft — never wipe a carefully written opening on reopen.
   restoreGroupDraft();
+  if (opts.meeting) {
+    if (els.groupTopicInput) els.groupTopicInput.value = opts.topic || '';
+    const r = Math.min(20, Math.max(1, opts.rounds || 3));
+    if (els.roundsDisplay) els.roundsDisplay.textContent = String(r);
+    if (els.roundsMinus) els.roundsMinus.disabled = r <= 1;
+    if (els.roundsPlus) els.roundsPlus.disabled = r >= 20;
+  }
+  fillTeamSelect(opts.teamId || '');
   try {
     await renderGroupPersonaModels();
   } catch (err) {
     console.warn('Could not render persona model assignments:', err);
   }
+  applyTeamToForm(els.groupTeamSelect?.value || '');
   if (els.groupTopicInput) {
     setTimeout(() => {
       els.groupTopicInput.focus();
@@ -6497,7 +6625,8 @@ async function openGroupModal() {
 }
 function closeGroupModal() {
   // Snapshot draft before hiding so accidental dismiss never loses the prompt.
-  captureGroupDraft();
+  if (!pendingMeeting) captureGroupDraft();
+  pendingMeeting = null;
   els.groupModal?.classList.add('hidden');
 }
 els.groupBtn?.addEventListener('click', () => { void openGroupModal(); });
@@ -6506,6 +6635,35 @@ els.cancelGroupBtn?.addEventListener('click', closeGroupModal);
 // Backdrop taps must NOT dismiss — on mobile the Start control used to sit
 // under the form with only a sliver visible; missing it hit the overlay,
 // closed the modal, wiped the prompt, and dumped you back into normal chat.
+
+els.groupTeamSelect?.addEventListener('change', () => {
+  if (els.groupTeamSelect.value === '__new') {
+    const name = (window.prompt('Name the new team:') || '').trim();
+    if (!name) { fillTeamSelect(''); applyTeamToForm(''); return; }
+    const id = 'team-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '-' + Date.now().toString(36);
+    const store = readTeamStore();
+    store[id] = { custom: true, name, prompt: '', personaIds: collectSelectedPersonaIdsFromForm() };
+    writeTeamStore(store);
+    fillTeamSelect(id);
+    applyTeamToForm(id);
+    return;
+  }
+  applyTeamToForm(els.groupTeamSelect.value);
+});
+els.saveTeamBtn?.addEventListener('click', () => {
+  const id = els.groupTeamSelect?.value;
+  if (!id || id === '__new') { alert('Pick a team first (or choose + New team…).'); return; }
+  const store = readTeamStore();
+  store[id] = {
+    ...(store[id] || {}),
+    prompt: els.groupTeamPrompt?.value || '',
+    personaIds: collectSelectedPersonaIdsFromForm(),
+  };
+  writeTeamStore(store);
+  fillTeamSelect(id);
+  els.saveTeamBtn.textContent = 'Saved ✓';
+  setTimeout(() => { if (els.saveTeamBtn) els.saveTeamBtn.textContent = 'Save team'; }, 1500);
+});
 
 // Rounds stepper
 const MIN_ROUNDS = 1;
@@ -6549,7 +6707,21 @@ els.startGroupBtn?.addEventListener('click', async () => {
     const t = (groupPersonaTasks[id] || '').trim();
     if (t) tasks[id] = t;
   }
-  createGroupChat(mode, topic, assigned, rounds, personaIds, tasks);
+  const teamId = els.groupTeamSelect?.value || '';
+  const teamPrompt = (els.groupTeamPrompt?.value || '').trim();
+  if (pendingMeeting) {
+    // Asked for in a chat: run it right there so the conversation (and the
+    // persona you're talking to) keeps the whole discussion.
+    const { chat } = pendingMeeting;
+    pendingMeeting = null;
+    const team = getTeams().find((t) => t.id === teamId);
+    els.groupModal?.classList.add('hidden');
+    await runInlineGroupDiscussion(chat, {
+      rounds, topic, mode, personaIds, personaTasks: tasks, teamPrompt, teamName: team?.name,
+    });
+    return;
+  }
+  createGroupChat(mode, topic, assigned, rounds, personaIds, tasks, teamPrompt);
   // Clear draft and hide without re-capturing the emptied form.
   clearGroupDraft();
   els.groupModal?.classList.add('hidden');
