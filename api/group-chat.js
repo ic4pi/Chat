@@ -355,6 +355,8 @@ export default async function handler(req, res) {
     webSearchQuery,
     personaIds,
     personaTasks = {},
+    // Team brief for a meeting run by a named team (editable in the app).
+    teamPrompt,
     // Orchestrated-only: pin a specific persona as lead instead of letting
     // rankPersonasByRelevance pick one. This is what turns Orchestrated mode
     // into "solo chat with a team behind it" — the persona you're actually
@@ -566,7 +568,10 @@ export default async function handler(req, res) {
         }
       }
 
-      const personaPrompt = [master, persona.systemPrompt, modeRules, teamActionsBlock, searchContext]
+      const teamBrief = typeof teamPrompt === 'string' && teamPrompt.trim()
+        ? `TEAM BRIEF (how this team works together):\n${teamPrompt.trim().slice(0, 4000)}`
+        : '';
+      const personaPrompt = [master, persona.systemPrompt, teamBrief, modeRules, teamActionsBlock, searchContext]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n');
 

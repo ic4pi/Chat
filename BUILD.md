@@ -25,6 +25,15 @@ Done = `[x]` + ~~struck through~~. Updated with every change that ships.
 - [ ] Verify Tokens + Plan panel are live on production (owner checking)
 - [ ] Use the saved extra tokens (Vercel/Render/Supabase) somewhere — stored only for now
 
+## Teams & Production (planned with owner)
+
+- [x] ~~Phase 1a: Teams (Marketing Agency, White-Hat Security) with editable member lists + team prompts~~
+- [x] ~~Phase 1b: Group discussion asked in chat opens a meeting popup — team auto-matched, roster/models/rounds (default 3) editable, Start meeting~~
+- [ ] Phase 1c: confirm the guerrilla-marketing persona landed in Marketing Agency (7 members) in the live app; Save team
+- [ ] Phase 2: orchestrator reads the meeting — summary, consensus (or "split"), per-persona breakdown
+- [ ] Phase 3: orchestrator proposes deliverables from the result and hands them off (Workspace app build, Media promo/video/logo kits)
+- [ ] Phase 4: Production module — project profiles, repeatable templates (marketing plan etc.), per-project customization
+
 ## Done log (newest first)
 
 - ~~Workspace Plan panel + orchestrator-owned build plan~~

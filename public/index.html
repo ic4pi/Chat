@@ -387,6 +387,17 @@
     </div>
     <p class="keys-hint group-modal-hint">Opening first. Start stays pinned. Close anytime — your draft is kept.</p>
     <div class="group-form">
+      <div class="group-team-row">
+        <label class="group-team-label">
+          Team
+          <select id="groupTeamSelect"></select>
+        </label>
+        <button id="saveTeamBtn" class="text-btn" type="button" title="Save the checked personas and this prompt as the team's default">Save team</button>
+      </div>
+      <label class="group-topic-label">
+        Team prompt <small>(how this team works — editable, sent to every member)</small>
+        <textarea id="groupTeamPrompt" rows="3" maxlength="4000" placeholder="No team prompt. Pick a team, or write one."></textarea>
+      </label>
       <label class="group-topic-label">
         Your opening message
         <textarea id="groupTopicInput" rows="4" maxlength="8000" placeholder="What do you want to say to the table?"></textarea>

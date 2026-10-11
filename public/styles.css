@@ -1249,3 +1249,7 @@ body.kb-open .context-row { padding: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) { *, *::before { transition: none !important; } }
+
+.group-team-row { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 8px; }
+.group-team-label { flex: 1; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.group-team-label select { padding: 8px 10px; }
