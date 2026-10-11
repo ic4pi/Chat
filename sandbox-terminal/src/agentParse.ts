@@ -317,3 +317,75 @@ export function nudgeAfterRejects(rejected: RejectedFileChange[]): string {
     '```'
   );
 }
+
+
+// ── long single-file replies (e.g. a whole HTML page) ────────────────────
+
+/** The continuation markers the server appends; never part of the content. */
+export function stripContinueMarkers(text: string): string {
+  return text.replace(/\s*⟦\s*(?:MORE|DONE)\s*⟧\s*/gi, '\n').replace(/[ \t]+$/gm, '').trimEnd();
+}
+
+/**
+ * Join a continuation onto a cut-off reply. Models often repeat the last lines,
+ * reopen the fence or File: header, or start the whole file over; none of that
+ * may end up inside the saved file.
+ */
+export function mergeContinuation(prevRaw: string, nextRaw: string): string {
+  const prev = stripContinueMarkers(prevRaw);
+  let next = stripContinueMarkers(nextRaw);
+  const open = (prev.match(/```/g) || []).length % 2 === 1;
+
+  if (!open) return `${prev}\n${next.replace(/^\s+/, '')}`;
+
+  // Inside a code block: the model picks up right after the last character, so
+  // join with nothing in between (a cut can land mid-token).
+  // Reopened File: header and/or fence: keep the body only.
+  next = next.replace(/^\s*File:[^\n]*\n/i, '').replace(/^\s*```[\w+\-.]*\n/, '');
+  // Started the file over: resume after the point we already reached.
+  const head = /^\s*(<!DOCTYPE[^\n]*|<html[^\n]*)/i.exec(next);
+  if (head && prev.includes(head[1]!.trim())) {
+    const probe = prev.slice(-80);
+    const at = next.indexOf(probe);
+    next = at >= 0 ? next.slice(at + probe.length) : '';
+  }
+  // Repeated tail: drop the overlap.
+  for (let len = Math.min(prev.length, next.length, 1500); len >= 30; len--) {
+    if (next.startsWith(prev.slice(-len))) { next = next.slice(len); break; }
+  }
+  return next.trim() ? prev + next : prev;
+}
+
+/** What to tell the model when its reply was cut off mid-output. */
+export function continuationPrompt(partial: string): string {
+  const tail = stripContinueMarkers(partial).slice(-600);
+  return 'Your previous reply was cut off mid-output. It ended exactly with:\n<<<TAIL\n' + tail + '\nTAIL>>>\n'
+    + 'Continue IMMEDIATELY after that last character. Do not repeat any earlier text, do not restart the file, '
+    + 'do not write a new File: header, <!DOCTYPE or opening fence. If you were inside a fenced block, keep writing '
+    + 'the code and close the fence only when the file is complete. No apology, no commentary.';
+}
+
+/**
+ * A complete HTML document in the reply with no File: header would never be
+ * saved or previewed. Give it a header (named from its <title>) so it lands
+ * in the project like any other file.
+ */
+export function adoptBareHtmlDocument(reply: string): string {
+  if (/^\s*(?:\*\*)?(?:File|Edit):\s*\S+/im.test(reply)) return reply;
+  const fenced = /```(?:html|htm)?[ \t]*\n(\s*<!DOCTYPE html[\s\S]*?<\/html>\s*)```/i.exec(reply);
+  let doc: string | null = null;
+  let before = '';
+  let after = '';
+  if (fenced) {
+    doc = fenced[1]!;
+    before = reply.slice(0, fenced.index);
+    after = reply.slice(fenced.index + fenced[0].length);
+  } else {
+    const bare = /(<!DOCTYPE html[\s\S]*?<\/html>)/i.exec(reply);
+    if (bare) { doc = bare[1]!; before = reply.slice(0, bare.index); after = reply.slice(bare.index + bare[0].length); }
+  }
+  if (!doc) return reply;
+  const title = /<title[^>]*>([^<]{1,80})<\/title>/i.exec(doc)?.[1] ?? '';
+  const slug = title.toLowerCase().replace(/&amp;/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'index';
+  return `${before}File: ${slug}.html\n\`\`\`html\n${doc.trim()}\n\`\`\`${after}`;
+}

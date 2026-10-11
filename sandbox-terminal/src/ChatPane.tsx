@@ -27,6 +27,10 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import type { PendingChange } from './useRepoContext.js';
 import type { FileNode } from './types.js';
 import {
+  adoptBareHtmlDocument,
+  continuationPrompt,
+  mergeContinuation,
+  stripContinueMarkers,
   extractFileChangeReport,
   formatRejectedSandboxWarning,
   looksLikeApplyRequest,
@@ -124,7 +128,7 @@ const CONTINUE_LOOP_BUDGET_MS = 900_000;
  *  to get there on a 4th; better to fail loud and fast than retry quietly
  *  for the better part of an hour. */
 const EMPTY_THINK_MAX_CONTINUES = 3;
-const MID_OUTPUT_MAX_CONTINUES = 2;
+const MID_OUTPUT_MAX_CONTINUES = 4;
 
 /** Plain-words ask for two takes at once — routed to Compare. */
 function wantsTwoVersions(text: string): boolean {
@@ -449,21 +453,6 @@ function looksTruncatedReply(text: string): boolean {
     }
   }
   return false;
-}
-
-function mergeContinuation(prev: string, next: string): string {
-  const a = prev.replace(/\s+$/, '');
-  const b = next.replace(/^\s+/, '');
-  // Model often restarts the open fence — strip a duplicated opener.
-  if (a.endsWith('```') || /```[a-zA-Z0-9_+\-.]*$/.test(a)) {
-    return `${a}\n${b}`;
-  }
-  if (b.startsWith('```') && (a.match(/```/g) || []).length % 2 === 1) {
-    // Continuation reopened the fence — keep body only
-    const nl = b.indexOf('\n');
-    return nl >= 0 ? `${a}\n${b.slice(nl + 1)}` : a + b;
-  }
-  return `${a}\n${b}`;
 }
 
 /** Read SSE from /api/agent-chat (stream:true). Falls back if the body is plain JSON.
@@ -1103,22 +1092,23 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         const contPrompt = emptyThink
           ? 'Previous attempt timed out during thinking before any answer text. '
             + 'Answer now with complete File: / fenced blocks. Spend less time thinking.'
-          : 'Your previous reply was cut off mid-output. Continue EXACTLY from where you left off. '
-            + 'Finish any open File: / fenced blocks with COMPLETE file contents. '
-            + 'Do not restart files you already finished. Do not apologize.';
+          : continuationPrompt(reply);
         const contHistory = emptyThink
           ? [...history, { role: 'user', content: contPrompt }]
           : [
               ...history,
-              { role: 'assistant', content: reply },
+              { role: 'assistant', content: stripContinueMarkers(reply) },
               { role: 'user', content: contPrompt },
             ];
         setLiveThoughts('');
         setLiveStatus('Continuing…');
         result = await callAgent(contHistory, systemPrompt, sid, prov, mod, key);
+        const before = reply.length;
         reply = emptyThink
           ? result.reply
           : mergeContinuation(reply, result.reply);
+        // A continuation that added nothing new won't on the next try either.
+        if (!emptyThink && reply.length <= stripContinueMarkers(reply).length && reply.length - before < 20 && !result.incomplete) break;
         emptyThink = result.timedOut && (!reply.trim() || reply === '(empty response)');
         hadReasoningEvidence = !!result.reasoning?.trim();
         coderReasoning = keepReasoning(result.reasoning) ?? coderReasoning;
@@ -1126,7 +1116,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           break;
         }
       }
-      return reply;
+      return stripContinueMarkers(reply);
     };
 
     try {
@@ -1343,7 +1333,9 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           + 'into the user\'s actual project in this sandbox, it is not a hypothetical or a described interface. '
           + 'Do not say you are "just a text-based AI" or that you cannot provide code/an interface "directly" — '
           + 'that is false here. Do not hand back a design blueprint, description, or plan instead of code. Write '
-          + 'the File:/Edit: blocks now.';
+          + 'the File:/Edit: blocks now. If the user asks for "code only" or one complete HTML file, your whole reply '
+          + 'is `File: name.html` followed by ONE fenced block holding the complete self-contained file, with no prose '
+          + 'around it. That is the code-only output: raw code pasted without a File: header is never saved or previewed.';
       } else if (runTurn) {
         systemPrompt +=
           '\n\nRUN this turn: the user wants a file/script actually EXECUTED, not written or explained. '
@@ -1371,6 +1363,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         setLiveStatus('Builder is fixing it…');
         reply = await callAgentWithContinue(history, systemPrompt, sid, prov, mod, key);
       }
+      if (!brief || userish) reply = adoptBareHtmlDocument(reply);
       let segs  = parseSegments(reply);
       let report = extractFileChangeReport(reply);
       // Full-file writes (new files / explicit rewrites) + unresolved Edit:
