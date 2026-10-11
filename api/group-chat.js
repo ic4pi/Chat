@@ -67,6 +67,31 @@ const MODE_RULES = {
 - 1–4 short paragraphs. Do not speak for other personas.`,
 };
 
+/**
+ * What a persona can DO at the table, not just say. Search runs here,
+ * mid-turn, and the persona finishes with the results; images and post
+ * drafts ride in the turn for the browser to make and show — a post only
+ * goes out when you tap Post.
+ */
+function toolsBlock(accounts) {
+  const where = accounts.length
+    ? `Connected accounts: ${accounts.map((a) => `${a.label} (${a.platform})`).join(', ')}.`
+    : 'No accounts are connected yet, so the user will copy it — still write it ready to publish.';
+  return [
+    'TOOLS — you can act, not just talk. Use one when it makes your contribution real. Put the request on its own line:',
+    '<<<SEARCH what to look up>>> — live web search. You get the results before your turn is shown, then finish',
+    '  your turn using them and cite them as [1], [2]. At most one search per turn.',
+    '<<<IMAGE what the image shows>>> — generates an image (ad creative, post visual, mockup). It appears under your message.',
+    '<<<POST where it goes',
+    'the exact post or email text',
+    'POST>>> — a ready-to-publish draft. The user taps once to publish it. ' + where,
+    'Never claim you searched, made an image or posted without using the tool. Never ask the user to do it for you.',
+  ].join('\n');
+}
+
+const SEARCH_TOOL_RE = /<<<\s*SEARCH\b[ \t:]*([^\n]*?)[ \t]*>>>/i;
+const SEARCH_TOOL_ALL_RE = /<<<\s*SEARCH\b[^\n]*?>>>[ \t]*\n?/gi;
+
 function sseWrite(res, obj) {
   res.write(`data: ${JSON.stringify(obj)}\n\n`);
 }
@@ -467,6 +492,12 @@ export default async function handler(req, res) {
 
     const roundSoFar = [];
     const master = (config.masterPrompt || '').trim();
+    const accounts = (config.socialAccounts || []).filter((a) => (a.platform === 'twitter'
+      ? a.consumerKey && a.consumerSecret && a.accessToken && a.accessTokenSecret
+      : a.platform === 'email'
+        ? a.resendApiKey && a.fromEmail
+        : a.pageId && a.pageToken));
+    const tools = toolsBlock(accounts);
 
     const speakingOrder = await rankPersonasByRelevance(defaultResolved, defaultModel, {
       topic: topicText,
@@ -566,7 +597,7 @@ export default async function handler(req, res) {
         }
       }
 
-      const personaPrompt = [master, persona.systemPrompt, modeRules, teamActionsBlock, searchContext]
+      const personaPrompt = [master, persona.systemPrompt, modeRules, tools, teamActionsBlock, searchContext]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n');
 
@@ -675,6 +706,50 @@ export default async function handler(req, res) {
         if (controller.signal.aborted) break;
         continue;
       }
+
+      // Asked to look something up: run the search, then let the persona
+      // finish its turn with the results instead of guessing.
+      const searchAsk = SEARCH_TOOL_RE.exec(reply);
+      if (searchAsk && searchAsk[1].trim() && !controller.signal.aborted) {
+        const q = searchAsk[1].trim().replace(/^["'`]+|["'`]+$/g, '');
+        sseWrite(res, { type: 'status', message: `${persona.name} is searching: ${q.slice(0, 80)}…` });
+        let found;
+        try {
+          const results = await searchWeb(q);
+          const offset = personaSources.length;
+          personaSources = [...personaSources, ...results];
+          found = results.length
+            ? results.map((r, i) => `[${offset + i + 1}] ${r.title}\n${r.snippet}\nSource: ${r.url}`).join('\n\n')
+            : `No results for "${q}". Say so instead of guessing.`;
+        } catch (err) {
+          found = `Search for "${q}" failed: ${err.message}. Say plainly you could not check it.`;
+        }
+        try {
+          const finished = await callCompletion(
+            turnResolved,
+            turnModel,
+            [
+              { role: 'system', content: personaPrompt },
+              { role: 'user', content: userPayload },
+              { role: 'assistant', content: reply },
+              {
+                role: 'user',
+                content: `[SEARCH RESULTS for "${q}"]\n\n${found}\n\nNow give your full turn using these results, `
+                  + 'citing them as [n] where you use one. No more searches this turn.',
+              },
+            ],
+            {
+              maxTokens: MAX_TOKENS_PER_TURN,
+              signal: controller.signal,
+              providerId: turnProviderId || turnResolved.id,
+            },
+          );
+          if (finished) reply = finished;
+        } catch (err) {
+          console.error(`group-chat persona ${persona.id} search follow-up:`, err?.message || err);
+        }
+      }
+      reply = reply.replace(SEARCH_TOOL_ALL_RE, '').trim() || '(searched, but the follow-up came back empty)';
 
       // Did this reply call on someone specific? In orchestrated mode that's
       // the ONLY way anyone else gets seated this round — search the summon

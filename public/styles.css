@@ -431,6 +431,14 @@ body::before {
 .campaign-post { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--border); }
 .campaign-post-head { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 6px; }
 .campaign-post-text { white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+/* Team tools: images a persona made, post drafts you publish with one tap */
+.tool-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.tool-image { margin: 0; flex: 1 1 220px; max-width: 360px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.tool-image img { display: block; width: 100%; height: auto; }
+.tool-image-status { padding: 24px 12px; color: var(--muted); font-size: 14px; text-align: center; }
+.tool-image figcaption { padding: 6px 10px; font-size: 12px; color: var(--muted); line-height: 1.4; }
+.tool-post-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+.tool-post-hint { font-size: 12px; color: var(--muted-2); }
 .campaign-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .campaign-failures { margin-top: 8px; font-size: 13px; color: var(--danger); }
 

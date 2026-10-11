@@ -1377,6 +1377,7 @@ function renderMessageInto(container, m, idx) {
       box.appendChild(ol);
       content.appendChild(box);
     }
+    if (!m.streaming) renderTurnToolsInto(content, m);
     if (m.content && !m.streaming) {
       const speak = document.createElement('button');
       speak.type = 'button';
@@ -1868,10 +1869,17 @@ async function fetchPersonas() {
  * account, via /api/social-post. Gated behind the same unlock password as
  * paid models — this triggers a real, public, irreversible action.
  */
-async function handlePostToSocial(text, triggerBtn, personaName) {
-  if (!socialAccounts.length) return;
+async function handlePostToSocial(text, triggerBtn, personaName, opts = {}) {
+  if (!socialAccounts.length) return false;
   let accountId = socialAccounts[0].id;
-  if (socialAccounts.length > 1) {
+  // A draft that names where it goes ("Instagram", "Main page") skips the picker.
+  const where = String(opts.where || '').toLowerCase();
+  const named = where && (socialAccounts.find((a) => a.label.toLowerCase() === where)
+    || socialAccounts.find((a) => where.includes(a.label.toLowerCase()))
+    || socialAccounts.find((a) => (a.platform === 'twitter' ? /\b(?:x|twitter)\b/ : new RegExp(`\\b${a.platform}\\b`)).test(where)));
+  if (named) {
+    accountId = named.id;
+  } else if (socialAccounts.length > 1) {
     const labels = socialAccounts.map((a, i) => `${i + 1}. ${a.label} (${a.platform})`).join('\n');
     const pick = prompt(`Post to which account?\n${labels}\n\nEnter a number:`, '1');
     if (!pick) return;
@@ -1893,7 +1901,8 @@ async function handlePostToSocial(text, triggerBtn, personaName) {
     subject = (prompt('Subject line:', 'Message from ' + (activePersona()?.name || 'the team')) || '').trim();
     if (!confirm(`Send this email to ${to} now? This sends immediately and can't be undone.`)) return;
   } else {
-    const wantsImage = confirm(
+    if (opts.imageUrl) imageUrl = opts.imageUrl;
+    const wantsImage = !imageUrl && confirm(
       account.platform === 'instagram'
         ? 'Instagram needs an image. Generate one now with AI?'
         : 'Generate an AI image to attach to this post?',
@@ -1941,8 +1950,10 @@ async function handlePostToSocial(text, triggerBtn, personaName) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     flashButton(triggerBtn, account.platform === 'email' ? 'Sent ✓' : 'Posted ✓');
+    return true;
   } catch (err) {
     alert((account.platform === 'email' ? 'Send failed: ' : 'Post failed: ') + (err.message || err));
+    return false;
   }
 }
 
@@ -3445,11 +3456,21 @@ async function sendMessage(text) {
   }
   // "Write a campaign for X" → offer a marketing meeting first (unless the
   // ask already says), then strategist, ruthless editor, every platform.
+  // Calling your team for it is already a yes to the meeting.
+  const teamAsk = imageParts.length === 0 ? parseTeamCall(text, prevUser?.content) : null;
   if (imageParts.length === 0 && parseCampaignRequest(text)) {
     turnSearchQuery = null;
     if (NO_MEETING_RE.test(text)) return runInlineCampaign(chat);
-    if (MEETING_RE.test(text)) return runMarketingMeetingThenCampaign(chat, text, text);
+    if (teamAsk || MEETING_RE.test(text)) {
+      return runMarketingMeetingThenCampaign(chat, text, text,
+        teamAsk ? { personaIds: teamAsk.personaIds, label: teamAsk.teamLabel } : null);
+    }
     return askMarketingMeeting(chat, text);
+  }
+  // "Marketing team, …" → that team works it here, with their tools.
+  if (teamAsk) {
+    turnSearchQuery = null;
+    return runInlineGroupDiscussion(chat, teamAsk);
   }
 
   // Agency mode: route through the Orchestrated group-chat engine instead
@@ -4014,6 +4035,151 @@ function showMoreRoundsPrompt(chat) {
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Team tools. Personas search the web on the server mid-turn; images and post
+// drafts come back in the turn as <<<IMAGE …>>> / <<<POST where … POST>>> and
+// are made and shown here. A post only goes out when you tap Post.
+// ---------------------------------------------------------------------------
+const IMAGE_TOOL_RE = /<<<\s*IMAGE\b[ \t:]*([^\n]*?)[ \t]*>>>/gi;
+const POST_TOOL_RE = /<<<\s*POST\b[ \t:]*([^\n]*)\n([\s\S]*?)(?:\n?[ \t]*POST\s*>>>|$)/gi;
+const STRAY_TOOL_RE = /<<<\s*(?:SEARCH|IMAGE|POST)\b[^\n]*?>>>|^[ \t]*POST\s*>>>[ \t]*$/gim;
+const MAX_TURN_IMAGES = 2;
+/** Images that came back as bytes (no storage configured) — shown this session, not saved. */
+const turnImageData = new Map();
+
+function extractTurnTools(raw) {
+  const images = [];
+  const posts = [];
+  let text = String(raw || '');
+  text = text.replace(POST_TOOL_RE, (_, where, body) => {
+    const t = String(body || '').trim();
+    if (t) posts.push({ where: String(where || '').replace(/[>:\s]+$/, '').trim(), text: t });
+    return '';
+  });
+  text = text.replace(IMAGE_TOOL_RE, (_, prompt) => {
+    const p = String(prompt || '').trim().replace(/^["'`]+|["'`]+$/g, '');
+    if (p) images.push(p);
+    return '';
+  });
+  text = text.replace(STRAY_TOOL_RE, '').replace(/\n{3,}/g, '\n\n').trim();
+  return { text, images, posts };
+}
+
+async function generateTurnImage(promptText) {
+  const res = await fetch('/api/media-generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind: 'image', provider: 'venice', prompt: promptText, size: '1024x1024' }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  const img = (data.images || [])[0];
+  if (img?.url) return { url: img.url };
+  if (img?.base64) return { dataUrl: `data:${img.mimeType || 'image/png'};base64,${img.base64}` };
+  throw new Error('no image came back');
+}
+
+/** Hang a turn's images and post drafts on its message, then make the images. */
+function attachTurnTools(chat, msg, tooled) {
+  if (tooled.posts.length) msg.toolPosts = tooled.posts;
+  if (!tooled.images.length) return;
+  msg.toolImages = tooled.images.slice(0, MAX_TURN_IMAGES).map((prompt) => ({ prompt, status: 'pending' }));
+  msg.toolImages.forEach((img, i) => {
+    generateTurnImage(img.prompt)
+      .then((r) => {
+        img.status = 'done';
+        if (r.url) img.url = r.url;
+        else turnImageData.set(`${msg.ts}:${i}`, r.dataUrl);
+      })
+      .catch((err) => {
+        img.status = 'failed';
+        img.error = String(err?.message || err).slice(0, 200);
+      })
+      .finally(() => {
+        chat.updatedAt = Date.now();
+        saveState();
+        renderMessages({ scroll: groupScrollMode('bottom') });
+      });
+  });
+}
+
+function renderTurnToolsInto(content, m) {
+  if (Array.isArray(m.toolImages) && m.toolImages.length) {
+    const wrap = document.createElement('div');
+    wrap.className = 'tool-images';
+    m.toolImages.forEach((img, i) => {
+      const fig = document.createElement('figure');
+      fig.className = 'tool-image';
+      const src = img.url || turnImageData.get(`${m.ts}:${i}`);
+      if (img.status === 'done' && src) {
+        const el = document.createElement('img');
+        el.src = src;
+        el.alt = img.prompt;
+        el.loading = 'lazy';
+        fig.appendChild(el);
+      } else {
+        const ph = document.createElement('div');
+        ph.className = 'tool-image-status';
+        ph.textContent = img.status === 'pending' ? 'Generating image…'
+          : img.status === 'failed' ? `Image failed: ${img.error || 'unknown error'}`
+            : 'Image was shown once and not saved (image storage is not configured).';
+        fig.appendChild(ph);
+      }
+      const cap = document.createElement('figcaption');
+      cap.textContent = img.prompt;
+      fig.appendChild(cap);
+      wrap.appendChild(fig);
+    });
+    content.appendChild(wrap);
+  }
+  if (Array.isArray(m.toolPosts) && m.toolPosts.length) {
+    const firstImage = (m.toolImages || []).find((img) => img.url)?.url;
+    m.toolPosts.forEach((post) => {
+      const card = document.createElement('div');
+      card.className = 'campaign-post tool-post';
+      const head = document.createElement('div');
+      head.className = 'campaign-post-head';
+      head.textContent = `Draft post${post.where ? ` · ${post.where}` : ''}${post.posted ? ' · posted ✓' : ''}`;
+      card.appendChild(head);
+      const body = document.createElement('div');
+      body.className = 'campaign-post-text';
+      body.textContent = post.text;
+      card.appendChild(body);
+      const actions = document.createElement('div');
+      actions.className = 'tool-post-actions';
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'text-btn';
+      copyBtn.textContent = 'Copy';
+      copyBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        void copyTextToClipboard(post.text).then((ok) => flashButton(copyBtn, ok ? 'Copied' : 'Copy failed'));
+      });
+      actions.appendChild(copyBtn);
+      if (socialAccounts.length) {
+        const postBtn = document.createElement('button');
+        postBtn.type = 'button';
+        postBtn.className = 'text-btn';
+        postBtn.textContent = post.posted ? 'Post again' : 'Post';
+        postBtn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const ok = await handlePostToSocial(post.text, postBtn, m.personaName, { where: post.where, imageUrl: firstImage });
+          if (ok) { post.posted = true; saveState(); }
+        });
+        actions.appendChild(postBtn);
+      } else {
+        const hint = document.createElement('span');
+        hint.className = 'tool-post-hint';
+        hint.textContent = 'Connect an account in /admin to publish from here.';
+        actions.appendChild(hint);
+      }
+      card.appendChild(actions);
+      content.appendChild(card);
+    });
+  }
+}
+
 // Execute a single group round (all personas speak once). Returns true on success.
 // ---------------------------------------------------------------------------
 async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) {
@@ -4105,12 +4271,13 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
           model: evt.model,
           provider: evt.provider,
         });
-        streamBuf = evt.text || streamBuf;
+        streamBuf = evt.text ? extractTurnTools(evt.text).text : streamBuf;
         refreshBubble();
         updateStatusClock(`${evt.personaName || 'Persona'} speaking`);
       } else if (evt.type === 'turn') {
         ensureBubble(evt.personaId, evt.personaName, { model: evt.model, provider: evt.provider });
-        streamBuf = evt.content || streamBuf;
+        const tooled = extractTurnTools(evt.content || streamBuf);
+        streamBuf = tooled.text || streamBuf;
         const msg = chat.messages.find((m) => m.ts === currentTs && m.role === 'assistant');
         if (msg) {
           msg.content   = streamBuf;
@@ -4122,6 +4289,10 @@ async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) 
           const turnSrc = Array.isArray(evt.sources) ? evt.sources : roundSources;
           if (turnSrc.length) msg.sources = turnSrc;
           if (evt.task) msg.task = evt.task;
+          if (tooled.images.length || tooled.posts.length) {
+            attachTurnTools(chat, msg, tooled);
+            renderMessages({ scroll: groupScrollMode('bottom') });
+          }
         }
         refreshBubble();
         spokenThisRound.push({ content: streamBuf, personaId: evt.personaId });
@@ -4311,6 +4482,102 @@ const GROUP_WHO_RE = /\b(?:group|team|everyone|everybody|all (?:the )?(?:models|
 const GROUP_WHAT_RE = /\b(?:discuss(?:ion)?|debate|brainstorm|talk|weigh in)\b/i;
 const ROUNDS_RE = /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)[\s-]*rounds?\b|\brounds?\s*[:=]?\s*(\d{1,2})\b/i;
 
+// Teams on command: "marketing team, plan the launch" seats only that team.
+// Built from the personas you have, so a new agency-* persona joins on its own.
+const TEAM_WORD = String.raw`(?:team|squad|crew|department|dept|people|panel|folks|guys)`;
+const TEAM_DEFS = [
+  {
+    key: 'marketing',
+    label: 'Marketing team',
+    call: new RegExp(String.raw`\b(?:marketing|agency|ads?|advertising|sales|promo(?:tion)?|growth|pr|publicity|social media|campaign)\s+${TEAM_WORD}\b`, 'i'),
+    member: (p) => p.id.startsWith('agency-')
+      || /\b(?:marketing|publicist|advertis\w*|copywrit\w*)\b/i.test(`${p.name} ${p.description || ''}`),
+  },
+  {
+    key: 'security',
+    label: 'Security team',
+    call: new RegExp(String.raw`\b(?:security|sec|infosec|cyber(?:security)?|red|blue|white[- ]hat|hacker|hacking|pentest(?:ing)?)\s+${TEAM_WORD}\b`, 'i'),
+    member: (p) => p.id.startsWith('sec-') || /\bsecurity\b/i.test(`${p.name} ${p.description || ''}`),
+  },
+];
+
+function shortPersonaName(p) {
+  return String(p?.name || '').split(/\s+[—–-]\s+/)[0].trim() || p?.id || '';
+}
+
+function teamByKey(key) {
+  const def = TEAM_DEFS.find((t) => t.key === key);
+  const members = def ? personas.filter(def.member) : [];
+  return members.length ? { key, label: def.label, personaIds: members.map((p) => p.id), members } : null;
+}
+
+/** The team you called by name, if any ("my marketing team", "the security crew"). */
+function detectTeam(text) {
+  const raw = String(text || '');
+  for (const def of TEAM_DEFS) {
+    const m = raw.match(def.call);
+    if (!m) continue;
+    const team = teamByKey(def.key);
+    if (team) return { ...team, phrase: m[0] };
+  }
+  return null;
+}
+
+/** Two or more personas named outright ("Vera, Dez and Nia, …") seat just them. */
+function namedPersonas(text) {
+  const raw = String(text || '');
+  const hit = personas.filter((p) => {
+    const n = shortPersonaName(p);
+    if (n.length < 3) return false;
+    return new RegExp(String.raw`(?:^|[^\w])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\w])`).test(raw);
+  });
+  return hit.length >= 2 ? hit : [];
+}
+
+/** Who sits at the table for this ask: a called team plus anyone named, else null (everyone). */
+function rosterFor(text) {
+  const team = detectTeam(text);
+  const named = namedPersonas(text);
+  if (!team && !named.length) return null;
+  const ids = [...new Set([...(team?.personaIds || []), ...named.map((p) => p.id)])];
+  const extra = named.filter((p) => !team?.personaIds.includes(p.id));
+  const label = team
+    ? `${team.label}${extra.length ? ` + ${extra.map(shortPersonaName).join(', ')}` : ''}`
+    : named.map(shortPersonaName).join(', ');
+  return { personaIds: ids, label, team };
+}
+
+/**
+ * "Marketing team, write 5 hooks for X" / "get the security team on this" —
+ * the team works it right here: one round unless you ask for more.
+ */
+function parseTeamCall(text, previousUserText = '') {
+  const raw = String(text || '').trim();
+  const team = detectTeam(raw);
+  if (!team) return null;
+  const roster = rosterFor(raw);
+  const m = raw.match(ROUNDS_RE);
+  let rounds = 1;
+  if (m) {
+    const tok = String(m[1] || m[2]).toLowerCase();
+    rounds = /^\d+$/.test(tok) ? parseInt(tok, 10) : (ROUND_WORDS[tok] || 1);
+  }
+  rounds = Math.min(10, Math.max(1, rounds));
+  // The ask minus "use my marketing team to" — with nothing left ("bring in
+  // the marketing team", "I need my team on this"), the team works on your
+  // previous message.
+  const phrase = team.phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const ask = raw
+    .replace(ROUNDS_RE, '')
+    .replace(new RegExp(String.raw`\b(?:(?:use|get|have|ask|bring in|call in|call|let|tell|i want|i need)\s+)?(?:my|the|our|your)?\s*${phrase}\b(?:\s+(?:to|and|on|for))?[\s,:;.!-]*`, 'i'), ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s,:;.!-]+|[\s,:;-]+$/g, '')
+    .trim();
+  const filler = /^(?:i (?:need|want)|can you|could you|please|go|now|get|put|jump)?\s*(?:on |with |at |in )?(?:this|that|it|here|now)?(?: now| please)?[\s.!?]*$/i;
+  const topic = ask.length >= 6 && !filler.test(ask) ? ask : (String(previousUserText || '').trim() || raw);
+  return { rounds, topic, personaIds: roster.personaIds, teamLabel: roster.label };
+}
+
 function parseGroupDiscussionRequest(text, previousUserText = '') {
   const raw = String(text || '').trim();
   if (!raw) return null;
@@ -4329,7 +4596,14 @@ function parseGroupDiscussionRequest(text, previousUserText = '') {
   const topic = about
     ? about[1].replace(ROUNDS_RE, '').replace(/[,;:.?!\s]+$/, '').trim()
     : (String(previousUserText || '').trim() || raw);
-  return { rounds, topic: topic || raw };
+  // "a marketing team discussion", "Vera, Dez and Nia debate it" → just them.
+  const roster = rosterFor(raw);
+  return {
+    rounds,
+    topic: topic || raw,
+    personaIds: roster?.personaIds || null,
+    teamLabel: roster?.label || '',
+  };
 }
 
 // Web search on request, inside any chat. No button or mode: "search the
@@ -4366,7 +4640,7 @@ function parseWebSearchRequest(text, previousUserText = '') {
   return query.slice(0, 400);
 }
 
-async function runInlineGroupDiscussion(chat, { rounds, topic }) {
+async function runInlineGroupDiscussion(chat, { rounds, topic, personaIds = null, teamLabel = '' }) {
   // runOneRound reads these off the chat; set them for this discussion only
   // and put the chat back exactly as it was afterwards.
   const saved = {
@@ -4377,7 +4651,7 @@ async function runInlineGroupDiscussion(chat, { rounds, topic }) {
     groupFocus: chat.groupFocus,
   };
   chat.groupMode = 'brainstorm'; // everyone speaks each round
-  chat.personaIds = null;        // full roster
+  chat.personaIds = personaIds && personaIds.length ? personaIds : null; // a called team, else everyone
   chat.forcedLeadId = undefined;
   chat.topic = topic;
   chat.groupFocus = topic;
@@ -4386,7 +4660,9 @@ async function runInlineGroupDiscussion(chat, { rounds, topic }) {
   // seating order), and an empty screen reads as stuck.
   chat.messages.push({
     role: 'info',
-    content: `Group discussion · ${rounds} round${rounds > 1 ? 's' : ''} · everyone at the table — starting…`,
+    content: `Group discussion · ${rounds} round${rounds > 1 ? 's' : ''} · `
+      + `${chat.personaIds ? `${teamLabel || 'your pick'}: ${chat.personaIds
+        .map((id) => shortPersonaName(personas.find((p) => p.id === id))).join(', ')}` : 'everyone at the table'} — starting…`,
     ts: Date.now(),
   });
   renderMessages({ scroll: 'bottom' });
@@ -4474,14 +4750,21 @@ function askMarketingMeeting(chat, request) {
   els.input?.focus();
 }
 
-async function runMarketingMeetingThenCampaign(chat, request, reply) {
+async function runMarketingMeetingThenCampaign(chat, request, reply, roster = null) {
   const m = String(reply || '').match(ROUNDS_RE);
   const tok = m ? String(m[1] || m[2]).toLowerCase() : '';
   const rounds = Math.min(5, Math.max(1, tok ? (/^\d+$/.test(tok) ? parseInt(tok, 10) : (ROUND_WORDS[tok] || 2)) : 2));
   const topic = `Marketing meeting before we write this campaign: "${request.slice(0, 600)}". `
     + 'Agree on who it is for, the one angle that will sell it, the offer, and the strongest real proof we have. '
     + 'Be specific and blunt. Do not invent numbers or results. End with the decisions.';
-  const finished = await runInlineGroupDiscussion(chat, { rounds, topic });
+  // A marketing meeting is your marketing team, not every persona you have.
+  const team = roster || rosterFor(request) || (() => {
+    const t = teamByKey('marketing');
+    return t ? { personaIds: t.personaIds, label: t.label } : null;
+  })();
+  const finished = await runInlineGroupDiscussion(chat, {
+    rounds, topic, personaIds: team?.personaIds || null, teamLabel: team?.label || '',
+  });
   if (finished) await runInlineCampaign(chat);
 }
 
