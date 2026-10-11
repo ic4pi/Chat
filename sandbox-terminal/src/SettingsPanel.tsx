@@ -7,6 +7,7 @@
 
 import React from 'react';
 import { ChunkModelPanel, type GenerateChunkResult } from './ChunkModelPanel.js';
+import { TokenSettings } from './TokenSettings.js';
 import { PROVIDER_LIST, type ProviderId } from './providerPrefs.js';
 
 interface Props {
@@ -103,6 +104,10 @@ export function SettingsPanel(props: Props) {
               </label>
             ))}
           </div>
+        </Section>
+
+        <Section title="Tokens" hint="GitHub token is used for Push, auto-backup and private repos. Saved in this browser only.">
+          <TokenSettings />
         </Section>
 
         <Section title="Role models" hint="Pick a role up top, then change provider/model — that assignment is saved per role.">
