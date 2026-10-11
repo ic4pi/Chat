@@ -168,6 +168,116 @@ export function buildBriefWriterTurns(personaTurns: Turn[], personaReply: string
   }];
 }
 
+// ── workspace tools: the persona reads, searches and runs things itself ──
+
+/**
+ * The persona asks for these in its reply — <<<READ path>>>, <<<SEARCH q>>>,
+ * <<<RUN cmd>>> — the app does them and hands the results back, so it never
+ * has to ask you to paste a file, an error or terminal output.
+ */
+export type WorkspaceOp = 'READ' | 'SEARCH' | 'RUN';
+export interface WorkspaceRequest { op: WorkspaceOp; arg: string }
+
+export interface WorkspaceTools {
+  read: (path: string) => Promise<string | null>;
+  search: (query: string) => Promise<SearchHit[]>;
+  /** Null when there's no sandbox to run in. */
+  run: ((command: string) => Promise<{ exitCode: number; output: string }>) | null;
+}
+
+/** Rounds of reading per turn before the persona must answer with what it has. */
+export const MAX_WORKSPACE_ROUNDS = 5;
+const MAX_REQUESTS_PER_ROUND = 6;
+const READ_CHARS = 24_000;
+const RUN_CHARS = 8_000;
+
+const REQUEST_RE = /<<<\s*(READ|SEARCH|RUN)\b[ \t:]*([^\n]*?)[ \t]*>>>/gi;
+
+export function parseWorkspaceRequests(raw: string): WorkspaceRequest[] {
+  const out: WorkspaceRequest[] = [];
+  const seen = new Set<string>();
+  for (const m of String(raw || '').matchAll(REQUEST_RE)) {
+    const op = m[1].toUpperCase() as WorkspaceOp;
+    const arg = (m[2] || '').trim().replace(/^[`'"]+|[`'"]+$/g, '').trim();
+    const k = `${op} ${arg}`;
+    if (!arg || seen.has(k)) continue;
+    seen.add(k);
+    out.push({ op, arg });
+  }
+  return out;
+}
+
+export function stripWorkspaceRequests(raw: string): string {
+  return String(raw || '').replace(REQUEST_RE, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** "Can you paste the file?", "I can't see your files" — it has access; it should use it. */
+const ASKS_TO_PASTE_RE = new RegExp([
+  String.raw`\b(?:paste|copy|share|send|upload|drop|show)\b[^.?!\n]{0,60}\b(?:file|code|contents?|output|error|log|logs|terminal|traceback|stack ?trace)\b`,
+  String.raw`\b(?:run|type|enter)\b[^.?!\n]{0,40}\bin (?:the|your) terminal\b`,
+  String.raw`\bI (?:can(?:'|no)t|cannot|don'?t have (?:access|the ability) to|am unable to)\s+(?:see|read|open|access|view|run)\b`,
+].join('|'), 'i');
+
+export function asksUserToPaste(say: string): boolean {
+  return ASKS_TO_PASTE_RE.test(say);
+}
+
+export const USE_YOUR_ACCESS = '[WORKSPACE] You have direct access to this workspace — do not ask the user to '
+  + 'paste, copy, upload or run anything. Get it yourself now with <<<READ path>>>, <<<SEARCH words>>> or '
+  + '<<<RUN command>>>, then answer.';
+
+/** Blocks the few things that would skip the push lock or wipe your work. */
+const BLOCKED_RUN_RE = /\bgit\s+push\b|\brm\s+-[a-z]*[rf][a-z]*\s+(?:\/|~|\.{1,2}(?:\/)?(?:\s|$)|\*)/i;
+
+async function doRequest(req: WorkspaceRequest, tools: WorkspaceTools): Promise<{ result: string; log: string }> {
+  if (req.op === 'READ') {
+    const content = await tools.read(req.arg).catch(() => null);
+    if (content == null) return { result: `READ ${req.arg}: not found or not readable.`, log: `couldn't read ${req.arg}` };
+    return { result: `READ ${req.arg}:\n\`\`\`\n${clip(content, READ_CHARS)}\n\`\`\``, log: `read ${req.arg}` };
+  }
+  if (req.op === 'SEARCH') {
+    const hits = await tools.search(req.arg).catch(() => [] as SearchHit[]);
+    const block = formatSearchHits(hits, 6_000);
+    return {
+      result: `SEARCH "${req.arg}":\n${block || 'no matches'}`,
+      log: `searched "${clip(req.arg, 40)}" (${hits.length} hit${hits.length === 1 ? '' : 's'})`,
+    };
+  }
+  if (!tools.run) return { result: `RUN ${req.arg}: no sandbox is running yet.`, log: `couldn't run \`${clip(req.arg, 60)}\`` };
+  if (BLOCKED_RUN_RE.test(req.arg)) {
+    return {
+      result: `RUN ${req.arg}: blocked — pushing goes through the app's tested Push, and wiping the repo is off limits.`,
+      log: `blocked \`${clip(req.arg, 60)}\``,
+    };
+  }
+  const { exitCode, output } = await tools.run(req.arg)
+    .catch((e) => ({ exitCode: -1, output: e instanceof Error ? e.message : String(e) }));
+  const tail = output.length > RUN_CHARS ? `…${output.slice(-RUN_CHARS)}` : output;
+  return {
+    result: `RUN ${req.arg} → exit ${exitCode}:\n\`\`\`\n${tail.trim() || '(no output)'}\n\`\`\``,
+    log: `ran \`${clip(req.arg, 60)}\` → exit ${exitCode}`,
+  };
+}
+
+/** Does one round of requests; results go back to the persona, the log goes on screen. */
+export async function runWorkspaceRequests(
+  reqs: WorkspaceRequest[],
+  tools: WorkspaceTools,
+  onStep?: (req: WorkspaceRequest) => void,
+): Promise<{ results: string; log: string[] }> {
+  const results: string[] = [];
+  const log: string[] = [];
+  const todo = reqs.slice(0, MAX_REQUESTS_PER_ROUND);
+  for (const r of todo) {
+    onStep?.(r);
+    const done = await doRequest(r, tools);
+    results.push(done.result);
+    log.push(done.log);
+  }
+  if (reqs.length > todo.length) results.push(`(${reqs.length - todo.length} more requests skipped — ask again next round.)`);
+  return { results: `[WORKSPACE RESULTS]\n\n${results.join('\n\n')}`, log };
+}
+
 // ── history builders ─────────────────────────────────────────────────────
 
 function clip(s: string, n: number): string {
@@ -221,6 +331,10 @@ export function buildPersonaHistory(msgs: OrchMessage[]): Turn[] {
         turns.push({ role: 'user', content: `[NOTE] ${m.content}` });
         continue;
       }
+      if (m.kind === 'workspace') {
+        turns.push({ role: 'user', content: `[WORKSPACE] ${m.content}` });
+        continue;
+      }
       if (m.kind === 'retry-inject') {
         turns.push({ role: 'user', content: `[AUTO-TEST → coder] ${clip(m.content, 800)}` });
         continue;
@@ -240,6 +354,7 @@ export function buildCoderHistory(msgs: OrchMessage[]): Turn[] {
   return msgs
     .filter((m) => {
       if (skip(m)) return false;
+      if (m.kind === 'workspace') return false; // the persona's own reading, not the coder's
       if (m.role === 'user') {
         if (m.kind === 'brief') return !m.pending; // never built — not the coder's business
         if (m.kind === 'retry-inject' || m.kind === 'note') return true;
@@ -263,11 +378,15 @@ function flatten(nodes: FileNode[], prefix = ''): string[] {
   return out;
 }
 
+const OPEN_FILES_CHARS = 30_000;
+
 export function buildPersonaContext(opts: {
   repoRoot: string;
   repoUrl: string | null;
   tree: FileNode[];
   openFiles: string[];
+  /** Contents of the files already open this turn, so the persona reads them without asking. */
+  files?: Map<string, string>;
   hits: SearchHit[];
   coderLabel: string;
   role?: string;
@@ -285,7 +404,7 @@ export function buildPersonaContext(opts: {
     && !p.includes('public/agent/assets'),
   );
   if (paths.length) {
-    const shown = paths.slice(0, 120);
+    const shown = paths.slice(0, 300);
     parts.push('', 'File tree:', shown.join('\n'));
     if (paths.length > shown.length) parts.push(`… (${paths.length - shown.length} more)`);
   } else if (!opts.repoRoot) {
@@ -293,6 +412,17 @@ export function buildPersonaContext(opts: {
   }
   if (opts.openFiles.length) {
     parts.push('', `Files the coder will have open in full: ${opts.openFiles.join(', ')}`);
+  }
+  if (opts.files?.size) {
+    let budget = OPEN_FILES_CHARS;
+    const shownFiles: string[] = [];
+    for (const [p, c] of opts.files) {
+      if (budget <= 0) break;
+      const body = clip(c, Math.min(budget, 12_000));
+      budget -= body.length;
+      shownFiles.push(`--- ${p} ---\n${body}`);
+    }
+    if (shownFiles.length) parts.push('', 'Open files (already read for you — <<<READ>>> anything else):', shownFiles.join('\n\n'));
   }
   const hitBlock = formatSearchHits(opts.hits, 6_000);
   if (hitBlock) parts.push('', hitBlock);

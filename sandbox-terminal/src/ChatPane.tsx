@@ -47,14 +47,21 @@ import { copyText, downloadTextFile } from './downloadFile.js';
 import { loadPaidPassword } from './providerPrefs.js';
 import {
   BRIEF_WRITER_SYSTEM,
+  MAX_WORKSPACE_ROUNDS,
   NO_BRIEF,
+  USE_YOUR_ACCESS,
+  asksUserToPaste,
   buildBriefWriterTurns,
   buildCoderHistory,
   buildPersonaContext,
   buildPersonaHistory,
+  parseWorkspaceRequests,
   personaMeantToBrief,
+  runWorkspaceRequests,
   splitPersonaReply,
+  stripWorkspaceRequests,
   type OrchestratorPersona,
+  type WorkspaceTools,
 } from './orchestrator.js';
 import { looksLikeRefusal } from './codingTeam.js';
 import { sigOf } from './chatBridge.js';
@@ -729,8 +736,8 @@ export interface Message {
   role:        'user' | 'assistant';
   content:     string;
   /** welcome = UI-only, never sent to the model; retry-inject = verify/nudge loop;
-   *  brief = the persona's instruction to the coder */
-  kind?:       'user' | 'retry-inject' | 'welcome' | 'imported' | 'brief' | 'note';
+   *  brief = the persona's instruction to the coder; workspace = what the persona read/ran itself */
+  kind?:       'user' | 'retry-inject' | 'welcome' | 'imported' | 'brief' | 'note' | 'workspace';
   /** Who wrote an assistant message. Unset = coder (pre-orchestrator sessions). */
   speaker?:    'persona' | 'coder';
   /** A user message addressed to the persona rather than the coder. */
@@ -768,6 +775,8 @@ interface Props {
   role?:             string;
   /** Set = the user talks to this persona, which briefs the coder. Null = direct to coder. */
   persona?:          (OrchestratorPersona & { apiKey?: string }) | null;
+  /** The persona's own hands in the workspace: read files, search, run commands. */
+  workspaceTools?:   WorkspaceTools | null;
   /** BYOK key for the active provider (optional). */
   apiKey?:           string;
   tree:              FileNode[];
@@ -809,7 +818,7 @@ interface Props {
 }
 
 export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
-  repoRoot, repoUrl, sandboxId, provider, model, role, persona = null, apiKey, tree, contextFiles, autoRun, appliedPaths,
+  repoRoot, repoUrl, sandboxId, provider, model, role, persona = null, workspaceTools = null, apiKey, tree, contextFiles, autoRun, appliedPaths,
   autoSelectedFiles, searchHits, initialMessages, onMessagesChange,
   onRunCode, onFileChanges, onUploadText, onBeforeSend, onModelReplaced, onCompareBrief,
   askBeforeBuild = false, buildPicker, fixer = null,
@@ -859,12 +868,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   // Keep latest props in a ref so a send started before auto-context finishes
   // still sees the updated file context afterward.
   const latestRef = useRef({
-    repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
+    repoRoot, repoUrl, sandboxId, provider, model, role, persona, workspaceTools, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
     rustReady, rustDetail, goReady, goDetail, onModelReplaced, onCompareBrief, askBeforeBuild, fixer,
   });
   latestRef.current = {
-    repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
+    repoRoot, repoUrl, sandboxId, provider, model, role, persona, workspaceTools, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
     rustReady, rustDetail, goReady, goDetail, onModelReplaced, onCompareBrief, askBeforeBuild, fixer,
   };
@@ -1160,6 +1169,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           repoUrl: rUrl,
           tree: tr,
           openFiles: [...ctx.keys()],
+          files: ctx,
           hits,
           coderLabel: `${prov} / ${mod}`,
           role: activeRole,
@@ -1167,26 +1177,66 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         const pProv = orchPersona.provider || prov;
         const pMod = orchPersona.model || mod;
         const personaTurns = trimMessageHistory(buildPersonaHistory(withUser));
-        const personaReply = await callAgent(
-          attachImages(personaTurns.map(t => ({ ...t }))),
-          personaSystem,
-          sid,
-          pProv,
-          pMod,
-          orchPersona.apiKey || (pProv === prov ? key : undefined),
-          { personaId: orchPersona.id, orchestrate: true },
-        );
-        const raw = personaReply.reply === '(empty response)' ? '' : personaReply.reply.trim();
+        const askPersona = async (turns: Array<{ role: string; content: string | unknown }>) => {
+          const out = await callAgent(
+            turns,
+            personaSystem,
+            sid,
+            pProv,
+            pMod,
+            orchPersona.apiKey || (pProv === prov ? key : undefined),
+            { personaId: orchPersona.id, orchestrate: true },
+          );
+          return out.reply === '(empty response)' ? '' : out.reply.trim();
+        };
+        let loopTurns: Array<{ role: string; content: string | unknown }> =
+          attachImages(personaTurns.map(t => ({ ...t })));
+        let raw = await askPersona(loopTurns);
+
+        // It reads, searches and runs things itself — files, errors, test
+        // output — instead of asking you to paste them. Each round's results go
+        // back to it until it answers or briefs the coder.
+        const tools = latestRef.current.workspaceTools;
+        const readTurns: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+        const did: string[] = [];
+        let nudged = false;
+        for (let round = 0; tools && round < MAX_WORKSPACE_ROUNDS; round++) {
+          if (userCancelledRef.current) break;
+          const reqs = splitPersonaReply(raw).brief ? [] : parseWorkspaceRequests(raw);
+          let followUp: string;
+          if (reqs.length) {
+            const done = await runWorkspaceRequests(reqs, tools, (r) => setLiveStatus(
+              `${orchPersona.name} ${r.op === 'READ' ? 'is reading' : r.op === 'SEARCH' ? 'is searching for' : 'is running'} ${r.arg.slice(0, 60)}…`,
+            ));
+            did.push(...done.log);
+            followUp = done.results;
+          } else if (!nudged && asksUserToPaste(stripWorkspaceRequests(raw))) {
+            nudged = true;
+            followUp = USE_YOUR_ACCESS;
+          } else {
+            break;
+          }
+          if (round === MAX_WORKSPACE_ROUNDS - 1) followUp += '\n\nLast round of reading — answer now with what you have.';
+          readTurns.push({ role: 'assistant', content: raw || '(no reply)' }, { role: 'user', content: followUp });
+          loopTurns = [...loopTurns, ...readTurns.slice(-2)];
+          setLiveThoughts('');
+          setLiveStatus(`${orchPersona.name} is thinking…`);
+          raw = await askPersona(loopTurns);
+        }
+        raw = stripWorkspaceRequests(raw);
         const split = splitPersonaReply(raw);
         brief = split.brief;
         const personaMsg: Message = {
           id: uid(), role: 'assistant', speaker: 'persona', content: raw || '(no reply)',
         };
-        setMessages(m => [...m, personaMsg]);
+        const readMsg: Message | null = did.length
+          ? { id: uid(), role: 'user', kind: 'workspace', content: `${orchPersona.name} ${did.join(' · ')}` }
+          : null;
+        setMessages(m => readMsg ? [...m, readMsg, personaMsg] : [...m, personaMsg]);
         if (speakOnRef.current && split.say && cleanForSpeech(split.say)) {
           void speakReply(split.say);
         }
-        convo = [...withUser, personaMsg];
+        convo = readMsg ? [...withUser, readMsg, personaMsg] : [...withUser, personaMsg];
 
         // The persona's model ignored the format (or handed you a prompt to
         // paste) on a turn that was meant to build something: the coder model
@@ -1196,7 +1246,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           setLiveThoughts('');
           setLiveStatus('Writing the brief for the coder…');
           const written = await callAgent(
-            buildBriefWriterTurns(personaTurns, raw),
+            buildBriefWriterTurns([...personaTurns, ...readTurns], raw),
             `${BRIEF_WRITER_SYSTEM}\n\n${personaSystem}`,
             sid, prov, mod, key,
           );
@@ -1651,10 +1701,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 </span>
                 {msg.content.slice(0, 500)}{msg.content.length > 500 ? '…' : ''}
               </div>
-            ) : msg.kind === 'note' ? (
-              <div data-testid="note-msg" style={{ fontSize: 14, color: '#9198AA', fontStyle: 'italic',
-                padding: '2px 4px' }}>
-                {msg.content}
+            ) : msg.kind === 'note' || msg.kind === 'workspace' ? (
+              <div data-testid={msg.kind === 'workspace' ? 'workspace-msg' : 'note-msg'} style={{ fontSize: 14,
+                color: '#9198AA', fontStyle: 'italic', padding: '2px 4px' }}>
+                {msg.kind === 'workspace' ? `📂 ${msg.content}` : msg.content}
               </div>
             ) : msg.role === 'user' && msg.kind === 'brief' ? (
               <div data-testid="brief-msg" style={{ background: '#12151D',

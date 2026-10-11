@@ -45,6 +45,7 @@ import {
   loadOrchestratorPrefs,
   saveOrchestratorPrefs,
   type OrchestratorPrefs,
+  type WorkspaceTools,
 } from './orchestrator.js';
 import {
   PROVIDER_LIST,
@@ -195,6 +196,25 @@ async function fetchFileContent(
       );
     }
     return data.content;
+  } catch {
+    return null;
+  }
+}
+
+/** Any file the persona asks for — configs and docs too, not just source. */
+async function fetchAnyFile(root: string, relPath: string, sandboxId: string | null): Promise<string | null> {
+  const p = relPath.replace(/^\.?\/+/, '');
+  if (!p || isJunkContextPath(p)) return null;
+  try {
+    const headers: Record<string, string> = {};
+    if (sandboxId) headers['X-Sandbox-Session'] = sandboxId;
+    const url = sandboxId
+      ? `${API_URL}/file?path=${encodeURIComponent(p)}&maxBytes=60000`
+      : `${API_URL}/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(p)}`;
+    const res = await fetch(url, { headers });
+    if (!res.ok) return null;
+    const data = await res.json() as { content?: string };
+    return data.content ?? null;
   } catch {
     return null;
   }
@@ -651,7 +671,8 @@ export function App() {
     if (!sessionId) return;
     const crossOver = chatMessages
       .filter(m =>
-        (m.role === 'user' && m.kind !== 'welcome' && m.kind !== 'retry-inject' && m.kind !== 'note')
+        (m.role === 'user' && m.kind !== 'welcome' && m.kind !== 'retry-inject' && m.kind !== 'note'
+          && m.kind !== 'workspace')
         || (m.role === 'assistant' && m.speaker === 'persona'))
       .map(m => ({ role: m.role, content: m.content }));
     if (crossOver.length) mirrorToChat(sessionId, crossOver);
@@ -1231,6 +1252,17 @@ export function App() {
       return empty;
     }
   }, [repo.root, repo.sandboxId, repo.tree, repo.contextFiles]);
+
+  // The persona's own access: it reads, searches and runs in the visible
+  // Terminal, the way you would, instead of asking you to paste things.
+  const workspaceTools = useMemo<WorkspaceTools | null>(() => (repo.root ? {
+    read: (path) => fetchAnyFile(repo.root, path, repo.sandboxId),
+    search: (query) => fetchAutoContext(repo.root, query, repo.sandboxId, 8),
+    run: repo.sandboxId
+      ? async (command) => termRef.current?.runCommand(command)
+        ?? { exitCode: -1, output: 'Terminal is not ready.' }
+      : null,
+  } : null), [repo.root, repo.sandboxId]);
 
   const handleFileChanges = useCallback(async (changes: PendingChange[]) => {
     if (autoApplyOn && (!repo.root || !repo.sandboxId)) {
@@ -1840,6 +1872,7 @@ export function App() {
           model={model}
           role={role}
           persona={orchPersona}
+          workspaceTools={workspaceTools}
           onModelReplaced={handleModelReplaced}
           onCompareBrief={handleCompareBrief}
           askBeforeBuild={teamPrefs.askFirst}
