@@ -26,6 +26,8 @@ Done = `[x]` + ~~struck through~~. Updated with every change that ships.
 - [ ] Verify Tokens + Plan panel are live on production (owner checking)
 - [ ] Use the saved extra tokens (Vercel/Render/Supabase) somewhere — stored only for now
 
+- [x] ~~Juno persona (supportive comedy-writer friend: assessment step-planning, wins tally, planning-to-doing nudges)~~
+
 ## Teams & Production (planned with owner)
 
 - [x] ~~Phase 1a: Teams (Marketing Agency, White-Hat Security) with editable member lists + team prompts~~
