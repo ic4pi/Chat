@@ -202,16 +202,21 @@ export function getSession(id: string): StoredSession | null {
  */
 export function mergeHandoffMessages(prev: StoredMessage[], imported: StoredMessage[]): StoredMessage[] {
   if (!prev.length) return imported;
-  const prevImported = prev.filter((m) => m.kind === 'imported');
-  if (!prevImported.length) return [...imported, ...prev];
   const key = (m: StoredMessage) => `${m.role}:${String(m.content || '').trim().slice(0, 500)}`;
-  const known = new Set(prevImported.map(key));
-  // Where the chat picks up: the latest chat message this project already has.
-  let last = -1;
-  for (let i = imported.length - 1; i >= 0; i--) {
-    if (known.has(key(imported[i]))) { last = i; break; }
+  // Everything the Workspace already has — including its own turns, which it
+  // wrote into the chat and now come back from it. Only imported ones before
+  // made those come back a second time.
+  const known = new Set(prev.map(key));
+  const prevImported = prev.filter((m) => m.kind === 'imported');
+  if (!prevImported.length) return [...imported.filter((m) => !known.has(key(m))), ...prev];
+  // Anything the chat has that we don't, from the first message we share on
+  // — including turns that landed between ours (Chat and Workspace open side
+  // by side). Unknown ones before that are old history the saved copy cut.
+  let first = -1;
+  for (let i = 0; i < imported.length; i++) {
+    if (known.has(key(imported[i]))) { first = i; break; }
   }
-  const fresh = last >= 0 ? imported.slice(last + 1) : imported.filter((m) => !known.has(key(m)));
+  const fresh = imported.filter((m, i) => i > first && !known.has(key(m)));
   return fresh.length ? [...prev, ...fresh] : prev;
 }
 

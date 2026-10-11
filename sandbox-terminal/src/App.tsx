@@ -672,7 +672,7 @@ export function App() {
     const crossOver = chatMessages
       .filter(m =>
         (m.role === 'user' && m.kind !== 'welcome' && m.kind !== 'retry-inject' && m.kind !== 'note'
-          && m.kind !== 'workspace')
+          && m.kind !== 'workspace' && m.kind !== 'imported')
         || (m.role === 'assistant' && m.speaker === 'persona'))
       .map(m => ({ role: m.role, content: m.content }));
     if (crossOver.length) mirrorToChat(sessionId, crossOver);
@@ -691,9 +691,13 @@ export function App() {
     };
     document.addEventListener('visibilitychange', refresh);
     window.addEventListener('focus', refresh);
+    // Back button: the page comes back from the browser's cache, which fires
+    // neither of the above on every browser.
+    window.addEventListener('pageshow', refresh);
     return () => {
       document.removeEventListener('visibilitychange', refresh);
       window.removeEventListener('focus', refresh);
+      window.removeEventListener('pageshow', refresh);
     };
   }, [sessionId]);
 

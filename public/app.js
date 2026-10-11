@@ -3460,7 +3460,7 @@ async function sendMessage(text) {
   // "Search the web for X" → this one reply is grounded in live results.
   turnSearchQuery = groupAsk ? null : parseWebSearchRequest(text, prevUser?.content);
   if (groupAsk) {
-    return runInlineGroupDiscussion(chat, groupAsk);
+    return runTeamThenReport(chat, () => runInlineGroupDiscussion(chat, groupAsk));
   }
   // "Write a campaign for X" → offer a marketing meeting first (unless the
   // ask already says), then strategist, ruthless editor, every platform.
@@ -3470,7 +3470,7 @@ async function sendMessage(text) {
   const missionAsk = imageParts.length === 0 ? parseMarketingMission(text) : null;
   if (missionAsk) {
     turnSearchQuery = null;
-    return runMarketingMission(chat, missionAsk);
+    return runTeamThenReport(chat, () => runMarketingMission(chat, missionAsk));
   }
   if (imageParts.length === 0 && parseCampaignRequest(text)) {
     turnSearchQuery = null;
@@ -3484,7 +3484,7 @@ async function sendMessage(text) {
   // "Marketing team, …" → that team works it here, with their tools.
   if (teamAsk) {
     turnSearchQuery = null;
-    return runInlineGroupDiscussion(chat, teamAsk);
+    return runTeamThenReport(chat, () => runInlineGroupDiscussion(chat, teamAsk));
   }
 
   // Agency mode: route through the Orchestrated group-chat engine instead
@@ -3518,27 +3518,12 @@ async function sendMessage(text) {
 
   try {
     while (true) {
-      const apiMessages = chat.messages
-        .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .filter((m) => !m.streaming)
-        .map((m, idx, arr) => {
-          if (
-            imageParts.length
-            && autoRound === 0
-            && idx === arr.length - 1
-            && m.role === 'user'
-            && !m.autoContinue
-          ) {
-            return {
-              role: 'user',
-              content: [
-                { type: 'text', text: m.content },
-                ...imageParts,
-              ],
-            };
-          }
-          return { role: m.role, content: m.content };
-        });
+      // Your persona sees the team's work as named results, not as its own words.
+      const apiMessages = historyForModel(chat);
+      const lastTurn = apiMessages[apiMessages.length - 1];
+      if (imageParts.length && autoRound === 0 && lastTurn?.role === 'user' && typeof lastTurn.content === 'string') {
+        lastTurn.content = [{ type: 'text', text: lastTurn.content }, ...imageParts];
+      }
 
       const assistantTs = Date.now();
       if (firstAssistantTs == null) firstAssistantTs = assistantTs;
@@ -4655,6 +4640,110 @@ function parseWebSearchRequest(text, previousUserText = '') {
 }
 
 // ---------------------------------------------------------------------------
+// Your persona and the team's results. Team turns, drafted posts, images and
+// launch status reach your persona as named TEAM RESULTS — not as words it
+// said itself — so it can report them, summarize them and answer questions.
+// ---------------------------------------------------------------------------
+const TEAM_NOTICE_RE = /^(?:Group discussion|Marketing mission|Task \d+\/\d+)/;
+
+function teamTurnText(m) {
+  const lines = [`${m.personaName}: ${stripContinueMarkers(m.content || '').trim()}`];
+  for (const p of m.toolPosts || []) {
+    const state2 = p.posted ? ', posted' : p.scheduledId ? `, scheduled for ${p.at}` : p.scheduleError ? `, not scheduled (${p.scheduleError})` : ', draft';
+    lines.push(`  [post${p.where ? ` for ${p.where}` : ''}${p.day != null && !/\bday\s*\d/i.test(p.where || '') ? ` · day ${p.day}` : ''}${state2}] ${p.text}`);
+  }
+  for (const img of m.toolImages || []) {
+    lines.push(`  [image${img.status === 'failed' ? ' — failed' : img.status === 'pending' ? ' — still generating' : ''}: ${img.prompt}]`);
+  }
+  if (Array.isArray(m.sources) && m.sources.length) {
+    lines.push(`  [sources: ${m.sources.slice(0, 5).map((x) => x.url).join(', ')}]`);
+  }
+  return lines.join('\n');
+}
+
+/** The conversation as your persona should see it: its own words, your words, and the team's results. */
+function historyForModel(chat) {
+  const out = [];
+  let team = [];
+  const flush = () => {
+    if (!team.length) return;
+    out.push({
+      role: 'user',
+      content: '[TEAM RESULTS — your team did this; you were not the speaker. Use it to report, summarize and answer questions about their work.]\n'
+        + team.join('\n\n'),
+    });
+    team = [];
+  };
+  for (const m of chat.messages) {
+    if (m.streaming) continue;
+    if (m.role === 'info') {
+      if (TEAM_NOTICE_RE.test(m.content || '')) team.push(`(${m.content})`);
+      continue;
+    }
+    const own = !m.personaName || (m.personaId && m.personaId === state.activePersonaId);
+    if (m.role === 'assistant' && !own) { team.push(teamTurnText(m)); continue; }
+    if (m.role !== 'user' && m.role !== 'assistant') continue;
+    flush();
+    out.push({ role: m.role, content: m.content });
+  }
+  flush();
+  // Strict chat templates reject two turns in a row from the same side.
+  const merged = [];
+  for (const t of out) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === t.role && typeof last.content === 'string' && typeof t.content === 'string') {
+      last.content = `${last.content}\n\n${t.content}`;
+    } else merged.push({ ...t });
+  }
+  return merged;
+}
+
+const TEAM_REPORT_ASK = 'Your team just finished. Report to me as my lead, in your own voice: what they concluded or produced — '
+  + 'the actual results (decisions, posts drafted and when they go out, images, anything scheduled) — what still needs me, '
+  + 'and the one next step. Short and plain; do not repeat everything they said.';
+
+/** After a team run: your persona tells you what came out of it. */
+async function reportTeamResults(chat) {
+  if (!chat || chat.kind === 'group' || chatBusy) return;
+  const history = historyForModel(chat);
+  const last = history[history.length - 1];
+  if (last?.role === 'user') last.content = `${last.content}\n\n${TEAM_REPORT_ASK}`;
+  else history.push({ role: 'user', content: TEAM_REPORT_ASK });
+  const ts = Date.now();
+  chat.messages.push({
+    role: 'assistant', content: '', ts, streaming: true, teamReport: true,
+    model: state.activeModel, provider: state.activeProvider,
+  });
+  renderMessages({ scroll: 'bottom' });
+  const msg = chat.messages.find((m) => m.ts === ts);
+  setGeneratingUi(true);
+  activeChatUserStopped = false;
+  setTypingActive(true, `${activePersona()?.name || 'Your lead'} is writing up the results…`);
+  let buf = '';
+  try {
+    const attempt = await callChatStream(state.activeProvider, state.activeModel, history, state.activePersonaId, (evt) => {
+      if (evt.type !== 'token') return;
+      buf += evt.text || '';
+      msg.content = buf;
+      const el = els.chat.querySelector(`.msg.bot[data-ts="${ts}"] .content`);
+      if (el) { el.innerHTML = ''; renderMarkdownInto(el, stripContinueMarkers(buf) || '…'); }
+    });
+    msg.content = stripContinueMarkers(buf).trim()
+      || (attempt.ok ? '(no summary came back)' : `Couldn’t write the summary: ${attempt.errText || attempt.data?.error || 'request failed'}. Ask me "what did the team decide?"`);
+  } finally {
+    msg.streaming = false;
+    setGeneratingUi(false);
+    setTypingActive(false);
+    activeChatUserStopped = false;
+    chat.updatedAt = Date.now();
+    saveState();
+    renderMessages({ scroll: 'bottom' });
+    void window.hub?.syncChat?.(chat);
+  }
+  if (speakReplies && msg.content) void speakReply(msg.content);
+}
+
+// ---------------------------------------------------------------------------
 // Marketing mission: "plan and execute a marketing plan for X". The marketing
 // team meets on it, a plan assigns each task to one member, each member does
 // their task with their tools, and every post lands in a launch queue you
@@ -4923,6 +5012,7 @@ function renderLaunchInto(content, m) {
 }
 
 async function runMarketingMission(chat, { ask }) {
+  let completed = false;
   const roster = rosterFor(ask);
   const team = teamByKey('marketing');
   const ids = roster?.personaIds?.length ? roster.personaIds : (team?.personaIds || personas.map((p) => p.id));
@@ -5018,6 +5108,7 @@ async function runMarketingMission(chat, { ask }) {
     } else {
       push({ role: 'info', content: 'Mission done — no posts were drafted this time, so nothing to schedule.' });
     }
+    completed = !activeChatUserStopped;
   } finally {
     Object.assign(chat, saved);
     clearInterval(tickTimer);
@@ -5029,6 +5120,14 @@ async function runMarketingMission(chat, { ask }) {
     renderMessages({ scroll: groupScrollMode('bottom') });
     void window.hub?.syncChat?.(chat);
   }
+  return completed;
+}
+
+/** Run the team, then have your persona report what came of it. */
+async function runTeamThenReport(chat, run) {
+  const done = await run();
+  if (done) await reportTeamResults(chat);
+  return done;
 }
 
 async function runInlineGroupDiscussion(chat, { rounds, topic, personaIds = null, teamLabel = '' }) {
@@ -6853,6 +6952,47 @@ els.interruptBtn?.addEventListener('click', () => {
 });
 
 const WORKSPACE_HANDOFF_KEY = 'chat_to_workspace_v1';
+
+/**
+ * The Workspace writes its turns straight into this chat's stored copy. Back
+ * here (back button, another tab, the app coming to the front) this page
+ * still holds the old copy in memory — read the new turns in, or the next
+ * save would write the old copy over them and the last message would vanish.
+ * Append-only: nothing here is ever dropped.
+ */
+function pullChatsFromStorage() {
+  if (chatBusy) return false;
+  let stored;
+  try { stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); } catch { return false; }
+  if (!stored || !Array.isArray(stored.chats)) return false;
+  const sig = (m) => `${m.role}:${String(m.content || '').trim().slice(0, 500)}`;
+  let changedActive = false;
+  let changed = false;
+  for (const sc of stored.chats) {
+    const mine = state.chats.find((c) => c.id === sc?.id);
+    if (!mine || !Array.isArray(sc.messages) || (sc.updatedAt || 0) <= (mine.updatedAt || 0)) continue;
+    const have = new Set((mine.messages || []).map(sig));
+    const fresh = sc.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && !have.has(sig(m)));
+    if (!fresh.length) continue;
+    mine.messages = [...(mine.messages || []), ...fresh];
+    mine.updatedAt = sc.updatedAt;
+    changed = true;
+    if (mine.id === state.activeChatId) changedActive = true;
+  }
+  if (!changed) return false;
+  saveState();
+  renderChatList();
+  if (changedActive) renderMessages({ scroll: 'bottom' });
+  return true;
+}
+window.addEventListener('pageshow', () => { pullChatsFromStorage(); });
+window.addEventListener('focus', () => { pullChatsFromStorage(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') pullChatsFromStorage();
+});
+window.addEventListener('storage', (e) => {
+  if (e.key === STORAGE_KEY) pullChatsFromStorage();
+});
 
 function openInWorkspace() {
   const chat = ensureActiveChat();

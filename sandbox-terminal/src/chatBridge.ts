@@ -22,7 +22,13 @@
 
 const CHAT_STORAGE_KEY = 'uncensored_chat_state_v3';
 
-interface ChatMsg { role: string; content: string; ts?: number }
+interface ToolPost { where?: string; text: string; day?: number; posted?: boolean; scheduledId?: string; at?: string; scheduleError?: string }
+interface ChatMsg {
+  role: string; content: string; ts?: number;
+  /** Set on a team member's turn (group discussion, marketing mission). */
+  personaId?: string; personaName?: string;
+  toolPosts?: ToolPost[]; toolImages?: Array<{ prompt: string; status?: string }>;
+}
 interface Chat { id: string; name?: string; personaId?: string; provider?: string; model?: string; messages?: ChatMsg[]; updatedAt?: number }
 interface ChatState { chats?: Chat[]; activeChatId?: string | null }
 
@@ -57,6 +63,27 @@ function pickChat(state: ChatState, chatId?: string): Chat | null {
   return null;
 }
 
+/** Prefix for a team member's turn as the Workspace persona reads it. */
+export const TEAM_PREFIX = '[TEAM] ';
+
+/**
+ * A team member's turn — not the persona's own words — goes to the Workspace
+ * as a named result, with the posts, images and launch status it produced,
+ * so the persona can summarize it and answer questions about it.
+ */
+function teamText(m: ChatMsg): string {
+  const lines = [`${m.personaName}: ${String(m.content || '').trim()}`];
+  for (const p of m.toolPosts || []) {
+    const st = p.posted ? ', posted' : p.scheduledId ? `, scheduled for ${p.at}` : p.scheduleError ? `, not scheduled (${p.scheduleError})` : ', draft';
+    lines.push(`  [post${p.where ? ` for ${p.where}` : ''}${p.day != null && !/\bday\s*\d/i.test(p.where || '') ? ` · day ${p.day}` : ''}${st}] ${p.text}`);
+  }
+  for (const img of m.toolImages || []) lines.push(`  [image: ${img.prompt}]`);
+  return lines.join('\n');
+}
+
+const isTeamTurn = (m: ChatMsg, leadId?: string) =>
+  m.role === 'assistant' && !!m.personaName && (!m.personaId || m.personaId !== leadId);
+
 /** Only the turns that belong in a shared conversation. */
 const isHumanFacing = (m: ChatMsg) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim().length > 0;
 
@@ -75,7 +102,9 @@ export function readChatConversation(chatId?: string): ChatConversation | null {
     provider: chat.provider,
     model: chat.model,
     title: chat.name,
-    messages: (chat.messages || []).filter(isHumanFacing).map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+    messages: (chat.messages || []).filter(isHumanFacing).map((m) => (isTeamTurn(m, chat.personaId)
+      ? { role: 'user' as const, content: `${TEAM_PREFIX}${teamText(m)}` }
+      : { role: m.role as 'user' | 'assistant', content: m.content })),
   };
 }
 

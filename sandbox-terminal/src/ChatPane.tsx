@@ -64,7 +64,7 @@ import {
   type WorkspaceTools,
 } from './orchestrator.js';
 import { looksLikeRefusal } from './codingTeam.js';
-import { sigOf } from './chatBridge.js';
+import { sigOf, TEAM_PREFIX } from './chatBridge.js';
 import {
   cleanForSpeech,
   getSpeechRecognition,
@@ -1685,13 +1685,24 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
               : repoRoot ? 'Ask for a change.' : 'Start a blank project or open a GitHub URL, then ask.'}
           </div>
         )}
-        {messages.map(msg => (
-          <div key={msg.id} data-testid={msg.role === 'user' ? 'user-msg' : 'assistant-msg'} style={{
-            alignSelf: msg.role === 'user' && msg.kind !== 'brief' ? 'flex-end' : 'flex-start',
-            maxWidth: msg.role === 'user' ? '75%' : '100%',
-            width: msg.role === 'assistant' ? '100%' : undefined,
+        {messages.map(msg => {
+          // A team member's turn from the chat (group discussion, marketing mission).
+          const teamTurn = msg.kind === 'imported' && msg.role === 'user' && msg.content.startsWith(TEAM_PREFIX);
+          return (
+          <div key={msg.id} data-testid={teamTurn ? 'team-msg' : msg.role === 'user' ? 'user-msg' : 'assistant-msg'} style={{
+            alignSelf: msg.role === 'user' && msg.kind !== 'brief' && !teamTurn ? 'flex-end' : 'flex-start',
+            maxWidth: msg.role === 'user' && !teamTurn ? '75%' : '100%',
+            width: msg.role === 'assistant' || teamTurn ? '100%' : undefined,
           }}>
-            {msg.role === 'user' && msg.kind === 'retry-inject' ? (
+            {teamTurn ? (
+              <div style={{ background: '#12151D', border: '1px solid #232838', borderRadius: 6,
+                padding: '6px 10px', fontSize: 16, lineHeight: 1.5, color: '#C9CDD8',
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 260, overflowY: 'auto' }}>
+                <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', color: '#9198AA',
+                  display: 'block', marginBottom: 3 }}>TEAM</span>
+                {msg.content.slice(TEAM_PREFIX.length)}
+              </div>
+            ) : msg.role === 'user' && msg.kind === 'retry-inject' ? (
               <div style={{ padding: '5px 10px', background: 'rgba(52,211,153,.16)',
                 border: '1px dashed rgba(52,211,153,.16)', borderRadius: 6,
                 fontSize: 15, color: '#7FE0B8', whiteSpace: 'pre-wrap',
@@ -1806,7 +1817,8 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
         {loading && (
           <div data-testid="thinking" style={{ alignSelf: 'flex-start', maxWidth: '92%', width: '100%' }}>
             <div style={{
