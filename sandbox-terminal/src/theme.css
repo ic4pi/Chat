@@ -149,3 +149,11 @@ input.ws-input:focus, select.ws-input:focus, textarea.ws-input:focus {
     transition: none !important;
   }
 }
+
+/* Always allow selecting, copying and pasting — some mobile browsers drop the
+   long-press menu on containers that don't say so explicitly. */
+textarea, input, [data-testid="chat-messages"], [data-testid="chat-messages"] * {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
