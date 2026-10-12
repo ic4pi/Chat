@@ -17,7 +17,43 @@ CLI:
     python black_ops_engine.py run brief.json [--platforms x linkedin email]
 """
 
-from __future__ import annotations
+import argparse
+import asyncio
+import email.utils
+import json
+import logging
+import os
+import random
+import re
+import sys
+import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, TypeVar
+
+import numpy as np
+import openai
+from openai import AsyncOpenAI
+from pydantic import BaseModel, Field
+
+log = logging.getLogger("black_ops")
+
+T = TypeVar("T", bound=BaseModel)
+
+# Automation action types
+ACTION_TYPES = ["CLICK", "TYPE", "NAVIGATE", "SCRAPE", "WAIT"]
+
+try:
+    from sentence_transformers import SentenceTransformer, util
+except ImportError:
+    SentenceTransformer = None
+    util = None
+
+try:
+    import faiss
+except ImportError:
+    faiss = None
 
 import argparse
 import asyncio
