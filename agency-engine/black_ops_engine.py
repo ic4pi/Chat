@@ -43,6 +43,9 @@ log = logging.getLogger("black_ops")
 
 T = TypeVar("T", bound=BaseModel)
 
+# Automation action types
+ACTION_TYPES = ["CLICK", "TYPE", "NAVIGATE", "SCRAPE", "WAIT"]
+
 
 # ── errors ──────────────────────────────────────────────────────────────────
 
@@ -656,6 +659,59 @@ class BlackOpsEngine:
         await self.llm.aclose()
         if self.memory is not None:
             await self.memory._embedder.aclose()
+
+    def extract_automation_block(self, response_text: str) -> dict | None:
+        """Extract automation block from persona response."""
+        # Look for automation block markers
+        pattern = r'\[AUTOMATION_BLOCK\](.*?)\[/AUTOMATION_BLOCK\]'
+        match = re.search(pattern, response_text, re.DOTALL)
+
+        if match:
+            try:
+                block_content = match.group(1).strip()
+                automation_data = json.loads(block_content)
+                log.info("DEPLOYING AUTOMATION: %s", json.dumps(automation_data, indent=2))
+                return automation_data
+            except json.JSONDecodeError as e:
+                log.warning("Failed to parse automation block JSON: %s", str(e))
+                return None
+
+        return None
+
+    def process_response_for_automation(self, response_text: str) -> tuple[str, dict | None]:
+        """Process response to separate explanatory text from automation instructions."""
+        automation_data = self.extract_automation_block(response_text)
+
+        # Remove the automation block from the response text for cleaner output
+        clean_response = re.sub(r'\[AUTOMATION_BLOCK\].*?\[/AUTOMATION_BLOCK\]', '', response_text, flags=re.DOTALL).strip()
+
+        return clean_response, automation_data
+
+    def create_automation_instruction(self, target_url: str, action_type: str, selector: str = None, value: str = None) -> dict:
+        """Create a structured automation instruction for Playwright execution."""
+        if action_type.upper() not in ACTION_TYPES:
+            raise ValueError(f"Invalid action type. Must be one of: {ACTION_TYPES}")
+
+        instruction = {
+            "target_url": target_url,
+            "action": {
+                "type": action_type.upper(),
+                "selector": selector,
+                "value": value
+            }
+        }
+
+        # Remove None values
+        instruction["action"] = {k: v for k, v in instruction["action"].items() if v is not None}
+
+        return instruction
+
+    def format_automation_block(self, automation_instruction: dict) -> str:
+        """Format automation instruction as a block for persona responses."""
+        if automation_instruction:
+            block_json = json.dumps(automation_instruction, indent=2)
+            return f"\n[AUTOMATION_BLOCK]\n{block_json}\n[/AUTOMATION_BLOCK]"
+        return ""
 
     # ── memory ──
 
