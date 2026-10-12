@@ -1,27 +1,23 @@
 {
-  "name": "openrouter-chat",
+  "name": "chat-app",
   "version": "1.0.0",
   "private": true,
-  "type": "module",
   "scripts": {
-    "dev": "vercel dev",
-    "check": "node scripts/check-api.mjs",
-    "test": "node scripts/check-api.mjs && node scripts/check-campaign.mjs && node scripts/check-models.mjs",
-    "animate": "node scripts/animate-sequence.mjs",
-    "test:animate": "node scripts/test-animate-local.mjs",
-    "check:packages": "node scripts/check-packages.mjs",
-    "check:media": "node scripts/check-media-extract.mjs",
-    "check:modal": "node scripts/check-modal-endpoints.mjs",
-    "check:video": "node scripts/check-video-persist.mjs",
-    "check:async": "node scripts/check-async-fallback.mjs",
-    "check:campaign": "node scripts/check-campaign.mjs",
-    "check:models": "node scripts/check-models.mjs"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.112.4",
-    "@vercel/sandbox": "^2.6.0",
-    "cors": "^2.8.5",
-    "edge-tts-universal": "^1.4.0",
-    "ignore": "^7.0.6"
+    "next": "14.2.3",
+    "react": "^18",
+    "react-dom": "^18"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "eslint": "^8",
+    "eslint-config-next": "14.2.3"
   }
 }

@@ -46,6 +46,9 @@ T = TypeVar("T", bound=BaseModel)
 # Automation action types
 ACTION_TYPES = ["CLICK", "TYPE", "NAVIGATE", "SCRAPE", "WAIT"]
 
+# Automation action types
+ACTION_TYPES = ["CLICK", "TYPE", "NAVIGATE", "SCRAPE", "WAIT"]
+
 
 # ── errors ──────────────────────────────────────────────────────────────────
 
@@ -712,6 +715,27 @@ class BlackOpsEngine:
             block_json = json.dumps(automation_instruction, indent=2)
             return f"\n[AUTOMATION_BLOCK]\n{block_json}\n[/AUTOMATION_BLOCK]"
         return ""
+
+    def parse_persona_output(self, response_text: str) -> dict:
+        """
+        Parse persona output to extract both natural language response and automation payload.
+
+        Args:
+            response_text (str): Complete persona response text
+
+        Returns:
+            dict: Dictionary containing 'response' (natural language) and 'automation_payload' (structured data)
+        """
+        # Extract automation block if present
+        automation_payload = self.extract_automation_block(response_text)
+
+        # Remove automation block from response text
+        clean_response = re.sub(r'\[AUTOMATION_BLOCK\].*?\[/AUTOMATION_BLOCK\]', '', response_text, flags=re.DOTALL).strip()
+
+        return {
+            'response': clean_response,
+            'automation_payload': automation_payload
+        }
 
     # ── memory ──
 
