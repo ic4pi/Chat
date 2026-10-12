@@ -16,13 +16,14 @@ Done = `[x]` + ~~struck through~~. Updated with every change that ships.
 - [x] ~~M7 Cross-device — one-time link code, Chat and Workspace synced live~~
 - [ ] M8 Media studio — see README; confirm scope
 - [ ] M9 Admin — prompts/config page; confirm scope
-- [ ] M10 Music — MIDI Humanizer (phase 1 built, awaiting review) → Mastering coach (phase 2)
+- [ ] M10 Music — Humanizer + Mastering coach built; awaiting production check
 
 ## Current work
 
 - [x] ~~Music phase 1: `/music` MIDI Humanizer (parse, humanize, piano roll, A/B play, export .mid) + `music-explain` coach mode in /api/assist~~
-- [ ] Verify `/music` live on production; set `MUSIC_COACH_MODEL` if not using the default
-- [ ] Music phase 2: genre mastering analyzer + teach mode
+- [ ] Verify `/music` and `/music/master.html` live on production; set `MUSIC_COACH_MODEL` if not using the default
+- [x] ~~Music phase 2: `/music/master.html` genre mastering coach — analysis (LUFS/spectrum/width), description→genre mapping, 6-stage offline chain, level-matched A/B, 3-style compare, teach mode, WAV + recipe export, `master-explain` coach mode~~
+- [ ] Music phase 3 (ideas): reference-track EQ matching; chain Humanizer → render → master as one flow; live-input jam partner
 - [x] ~~Settings → Tokens section (GitHub + named tokens) — merged #109~~
 - [x] ~~Rebuild Workspace bundle so Tokens UI actually ships (was source-only in #109)~~
 - [x] ~~Build plan: Plan panel in Workspace, orchestrator reads + maintains it~~
@@ -31,6 +32,7 @@ Done = `[x]` + ~~struck through~~. Updated with every change that ships.
 
 ## Done log (newest first)
 
+- ~~Music phase 2: Mastering Coach at /music/master.html~~
 - ~~Music phase 1: MIDI Humanizer at /music~~
 - ~~Workspace Plan panel + orchestrator-owned build plan~~
 - ~~GitHub backup for work in progress~~

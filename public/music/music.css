@@ -38,3 +38,20 @@ canvas{display:block}
 .ex{margin-bottom:10px}
 .ex ul,.coach ol{margin:4px 0 0;padding-left:20px;color:#c9d1e0}
 .coach{margin-top:10px;white-space:pre-wrap}
+textarea{width:100%;background:#1d2330;color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit;margin-bottom:10px;resize:vertical}
+.afterm{display:none}
+body.mastered .afterm{display:block}
+.spec{width:100%;display:block;margin:10px 0}
+.mrow{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:baseline;margin-bottom:6px}
+.mt{display:flex;flex-direction:column;font-size:15px}
+.mt i{font-style:normal;font-size:11px;color:var(--mut)}
+.report ul{margin:0;padding-left:20px;color:#c9d1e0}
+.sl em{font-style:normal;color:#FFB86B;font-size:12px}
+.step{border-top:1px solid var(--line);padding:10px 0}
+.step .sh{display:flex;flex-direction:column;gap:2px}
+.step .sp{color:#FFB86B;font-size:12px}
+.step p{margin:6px 0;color:#c9d1e0}
+.cmp table{border-collapse:collapse;margin-top:8px;font-size:13px}
+.cmp th,.cmp td{border:1px solid var(--line);padding:4px 8px;text-align:left}
+h2.sp{margin-top:16px}
+h2 small{color:var(--mut);font-weight:400;font-size:12px}
