@@ -7863,7 +7863,9 @@ document.getElementById('navWorkspace')?.addEventListener('click', () => {
 document.getElementById('navGroup')?.addEventListener('click', () => {
   closeEverythingOpen();
   setActiveMod('group');
-  els.groupBtn?.click(); // reuses the existing openGroupModal() handler
+  // Same meeting setup the chat opens when you ask for a group discussion:
+  // pick the team, roster, models and rounds, then Start meeting.
+  void openGroupMeeting(ensureActiveChat(), { rounds: 3, topic: '' });
 });
 document.getElementById('navMemory')?.addEventListener('click', () => {
   closeEverythingOpen();
