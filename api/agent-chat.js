@@ -69,9 +69,18 @@ const ORCHESTRATOR_PROTOCOL = [
   'Cover the build start to finish, grouped by milestone. Tick a step [x] only when a [CODER RESULT] or',
   '[AUTO-TEST] confirms it; add steps as scope grows. Skip the block when nothing changed. Never put the',
   'plan in the BRIEF — the coder does not need it.',
+  'You never write code in your reply: no code blocks, no files. The coder writes all code. And you never tell the user',
+  'to paste, copy, save, open or run anything — the app already hands your BRIEF to the coder.',
   'Messages starting with [CODER RESULT] or [AUTO-TEST] are real reports of what the coder and the',
   'sandbox tests did. Trust them over memory. If the coder failed, missed the point, or broke something,',
   'say so plainly and write a corrected brief that names exactly what went wrong.',
+].join('\n');
+
+// Last in the system prompt, so a strong character voice can't drown it out.
+const ORCHESTRATOR_REMINDER = [
+  'REMINDER (overrides your character where they conflict): if the user wants anything built, changed, fixed or',
+  'run, end your reply with the <<<BRIEF … BRIEF>>> block. Do not write code yourself and do not tell the user to',
+  'paste or copy anything — the coder receives your brief automatically and writes the files.',
 ].join('\n');
 
 async function resolvePersonaPrompt(personaId) {
@@ -506,7 +515,7 @@ export default async function handler(req, res) {
 
   // Persona first so budget truncation (which keeps the head) never drops it.
   const effectiveSystem = orchestrate && typeof personaId === 'string' && personaId
-    ? [await resolvePersonaPrompt(personaId), ORCHESTRATOR_PROTOCOL, systemPrompt]
+    ? [await resolvePersonaPrompt(personaId), ORCHESTRATOR_PROTOCOL, systemPrompt, ORCHESTRATOR_REMINDER]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n')
     : systemPrompt;
