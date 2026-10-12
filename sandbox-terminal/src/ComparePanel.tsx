@@ -550,7 +550,6 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
             onChange={e => setPrompt(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendToBoth(prompt); } }}
             placeholder="Describe what to build — or send a brief from your persona with ⇄"
-            disabled={sending}
             style={{ flex: 1, background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
               borderRadius: 4, padding: '7px 10px', fontFamily: 'inherit', fontSize: 15, minWidth: 0 }}
           />
