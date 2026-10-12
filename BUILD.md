@@ -23,6 +23,7 @@ Done = `[x]` + ~~struck through~~. Updated with every change that ships.
 - [x] ~~Rebuild Workspace bundle so Tokens UI actually ships (was source-only in #109)~~
 - [x] ~~Build plan: Plan panel in Workspace, orchestrator reads + maintains it~~
 - [x] ~~Keep model reasoning viewable ("Thinking" toggle under replies) in Chat + Workspace~~
+- [x] ~~Compare: start a blank project or clone a repo (owner/repo works) without leaving the panel~~
 - [ ] Verify Tokens + Plan panel are live on production (owner checking)
 - [ ] Use the saved extra tokens (Vercel/Render/Supabase) somewhere — stored only for now
 

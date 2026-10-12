@@ -2064,6 +2064,8 @@ export function App() {
       <ComparePanel ref={compareRef} open={showCompare} onClose={() => setShowCompare(false)}
         sandboxId={repo.sandboxId} onUseBuild={handleUseBuild}
         onNeedSandbox={(t) => handleCompareBrief(t)}
+        onStartBlank={() => repo.startBlankProject()}
+        onOpenRepo={(u) => repo.openRepo(u)}
         onVersionsReady={(v) => {
           // Give the orchestrator the two versions so it can answer about them
           // if you ask — it does not jump in on its own.
