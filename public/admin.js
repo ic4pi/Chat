@@ -46,6 +46,14 @@ const els = {
   accountFromEmailInput: $('accountFromEmailInput'),
   saveAccountBtn: $('saveAccountBtn'),
   deleteAccountBtn: $('deleteAccountBtn'),
+  dailyStatus: $('dailyStatus'), dailyEnabled: $('dailyEnabled'), dailyBrief: $('dailyBrief'),
+  dailyHours: $('dailyHours'), dailyTimezone: $('dailyTimezone'), dailyProvider: $('dailyProvider'),
+  dailyModel: $('dailyModel'), dailyTargetType: $('dailyTargetType'),
+  dailyGithubFields: $('dailyGithubFields'), dailyWebhookFields: $('dailyWebhookFields'),
+  dailyRepo: $('dailyRepo'), dailyBranch: $('dailyBranch'), dailyDir: $('dailyDir'), dailyGhToken: $('dailyGhToken'),
+  dailyHookUrl: $('dailyHookUrl'), dailyHookToken: $('dailyHookToken'), dailySiteUrl: $('dailySiteUrl'),
+  dailySaveBtn: $('dailySaveBtn'), dailyPreviewBtn: $('dailyPreviewBtn'), dailyRunBtn: $('dailyRunBtn'),
+  dailyResult: $('dailyResult'), dailyPreview: $('dailyPreview'), dailyHistory: $('dailyHistory'),
 };
 
 let data = { masterPrompt: '', personas: [], socialAccounts: [] };
@@ -439,5 +447,169 @@ els.saveAccountBtn?.addEventListener('click', saveAccount);
 els.deleteAccountBtn?.addEventListener('click', deleteAccount);
 els.accountPlatformInput?.addEventListener('change', syncAccountFieldVisibility);
 
+// ---------------------------------------------------------------------------
+// Daily pages: the settings, a preview that posts nothing, and a log.
+// ---------------------------------------------------------------------------
+
+async function dailyApi(method, query = '', body) {
+  const res = await fetch(`/api/admin-daily-pages${query}`, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    credentials: 'same-origin',
+    cache: 'no-store',
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error || `Server returned HTTP ${res.status}`);
+  return json;
+}
+
+function syncDailyTarget() {
+  const hook = els.dailyTargetType.value === 'webhook';
+  els.dailyGithubFields.hidden = hook;
+  els.dailyWebhookFields.hidden = !hook;
+}
+
+function dailyWhen(iso) {
+  try { return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch { return iso || ''; }
+}
+
+function renderDaily(payload) {
+  const c = payload.config;
+  const s = payload.status || {};
+  els.dailyEnabled.checked = !!c.enabled;
+  els.dailyBrief.value = c.brief || '';
+  els.dailyHours.value = (c.hours || []).join(', ');
+  els.dailyTimezone.value = c.timezone || 'UTC';
+  els.dailyProvider.value = c.provider || 'openrouter';
+  els.dailyModel.value = c.model || '';
+  els.dailyTargetType.value = c.target?.type || 'github';
+  els.dailyRepo.value = c.target?.repo || '';
+  els.dailyBranch.value = c.target?.branch || 'main';
+  els.dailyDir.value = c.target?.dir ?? 'docs';
+  els.dailyHookUrl.value = c.target?.url || '';
+  els.dailySiteUrl.value = c.target?.siteUrl || '';
+  const hasToken = !!c.target?.hasToken;
+  els.dailyGhToken.value = '';
+  els.dailyHookToken.value = '';
+  els.dailyGhToken.placeholder = hasToken ? 'saved — leave blank to keep it' : 'github_pat_…';
+  els.dailyHookToken.placeholder = hasToken ? 'saved — leave blank to keep it' : 'optional';
+  syncDailyTarget();
+
+  const lines = [];
+  let bad = false;
+  if (!s.hasProviderKey) { lines.push(`No ${s.providerKeyName || 'API key'} is set in Vercel — pages cannot be written until it is.`); bad = true; }
+  if (s.problem) { lines.push(s.problem); bad = true; }
+  if (c.enabled && !bad && s.next) lines.push(`On. Next page: ${s.next.replace('@', ' at ')}:00 (${c.timezone}).`);
+  if (!c.enabled) lines.push('Off. Nothing will be made or posted until you turn it on.');
+  if (s.lastRun) {
+    lines.push(s.lastRun.ok
+      ? `Last run ${dailyWhen(s.lastRun.at)}: posted "${s.lastRun.title}".`
+      : `Last run ${dailyWhen(s.lastRun.at)} FAILED: ${s.lastRun.error}`);
+    if (!s.lastRun.ok) bad = true;
+  }
+  els.dailyStatus.textContent = lines.join('\n');
+  els.dailyStatus.style.whiteSpace = 'pre-wrap';
+  els.dailyStatus.classList.toggle('bad', bad);
+
+  els.dailyHistory.innerHTML = '';
+  if (!(s.history || []).length) {
+    const li = document.createElement('li');
+    li.className = 'media-recent-empty';
+    li.textContent = 'No pages posted yet.';
+    els.dailyHistory.appendChild(li);
+  }
+  for (const h of s.history || []) {
+    const li = document.createElement('li');
+    li.className = 'media-recent-item';
+    const a = document.createElement('a');
+    a.textContent = h.title;
+    if (h.url) { a.href = h.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+    const meta = document.createElement('span');
+    meta.className = 'media-recent-meta';
+    meta.textContent = dailyWhen(h.at);
+    li.append(a, meta);
+    els.dailyHistory.appendChild(li);
+  }
+}
+
+function dailyForm() {
+  const type = els.dailyTargetType.value;
+  return {
+    enabled: els.dailyEnabled.checked,
+    brief: els.dailyBrief.value,
+    hours: els.dailyHours.value.split(/[\s,;]+/).filter(Boolean).map(Number),
+    timezone: els.dailyTimezone.value.trim() || 'UTC',
+    provider: els.dailyProvider.value,
+    model: els.dailyModel.value.trim(),
+    target: {
+      type,
+      repo: els.dailyRepo.value.trim(),
+      branch: els.dailyBranch.value.trim() || 'main',
+      dir: els.dailyDir.value,
+      token: (type === 'webhook' ? els.dailyHookToken.value : els.dailyGhToken.value).trim(),
+      url: els.dailyHookUrl.value.trim(),
+      siteUrl: els.dailySiteUrl.value.trim(),
+    },
+  };
+}
+
+function dailyMessage(text, bad = false) {
+  els.dailyResult.textContent = text;
+  els.dailyResult.classList.toggle('bad', bad);
+}
+
+async function loadDaily() {
+  try {
+    renderDaily(await dailyApi('GET'));
+  } catch (err) {
+    els.dailyStatus.textContent = err.message || 'Could not load daily pages.';
+    els.dailyStatus.classList.add('bad');
+  }
+}
+
+async function saveDaily() {
+  try {
+    renderDaily(await dailyApi('PUT', '', dailyForm()));
+    dailyMessage('Saved.');
+    flashButton(els.dailySaveBtn, 'Saved ✓');
+  } catch (err) {
+    dailyMessage(`Save failed: ${err.message}`, true);
+  }
+}
+
+async function runDaily(dry) {
+  const btn = dry ? els.dailyPreviewBtn : els.dailyRunBtn;
+  if (!dry && !confirm('Make one page and post it to the live destination now?')) return;
+  els.dailyPreview.hidden = true;
+  btn.disabled = true;
+  dailyMessage(dry ? 'Making a page… this takes 1–3 minutes.' : 'Making a page and posting it… this takes 1–3 minutes.');
+  try {
+    // Save first so the run uses what is on screen.
+    await dailyApi('PUT', '', dailyForm());
+    const out = await dailyApi('POST', `?action=run${dry ? '&dry=1' : ''}`);
+    const r = out.result;
+    if (dry) {
+      els.dailyPreview.srcdoc = r.html;
+      els.dailyPreview.hidden = false;
+      dailyMessage(`Preview: "${r.title}" (${Math.round(r.bytes / 1000)} KB, ${r.model}). It passed every check and nothing was posted. Try the controls below.`);
+    } else {
+      dailyMessage(`Posted "${r.title}".${r.url ? ` ${r.url}` : ''}`);
+    }
+    renderDaily(await dailyApi('GET'));
+  } catch (err) {
+    dailyMessage(err.message || 'Run failed.', true);
+    loadDaily();
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+els.dailyTargetType?.addEventListener('change', syncDailyTarget);
+els.dailySaveBtn?.addEventListener('click', saveDaily);
+els.dailyPreviewBtn?.addEventListener('click', () => runDaily(true));
+els.dailyRunBtn?.addEventListener('click', () => runDaily(false));
+
 refresh();
 refreshMedia();
+loadDaily();

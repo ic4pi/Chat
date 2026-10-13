@@ -163,6 +163,97 @@ const ADMIN_HTML = `<!DOCTYPE html>
     </div>
   </section>
 
+  <section class="admin-section" id="dailySection">
+    <h2>Daily pages</h2>
+    <p class="admin-hint">
+      Makes a new interactive web page on a schedule and posts it somewhere
+      that is not this app: a GitHub repo (turn on GitHub Pages for it) or any
+      website that accepts a webhook. Every page is checked before it goes
+      out: one file, no network calls, its scripts must compile, and it must
+      have working controls. Use Preview to see what it makes before you turn
+      it on.
+    </p>
+    <div id="dailyStatus" class="admin-hint daily-status"></div>
+    <label class="field field-check">
+      <input id="dailyEnabled" type="checkbox" />
+      <span>Turned on <em>(posts at the hours below, every day)</em></span>
+    </label>
+    <label class="field">
+      <span>What the pages are about <em>(blank = surprising, useful little toys and tools)</em></span>
+      <textarea id="dailyBrief" rows="3" spellcheck="true" placeholder="e.g. Money and math tools for freelancers. Games that teach probability."></textarea>
+    </label>
+    <label class="field">
+      <span>Hours it posts <em>(24-hour clock, comma separated: two numbers = two pages a day)</em></span>
+      <input id="dailyHours" type="text" placeholder="8, 20" autocomplete="off" />
+    </label>
+    <label class="field">
+      <span>Timezone <em>(for those hours)</em></span>
+      <input id="dailyTimezone" type="text" placeholder="America/New_York" autocomplete="off" />
+    </label>
+    <label class="field">
+      <span>Model provider <em>(its key must be set in Vercel)</em></span>
+      <select id="dailyProvider">
+        <option value="openrouter">OpenRouter</option>
+        <option value="venice">Venice</option>
+        <option value="cerebras">Cerebras</option>
+        <option value="groq">Groq</option>
+        <option value="xai">xAI (Grok)</option>
+        <option value="nvidia">NVIDIA</option>
+      </select>
+    </label>
+    <label class="field">
+      <span>Model <em>(blank = the best free coding model right now; a stronger model makes better pages)</em></span>
+      <input id="dailyModel" type="text" placeholder="e.g. anthropic/claude-sonnet-4.5" autocomplete="off" />
+    </label>
+    <label class="field">
+      <span>Post to</span>
+      <select id="dailyTargetType">
+        <option value="github">A GitHub repo</option>
+        <option value="webhook">A website (webhook)</option>
+      </select>
+    </label>
+    <div id="dailyGithubFields">
+      <label class="field">
+        <span>Repo <em>(owner/name, must already have one commit)</em></span>
+        <input id="dailyRepo" type="text" placeholder="yourname/daily-pages" autocomplete="off" />
+      </label>
+      <label class="field">
+        <span>Branch</span>
+        <input id="dailyBranch" type="text" placeholder="main" autocomplete="off" />
+      </label>
+      <label class="field">
+        <span>Folder in the repo <em>(GitHub Pages "/docs" = docs; blank = repo root)</em></span>
+        <input id="dailyDir" type="text" placeholder="docs" autocomplete="off" />
+      </label>
+      <label class="field">
+        <span>GitHub token <em>(fine-grained, only that repo, Contents: read and write)</em></span>
+        <input id="dailyGhToken" type="password" placeholder="github_pat_…" autocomplete="off" />
+      </label>
+    </div>
+    <div id="dailyWebhookFields">
+      <label class="field">
+        <span>Webhook URL <em>(https; gets a POST with title, slug, html)</em></span>
+        <input id="dailyHookUrl" type="text" placeholder="https://yoursite.com/api/daily-page" autocomplete="off" />
+      </label>
+      <label class="field">
+        <span>Secret <em>(optional, sent as Authorization: Bearer …)</em></span>
+        <input id="dailyHookToken" type="password" placeholder="optional" autocomplete="off" />
+      </label>
+    </div>
+    <label class="field">
+      <span>Public address of the pages <em>(optional, so the log links to the live page)</em></span>
+      <input id="dailySiteUrl" type="text" placeholder="https://yourname.github.io/daily-pages/" autocomplete="off" />
+    </label>
+    <div class="admin-actions">
+      <button id="dailySaveBtn" class="text-btn primary">Save</button>
+      <button id="dailyPreviewBtn" class="text-btn">Preview one (posts nothing)</button>
+      <button id="dailyRunBtn" class="text-btn">Make &amp; post one now</button>
+    </div>
+    <div id="dailyResult" class="admin-hint daily-result" aria-live="polite"></div>
+    <iframe id="dailyPreview" class="daily-preview" sandbox="allow-scripts" title="Preview of the generated page" hidden></iframe>
+    <ul id="dailyHistory" class="media-recent-list"></ul>
+  </section>
+
   <section class="admin-section">
     <h2>Recent media</h2>
     <p class="admin-hint">

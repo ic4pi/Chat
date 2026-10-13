@@ -112,6 +112,34 @@ history; the server holds every prompt and key.
 - Optional prepaid metering for video (`VIDEO_ACCESS_KEYS`); unset means
   unmetered.
 
+### 📰 Daily pages — set up in `/admin`
+
+- On a schedule (default 8:00 and 20:00 in the timezone you set) a model
+  invents an interactive one-file HTML page, the app checks it, and posts it
+  somewhere that is **not this app**: a GitHub repo, or any website that takes
+  a webhook.
+- GitHub: each page, `manifest.json` and a regenerated `index.html` go in ONE
+  commit (GraphQL `createCommitOnBranch`), so the site never shows a page its
+  index doesn't know about. Turn on GitHub Pages for the repo (branch `main`,
+  folder `/docs`) and it is live. The repo must already have one commit.
+- Webhook: `POST` with `{ event: "daily-page", title, folder, description,
+  date, html }`, `Authorization: Bearer <secret>` if you set one. Reply with
+  `{ "url": "…" }` to have the log link to the live page.
+- Before posting, every page must: be one file, make no network calls, load
+  nothing external, have inline scripts that compile, and have controls wired
+  with `addEventListener`. It is sent back to the model with the exact reason
+  up to twice; after that the slot is retried next hour, and given up on after
+  three failed attempts. These are static checks, not proof the page works —
+  use **Preview** in /admin (posts nothing) to see what the model makes.
+- The hourly cron (`/api/cron/daily-pages`) catches up a missed slot and never
+  makes the same slot twice. Settings and results live in Vercel KV
+  (`uncensored-chat:daily-pages:*`); the GitHub token is stored server-side
+  and never sent back to the browser. Use a fine-grained token limited to the
+  one repo with Contents: read and write.
+- The model's provider key (`OPENROUTER_API_KEY`, etc.) must be set in Vercel.
+  With the model left blank it picks the best free coding model; set a stronger
+  one in /admin for better pages.
+
 ### 🔐 Admin — `/admin`
 
 - Edit personas and the master prompt behind HTTP Basic auth, enforced at the
