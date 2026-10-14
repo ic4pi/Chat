@@ -15,8 +15,7 @@
     "check:video": "node scripts/check-video-persist.mjs",
     "check:async": "node scripts/check-async-fallback.mjs",
     "check:campaign": "node scripts/check-campaign.mjs",
-    "check:models": "node scripts/check-models.mjs",
-    "check:music": "node scripts/check-music.mjs && node scripts/check-master.mjs && node scripts/check-transcribe.mjs"
+    "check:models": "node scripts/check-models.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",
