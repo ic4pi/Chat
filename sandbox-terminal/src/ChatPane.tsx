@@ -60,8 +60,10 @@ import {
   buildPersonaContext,
   buildPersonaHistory,
   extractAskBlocks,
+  parseReadRequests,
   personaMeantToBrief,
   splitPersonaReply,
+  stripReadRequests,
   type OrchestratorPersona,
 } from './orchestrator.js';
 import { looksLikeRefusal } from './codingTeam.js';
@@ -101,6 +103,19 @@ export interface ChatHandle {
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
+
+/** Read one file from the sandbox, for when the persona asks to read it itself. */
+async function fetchSandboxFile(path: string, sid: string | null): Promise<string | null> {
+  if (!sid) return null;
+  try {
+    const res = await fetch(`${API_URL}/file?path=${encodeURIComponent(path)}`, {
+      headers: { 'X-Sandbox-Session': sid },
+    });
+    if (!res.ok) return null;
+    const d = await res.json() as { content?: string };
+    return typeof d.content === 'string' ? d.content : null;
+  } catch { return null; }
+}
 
 // Auto-context must NEVER block the user bubble from appearing.
 const BEFORE_SEND_TIMEOUT_MS = 8_000;
@@ -738,7 +753,7 @@ export interface Message {
   content:     string;
   /** welcome = UI-only, never sent to the model; retry-inject = verify/nudge loop;
    *  brief = the persona's instruction to the coder */
-  kind?:       'user' | 'retry-inject' | 'welcome' | 'imported' | 'brief' | 'note' | 'runplan' | 'askreply';
+  kind?:       'user' | 'retry-inject' | 'welcome' | 'imported' | 'brief' | 'note' | 'runplan' | 'askreply' | 'asks';
   /** runplan: the questions waiting on one Run / Don't run. */
   asks?:       Array<{ id: string; question: string }>;
   runStatus?:  'pending' | 'running' | 'done' | 'declined';
@@ -1224,6 +1239,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           repoUrl: rUrl,
           tree: tr,
           openFiles: [...ctx.keys()],
+          files: ctx,            // full contents — the persona reads these in full
           hits,
           coderLabel: `${prov} / ${mod}`,
           role: activeRole,
@@ -1232,29 +1248,51 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         const pProv = orchPersona.provider || prov;
         const pMod = orchPersona.model || mod;
         const personaTurns = trimMessageHistory(buildPersonaHistory(withUser));
-        const personaReply = await callAgent(
-          attachImages(personaTurns.map(t => ({ ...t }))),
-          personaSystem,
-          sid,
-          pProv,
-          pMod,
+        type PTurn = { role: 'user' | 'assistant'; content: string };
+        const askPersona = (turns: PTurn[]) => callAgent(
+          attachImages(turns.map(t => ({ ...t }))),
+          personaSystem, sid, pProv, pMod,
           orchPersona.apiKey || (pProv === prov ? key : undefined),
           { personaId: orchPersona.id, orchestrate: true },
         );
-        const rawFull = personaReply.reply === '(empty response)' ? '' : personaReply.reply.trim();
+        let personaReply = await askPersona(personaTurns);
+        let rawFull = personaReply.reply === '(empty response)' ? '' : personaReply.reply.trim();
+        // The persona can read any file itself (a "READ: path" line) instead of
+        // asking you to paste one — fetch what it asked for and let it continue
+        // once, BEFORE it commits to a plan/ask/brief on this reply.
+        const toRead = /<<<BRIEF|<<<ASK/.test(rawFull) ? [] : parseReadRequests(rawFull);
+        if (toRead.length) {
+          setLiveStatus(`${orchPersona.name} is reading ${toRead.length} file${toRead.length === 1 ? '' : 's'}…`);
+          const blocks: string[] = [];
+          for (const rel of toRead) {
+            const have = ctx.get(rel);
+            const content = have != null ? have : await fetchSandboxFile(rel, sid);
+            const body = content == null ? '(file not found)'
+              : (content.length > 8000 ? content.slice(0, 8000) + '\n… (truncated)' : content);
+            blocks.push(`--- ${rel} ---\n${body}`);
+          }
+          const readTurns: PTurn[] = [
+            ...personaTurns,
+            { role: 'assistant', content: rawFull },
+            { role: 'user', content: `[FILES YOU ASKED TO READ]\n${blocks.join('\n\n')}` },
+          ];
+          personaReply = await askPersona(readTurns);
+          rawFull = personaReply.reply === '(empty response)' ? '' : personaReply.reply.trim();
+        }
         // The orchestrator keeps the build plan current with a <<<PLAN>>> block.
         const { text: raw0, plan: newPlan } = extractPlanBlock(rawFull);
         const { text: raw, asks } = extractAskBlocks(raw0);
         if (newPlan) latestRef.current.onBuildPlan?.(newPlan);
         const split = splitPersonaReply(raw);
         brief = split.brief;
+        const shown = stripReadRequests(raw) || raw;
         const personaMsg: Message = {
-          id: uid(), role: 'assistant', speaker: 'persona', content: raw || '(no reply)',
+          id: uid(), role: 'assistant', speaker: 'persona', content: shown || '(no reply)',
           reasoning: keepReasoning(personaReply.reasoning),
         };
         setMessages(m => [...m, personaMsg]);
-        if (speakOnRef.current && split.say && cleanForSpeech(split.say)) {
-          void speakReply(split.say);
+        if (speakOnRef.current && split.say && cleanForSpeech(stripReadRequests(split.say))) {
+          void speakReply(stripReadRequests(split.say) || split.say);
         }
         convo = [...withUser, personaMsg];
 

@@ -295,11 +295,38 @@ function flatten(nodes: FileNode[], prefix = ''): string[] {
   return out;
 }
 
+/**
+ * Files the persona asked to read itself, from a `READ: a.js, src/b.ts` line.
+ * Lets it pull any file on its own instead of telling the user to paste one.
+ */
+export function parseReadRequests(reply: string): string[] {
+  const out: string[] = [];
+  const re = /^[\s>*\-]*READ(?:\s+FILES?)?\s*:\s*(.+)$/gim;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(String(reply || '')))) {
+    for (let p of m[1].split(/[,;]+/)) {
+      p = p.trim().replace(/^[`'"]+|[`'"]+$/g, '').replace(/^\.\//, '').trim();
+      if (p && /[./]/.test(p) && !p.includes('..') && p.length < 200) out.push(p);
+    }
+  }
+  return [...new Set(out)].slice(0, 8);
+}
+
+/** Hide the READ: lines from what the user sees — they're a machine request. */
+export function stripReadRequests(text: string): string {
+  return String(text || '')
+    .replace(/^[\s>*\-]*READ(?:\s+FILES?)?\s*:.*(?:\r?\n)?/gim, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export function buildPersonaContext(opts: {
   repoRoot: string;
   repoUrl: string | null;
   tree: FileNode[];
   openFiles: string[];
+  /** Full contents of the files currently in context — the persona reads these in full. */
+  files?: Map<string, string>;
   hits: SearchHit[];
   coderLabel: string;
   role?: string;
@@ -329,7 +356,26 @@ export function buildPersonaContext(opts: {
     parts.push('', `Files the coder will have open in full: ${opts.openFiles.join(', ')}`);
   }
   parts.push('', planForPersona(opts.plan || ''));
+  // Full contents of what's in context, so the persona reads files itself.
+  if (opts.files && opts.files.size) {
+    let budget = 16_000;
+    const blocks: string[] = [];
+    for (const [path, content] of opts.files) {
+      if (budget <= 0) break;
+      const slice = content.length > 8_000 ? content.slice(0, 8_000) + '\n… (truncated)' : content;
+      budget -= slice.length;
+      blocks.push(`--- ${path} ---\n${slice}`);
+    }
+    if (blocks.length) parts.push('', 'File contents (read these directly — do not ask the user for them):', ...blocks);
+  }
   const hitBlock = formatSearchHits(opts.hits, 6_000);
   if (hitBlock) parts.push('', hitBlock);
+  parts.push(
+    '',
+    'READING FILES: you can open any file in the project yourself. Put a line exactly like',
+    '`READ: path/one.js, path/two.css` (paths from the file tree above) anywhere in your reply and the app',
+    'fetches those files and lets you continue with their contents. NEVER tell the user to click, open, copy,',
+    'paste, cat, or relay a file — read it yourself with READ:.',
+  );
   return parts.join('\n');
 }
