@@ -72,10 +72,34 @@ const ORCHESTRATOR_PROTOCOL = [
   'plan in the BRIEF — the coder does not need it.',
   'You never write code in your reply: no code blocks, no files. The coder writes all code. And you never tell the user',
   'to paste, copy, save, open or run anything — the app already hands your BRIEF to the coder.',
+  'Team line: you can put a question to any persona on the roster below. End the reply with one block per',
+  'question (max 6), instead of a BRIEF in the same reply:',
+  '<<<ASK persona-id',
+  'The exact question, with the context that persona needs — it cannot see this conversation.',
+  'ASK>>>',
+  'The app shows the user ONE card listing every question and asks Run / Don\'t run. After Run, each',
+  'persona answers and the answers come back to you as [REPLY from <id>] messages; then you synthesize',
+  'them for the user, and write the BRIEF if code is now needed. Only ask when another view really helps.',
   'Messages starting with [CODER RESULT] or [AUTO-TEST] are real reports of what the coder and the',
   'sandbox tests did. Trust them over memory. If the coder failed, missed the point, or broke something,',
   'say so plainly and write a corrected brief that names exactly what went wrong.',
 ].join('\n');
+
+const AS_PERSONA_NOTE = [
+  'You were asked a direct question by the lead orchestrator of this workspace. Answer as yourself, in your own',
+  'voice, in under 250 words. No code, no BRIEF blocks, no questions back unless something essential is missing.',
+].join('\n');
+
+/** id and name for each persona the orchestrator can ask. */
+async function personaRoster() {
+  try {
+    const config = await loadConfig();
+    const rows = (config.personas || []).map((p) => `- ${p.id}: ${p.name || p.id}`);
+    return rows.length ? `PERSONA ROSTER (valid ids for ASK):\n${rows.join('\n')}` : '';
+  } catch {
+    return '';
+  }
+}
 
 // Last in the system prompt, so a strong character voice can't drown it out.
 const ORCHESTRATOR_REMINDER = [
@@ -480,6 +504,7 @@ export default async function handler(req, res) {
     stream: wantStream,
     personaId,
     orchestrate,
+    asPersona,
   } = req.body || {};
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'messages array required' });
@@ -526,10 +551,14 @@ export default async function handler(req, res) {
 
   // Persona first so budget truncation (which keeps the head) never drops it.
   const effectiveSystem = orchestrate && typeof personaId === 'string' && personaId
-    ? [await resolvePersonaPrompt(personaId), ORCHESTRATOR_PROTOCOL, clientBriefText, systemPrompt, ORCHESTRATOR_REMINDER]
+    ? [await resolvePersonaPrompt(personaId), ORCHESTRATOR_PROTOCOL, await personaRoster(), clientBriefText, systemPrompt, ORCHESTRATOR_REMINDER]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n')
-    : [systemPrompt, clientBriefText].filter((s) => typeof s === 'string' && s.trim()).join('\n\n');
+    : asPersona && typeof personaId === 'string' && personaId
+      ? [await resolvePersonaPrompt(personaId), clientBriefText, AS_PERSONA_NOTE]
+          .filter((s) => typeof s === 'string' && s.trim())
+          .join('\n\n')
+      : [systemPrompt, clientBriefText].filter((s) => typeof s === 'string' && s.trim()).join('\n\n');
 
   const budgeted = budgetMessages(effectiveSystem, chatMessages);
   const messagesWithSystem = budgeted.system
@@ -539,7 +568,7 @@ export default async function handler(req, res) {
   // Default stream:true — Workspace needs tokens before the function time limit.
   const useStream = wantStream !== false;
   // A retired model is replaced in kind: the persona with a chat model, the coder with a coder.
-  const kind = orchestrate ? 'chat' : 'coder';
+  const kind = orchestrate || asPersona ? 'chat' : 'coder';
   if (useStream) {
     return handleStream(req, res, resolved, model, messagesWithSystem, providerId, budgeted, kind);
   }

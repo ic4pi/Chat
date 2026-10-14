@@ -29,6 +29,8 @@ export interface OrchMessage {
   role: 'user' | 'assistant';
   content: string;
   kind?: string;
+  askName?: string;
+  runStatus?: string;
   speaker?: 'persona' | 'coder';
   to?: 'persona';
   pending?: boolean;
@@ -169,6 +171,24 @@ export function buildBriefWriterTurns(personaTurns: Turn[], personaReply: string
   }];
 }
 
+// ── team line (ASK) ──────────────────────────────────────────────────────
+
+export const MAX_ASKS = 6;
+export interface Ask { id: string; question: string }
+
+const ASK_RE = /<<<\s*ASK[ \t]+([\w-]+)[^\n]*\n([\s\S]*?)(?:\n?\s*ASK\s*>>>|$)/gi;
+
+/** Questions the orchestrator wants put to other personas, and its reply without them. */
+export function extractAskBlocks(raw: string): { text: string; asks: Ask[] } {
+  const asks: Ask[] = [];
+  const text = String(raw || '').replace(ASK_RE, (_all, id: string, q: string) => {
+    const question = (q || '').trim();
+    if (question && asks.length < MAX_ASKS) asks.push({ id: id.toLowerCase(), question });
+    return '';
+  }).replace(/\n{3,}/g, '\n\n').trim();
+  return { text, asks };
+}
+
 // ── history builders ─────────────────────────────────────────────────────
 
 function clip(s: string, n: number): string {
@@ -218,6 +238,16 @@ export function buildPersonaHistory(msgs: OrchMessage[]): Turn[] {
     if (skip(m)) continue;
     if (m.role === 'user') {
       if (m.kind === 'brief') continue; // already inside the persona's own reply
+      if (m.kind === 'runplan') {
+        if (m.runStatus === 'declined') {
+          turns.push({ role: 'user', content: '[NOTE] The user chose not to run your questions to the team. Carry on without them.' });
+        }
+        continue;
+      }
+      if (m.kind === 'askreply') {
+        turns.push({ role: 'user', content: `[REPLY from ${m.askName || 'persona'}] ${clip(m.content, 2500)}` });
+        continue;
+      }
       if (m.kind === 'note') {
         turns.push({ role: 'user', content: `[NOTE] ${m.content}` });
         continue;
@@ -243,6 +273,7 @@ export function buildCoderHistory(msgs: OrchMessage[]): Turn[] {
       if (skip(m)) return false;
       if (m.role === 'user') {
         if (m.kind === 'brief') return !m.pending; // never built — not the coder's business
+        if (m.kind === 'runplan' || m.kind === 'askreply') return false;
         if (m.kind === 'retry-inject' || m.kind === 'note') return true;
         // Direct-mode asks from earlier in this session still belong to the coder.
         return m.kind !== 'imported' && m.to !== 'persona';

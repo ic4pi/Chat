@@ -59,6 +59,7 @@ import {
   buildCoderHistory,
   buildPersonaContext,
   buildPersonaHistory,
+  extractAskBlocks,
   personaMeantToBrief,
   splitPersonaReply,
   type OrchestratorPersona,
@@ -737,7 +738,12 @@ export interface Message {
   content:     string;
   /** welcome = UI-only, never sent to the model; retry-inject = verify/nudge loop;
    *  brief = the persona's instruction to the coder */
-  kind?:       'user' | 'retry-inject' | 'welcome' | 'imported' | 'brief' | 'note';
+  kind?:       'user' | 'retry-inject' | 'welcome' | 'imported' | 'brief' | 'note' | 'runplan' | 'askreply';
+  /** runplan: the questions waiting on one Run / Don't run. */
+  asks?:       Array<{ id: string; question: string }>;
+  runStatus?:  'pending' | 'running' | 'done' | 'declined';
+  /** askreply: which persona answered. */
+  askName?:    string;
   /** Who wrote an assistant message. Unset = coder (pre-orchestrator sessions). */
   speaker?:    'persona' | 'coder';
   /** A user message addressed to the persona rather than the coder. */
@@ -913,7 +919,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   // ── shared send implementation ─────────────────────────────────────────────
   const sendText = useCallback(async (
     text: string,
-    kind: 'user' | 'retry-inject' | 'brief' = 'user',
+    kind: 'user' | 'retry-inject' | 'brief' | 'asks' = 'user',
     opts?: { builder?: SeatPick },
   ): Promise<PendingChange[]> => {
     if (!text || sendingRef.current) return [];
@@ -922,17 +928,19 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
     // 'brief': a brief you just picked agents for — it's already on screen,
     // so straight to the coder you chose, no new bubble, no persona turn.
     const goBrief = kind === 'brief';
+    // 'asks': you approved a run plan — the questions go out, the answers come back to the orchestrator.
+    const goAsks = kind === 'asks';
 
     // 1) Show the bubble IMMEDIATELY — never wait on auto-context / network first.
     const orchPersona = latestRef.current.persona;
-    const orchestrated = !!orchPersona && kind === 'user';
+    const orchestrated = !!orchPersona && (kind === 'user' || goAsks);
     const userMsg: Message = {
       id: uid(), role: 'user', content: text, kind,
       ...(orchestrated ? { to: 'persona' as const } : {}),
     };
     // Prefixes server status events so you can tell persona and coder phases apart.
     let phase = orchestrated ? orchPersona!.name : goBrief ? 'Coder' : '';
-    if (!goBrief) setMessages(m => [...m, userMsg]);
+    if (!goBrief && !goAsks) setMessages(m => [...m, userMsg]);
     setLoading(true);
     setLiveThoughts('');
     setLiveStatus('Connecting…');
@@ -1159,7 +1167,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       // After await, React may already have flushed userMsg into state — don't duplicate.
       // Never send welcome / legacy example blurb to the model.
-      const withUser = goBrief || prev.some(m => m.id === userMsg.id) ? prev : [...prev, userMsg];
+      let withUser = goBrief || goAsks || prev.some(m => m.id === userMsg.id) ? prev : [...prev, userMsg];
 
       // Pending images ride on the latest user turn (vision-capable models) —
       // the persona's and the coder's both, so neither has to guess what you showed.
@@ -1177,8 +1185,40 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       // ── Persona turn: you talk to the persona; it decides what the coder is told.
       let convo: Message[] = withUser;
       let brief: string | null = goBrief ? text : null;
+      if (orchestrated && orchPersona && goAsks) {
+        const plan = prev.find(m => m.id === text);
+        const asks = plan?.asks ?? [];
+        const answers: Message[] = [];
+        for (let i = 0; i < asks.length; i++) {
+          if (userCancelledRef.current) break;
+          const a = asks[i]!;
+          setLiveThoughts('');
+          setLiveStatus(`Asking ${a.id} (${i + 1}/${asks.length})…`);
+          const pp = orchPersona.provider || builderProv;
+          const pm = orchPersona.model || builderMod;
+          let content: string;
+          let reasoning: string | undefined;
+          try {
+            const r = await callAgent(
+              [{ role: 'user', content: a.question }],
+              '', sid, pp, pm,
+              orchPersona.apiKey || (pp === builderProv ? builderKey : undefined),
+              { personaId: a.id, asPersona: true },
+            );
+            content = r.reply === '(empty response)' ? '(no answer)' : r.reply.trim();
+            reasoning = keepReasoning(r.reasoning);
+          } catch (err) {
+            content = `(could not reach ${a.id}: ${err instanceof Error ? err.message : String(err)})`;
+          }
+          answers.push({ id: uid(), role: 'user', kind: 'askreply', askName: a.id, content, reasoning });
+          setMessages(m => [...m, answers[answers.length - 1]!]);
+        }
+        setMessages(m => m.map(x => x.id === text ? { ...x, runStatus: 'done' as const } : x));
+        withUser = [...withUser, ...answers];
+      }
       if (orchestrated && orchPersona) {
-        setLiveStatus(`${orchPersona.name} is thinking…`);
+        if (goAsks) setLiveStatus(`${orchPersona.name} is reading the answers…`);
+        else setLiveStatus(`${orchPersona.name} is thinking…`);
         const personaSystem = buildPersonaContext({
           repoRoot: root,
           repoUrl: rUrl,
@@ -1203,7 +1243,8 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         );
         const rawFull = personaReply.reply === '(empty response)' ? '' : personaReply.reply.trim();
         // The orchestrator keeps the build plan current with a <<<PLAN>>> block.
-        const { text: raw, plan: newPlan } = extractPlanBlock(rawFull);
+        const { text: raw0, plan: newPlan } = extractPlanBlock(rawFull);
+        const { text: raw, asks } = extractAskBlocks(raw0);
         if (newPlan) latestRef.current.onBuildPlan?.(newPlan);
         const split = splitPersonaReply(raw);
         brief = split.brief;
@@ -1216,6 +1257,14 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           void speakReply(split.say);
         }
         convo = [...withUser, personaMsg];
+
+        // Questions for other personas wait on ONE approval for the whole batch.
+        if (asks.length && !goAsks) {
+          setMessages(m => [...m, {
+            id: uid(), role: 'user', kind: 'runplan', content: '', asks, runStatus: 'pending',
+          }]);
+          return [];
+        }
 
         // The persona's model ignored the format (or handed you a prompt to
         // paste) on a turn that was meant to build something: the coder model
@@ -1706,6 +1755,50 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                   ⟳ Auto-retry — test failure injected
                 </span>
                 {msg.content.slice(0, 500)}{msg.content.length > 500 ? '…' : ''}
+              </div>
+            ) : msg.kind === 'runplan' ? (
+              <div data-testid="runplan-msg" style={{ background: '#12151D', border: '1px solid #323A50',
+                borderRadius: 6, padding: '8px 10px' }}>
+                <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: '0.08em',
+                  textTransform: 'uppercase', color: '#9198AA', marginBottom: 6 }}>
+                  Run plan — {msg.asks?.length ?? 0} question{(msg.asks?.length ?? 0) === 1 ? '' : 's'} to your team
+                </div>
+                <ol style={{ margin: '0 0 8px', paddingLeft: 20, fontSize: 15, color: '#C9CEDA', lineHeight: 1.5 }}>
+                  {(msg.asks || []).map((a, i) => (
+                    <li key={i}><strong>{a.id}</strong>: {a.question.length > 220 ? `${a.question.slice(0, 220)}…` : a.question}</li>
+                  ))}
+                </ol>
+                {msg.runStatus === 'pending' ? (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button type="button" data-testid="runplan-run" disabled={loading}
+                      onClick={() => {
+                        setMessages(m => m.map(x => x.id === msg.id ? { ...x, runStatus: 'running' as const } : x));
+                        void sendText(msg.id, 'asks');
+                      }}
+                      style={{ background: 'var(--accent)', color: '#0B0D12', border: 'none', borderRadius: 4,
+                        padding: '5px 16px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 15, fontWeight: 700 }}>
+                      Run
+                    </button>
+                    <button type="button" data-testid="runplan-skip" disabled={loading}
+                      onClick={() => setMessages(m => m.map(x => x.id === msg.id ? { ...x, runStatus: 'declined' as const } : x))}
+                      style={{ background: 'transparent', color: '#9198AA', border: '1px solid #323A50', borderRadius: 4,
+                        padding: '5px 16px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 15 }}>
+                      Don't run
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 13, color: '#9198AA' }}>
+                    {msg.runStatus === 'running' ? 'Running…' : msg.runStatus === 'declined' ? "Not run." : 'Done — answers below.'}
+                  </div>
+                )}
+              </div>
+            ) : msg.kind === 'askreply' ? (
+              <div data-testid="askreply-msg" style={{ borderLeft: '3px solid #FF9FC4', paddingLeft: 10 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: '0.08em',
+                  textTransform: 'uppercase', color: '#FF9FC4', marginBottom: 4 }}>{msg.askName}</div>
+                <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 16, lineHeight: 1.5, color: '#E8E8E8' }}>
+                  {msg.content}
+                </div>
               </div>
             ) : msg.kind === 'note' ? (
               <div data-testid="note-msg" style={{ fontSize: 14, color: '#9198AA', fontStyle: 'italic',
