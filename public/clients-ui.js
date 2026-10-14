@@ -130,7 +130,7 @@
     pill = el('button', { type: 'button', id: 'clientPill', onclick: openSwitcher, style: 'display:inline-flex;align-items:center;gap:6px;background:#1a1d26;color:#e8e8e8;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:4px 10px;font:12px system-ui,sans-serif;cursor:pointer;flex:none' });
     var top = document.getElementById('topbar');
     if (top) { top.insertBefore(pill, top.children[1] || null); }
-    else { pill.style.cssText += ';position:fixed;top:8px;left:8px;z-index:90'; document.body.appendChild(pill); }
+    else { pill.style.cssText += ';position:fixed;bottom:8px;left:8px;z-index:5'; document.body.appendChild(pill); }
     paintPill();
     api('clients-list').then(function (j) {
       clients = j.clients || [];
