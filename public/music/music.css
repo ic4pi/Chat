@@ -55,3 +55,7 @@ body.mastered .afterm{display:block}
 .cmp th,.cmp td{border:1px solid var(--line);padding:4px 8px;text-align:left}
 h2.sp{margin-top:16px}
 h2 small{color:var(--mut);font-weight:400;font-size:12px}
+.audioopts{display:none;gap:10px;align-items:center;color:var(--mut);font-size:13px}
+body.fromaudio .audioopts{display:inline-flex}
+#audioNote{display:none}
+body.fromaudio #audioNote{display:block}

@@ -3,6 +3,7 @@
 (() => {
   'use strict';
   const $ = (s, r = document) => r.querySelector(s);
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
   // ───────────────────────── RNG ─────────────────────────
   function mulberry32(a) {
@@ -400,7 +401,7 @@
     file: $('#file'), drop: $('#drop'), demo: $('#demo'), name: $('#songName'), tracks: $('#tracks'), sliders: $('#sliders'),
     preset: $('#preset'), grid: $('#swingGrid'), reroll: $('#reroll'), roll: $('#roll'), canvas: $('#canvas'), view: $('#view'),
     zoom: $('#zoom'), playO: $('#playO'), playH: $('#playH'), stop: $('#stop'), exp: $('#export'), explain: $('#explain'),
-    coach: $('#coach'), coachOut: $('#coachOut'), status: $('#status'),
+    coach: $('#coach'), coachOut: $('#coachOut'), status: $('#status'), bpm: $('#bpm'), snap: $('#snap'),
   };
   const say = (m, err) => { els.status.textContent = m; els.status.className = err ? 'err' : ''; };
 
@@ -615,15 +616,46 @@
   }
 
   // ───────────────────────── Wiring ─────────────────────────
+  const isMidi = (f) => /\.(mid|midi)$/i.test(f.name) || f.type === 'audio/midi' || f.type === 'audio/mid';
+  let audioRaw = null;
+  function buildFromAudio() {
+    const bpm = clamp(+els.bpm.value || audioRaw.bpm, 50, 220);
+    const song = window.__transcribe.buildSong(audioRaw, bpm, els.snap.value, audioRaw.name);
+    if (!song.tracks.length) throw new Error('No notes or drum hits could be detected in that audio');
+    load(song);
+    return song;
+  }
   async function handleFile(f) {
     if (!f) return;
     try {
-      const song = parseMidi(await f.arrayBuffer());
-      song.name = f.name;
-      if (!song.tracks.some((t) => t.notes.length)) throw new Error('No notes found in this file');
-      load(song); say(`Loaded ${f.name}: ${song.tracks.filter((t) => t.notes.length).length} track(s), ${Math.round(songBpm(song))} BPM`);
+      if (isMidi(f)) {
+        audioRaw = null; document.body.classList.remove('fromaudio');
+        const song = parseMidi(await f.arrayBuffer());
+        song.name = f.name;
+        if (!song.tracks.some((t) => t.notes.length)) throw new Error('No notes found in this file');
+        load(song); say(`Loaded ${f.name}: ${song.tracks.filter((t) => t.notes.length).length} track(s), ${Math.round(songBpm(song))} BPM`);
+        return;
+      }
+      say('Decoding audio…');
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      let dec;
+      try { dec = await ctx.decodeAudioData(await f.arrayBuffer()); } catch { throw new Error('Could not decode that file. Try WAV or MP3.'); } finally { ctx.close().catch(() => {}); }
+      if (dec.duration > 180) throw new Error('Audio over 3 minutes is not supported yet — trim it first.');
+      const mono = new Float32Array(dec.length);
+      for (let c = 0; c < dec.numberOfChannels; c++) { const d = dec.getChannelData(c); for (let i = 0; i < dec.length; i++) mono[i] += d[i] / dec.numberOfChannels; }
+      say('Transcribing (drums, bass, melody)…');
+      await new Promise((r) => setTimeout(r, 30));
+      audioRaw = window.__transcribe.transcribe(mono, dec.sampleRate);
+      audioRaw.name = f.name;
+      els.bpm.value = Math.round(audioRaw.bpm * 2) / 2;
+      document.body.classList.add('fromaudio');
+      const song = buildFromAudio();
+      const hits = song.tracks.map((t) => `${t.name.replace(' (detected)', '')} ${t.notes.length}`).join(', ');
+      say(`Transcribed ${f.name}: ${hits}. Tempo ${els.bpm.value} BPM — fix it if it's off (doubled/halved is common).`);
     } catch (e) { say(e.message, true); }
   }
+  const redoAudio = () => { if (audioRaw) { try { buildFromAudio(); } catch (e) { say(e.message, true); } } };
+  els.bpm.onchange = redoAudio; els.snap.onchange = redoAudio;
 
   els.file.onchange = () => handleFile(els.file.files[0]);
   els.drop.ondragover = (e) => { e.preventDefault(); els.drop.classList.add('over'); };

@@ -23,6 +23,8 @@ Done = `[x]` + ~~struck through~~. Updated with every change that ships.
 - [x] ~~Music phase 1: `/music` MIDI Humanizer (parse, humanize, piano roll, A/B play, export .mid) + `music-explain` coach mode in /api/assist~~
 - [ ] Verify `/music` and `/music/master.html` live on production; set `MUSIC_COACH_MODEL` if not using the default
 - [x] ~~Music phase 2: `/music/master.html` genre mastering coach — analysis (LUFS/spectrum/width), description→genre mapping, 6-stage offline chain, level-matched A/B, 3-style compare, teach mode, WAV + recipe export, `master-explain` coach mode~~
+- [x] ~~Humanizer accepts .mp3/.wav: in-browser audio→MIDI (drums by band, bass + melody line, tempo estimate, grid snap, tempo override)~~
+- [ ] Music: polyphonic (chord) transcription — needs an ML model (e.g. Basic Pitch); decide if worth the download
 - [ ] Music phase 3 (ideas): reference-track EQ matching; chain Humanizer → render → master as one flow; live-input jam partner
 - [x] ~~Settings → Tokens section (GitHub + named tokens) — merged #109~~
 - [x] ~~Rebuild Workspace bundle so Tokens UI actually ships (was source-only in #109)~~
@@ -32,6 +34,7 @@ Done = `[x]` + ~~struck through~~. Updated with every change that ships.
 
 ## Done log (newest first)
 
+- ~~Humanizer: .mp3/.wav import via audio→MIDI transcription~~
 - ~~Music phase 2: Mastering Coach at /music/master.html~~
 - ~~Music phase 1: MIDI Humanizer at /music~~
 - ~~Workspace Plan panel + orchestrator-owned build plan~~
