@@ -27,6 +27,10 @@ Done = `[x]` + ~~struck through~~. Updated with every change that ships.
 - [ ] Verify Tokens + Plan panel are live on production (owner checking)
 - [ ] Use the saved extra tokens (Vercel/Render/Supabase) somewhere — stored only for now
 
+- [x] ~~Client workspaces, part 1: walled-off clients (own owner row), profile brief injected into chat/agent/group/campaign, switcher + client page, per-client local data~~
+- [ ] Client workspaces, part 2: orchestrator direct line to every persona (ASK/ASSIGN/MEETING), one Run/Don't run approval per batch, per-persona per-client threads
+- [ ] Browser-driving marketing agent (own spec; first-job question open)
+
 - [x] ~~Juno persona (supportive comedy-writer friend: assessment step-planning, wins tally, planning-to-doing nudges)~~
 
 ## Teams & Production (planned with owner)
