@@ -8,7 +8,7 @@
 
 import { resolveProvider, withProviderChatExtras, formatProviderError } from '../lib/providers.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
-import { db, HUB_ENABLED, resolveOwner, embedOne, rateLimit } from '../lib/hub.js';
+import { db, HUB_ENABLED, resolveOwner, embedOne, rateLimit, loadClientBrief, ClientAccessError } from '../lib/hub.js';
 import { runCampaign, platformsFromText, PLATFORMS } from '../lib/campaign-engine.js';
 import { isModelGoneError, replacementFor } from '../lib/model-health.js';
 
@@ -162,6 +162,7 @@ async function saveHook(req, res) {
     if (error) throw new Error(error.message);
     return res.status(200).json({ ok: true, id: data.id });
   } catch (err) {
+    if (err instanceof ClientAccessError) return res.status(403).json({ error: err.message });
     return res.status(502).json({ error: `Could not save the hook: ${err.message}` });
   }
 }
@@ -189,8 +190,15 @@ export default async function handler(req, res) {
 
   // Cookie must be set before the SSE headers go out.
   let ownerId = null;
+  let clientBriefText = '';
   if (HUB_ENABLED) {
-    try { ownerId = await resolveOwner(req, res); } catch (err) { console.error('campaign owner:', err); }
+    try {
+      ownerId = await resolveOwner(req, res);
+      clientBriefText = await loadClientBrief(req);
+    } catch (err) {
+      if (err instanceof ClientAccessError) return res.status(403).json({ error: err.message });
+      console.error('campaign owner:', err);
+    }
   }
 
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -213,6 +221,8 @@ export default async function handler(req, res) {
       ...(typeof m.name === 'string' && m.name ? { name: m.name.slice(0, 60) } : {}),
     }));
   const lastUser = [...conversation].reverse().find((m) => m.role === 'user')?.content || '';
+  // The client's profile counts as facts the user stated, so the brief reader and the editor can rely on them.
+  if (clientBriefText) conversation.unshift({ role: 'user', content: clientBriefText });
 
   try {
     const result = await runCampaign({

@@ -21,7 +21,7 @@ import { fetchWithModelFallback } from '../lib/model-health.js';
 import { resolveProvider, withProviderChatExtras } from '../lib/providers.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
 import { searchWeb, formatSearchContext } from '../lib/websearch.js';
-import { resolveOwner } from '../lib/hub.js';
+import { resolveOwner, loadClientBrief, ClientAccessError } from '../lib/hub.js';
 import { recentTeamActions, formatTeamActions } from '../lib/team-log.js';
 
 const UPSTREAM_TIMEOUT_MS = 90_000;
@@ -393,6 +393,17 @@ export default async function handler(req, res) {
     }
   }
 
+  let clientBriefText = '';
+  try {
+    clientBriefText = await loadClientBrief(req);
+  } catch (err) {
+    if (err instanceof ClientAccessError) {
+      sseWrite(res, { type: 'error', error: err.message });
+      return res.end();
+    }
+    console.error('client brief:', err);
+  }
+
   let defaultResolved;
   try {
     defaultResolved = resolveProvider(providerId || 'venice', clientKeyStr);
@@ -571,7 +582,7 @@ export default async function handler(req, res) {
       const teamBrief = typeof teamPrompt === 'string' && teamPrompt.trim()
         ? `TEAM BRIEF (how this team works together):\n${teamPrompt.trim().slice(0, 4000)}`
         : '';
-      const personaPrompt = [master, persona.systemPrompt, teamBrief, modeRules, teamActionsBlock, searchContext]
+      const personaPrompt = [master, persona.systemPrompt, clientBriefText, teamBrief, modeRules, teamActionsBlock, searchContext]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n');
 

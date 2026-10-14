@@ -20,6 +20,7 @@ import { prepareImageMessages } from '../lib/vision.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
 import { loadConfig } from '../lib/config.js';
 import { fetchWithModelFallback } from '../lib/model-health.js';
+import { loadClientBrief, ClientAccessError } from '../lib/hub.js';
 
 /**
  * Orchestrator turns (body.orchestrate + personaId): the user talks to their
@@ -513,12 +514,22 @@ export default async function handler(req, res) {
     console.error('image preparation failed:', err);
   }
 
+  // Working for a client: their profile rides along (refused outright if the
+  // client is not the caller's — never answered from Personal).
+  let clientBriefText = '';
+  try {
+    clientBriefText = await loadClientBrief(req);
+  } catch (err) {
+    if (err instanceof ClientAccessError) return res.status(403).json({ error: err.message });
+    console.error('client brief:', err);
+  }
+
   // Persona first so budget truncation (which keeps the head) never drops it.
   const effectiveSystem = orchestrate && typeof personaId === 'string' && personaId
-    ? [await resolvePersonaPrompt(personaId), ORCHESTRATOR_PROTOCOL, systemPrompt, ORCHESTRATOR_REMINDER]
+    ? [await resolvePersonaPrompt(personaId), ORCHESTRATOR_PROTOCOL, clientBriefText, systemPrompt, ORCHESTRATOR_REMINDER]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n')
-    : systemPrompt;
+    : [systemPrompt, clientBriefText].filter((s) => typeof s === 'string' && s.trim()).join('\n\n');
 
   const budgeted = budgetMessages(effectiveSystem, chatMessages);
   const messagesWithSystem = budgeted.system
