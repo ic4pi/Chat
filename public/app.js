@@ -458,7 +458,8 @@ function migrate(s) {
     provider: c.provider || 'venice',
     model: c.model || 'venice-uncensored',
     personaId: c.personaId || 'nexus',
-    messages: Array.isArray(c.messages) ? c.messages : [],
+    // An introduction that was still being written when the page closed is not a message.
+    messages: (Array.isArray(c.messages) ? c.messages : []).filter((m) => !(m && m.intro && m.streaming)),
     artifacts: Array.isArray(c.artifacts) ? c.artifacts : [],
     createdAt: c.createdAt || Date.now(),
     updatedAt: c.updatedAt || Date.now(),
@@ -3073,6 +3074,111 @@ async function callChat(provider, model, messages, personaId) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Persona introduction
+//
+// A persona opens a new chat, and takes over a chat mid-conversation, by saying
+// who it is and how it works as the orchestrator: it talks the idea through
+// here, then turns it into a brief for the builder and moves the chat into the
+// Workspace. Written by the persona itself so each one sounds like itself.
+// The message is flagged `intro`: it is never sent back to the model as history,
+// and a chat holding only an introduction still counts as empty.
+// ---------------------------------------------------------------------------
+
+const introInFlight = new Set();
+
+function personaIntroPrompt(mode) {
+  return [
+    mode === 'switch'
+      ? '[INTRODUCE YOURSELF] The user just switched to you in the middle of this conversation.'
+      : '[INTRODUCE YOURSELF] The user just opened a new chat with you.',
+    'Write your opening message, in your own voice, in 3 to 5 short sentences. Make clear what kind of',
+    'orchestrator you are: you talk the idea through with them here, and when it is ready you turn it into a',
+    'precise brief for the builder and move the chat into the Workspace, where the code gets written and tested.',
+    'Say what you are best at and the style you bring. Be specific to who you are, not generic.',
+    mode === 'switch' ? 'Say briefly that you are picking up from here.' : '',
+    'End with one line inviting them to tell you what they want to make.',
+    'Do not write code. Do not write a brief. Do not ask clarifying questions.',
+  ].filter(Boolean).join('\n');
+}
+
+async function introducePersona(chat, mode) {
+  const persona = activePersona();
+  if (!persona || !chat || chat.kind !== 'chat' || chatBusy) return;
+  const flightKey = `${chat.id}:${persona.id}`;
+  if (introInFlight.has(flightKey)) return;
+  introInFlight.add(flightKey);
+
+  // A fresh chat only ever carries the latest persona's introduction.
+  if (mode === 'new') {
+    for (let i = chat.messages.length - 1; i >= 0; i--) if (chat.messages[i]?.intro) chat.messages.splice(i, 1);
+  }
+  const provider = state.activeProvider;
+  const model = state.activeModel;
+  const holder = { role: 'assistant', content: '', ts: Date.now(), streaming: true, intro: true, model, provider };
+  const history = mode === 'switch'
+    ? chat.messages
+        .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.streaming && !m.intro && typeof m.content === 'string')
+        .slice(-6)
+        .map((m) => ({ role: m.role, content: m.content }))
+    : [];
+  chat.messages.push(holder);
+  const showing = () => activeChat()?.id === chat.id;
+  if (showing()) renderMessages({ scroll: 'bottom' });
+  const drop = () => {
+    const i = chat.messages.indexOf(holder);
+    if (i >= 0) chat.messages.splice(i, 1);
+    if (showing()) renderMessages({ scroll: 'none' });
+  };
+
+  try {
+    const apiKey = (providerKeys[provider] || '').trim();
+    const headers = paidAuthHeaders({ 'Content-Type': 'application/json' });
+    if (apiKey) headers['X-Provider-Key'] = apiKey;
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        messages: [...history, { role: 'user', content: personaIntroPrompt(mode) }],
+        model,
+        provider,
+        personaId: persona.id,
+        role: state.activeRole || 'plan',
+        apiKey: apiKey || undefined,
+        paidPassword: loadPaidPassword() || undefined,
+        stream: false,
+      }),
+    });
+    const data = res.ok ? await res.json().catch(() => null) : null;
+    const text = stripContinueMarkers(String(data?.reply || '')).trim();
+    // Gone, or the persona changed again while this was being written: say nothing.
+    if (!text || text === '(empty response)' || chat.personaId !== persona.id || !chat.messages.includes(holder)) {
+      drop();
+      return;
+    }
+    holder.content = text;
+    delete holder.streaming;
+    chat.updatedAt = Date.now();
+    saveState();
+    if (showing()) renderMessages({ scroll: 'bottom' });
+  } catch {
+    drop(); // a greeting is a nicety — never show an error for it
+  } finally {
+    introInFlight.delete(flightKey);
+  }
+}
+
+/** User-picked persona: switch to it, and let it introduce itself if it is a different one. */
+function pickPersona(personaId) {
+  const chat = activeChat();
+  const before = chat?.personaId || state.activePersonaId;
+  applyPersona(personaId);
+  if (chat && chat.kind === 'chat' && chat.personaId !== before) {
+    const talked = chat.messages.some((m) => m && !m.intro && !m.streaming);
+    void introducePersona(chat, talked ? 'switch' : 'new');
+  }
+}
+
 /**
  * The actual SSE fetch + parse for a chat completion — reentrant and free of
  * shared module state (no activeChatAbort/chatBusy). Takes its own
@@ -3485,7 +3591,7 @@ async function sendMessage(text) {
     while (true) {
       const apiMessages = chat.messages
         .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .filter((m) => !m.streaming)
+        .filter((m) => !m.streaming && !m.intro)
         .map((m, idx, arr) => {
           if (
             imageParts.length
@@ -4937,7 +5043,9 @@ function handleNewChat() {
     state.chatsCollapsed = true;
     saveState();
   }
-  renderAll().catch((err) => console.error(err));
+  renderAll()
+    .then(() => introducePersona(activeChat(), 'new'))
+    .catch((err) => console.error(err));
   els.input.focus();
 }
 els.newChatBtn.addEventListener('click', handleNewChat);
@@ -5168,7 +5276,7 @@ els.unlockPaidForm?.addEventListener('submit', async (e) => {
   }
 });
 els.personaSelect?.addEventListener('change', () => {
-  applyPersona(els.personaSelect.value);
+  pickPersona(els.personaSelect.value);
 });
 
 if (els.roleSelect) {
@@ -5545,7 +5653,7 @@ function renderPersonaCards() {
 
       card.append(av, nm, ds);
       card.addEventListener('click', () => {
-        applyPersona(p.id);
+        pickPersona(p.id);
         renderPersonaChip();
         renderPersonaCards();
         setTimeout(closeAppMenu, 160);
@@ -5646,7 +5754,7 @@ els.toneRoleSelect?.addEventListener('change', () => {
   void applyRole(els.toneRoleSelect.value);
 });
 els.tonePersonaSelect?.addEventListener('change', () => {
-  applyPersona(els.tonePersonaSelect.value);
+  pickPersona(els.tonePersonaSelect.value);
   renderPersonaDescription();
 });
 els.toneVoiceSelect?.addEventListener('change', () => {
@@ -6972,7 +7080,7 @@ const RESUME_IDLE_MS = 2 * 60 * 60 * 1000;
 // chat" placeholder was still triggering the prompt, so answering Yes landed
 // you on a blank screen — a dialog that cost a tap and gave nothing back.
 function isResumable(chat) {
-  return !!chat && Array.isArray(chat.messages) && chat.messages.length > 0;
+  return !!chat && Array.isArray(chat.messages) && chat.messages.some((m) => m && !m.intro);
 }
 
 function mostRecentChat() {
@@ -7040,7 +7148,11 @@ els.resumeModal?.addEventListener('click', (e) => {
 });
 
 setArtifactsTab(state.artifactsActiveTab || 'artifacts');
-renderAll().catch((err) => {
+renderAll().then(() => {
+  const c = activeChat();
+  const promptShowing = els.resumeModal && !els.resumeModal.classList.contains('hidden');
+  if (c && c.kind === 'chat' && c.messages.length === 0 && !promptShowing) return introducePersona(c, 'new');
+}).catch((err) => {
   console.error('renderAll failed:', err);
   showBootError(err?.stack || err?.message || String(err));
 });
