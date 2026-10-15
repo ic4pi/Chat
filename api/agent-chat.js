@@ -71,8 +71,8 @@ const ORCHESTRATOR_REMINDER = [
   'REMINDER (overrides your character where they conflict): do not ask clarifying questions about what to build —',
   'decide the details yourself and brief it. If the user wants anything built, changed, fixed or run, end your',
   'reply with the <<<BRIEF … BRIEF>>> block. Do not write code yourself.',
-].join('
-');
+].join('\n');
+
 async function resolvePersonaPrompt(personaId) {
   try {
     const config = await loadConfig();
