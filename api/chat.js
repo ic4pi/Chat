@@ -12,6 +12,7 @@ import { requirePaidAccess } from '../lib/model-meta.js';
 import { prepareImageMessages, hasImageParts } from '../lib/vision.js';
 import { extractQueryText, searchWeb, formatSearchContext } from '../lib/websearch.js';
 import { fetchWithModelFallback } from '../lib/model-health.js';
+import { codeSpaceHandoffInstruction } from '../lib/code-space-handoff.js';
 
 /**
  * Headroom under vercel.json maxDuration 300. Must stay below the platform
@@ -336,6 +337,8 @@ export default async function handler(req, res) {
     // What to search for, when the client pulled it out of a plain-words ask
     // ("search the web for X" → "X"). Otherwise the last user message.
     webSearchQuery,
+    // Solo chats only: lets the persona move the chat into the Code Space (see lib/code-space-handoff.js).
+    codeSpaceHandoff,
   } = req.body || {};
 
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -385,7 +388,11 @@ export default async function handler(req, res) {
   const sentImages = hasImageParts(chatMessages);
 
   const hasPriorTurn = chatMessages.some((m) => m.role === 'assistant');
-  const basePrompt = [await resolveSystemPrompt(personaId), hasPriorTurn ? NO_REPEAT_INSTRUCTION : '']
+  const basePrompt = [
+    await resolveSystemPrompt(personaId),
+    hasPriorTurn ? NO_REPEAT_INSTRUCTION : '',
+    codeSpaceHandoffInstruction(codeSpaceHandoff),
+  ]
     .filter(Boolean)
     .join('\n\n');
 

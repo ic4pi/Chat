@@ -3187,7 +3187,7 @@ function pickPersona(personaId) {
  * onEvent({type, ...}) for status/token/thinking/done/error.
  * Returns { ok, status, data, errText } shaped like callChat.
  */
-async function streamChatResponse({ provider, model, messages, personaId, signal, onEvent, wasUserStopped }) {
+async function streamChatResponse({ provider, model, messages, personaId, signal, onEvent, wasUserStopped, codeSpaceHandoff }) {
   const apiKey = (providerKeys[provider] || '').trim();
   const headers = paidAuthHeaders({ 'Content-Type': 'application/json', Accept: 'text/event-stream' });
   if (apiKey) headers['X-Provider-Key'] = apiKey;
@@ -3207,6 +3207,7 @@ async function streamChatResponse({ provider, model, messages, personaId, signal
         stream: true,
         webSearch: turnSearchQuery ? true : undefined,
         webSearchQuery: turnSearchQuery || undefined,
+        codeSpaceHandoff: codeSpaceHandoff ? true : undefined,
       }),
       signal,
     });
@@ -3326,13 +3327,14 @@ async function streamChatResponse({ provider, model, messages, personaId, signal
  * Esc/Enter-to-stop key off. Behavior is unchanged from before the
  * streamChatResponse extraction; only the SSE body itself moved.
  */
-async function callChatStream(provider, model, messages, personaId, onEvent) {
+async function callChatStream(provider, model, messages, personaId, onEvent, opts = {}) {
   const controller = new AbortController();
   activeChatAbort = controller;
   const timer = setTimeout(() => controller.abort(), timeoutFor(provider, model));
   try {
     return await streamChatResponse({
       provider, model, messages, personaId, onEvent,
+      codeSpaceHandoff: opts.codeSpaceHandoff,
       signal: controller.signal,
       wasUserStopped: () => activeChatUserStopped,
     });
@@ -3408,8 +3410,21 @@ const AUTO_CONTINUE_AFTER_TIMEOUT_TEXT =
 const AUTO_CONTINUE_EMPTY_TIMEOUT_TEXT =
   'Previous attempt timed out during thinking before the answer text arrived. Restart and answer as fully as you can in one reply — spend less time thinking if needed. End with ⟦MORE⟧ only if the ask is too large to finish; otherwise end with ⟦DONE⟧.';
 
+// The persona ends a reply with this line to move the chat into the Code Space.
+const CODE_SPACE_MARKER = '<<<OPEN_CODE_SPACE>>>';
+const CODE_SPACE_MARKER_RE = /<<<\s*OPEN[_ ]CODE[_ ]SPACE\s*>>>/i;
+
+function stripCodeSpaceMarker(text) {
+  let out = String(text || '').replace(new RegExp(CODE_SPACE_MARKER_RE.source, 'gi'), '');
+  // Mid-stream the marker arrives a few characters at a time: hide the part that has landed.
+  for (let k = CODE_SPACE_MARKER.length - 1; k >= 3; k--) {
+    if (out.endsWith(CODE_SPACE_MARKER.slice(0, k))) { out = out.slice(0, out.length - k); break; }
+  }
+  return out;
+}
+
 function stripContinueMarkers(text) {
-  return String(text || '')
+  return stripCodeSpaceMarker(String(text || ''))
     .replace(CONTINUE_MARKER_RE, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -3529,6 +3544,9 @@ async function sendMessage(text) {
   renderChatList();
   renderChatTitle();
   renderMessages({ scroll: 'bottom' });
+  // "I'm ready — build it": the persona is told in its instructions to take it to the Code Space,
+  // and if it doesn't, we still do, because the user said so.
+  const userReady = chat.kind === 'chat' && userSaysReadyToBuild(text);
 
   // Answer to "marketing meeting first?" — only the very next message counts;
   // anything that isn't a yes/no is a normal message (they moved on).
@@ -3681,6 +3699,7 @@ async function sendMessage(text) {
             }
           }
         },
+        { codeSpaceHandoff: true },
       );
       let usedFallback = null;
 
@@ -3710,6 +3729,7 @@ async function sendMessage(text) {
                 speakNewSentences();
               }
             },
+            { codeSpaceHandoff: true },
           );
           if (retry.ok) {
             attempt = retry;
@@ -3898,8 +3918,15 @@ async function sendMessage(text) {
     }
 
     chat.updatedAt = Date.now();
+    // The persona's marker never stays in the stored reply (it would be sent back as history).
+    const lastMsg = chat.messages[chat.messages.length - 1];
+    const personaSaidGo = !!lastMsg && lastMsg.role === 'assistant' && CODE_SPACE_MARKER_RE.test(String(lastMsg.content || ''));
+    if (personaSaidGo) lastMsg.content = stripCodeSpaceMarker(lastMsg.content).trim();
     saveState();
     void triggerSmartReplies(chat);
+    if (!activeChatUserStopped && chat.kind === 'chat' && lastMsg?.role === 'assistant' && (personaSaidGo || userReady)) {
+      offerCodeSpace(chat, personaSaidGo ? 'persona' : 'you');
+    }
   } catch (err) {
     const idx = chat.messages.findIndex((m) => m.role === 'assistant' && m.streaming);
     if (idx !== -1) {
@@ -6288,7 +6315,72 @@ els.interruptBtn?.addEventListener('click', () => {
 
 const WORKSPACE_HANDOFF_KEY = 'chat_to_workspace_v1';
 
-function openInWorkspace() {
+/** The user telling the persona they are ready for the build: "I'm ready", "build it", "take it to the Code Space". */
+const READY_TO_BUILD_RE = new RegExp([
+  // "I'm ready", "ready to build", "ready for the code space" — anywhere in a short message
+  "\\b(i['’]?m|i am|we['’]?re|we are|im)\\s+ready\\b",
+  "\\bready\\s+(to|for)\\s+(build|the\\s+code\\s?space|code\\s?space)\\b",
+  // bare commands only: the message must END with them ("build it", "let's build", "go build it")
+  "\\b(let['’]?s|lets|go|time to|please|ok(ay)?|now)[,\\s]+(build|start building)(\\s+(it|this|that))?(\\s+now)?\\s*[.!]*\\s*$",
+  "^\\W*(ok(ay)?[,\\s]+)?(please\\s+)?build\\s+(it|this|that)(\\s+now)?\\s*[.!]*\\s*$",
+  "\\b(send|take|move|hand)\\s+(it|this|that)\\s+(over\\s+)?(to|into)\\s+(the\\s+)?code\\s?space\\b",
+  "\\b(open|go to|switch to)\\s+(the\\s+)?code\\s?space\\s*[.!]*\\s*$",
+].join('|'), 'i');
+
+function userSaysReadyToBuild(text) {
+  const t = String(text || '').trim();
+  // A long message is a description, not a go-ahead; only short, direct ones count.
+  return t.length > 0 && t.length <= 200 && READY_TO_BUILD_RE.test(t);
+}
+
+let codeSpaceOfferTimer = null;
+let codeSpaceOfferEl = null;
+
+function clearCodeSpaceOffer() {
+  if (codeSpaceOfferTimer) { clearTimeout(codeSpaceOfferTimer); codeSpaceOfferTimer = null; }
+  if (codeSpaceOfferEl) { codeSpaceOfferEl.remove(); codeSpaceOfferEl = null; }
+}
+
+/**
+ * Calm, not abrupt: say it is going, leave a few seconds to read the reply and say "stay",
+ * then open the Code Space. Typing or sending anything also cancels it.
+ */
+function offerCodeSpace(chat, who) {
+  clearCodeSpaceOffer();
+  const name = activePersona()?.name || 'Your orchestrator';
+  const el = document.createElement('div');
+  el.id = 'codeSpaceOffer';
+  el.setAttribute('role', 'status');
+  el.style.cssText = [
+    'position:fixed', 'left:50%', 'bottom:120px', 'transform:translateX(-50%)', 'z-index:60',
+    'display:flex', 'align-items:center', 'gap:12px', 'max-width:calc(100vw - 32px)',
+    'padding:10px 14px', 'border-radius:12px', 'background:#12151D', 'color:#ECEEF3',
+    'border:1px solid hsl(var(--id-h, 30) 78% 68% / .45)', 'font-size:14px',
+    'box-shadow:0 8px 30px rgba(0,0,0,.45)',
+  ].join(';');
+  const label = document.createElement('span');
+  label.textContent = who === 'you'
+    ? `Opening the Code Space — ${name} will write the brief there.`
+    : `${name} is taking this to the Code Space…`;
+  const stay = document.createElement('button');
+  stay.type = 'button';
+  stay.textContent = 'Stay here';
+  stay.style.cssText = 'background:transparent;color:#9198AA;border:1px solid #232838;border-radius:8px;padding:4px 10px;cursor:pointer;font:inherit';
+  stay.addEventListener('click', clearCodeSpaceOffer);
+  el.append(label, stay);
+  document.body.appendChild(el);
+  codeSpaceOfferEl = el;
+  // Anything the user does with the composer means they are not done talking.
+  els.input?.addEventListener('input', clearCodeSpaceOffer, { once: true });
+  codeSpaceOfferTimer = setTimeout(() => {
+    codeSpaceOfferTimer = null;
+    if (activeChat()?.id !== chat.id) { clearCodeSpaceOffer(); return; }
+    clearCodeSpaceOffer();
+    openInWorkspace({ autoBrief: true });
+  }, 4000);
+}
+
+function openInWorkspace(opts = {}) {
   const chat = ensureActiveChat();
   const messages = (chat.messages || [])
     .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -6304,6 +6396,8 @@ function openInWorkspace() {
     // orchestrates the coder instead of you prompting the coder directly.
     personaId: state.activePersonaId,
     messages,
+    // Ready to build: the Code Space's orchestrator starts the brief on arrival.
+    autoBrief: opts.autoBrief === true,
     createdAt: Date.now(),
   };
   try {
@@ -6315,7 +6409,7 @@ function openInWorkspace() {
   window.location.href = '/agent';
 }
 
-els.workspaceBtn?.addEventListener('click', openInWorkspace);
+els.workspaceBtn?.addEventListener('click', () => openInWorkspace());
 
 /** Fill a model <select> with ONLY models for one provider. Never mixes catalogs. */
 async function fillModelSelect(selectEl, provider, selectedModel) {
