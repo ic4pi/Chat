@@ -220,26 +220,21 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
   const shortCmd = testCommand
     ? (testCommand.length > 64 ? `${testCommand.slice(0, 64)}…` : testCommand)
     : '…';
-  const label = verifyState === 'detecting' ? 'SANDBOX CHECK — detecting test / smoke…' :
-    verifyState === 'running' ? `SANDBOX CHECK RUNNING — ${shortCmd}` :
-    passed ? 'SANDBOX VERIFIED — Push unlocked. Incomplete stubs never get this far.' :
-    failed ? `SANDBOX FAILED — Push LOCKED after ${attempt} attempts. Fix until green.` :
-    `SANDBOX AUTO-FIX — attempt ${attempt}/5 (do not push yet)`;
+  const label = verifyState === 'detecting' ? 'Checking…' :
+    verifyState === 'running' ? `Testing — ${shortCmd}` :
+    passed ? 'Tests passed — Push unlocked' :
+    failed ? `Tests failed after ${attempt} tries — Push locked` :
+    `Fixing — try ${attempt} of 5`;
   if (askCommand) return (
     <div data-testid="verify-banner" style={{ padding: '10px 12px', background: '#5a1010',
       borderTop: '2px solid #ff6a6a', flexShrink: 0 }}>
-      <div style={{ fontSize: 18, fontWeight: 800, color: '#ffb4b4', marginBottom: 4,
-        letterSpacing: '0.04em' }}>
-        PUSH LOCKED — no sandbox check found
-      </div>
-      <div style={{ fontSize: 15, color: '#ffd0d0', marginBottom: 6, lineHeight: 1.45 }}>
-        Enter <code style={{ color: '#FF3D8E' }}>npm test</code> / your command, or add{' '}
-        <code style={{ color: '#FF3D8E' }}>index.html</code> for built-in smoke. Nothing ships unproven.
+      <div style={{ fontSize: 16, fontWeight: 700, color: '#ffb4b4', marginBottom: 6 }}>
+        No test found — enter a command to run
       </div>
       <div style={{ display: 'flex', gap: 6 }}>
         <input value={cmd} onChange={e => setCmd(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && cmd.trim() && onSetCommand(cmd.trim())}
-          placeholder="e.g. npm test"
+          placeholder="npm test"
           style={{ flex: 1, background: '#171B26', color: '#ECEEF3', border: '1px solid #232838',
             borderRadius: 4, padding: '4px 8px', fontFamily: 'inherit', fontSize: 16, outline: 'none' }} />
         <button onClick={() => cmd.trim() && onSetCommand(cmd.trim())}
@@ -1773,11 +1768,11 @@ export function App() {
           ⛔ SANDBOX PROTECTED — {applyFailed.length} write{applyFailed.length === 1 ? '' : 's'} blocked
         </div>
       ) : (
-        <div style={{ color: '#34D399', fontWeight: 700, marginBottom: 4 }}>
-          Saved to sandbox — not GitHub yet. Push stays locked until Auto-test is green.
+        <div style={{ color: '#34D399', fontWeight: 700 }}>
+          Saved {applyOk.length} file{applyOk.length === 1 ? '' : 's'}
         </div>
       )}
-      {applyOk.map(r => (
+      {applyFailed.length > 0 && applyOk.map(r => (
         <div key={r.path} style={{ color: '#34D399' }}>✓ {r.path}</div>
       ))}
       {applyFailed.map(r => (
