@@ -20,7 +20,6 @@ import { prepareImageMessages } from '../lib/vision.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
 import { loadConfig } from '../lib/config.js';
 import { fetchWithModelFallback } from '../lib/model-health.js';
-import { loadClientBrief, ClientAccessError } from '../lib/hub.js';
 
 /**
  * Orchestrator turns (body.orchestrate + personaId): the user talks to their
@@ -41,8 +40,11 @@ const ORCHESTRATOR_PROTOCOL = [
   '   often be rough or incomplete — fill the gaps from context. Never make them write a better prompt.',
   '2. If the request needs code written, changed, fixed, or debugged, write a brief for the coder.',
   '   If it is a question, discussion, or opinion, just answer — no brief.',
-  '3. Ask the user a question only when a wrong guess would waste real work (two incompatible directions,',
-  '   a missing credential, an unknown target). Otherwise decide, state the assumption in one line, brief it.',
+  '3. Do NOT quiz the user. A request that names what to build ("a tribute site to hold music", "a todo app")',
+  '   is enough: pick the details yourself, state the assumption in one line, and brief it. Never ask what the',
+  '   thing is about, what kind, what style or what to include — you decide. Never ask something the user',
+  '   already said in their message. Ask only when a wrong guess would waste real work: a missing credential,',
+  '   or two directions that cannot both be built. At most one question, and still brief what you can.',
   '',
   'Brief format — at most one block per reply, at the very end, exactly these markers:',
   '<<<BRIEF',
@@ -59,56 +61,16 @@ const ORCHESTRATOR_PROTOCOL = [
   'any assumption you made. Do not write the code yourself; the coder does that.',
   'You CAN reach the coder: the app hands your BRIEF block to it the moment you reply. Never ask the user',
   'to copy, paste or relay a prompt, and never say you cannot talk to the coder — write the BRIEF block.',
-  'You CAN read any file yourself: put a line "READ: <path>, <path>" (paths from the file tree) in your',
-  'reply and the app fetches them so you continue with their contents. Never ask the user to click, open,',
-  'copy, paste, cat or relay a file — read it with READ:.',
-  'Build plan: for any build with more than a couple of steps, you own a checklist the user sees in the',
-  'Workspace Plan panel. The current plan is in the workspace state below. To create or update it, end the',
-  'reply with ONE block holding the WHOLE plan (it replaces the old one), after any BRIEF block:',
-  '<<<PLAN',
-  '## Milestone name',
-  '- [ ] a concrete step',
-  '- [x] a finished step',
-  'PLAN>>>',
-  'Cover the build start to finish, grouped by milestone. Tick a step [x] only when a [CODER RESULT] or',
-  '[AUTO-TEST] confirms it; add steps as scope grows. Skip the block when nothing changed. Never put the',
-  'plan in the BRIEF — the coder does not need it.',
-  'You never write code in your reply: no code blocks, no files. The coder writes all code. And you never tell the user',
-  'to paste, copy, save, open or run anything — the app already hands your BRIEF to the coder.',
-  'Team line: you can put a question to any persona on the roster below. End the reply with one block per',
-  'question (max 6), instead of a BRIEF in the same reply:',
-  '<<<ASK persona-id',
-  'The exact question, with the context that persona needs — it cannot see this conversation.',
-  'ASK>>>',
-  'The app shows the user ONE card listing every question and asks Run / Don\'t run. After Run, each',
-  'persona answers and the answers come back to you as [REPLY from <id>] messages; then you synthesize',
-  'them for the user, and write the BRIEF if code is now needed. Only ask when another view really helps.',
   'Messages starting with [CODER RESULT] or [AUTO-TEST] are real reports of what the coder and the',
   'sandbox tests did. Trust them over memory. If the coder failed, missed the point, or broke something,',
   'say so plainly and write a corrected brief that names exactly what went wrong.',
 ].join('\n');
 
-const AS_PERSONA_NOTE = [
-  'You were asked a direct question by the lead orchestrator of this workspace. Answer as yourself, in your own',
-  'voice, in under 250 words. No code, no BRIEF blocks, no questions back unless something essential is missing.',
-].join('\n');
-
-/** id and name for each persona the orchestrator can ask. */
-async function personaRoster() {
-  try {
-    const config = await loadConfig();
-    const rows = (config.personas || []).map((p) => `- ${p.id}: ${p.name || p.id}`);
-    return rows.length ? `PERSONA ROSTER (valid ids for ASK):\n${rows.join('\n')}` : '';
-  } catch {
-    return '';
-  }
-}
-
 // Last in the system prompt, so a strong character voice can't drown it out.
 const ORCHESTRATOR_REMINDER = [
-  'REMINDER (overrides your character where they conflict): if the user wants anything built, changed, fixed or',
-  'run, end your reply with the <<<BRIEF … BRIEF>>> block. Do not write code yourself and do not tell the user to',
-  'paste or copy anything — the coder receives your brief automatically and writes the files.',
+  'REMINDER (overrides your character where they conflict): do not ask clarifying questions about what to build —',
+  'decide the details yourself and brief it. If the user wants anything built, changed, fixed or run, end your',
+  'reply with the <<<BRIEF … BRIEF>>> block. Do not write code yourself.',
 ].join('\n');
 
 async function resolvePersonaPrompt(personaId) {
@@ -507,7 +469,6 @@ export default async function handler(req, res) {
     stream: wantStream,
     personaId,
     orchestrate,
-    asPersona,
   } = req.body || {};
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'messages array required' });
@@ -542,26 +503,12 @@ export default async function handler(req, res) {
     console.error('image preparation failed:', err);
   }
 
-  // Working for a client: their profile rides along (refused outright if the
-  // client is not the caller's — never answered from Personal).
-  let clientBriefText = '';
-  try {
-    clientBriefText = await loadClientBrief(req);
-  } catch (err) {
-    if (err instanceof ClientAccessError) return res.status(403).json({ error: err.message });
-    console.error('client brief:', err);
-  }
-
   // Persona first so budget truncation (which keeps the head) never drops it.
   const effectiveSystem = orchestrate && typeof personaId === 'string' && personaId
-    ? [await resolvePersonaPrompt(personaId), ORCHESTRATOR_PROTOCOL, await personaRoster(), clientBriefText, systemPrompt, ORCHESTRATOR_REMINDER]
+    ? [await resolvePersonaPrompt(personaId), ORCHESTRATOR_PROTOCOL, systemPrompt, ORCHESTRATOR_REMINDER]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n')
-    : asPersona && typeof personaId === 'string' && personaId
-      ? [await resolvePersonaPrompt(personaId), clientBriefText, AS_PERSONA_NOTE]
-          .filter((s) => typeof s === 'string' && s.trim())
-          .join('\n\n')
-      : [systemPrompt, clientBriefText].filter((s) => typeof s === 'string' && s.trim()).join('\n\n');
+    : systemPrompt;
 
   const budgeted = budgetMessages(effectiveSystem, chatMessages);
   const messagesWithSystem = budgeted.system
@@ -571,7 +518,7 @@ export default async function handler(req, res) {
   // Default stream:true — Workspace needs tokens before the function time limit.
   const useStream = wantStream !== false;
   // A retired model is replaced in kind: the persona with a chat model, the coder with a coder.
-  const kind = orchestrate || asPersona ? 'chat' : 'coder';
+  const kind = orchestrate ? 'chat' : 'coder';
   if (useStream) {
     return handleStream(req, res, resolved, model, messagesWithSystem, providerId, budgeted, kind);
   }

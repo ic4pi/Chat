@@ -3,7 +3,7 @@
  * Collapsed by default so it does not bury the chat transcript.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import type { PendingChange } from './useRepoContext.js';
 import { copyText, downloadAllFiles, downloadTextFile } from './downloadFile.js';
 
@@ -163,13 +163,6 @@ export function DiffPanel({
     } catch { /* private mode / blocked storage */ }
     return '';
   });
-  useEffect(() => {
-    const sync = () => {
-      try { setToken(localStorage.getItem('gh_push_token') || ''); } catch { /* ignore */ }
-    };
-    window.addEventListener('gh-token-changed', sync);
-    return () => window.removeEventListener('gh-token-changed', sync);
-  }, []);
   const [commitMsg, setCommitMsg] = useState('Apply agent changes from sandbox');
 
   if (changes.length === 0) return null;

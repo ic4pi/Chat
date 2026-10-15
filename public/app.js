@@ -563,7 +563,7 @@ const GROUP_MODE_LABELS = {
   orchestrated: 'Orchestrated',
 };
 
-function createGroupChat(mode, topic, personaModels = {}, rounds = 3, personaIds = null, personaTasks = {}, teamPrompt = '') {
+function createGroupChat(mode, topic, personaModels = {}, rounds = 3, personaIds = null, personaTasks = {}) {
   const label = GROUP_MODE_LABELS[mode] || 'Group';
   const chat = createChat({
     kind: 'group',
@@ -572,7 +572,6 @@ function createGroupChat(mode, topic, personaModels = {}, rounds = 3, personaIds
     personaModels,
     personaIds,
     personaTasks,
-    teamPrompt: teamPrompt || undefined,
     groupRounds: rounds,
     name: `${label}: ${topic.slice(0, 36)}`,
     messages: [],
@@ -664,10 +663,6 @@ const els = {
   closeGroupModal: $('closeGroupModal'),
   cancelGroupBtn: $('cancelGroupBtn'),
   groupTopicInput: $('groupTopicInput'),
-  groupTeamSelect: $('groupTeamSelect'),
-  groupTeamPrompt: $('groupTeamPrompt'),
-  saveTeamBtn: $('saveTeamBtn'),
-  groupModalTitle: $('groupModalTitle'),
   groupPersonaModels: $('groupPersonaModels'),
   startGroupBtn: $('startGroupBtn'),
   roundsMinus: $('roundsMinus'),
@@ -1358,37 +1353,9 @@ function renderMessageInto(container, m, idx) {
       taskLine.textContent = `Task: ${m.task}`;
       content.appendChild(taskLine);
     }
-    if (m.reasoning && !m.streaming) {
-      const det = document.createElement('details');
-      det.className = 'msg-reasoning';
-      const sum = document.createElement('summary');
-      sum.textContent = 'Thinking';
-      const pre = document.createElement('pre');
-      pre.textContent = m.reasoning;
-      det.append(sum, pre);
-      content.appendChild(det);
-    }
     const shown = stripContinueMarkers(m.content || '') || (m.streaming ? '…' : '');
     if (m.campaign?.posts) renderCampaignInto(content, m.campaign);
     else renderMarkdownInto(content, shown);
-    if (m.meetingAsk && !m.meetingAsk.answered && !m.streaming) {
-      const row = document.createElement('div');
-      row.className = 'meeting-ask';
-      const mk = (label, mp3) => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'text-btn' + (mp3 === false ? ' primary' : '');
-        b.textContent = label;
-        b.addEventListener('click', (e) => {
-          e.preventDefault();
-          void answerMeetingAsk(m, mp3);
-        });
-        return b;
-      };
-      row.append(mk('Summary', false), mk('Summary + MP3', true), mk('No thanks', null));
-      content.appendChild(row);
-    }
-    if (m.audioId && !m.streaming) content.appendChild(renderSavedAudio(m));
     if (Array.isArray(m.sources) && m.sources.length && !m.streaming) {
       const box = document.createElement('div');
       box.className = 'msg-sources';
@@ -3287,15 +3254,6 @@ function setTypingActive(on, statusText) {
   }
 }
 
-// Keep what the model reasoned so it stays viewable under the reply.
-// Capped so a long chain of thought can't blow the localStorage budget.
-const MAX_SAVED_REASONING = 20000;
-function keepReasoning(text) {
-  const t = String(text || '').trim();
-  if (!t) return undefined;
-  return t.length > MAX_SAVED_REASONING ? t.slice(0, MAX_SAVED_REASONING) + '\n… (trimmed)' : t;
-}
-
 function appendTypingThought(text) {
   if (!els.typingThoughts || !text) return;
   els.typingThoughts.classList.remove('hidden');
@@ -3483,7 +3441,7 @@ async function sendMessage(text) {
   // "Search the web for X" → this one reply is grounded in live results.
   turnSearchQuery = groupAsk ? null : parseWebSearchRequest(text, prevUser?.content);
   if (groupAsk) {
-    return openGroupMeeting(chat, groupAsk);
+    return runInlineGroupDiscussion(chat, groupAsk);
   }
   // "Write a campaign for X" → offer a marketing meeting first (unless the
   // ask already says), then strategist, ruthless editor, every platform.
@@ -3544,23 +3502,8 @@ async function sendMessage(text) {
               ],
             };
           }
-          // Meeting turns carry the speaker, so "what did Rico think?" works.
-          if (m.role === 'assistant' && m.personaId && m.personaName && typeof m.content === 'string') {
-            return { role: m.role, content: `[${m.personaName}]: ${m.content}` };
-          }
           return { role: m.role, content: m.content };
-        })
-        // Strict chat templates reject same-role turns back to back, and a
-        // meeting is a long run of assistant turns — fold them together.
-        .reduce((acc, m) => {
-          const last = acc[acc.length - 1];
-          if (last && last.role === m.role && typeof last.content === 'string' && typeof m.content === 'string') {
-            last.content += `\n\n${m.content}`;
-          } else {
-            acc.push({ ...m });
-          }
-          return acc;
-        }, []);
+        });
 
       const assistantTs = Date.now();
       if (firstAssistantTs == null) firstAssistantTs = assistantTs;
@@ -3568,7 +3511,6 @@ async function sendMessage(text) {
       let streamBuf = '';
       let spokenUpTo = 0;
       let turnSources = [];
-      let turnThoughts = '';
       chat.messages.push({
         role: 'assistant',
         content: '',
@@ -3620,7 +3562,6 @@ async function sendMessage(text) {
           } else if (evt.type === 'status') {
             updateStatusClock(evt.message || 'Working…');
           } else if (evt.type === 'thinking') {
-            turnThoughts += evt.text || '';
             appendTypingThought(evt.text || '');
             updateStatusClock('Thinking');
           } else if (evt.type === 'token') {
@@ -3645,7 +3586,6 @@ async function sendMessage(text) {
           // belongs to the discarded attempt, same as the bubble reset below.
           stopNeuralSpeech();
           streamBuf = '';
-          turnThoughts = '';
           spokenUpTo = 0;
           refreshStreamingBubble();
           const retry = await callChatStream(
@@ -3656,7 +3596,7 @@ async function sendMessage(text) {
             (evt) => {
               if (evt.type === 'sources') turnSources = Array.isArray(evt.sources) ? evt.sources : [];
               else if (evt.type === 'status') updateStatusClock(evt.message || 'Working…');
-              else if (evt.type === 'thinking') { turnThoughts += evt.text || ''; appendTypingThought(evt.text || ''); }
+              else if (evt.type === 'thinking') appendTypingThought(evt.text || '');
               else if (evt.type === 'token') {
                 streamBuf += evt.text || '';
                 updateStatusClock('Writing');
@@ -3677,9 +3617,6 @@ async function sendMessage(text) {
       if (idx !== -1) chat.messages.splice(idx, 1);
 
       const data = attempt.data || {};
-      const savedReasoning = keepReasoning(
-        (typeof data.reasoning === 'string' && data.reasoning.trim()) ? data.reasoning : turnThoughts,
-      );
       const rawReply = (attempt.ok ? (data.reply || streamBuf) : (streamBuf || data.partialReply || '')).trim();
       const timedOut = Boolean(data.timedOut) || (!attempt.ok && isTimeoutLikeError(data.error || attempt.errText));
       const hadReasoning = Boolean(
@@ -3754,7 +3691,6 @@ async function sendMessage(text) {
           provider: data.provider,
           model: data.model || state.activeModel,
           sources: turnSources.length ? turnSources : undefined,
-          reasoning: savedReasoning,
         });
         if (attempt.stopped || activeChatUserStopped) {
           chat.messages.push({ role: 'info', content: 'Stopped.', ts: Date.now() });
@@ -3795,7 +3731,6 @@ async function sendMessage(text) {
         model: data.model || state.activeModel,
         chunk: autoRound + 1,
         sources: turnSources.length ? turnSources : undefined,
-        reasoning: savedReasoning,
       });
 
       const newArts = extractArtifacts(displayReply, { role: state.activeRole || 'plan' });
@@ -3941,7 +3876,6 @@ async function callGroupStream(chat, apiMessages, onEvent) {
         webSearchQuery: turnSearchQuery || undefined,
         personaIds: (Array.isArray(chat.personaIds) && chat.personaIds.length) ? chat.personaIds : undefined,
         personaTasks: (chat.personaTasks && typeof chat.personaTasks === 'object') ? chat.personaTasks : undefined,
-        teamPrompt: chat.teamPrompt || undefined,
         forcedLeadId: chat.forcedLeadId || undefined,
       }),
       signal: controller.signal,
@@ -4432,150 +4366,18 @@ function parseWebSearchRequest(text, previousUserText = '') {
   return query.slice(0, 400);
 }
 
-// ---------------------------------------------------------------------------
-// After a meeting: the persona you're talking to offers a summary. Nothing is
-// generated until you say yes. The summary ends with where the group landed
-// and what to do next, and can also be kept as an MP3 inside the app.
-// ---------------------------------------------------------------------------
-const MEETING_SUMMARY_PROMPT = 'The group meeting above just finished. Give me a short summary in your own voice '
-  + '(no name tag or brackets): what was discussed and the key points, and where they disagreed. '
-  + 'Then end with two things: where the group landed (their consensus \u2014 and if they did not agree, say so plainly and '
-  + 'give each side), and what we should do next (concrete next steps).';
-
-function activePersonaName() {
-  return personas.find((p) => p.id === state.activePersonaId)?.name || 'Assistant';
-}
-
-function askMeetingSummary(chat) {
-  chat.messages.push({
-    role: 'assistant',
-    personaName: activePersonaName(),
-    content: 'The meeting is over. Want a summary \u2014 what was said, where the group landed, and what to do next? I can also make it an MP3 and keep it here in the app.',
-    meetingAsk: { chatId: chat.id },
-    ts: Date.now(),
-  });
-  chat.updatedAt = Date.now();
-  renderMessages({ scroll: 'bottom' });
-  saveState();
-}
-
-async function answerMeetingAsk(msg, mp3) {
-  if (!msg.meetingAsk || msg.meetingAsk.answered) return;
-  msg.meetingAsk.answered = true;
-  const chat = activeChat();
-  saveState();
-  renderMessages({ scroll: 'bottom' });
-  if (mp3 === null || !chat) return; // "No thanks"
-  await sendMessage(MEETING_SUMMARY_PROMPT);
-  if (!mp3) return;
-  const reply = [...chat.messages].reverse().find((m) => m.role === 'assistant' && m.content && !m.meetingAsk && !m.streaming);
-  if (reply) await saveSummaryAudio(chat, reply);
-}
-
-// MP3s live in IndexedDB (too big for localStorage); the chat message only
-// keeps an id, so the clip survives reloads on this device.
-const AUDIO_DB = 'uncensored_audio_v1';
-function openAudioDb() {
-  return new Promise((resolve, reject) => {
-    const r = indexedDB.open(AUDIO_DB, 1);
-    r.onupgradeneeded = () => r.result.createObjectStore('clips');
-    r.onsuccess = () => resolve(r.result);
-    r.onerror = () => reject(r.error);
-  });
-}
-async function putClip(id, blob) {
-  const db = await openAudioDb();
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction('clips', 'readwrite');
-    tx.objectStore('clips').put(blob, id);
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error);
-  });
-  db.close();
-}
-async function getClip(id) {
-  const db = await openAudioDb();
-  const blob = await new Promise((resolve, reject) => {
-    const req = db.transaction('clips').objectStore('clips').get(id);
-    req.onsuccess = () => resolve(req.result || null);
-    req.onerror = () => reject(req.error);
-  });
-  db.close();
-  return blob;
-}
-
-async function saveSummaryAudio(chat, replyMsg) {
-  const note = { role: 'info', content: 'Making the MP3\u2026', ts: Date.now() };
-  chat.messages.push(note);
-  renderMessages({ scroll: 'bottom' });
-  const dropNote = () => {
-    const i = chat.messages.indexOf(note);
-    if (i !== -1) chat.messages.splice(i, 1);
-  };
-  try {
-    const text = cleanForSpeech(stripContinueMarkers(replyMsg.content));
-    const voice = voiceForPersona(state.activePersonaId);
-    const parts = [];
-    for (const chunk of chunkSpeech(text)) {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try { parts.push(await fetchNeuralAudio(chunk, voice)); break; }
-        catch { await new Promise((r) => setTimeout(r, 600 * (attempt + 1))); }
-      }
-    }
-    if (!parts.length) throw new Error('The voice service did not respond.');
-    const id = 'clip-' + Date.now().toString(36);
-    await putClip(id, new Blob(parts, { type: 'audio/mpeg' }));
-    replyMsg.audioId = id;
-    replyMsg.audioName = `meeting-summary-${new Date().toISOString().slice(0, 10)}.mp3`;
-    dropNote();
-  } catch (err) {
-    dropNote();
-    chat.messages.push({ role: 'error', content: `Could not make the MP3: ${err.message || err}`, ts: Date.now() });
-  }
-  chat.updatedAt = Date.now();
-  saveState();
-  renderMessages({ scroll: 'bottom' });
-}
-
-function renderSavedAudio(m) {
-  const box = document.createElement('div');
-  box.className = 'saved-audio';
-  const label = document.createElement('div');
-  label.className = 'saved-audio-label';
-  label.textContent = 'Summary MP3 \u00b7 saved in the app';
-  box.appendChild(label);
-  getClip(m.audioId).then((blob) => {
-    if (!blob) { label.textContent = 'Summary MP3 \u00b7 not on this device'; return; }
-    const url = URL.createObjectURL(blob);
-    const audio = document.createElement('audio');
-    audio.controls = true;
-    audio.src = url;
-    const dl = document.createElement('a');
-    dl.href = url;
-    dl.download = m.audioName || 'meeting-summary.mp3';
-    dl.textContent = 'Download';
-    dl.className = 'text-btn';
-    box.append(audio, dl);
-  }).catch(() => { label.textContent = 'Summary MP3 \u00b7 unavailable'; });
-  return box;
-}
-
-async function runInlineGroupDiscussion(chat, { rounds, topic, mode, personaIds, personaTasks, teamPrompt, teamName }) {
+async function runInlineGroupDiscussion(chat, { rounds, topic }) {
   // runOneRound reads these off the chat; set them for this discussion only
   // and put the chat back exactly as it was afterwards.
   const saved = {
     groupMode: chat.groupMode,
     personaIds: chat.personaIds,
-    personaTasks: chat.personaTasks,
-    teamPrompt: chat.teamPrompt,
     forcedLeadId: chat.forcedLeadId,
     topic: chat.topic,
     groupFocus: chat.groupFocus,
   };
-  chat.groupMode = mode || 'brainstorm'; // everyone speaks each round
-  chat.personaIds = Array.isArray(personaIds) && personaIds.length ? personaIds : null; // null = full roster
-  chat.personaTasks = personaTasks && Object.keys(personaTasks).length ? personaTasks : undefined;
-  chat.teamPrompt = teamPrompt || undefined;
+  chat.groupMode = 'brainstorm'; // everyone speaks each round
+  chat.personaIds = null;        // full roster
   chat.forcedLeadId = undefined;
   chat.topic = topic;
   chat.groupFocus = topic;
@@ -4584,7 +4386,7 @@ async function runInlineGroupDiscussion(chat, { rounds, topic, mode, personaIds,
   // seating order), and an empty screen reads as stuck.
   chat.messages.push({
     role: 'info',
-    content: `Group meeting · ${teamName || 'everyone at the table'} · ${rounds} round${rounds > 1 ? 's' : ''} — starting…`,
+    content: `Group discussion · ${rounds} round${rounds > 1 ? 's' : ''} · everyone at the table — starting…`,
     ts: Date.now(),
   });
   renderMessages({ scroll: 'bottom' });
@@ -6674,134 +6476,16 @@ function clearGroupDraft() {
   if (els.roundsPlus) els.roundsPlus.disabled = false;
 }
 
-// ---------------------------------------------------------------------------
-// Teams: named sets of personas with their own editable prompt, so "group
-// discussion about my ad campaign" seats the marketing people, not everyone.
-// Browser-stored. A built-in team with no saved roster picks its members by
-// matching persona id/name/description; check boxes + "Save team" fixes it.
-// ---------------------------------------------------------------------------
-const TEAMS_KEY = 'uncensored_teams_v1';
-const BUILTIN_TEAMS = [
-  {
-    id: 'marketing',
-    name: 'Marketing Agency',
-    personaRe: /market|brand|campaign|copy|content|social|seo|advertis|\bads?\b|growth|guerr?illa|promo|creative|media|pr\b|strateg/i,
-    routeRe: /\b(?:market(?:ing)?|brand(?:ing)?|campaigns?|ad copy|advertis\w*|promo(?:tion|tional)?|launch|go[- ]to[- ]market|audience|social media|seo|content calendar|positioning|customers?|clients?|slogan|tagline|influencer|guerr?illa)\b/i,
-    prompt: 'You are an agency team working one client brief. Open with the strategist\'s read of audience, angle and offer. The creative and the guerrilla marketer push for ideas that would actually get noticed; the analyst and the editor challenge anything vague or unproven. Disagree openly, then converge. End with concrete deliverables the client can use, each with an owner.',
-  },
-  {
-    id: 'security',
-    name: 'White-Hat Security',
-    idRe: /^sec-/i,
-    personaRe: /security|pentest|recon|malware|exploit|vulnerab|infosec|red team|blue team|reverse engineer/i,
-    routeRe: /\b(?:security|vulnerab\w*|pentest|penetration|exploit\w*|hack\w*|malware|owasp|attack surface|threat model|breach|firewall|cve|xss|sql injection|ctf|red team|recon)\b/i,
-    prompt: 'You are an authorized white-hat team assessing a target the user owns or is cleared to test. Recon maps the surface first; web, network and malware specialists then dig into their areas. Every finding states the exact weakness, the exploit path and the fix, ranked by real impact. End with a prioritized remediation list.',
-  },
-];
-
-function readTeamStore() {
-  try {
-    const o = JSON.parse(localStorage.getItem(TEAMS_KEY) || '{}');
-    return o && typeof o === 'object' ? o : {};
-  } catch { return {}; }
-}
-function writeTeamStore(o) {
-  try { localStorage.setItem(TEAMS_KEY, JSON.stringify(o)); } catch { /* ignore */ }
-}
-/** Built-in teams plus custom ones, saved edits applied, rosters resolved. */
-function getTeams() {
-  const store = readTeamStore();
-  const ids = new Set(personas.map((p) => p.id));
-  const out = [];
-  for (const b of BUILTIN_TEAMS) {
-    const saved = store[b.id] || {};
-    let personaIds = Array.isArray(saved.personaIds) ? saved.personaIds.filter((id) => ids.has(id)) : null;
-    if (!personaIds) {
-      personaIds = personas
-        .filter((p) => (b.idRe && b.idRe.test(p.id)) || b.personaRe.test(`${p.name} ${p.description || ''}`))
-        .map((p) => p.id);
-    }
-    out.push({ id: b.id, name: b.name, prompt: typeof saved.prompt === 'string' ? saved.prompt : b.prompt, personaIds, routeRe: b.routeRe });
-  }
-  for (const [id, t] of Object.entries(store)) {
-    if (!t || !t.custom) continue;
-    out.push({
-      id, name: t.name || id, prompt: t.prompt || '',
-      personaIds: (t.personaIds || []).filter((x) => ids.has(x)), routeRe: null,
-    });
-  }
-  return out;
-}
-/** Best team for a piece of text, or null when nothing fits. */
-function matchTeamForText(text) {
-  const t = String(text || '');
-  let best = null;
-  let bestHits = 0;
-  for (const team of getTeams()) {
-    if (!team.routeRe || !team.personaIds.length) continue;
-    const hits = (t.match(new RegExp(team.routeRe.source, 'gi')) || []).length;
-    if (hits > bestHits) { best = team; bestHits = hits; }
-  }
-  return best;
-}
-function fillTeamSelect(selectedId) {
-  const sel = els.groupTeamSelect;
-  if (!sel) return;
-  sel.innerHTML = '';
-  const add = (value, label) => {
-    const o = document.createElement('option');
-    o.value = value; o.textContent = label; sel.appendChild(o);
-  };
-  add('', 'Everyone (all personas)');
-  for (const t of getTeams()) add(t.id, `${t.name} (${t.personaIds.length})`);
-  add('__new', '+ New team…');
-  sel.value = [...sel.options].some((o) => o.value === selectedId) ? selectedId : '';
-}
-/** Check exactly the team's members in the roster and load its prompt. */
-function applyTeamToForm(teamId) {
-  const host = els.groupPersonaModels;
-  const team = getTeams().find((t) => t.id === teamId);
-  if (els.groupTeamPrompt) els.groupTeamPrompt.value = team ? team.prompt : '';
-  if (!host) return;
-  host.querySelectorAll('.group-persona-row').forEach((row) => {
-    const box = row.querySelector('.group-persona-include');
-    if (!box) return;
-    box.checked = team ? team.personaIds.includes(row.dataset.personaId) : true;
-    box.dispatchEvent(new Event('change'));
-  });
-}
-
-// A group discussion asked for in chat opens this meeting setup first, so
-// you confirm the team, roster, models and rounds before anyone speaks.
-let pendingMeeting = null;
-async function openGroupMeeting(chat, ask) {
-  pendingMeeting = { chat, rounds: ask.rounds || 3 };
-  const team = matchTeamForText(ask.topic);
-  await openGroupModal({ meeting: true, topic: ask.topic, rounds: pendingMeeting.rounds, teamId: team ? team.id : '' });
-}
-
-async function openGroupModal(opts = {}) {
+async function openGroupModal() {
   if (!els.groupModal) return;
   els.groupModal.classList.remove('hidden');
-  if (!opts.meeting) pendingMeeting = null;
-  if (els.groupModalTitle) els.groupModalTitle.textContent = opts.meeting ? 'Group meeting' : 'Group table';
-  if (els.startGroupBtn) els.startGroupBtn.textContent = opts.meeting ? 'Start meeting' : 'Start group';
   // Restore draft — never wipe a carefully written opening on reopen.
   restoreGroupDraft();
-  if (opts.meeting) {
-    if (els.groupTopicInput) els.groupTopicInput.value = opts.topic || '';
-    const r = Math.min(20, Math.max(1, opts.rounds || 3));
-    if (els.roundsDisplay) els.roundsDisplay.textContent = String(r);
-    if (els.roundsMinus) els.roundsMinus.disabled = r <= 1;
-    if (els.roundsPlus) els.roundsPlus.disabled = r >= 20;
-  }
-  fillTeamSelect(opts.teamId || '');
   try {
     await renderGroupPersonaModels();
   } catch (err) {
     console.warn('Could not render persona model assignments:', err);
   }
-  applyTeamToForm(els.groupTeamSelect?.value || '');
   if (els.groupTopicInput) {
     setTimeout(() => {
       els.groupTopicInput.focus();
@@ -6813,8 +6497,7 @@ async function openGroupModal(opts = {}) {
 }
 function closeGroupModal() {
   // Snapshot draft before hiding so accidental dismiss never loses the prompt.
-  if (!pendingMeeting) captureGroupDraft();
-  pendingMeeting = null;
+  captureGroupDraft();
   els.groupModal?.classList.add('hidden');
 }
 els.groupBtn?.addEventListener('click', () => { void openGroupModal(); });
@@ -6823,35 +6506,6 @@ els.cancelGroupBtn?.addEventListener('click', closeGroupModal);
 // Backdrop taps must NOT dismiss — on mobile the Start control used to sit
 // under the form with only a sliver visible; missing it hit the overlay,
 // closed the modal, wiped the prompt, and dumped you back into normal chat.
-
-els.groupTeamSelect?.addEventListener('change', () => {
-  if (els.groupTeamSelect.value === '__new') {
-    const name = (window.prompt('Name the new team:') || '').trim();
-    if (!name) { fillTeamSelect(''); applyTeamToForm(''); return; }
-    const id = 'team-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '-' + Date.now().toString(36);
-    const store = readTeamStore();
-    store[id] = { custom: true, name, prompt: '', personaIds: collectSelectedPersonaIdsFromForm() };
-    writeTeamStore(store);
-    fillTeamSelect(id);
-    applyTeamToForm(id);
-    return;
-  }
-  applyTeamToForm(els.groupTeamSelect.value);
-});
-els.saveTeamBtn?.addEventListener('click', () => {
-  const id = els.groupTeamSelect?.value;
-  if (!id || id === '__new') { alert('Pick a team first (or choose + New team…).'); return; }
-  const store = readTeamStore();
-  store[id] = {
-    ...(store[id] || {}),
-    prompt: els.groupTeamPrompt?.value || '',
-    personaIds: collectSelectedPersonaIdsFromForm(),
-  };
-  writeTeamStore(store);
-  fillTeamSelect(id);
-  els.saveTeamBtn.textContent = 'Saved ✓';
-  setTimeout(() => { if (els.saveTeamBtn) els.saveTeamBtn.textContent = 'Save team'; }, 1500);
-});
 
 // Rounds stepper
 const MIN_ROUNDS = 1;
@@ -6895,22 +6549,7 @@ els.startGroupBtn?.addEventListener('click', async () => {
     const t = (groupPersonaTasks[id] || '').trim();
     if (t) tasks[id] = t;
   }
-  const teamId = els.groupTeamSelect?.value || '';
-  const teamPrompt = (els.groupTeamPrompt?.value || '').trim();
-  if (pendingMeeting) {
-    // Asked for in a chat: run it right there so the conversation (and the
-    // persona you're talking to) keeps the whole discussion.
-    const { chat } = pendingMeeting;
-    pendingMeeting = null;
-    const team = getTeams().find((t) => t.id === teamId);
-    els.groupModal?.classList.add('hidden');
-    const finished = await runInlineGroupDiscussion(chat, {
-      rounds, topic, mode, personaIds, personaTasks: tasks, teamPrompt, teamName: team?.name,
-    });
-    if (finished) askMeetingSummary(chat);
-    return;
-  }
-  createGroupChat(mode, topic, assigned, rounds, personaIds, tasks, teamPrompt);
+  createGroupChat(mode, topic, assigned, rounds, personaIds, tasks);
   // Clear draft and hide without re-capturing the emptied form.
   clearGroupDraft();
   els.groupModal?.classList.add('hidden');
@@ -7863,9 +7502,7 @@ document.getElementById('navWorkspace')?.addEventListener('click', () => {
 document.getElementById('navGroup')?.addEventListener('click', () => {
   closeEverythingOpen();
   setActiveMod('group');
-  // Same meeting setup the chat opens when you ask for a group discussion:
-  // pick the team, roster, models and rounds, then Start meeting.
-  void openGroupMeeting(ensureActiveChat(), { rounds: 3, topic: '' });
+  els.groupBtn?.click(); // reuses the existing openGroupModal() handler
 });
 document.getElementById('navMemory')?.addEventListener('click', () => {
   closeEverythingOpen();

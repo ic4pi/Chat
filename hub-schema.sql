@@ -428,18 +428,3 @@ create table if not exists workspace_sessions (
   primary key (owner_id, session_id)
 );
 alter table workspace_sessions enable row level security;
-
--- Client workspaces: each client is its own owner row (walled off), reachable
--- only through its parent. The `clients` row shares the owner's id.
-alter table owners add column if not exists parent_owner_id uuid references owners(id) on delete cascade;
-create table if not exists clients (
-  id              uuid primary key references owners(id) on delete cascade,
-  parent_owner_id uuid not null references owners(id) on delete cascade,
-  name            text not null,
-  profile         jsonb not null default '{}'::jsonb,
-  archived        boolean not null default false,
-  created_at      timestamptz not null default now(),
-  updated_at      timestamptz not null default now()
-);
-create index if not exists clients_parent_idx on clients(parent_owner_id);
-alter table clients enable row level security;

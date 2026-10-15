@@ -21,15 +21,6 @@ const API_URL =
  * Sent to /api/init-repo so a private repo can be cloned — the same token the
  * push path sends, to the same origin, and never persisted server-side.
  */
-/** "github.com/owner/repo" and "owner/repo" mean the GitHub URL, not a local path. */
-export function normalizeRepoInput(input: string): string {
-  const t = input.trim();
-  if (/^https?:\/\/|^git@/.test(t)) return t;
-  if (/^(?:www\.)?github\.com\//i.test(t)) return `https://${t.replace(/^www\./i, '')}`;
-  if (/^[\w.-]+\/[\w.-]+$/.test(t) && !t.startsWith('.') && !t.startsWith('/')) return `https://github.com/${t}`;
-  return t;
-}
-
 function savedGitHubToken(): string | undefined {
   try {
     const saved =
@@ -101,8 +92,6 @@ export interface RepoContextActions {
   /** Write pending (or explicitly provided) changes to disk/sandbox. */
   applyChanges:    (files?: PendingChange[]) => Promise<{ path: string; ok: boolean; error?: string }[]>;
   clearChanges:    () => void;
-  /** Read a file's full content for viewing — does not pin it into LLM context. */
-  readFile:        (relPath: string) => Promise<{ content: string } | { error: string }>;
 }
 
 export function useRepoContext(): RepoContextState & RepoContextActions {
@@ -172,8 +161,7 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     }
   }, []);
 
-  const openRepo = useCallback(async (rawInput: string) => {
-    const rootPathOrUrl = normalizeRepoInput(rawInput);
+  const openRepo = useCallback(async (rootPathOrUrl: string) => {
     setLoading(true);
     setError(null);
     setTree([]);
@@ -344,25 +332,6 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     }
   }, [root, sandboxId, contextFiles]);
 
-  const readFile = useCallback(async (relPath: string): Promise<{ content: string } | { error: string }> => {
-    // Already fetched for context (or just written back)? Reuse it — same
-    // bytes, no extra round trip to the sandbox.
-    const cached = contextFiles.get(relPath);
-    if (cached !== undefined) return { content: cached };
-    try {
-      const headers = sandboxId ? { 'X-Sandbox-Session': sandboxId } : undefined;
-      const url = sandboxId
-        ? `${API_URL}/file?path=${encodeURIComponent(relPath)}`
-        : `${API_URL}/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(relPath)}`;
-      const res = await fetch(url, { headers });
-      const data = await res.json() as { content?: string; error?: string };
-      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      return { content: data.content ?? '' };
-    } catch (err: unknown) {
-      return { error: err instanceof Error ? err.message : String(err) };
-    }
-  }, [root, sandboxId, contextFiles]);
-
   const injectContextFile = useCallback((relPath: string, content: string) => {
     const path = relPath.startsWith('uploads/') ? relPath : `uploads/${relPath}`;
     setContextFiles(m => new Map(m).set(path, truncateForContext(content)));
@@ -449,6 +418,6 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     goReady, goDetail, snapshot,
     openRepo, startBlankProject, restoreProject,
     addToContext, injectContextFile, removeFromContext, clearContext,
-    setPendingChanges, applyChanges, clearChanges, readFile,
+    setPendingChanges, applyChanges, clearChanges,
   };
 }

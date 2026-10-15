@@ -14,7 +14,6 @@ import type { FileNode } from './types.js';
 import { formatSearchHits, type SearchHit } from './contextBudget.js';
 import { looksLikeApplyRequest, looksLikeLegacyWelcome } from './agentParse.js';
 import { noteSettingsChanged } from './settingsSync.js';
-import { planForPersona } from './buildPlan.js';
 
 export interface OrchestratorPersona {
   id: string;
@@ -29,8 +28,6 @@ export interface OrchMessage {
   role: 'user' | 'assistant';
   content: string;
   kind?: string;
-  askName?: string;
-  runStatus?: string;
   speaker?: 'persona' | 'coder';
   to?: 'persona';
   pending?: boolean;
@@ -171,24 +168,6 @@ export function buildBriefWriterTurns(personaTurns: Turn[], personaReply: string
   }];
 }
 
-// ── team line (ASK) ──────────────────────────────────────────────────────
-
-export const MAX_ASKS = 6;
-export interface Ask { id: string; question: string }
-
-const ASK_RE = /<<<\s*ASK[ \t]+([\w-]+)[^\n]*\n([\s\S]*?)(?:\n?\s*ASK\s*>>>|$)/gi;
-
-/** Questions the orchestrator wants put to other personas, and its reply without them. */
-export function extractAskBlocks(raw: string): { text: string; asks: Ask[] } {
-  const asks: Ask[] = [];
-  const text = String(raw || '').replace(ASK_RE, (_all, id: string, q: string) => {
-    const question = (q || '').trim();
-    if (question && asks.length < MAX_ASKS) asks.push({ id: id.toLowerCase(), question });
-    return '';
-  }).replace(/\n{3,}/g, '\n\n').trim();
-  return { text, asks };
-}
-
 // ── history builders ─────────────────────────────────────────────────────
 
 function clip(s: string, n: number): string {
@@ -238,16 +217,6 @@ export function buildPersonaHistory(msgs: OrchMessage[]): Turn[] {
     if (skip(m)) continue;
     if (m.role === 'user') {
       if (m.kind === 'brief') continue; // already inside the persona's own reply
-      if (m.kind === 'runplan') {
-        if (m.runStatus === 'declined') {
-          turns.push({ role: 'user', content: '[NOTE] The user chose not to run your questions to the team. Carry on without them.' });
-        }
-        continue;
-      }
-      if (m.kind === 'askreply') {
-        turns.push({ role: 'user', content: `[REPLY from ${m.askName || 'persona'}] ${clip(m.content, 2500)}` });
-        continue;
-      }
       if (m.kind === 'note') {
         turns.push({ role: 'user', content: `[NOTE] ${m.content}` });
         continue;
@@ -273,7 +242,6 @@ export function buildCoderHistory(msgs: OrchMessage[]): Turn[] {
       if (skip(m)) return false;
       if (m.role === 'user') {
         if (m.kind === 'brief') return !m.pending; // never built — not the coder's business
-        if (m.kind === 'runplan' || m.kind === 'askreply') return false;
         if (m.kind === 'retry-inject' || m.kind === 'note') return true;
         // Direct-mode asks from earlier in this session still belong to the coder.
         return m.kind !== 'imported' && m.to !== 'persona';
@@ -295,43 +263,14 @@ function flatten(nodes: FileNode[], prefix = ''): string[] {
   return out;
 }
 
-/**
- * Files the persona asked to read itself, from a `READ: a.js, src/b.ts` line.
- * Lets it pull any file on its own instead of telling the user to paste one.
- */
-export function parseReadRequests(reply: string): string[] {
-  const out: string[] = [];
-  const re = /^[\s>*\-]*READ(?:\s+FILES?)?\s*:\s*(.+)$/gim;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(String(reply || '')))) {
-    for (let p of m[1].split(/[,;]+/)) {
-      p = p.trim().replace(/^[`'"]+|[`'"]+$/g, '').replace(/^\.\//, '').trim();
-      if (p && /[./]/.test(p) && !p.includes('..') && p.length < 200) out.push(p);
-    }
-  }
-  return [...new Set(out)].slice(0, 8);
-}
-
-/** Hide the READ: lines from what the user sees — they're a machine request. */
-export function stripReadRequests(text: string): string {
-  return String(text || '')
-    .replace(/^[\s>*\-]*READ(?:\s+FILES?)?\s*:.*(?:\r?\n)?/gim, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
 export function buildPersonaContext(opts: {
   repoRoot: string;
   repoUrl: string | null;
   tree: FileNode[];
   openFiles: string[];
-  /** Full contents of the files currently in context — the persona reads these in full. */
-  files?: Map<string, string>;
   hits: SearchHit[];
   coderLabel: string;
   role?: string;
-  /** Build plan markdown (may be empty). */
-  plan?: string;
 }): string {
   const parts: string[] = ['WORKSPACE STATE (live, right now):'];
   parts.push(`Repo: ${opts.repoUrl || (opts.repoRoot ? 'blank project' : 'nothing opened yet')}`);
@@ -355,27 +294,7 @@ export function buildPersonaContext(opts: {
   if (opts.openFiles.length) {
     parts.push('', `Files the coder will have open in full: ${opts.openFiles.join(', ')}`);
   }
-  parts.push('', planForPersona(opts.plan || ''));
-  // Full contents of what's in context, so the persona reads files itself.
-  if (opts.files && opts.files.size) {
-    let budget = 16_000;
-    const blocks: string[] = [];
-    for (const [path, content] of opts.files) {
-      if (budget <= 0) break;
-      const slice = content.length > 8_000 ? content.slice(0, 8_000) + '\n… (truncated)' : content;
-      budget -= slice.length;
-      blocks.push(`--- ${path} ---\n${slice}`);
-    }
-    if (blocks.length) parts.push('', 'File contents (read these directly — do not ask the user for them):', ...blocks);
-  }
   const hitBlock = formatSearchHits(opts.hits, 6_000);
   if (hitBlock) parts.push('', hitBlock);
-  parts.push(
-    '',
-    'READING FILES: you can open any file in the project yourself. Put a line exactly like',
-    '`READ: path/one.js, path/two.css` (paths from the file tree above) anywhere in your reply and the app',
-    'fetches those files and lets you continue with their contents. NEVER tell the user to click, open, copy,',
-    'paste, cat, or relay a file — read it yourself with READ:.',
-  );
   return parts.join('\n');
 }

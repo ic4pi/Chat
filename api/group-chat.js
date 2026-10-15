@@ -21,7 +21,7 @@ import { fetchWithModelFallback } from '../lib/model-health.js';
 import { resolveProvider, withProviderChatExtras } from '../lib/providers.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
 import { searchWeb, formatSearchContext } from '../lib/websearch.js';
-import { resolveOwner, loadClientBrief, ClientAccessError } from '../lib/hub.js';
+import { resolveOwner } from '../lib/hub.js';
 import { recentTeamActions, formatTeamActions } from '../lib/team-log.js';
 
 const UPSTREAM_TIMEOUT_MS = 90_000;
@@ -355,8 +355,6 @@ export default async function handler(req, res) {
     webSearchQuery,
     personaIds,
     personaTasks = {},
-    // Team brief for a meeting run by a named team (editable in the app).
-    teamPrompt,
     // Orchestrated-only: pin a specific persona as lead instead of letting
     // rankPersonasByRelevance pick one. This is what turns Orchestrated mode
     // into "solo chat with a team behind it" — the persona you're actually
@@ -391,17 +389,6 @@ export default async function handler(req, res) {
       sseWrite(res, { type: 'error', error: paidGate.error, paidLocked: true });
       return res.end();
     }
-  }
-
-  let clientBriefText = '';
-  try {
-    clientBriefText = await loadClientBrief(req);
-  } catch (err) {
-    if (err instanceof ClientAccessError) {
-      sseWrite(res, { type: 'error', error: err.message });
-      return res.end();
-    }
-    console.error('client brief:', err);
   }
 
   let defaultResolved;
@@ -579,10 +566,7 @@ export default async function handler(req, res) {
         }
       }
 
-      const teamBrief = typeof teamPrompt === 'string' && teamPrompt.trim()
-        ? `TEAM BRIEF (how this team works together):\n${teamPrompt.trim().slice(0, 4000)}`
-        : '';
-      const personaPrompt = [master, persona.systemPrompt, clientBriefText, teamBrief, modeRules, teamActionsBlock, searchContext]
+      const personaPrompt = [master, persona.systemPrompt, modeRules, teamActionsBlock, searchContext]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n');
 

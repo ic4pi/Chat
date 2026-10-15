@@ -38,7 +38,7 @@ import {
   buildPushShellCommands,
   type StoredSession,
 } from './sessionStore.js';
-import { copyText, downloadTextFile } from './downloadFile.js';
+import { copyText } from './downloadFile.js';
 import { peekWorkspaceHandoff } from './workspaceHandoff.js';
 import { readChatConversation, mirrorToChat } from './chatBridge.js';
 import {
@@ -71,8 +71,6 @@ import {
 } from './coderModels.js';
 import type { GenerateChunkResult } from './ChunkModelPanel.js';
 import { SettingsPanel } from './SettingsPanel.js';
-import { PlanPanel } from './PlanPanel.js';
-import { loadPlan, savePlan, parsePlan } from './buildPlan.js';
 import { ComparePanel, type BuildChoice, type CompareHandle } from './ComparePanel.js';
 import { BuildPicker, type BuildChoiceSeats, type TeamOption } from './BuildPicker.js';
 import {
@@ -399,13 +397,12 @@ export function App() {
   // The Workspace writes code, so it opens on the Coders package rather than a
   // raw provider catalog. 'provider' is the escape hatch to the full list.
   const [modelScope,   setModelScope]   = useState<'coders' | 'provider'>(
-    () => (localStorage.getItem(MODEL_SCOPE_KEY) === 'coders' ? 'coders' : 'provider'),
+    () => (localStorage.getItem(MODEL_SCOPE_KEY) === 'provider' ? 'provider' : 'coders'),
   );
   const [coderBrands,  setCoderBrands]  = useState<ResolvedCoderBrand[]>([]);
   const [keys,         setKeys]         = useState(() => loadProviderKeys());
   const [showSettings, setShowSettings] = useState(false);
   const [showCompare,  setShowCompare]  = useState(false);
-  const [showPlan,     setShowPlan]     = useState(false);
   const [roleModels,   setRoleModels]   = useState(() => loadRoleModels());
   // Auto-save ON — generated files go to the sandbox immediately so you can download/push.
   const [autoRun,      setAutoRun]      = useState(false);
@@ -467,41 +464,12 @@ export function App() {
       pending: x.pending,
       wantCompare: x.wantCompare,
       builtBy: x.builtBy,
-      reasoning: x.reasoning,
     }));
   });
   const [fromChat] = useState(() => boot.fromChat);
   const [showHome, setShowHome] = useState(false);
-  const [viewingFile, setViewingFile] = useState<
-    { path: string; content: string; loading: false } |
-    { path: string; content: null; loading: true } |
-    { path: string; error: string; loading: false } | null
-  >(null);
-  const [viewerCopied, setViewerCopied] = useState(false);
-  // Always read through the LATEST repo. With empty deps this captured the
-  // first render's repo — whose sandboxId was still null — so every file
-  // open ran with no sandbox header and the viewer only ever showed
-  // "No active sandbox session" (and never the Copy / Download buttons).
-  const readFileRef = useRef(repo.readFile);
-  readFileRef.current = repo.readFile;
-  const openFileViewer = useCallback((node: FileNode) => {
-    if (node.type !== 'file') return;
-    setViewerCopied(false);
-    setViewingFile({ path: node.path, content: null, loading: true });
-    void readFileRef.current(node.path).then(result => {
-      if ('error' in result) setViewingFile({ path: node.path, error: result.error, loading: false });
-      else setViewingFile({ path: node.path, content: result.content, loading: false });
-    });
-  }, []);
   const [homeList, setHomeList] = useState<StoredSession[]>(() => listSessions());
   const [sessionKey,   setSessionKey]   = useState(0);
-  // Build plan: the orchestrator's checklist for this workspace session.
-  const [buildPlan, setBuildPlan] = useState(() => loadPlan(sessionId));
-  useEffect(() => { setBuildPlan(loadPlan(sessionId)); }, [sessionId]);
-  const handleBuildPlan = useCallback((md: string) => {
-    savePlan(sessionId, md);
-    setBuildPlan(md);
-  }, [sessionId]);
   const isMobile = useIsMobile();
   const activeApiKey = (keys[provider] || '').trim();
 
@@ -638,7 +606,7 @@ export function App() {
       fromChat,
       messages: chatMessages.map(m => ({
         id: m.id, role: m.role, content: m.content, kind: m.kind, speaker: m.speaker, to: m.to,
-        pending: m.pending, wantCompare: m.wantCompare, builtBy: m.builtBy, reasoning: m.reasoning,
+        pending: m.pending, wantCompare: m.wantCompare, builtBy: m.builtBy,
       })),
       pendingChanges: repo.pendingChanges,
       files: repo.snapshot,
@@ -704,7 +672,6 @@ export function App() {
       pending: x.pending,
       wantCompare: x.wantCompare,
       builtBy: x.builtBy,
-      reasoning: x.reasoning,
     })));
     setPushError(null);
     setPushOk(null);
@@ -1059,12 +1026,6 @@ export function App() {
   }, [repo]);
 
   // ── Compare: the persona's brief to two coders, and the chosen version back ──
-  // Compare needs a sandbox for its two previews and file writes: open one as the panel opens,
-  // so typing straight into either side works instead of silently building nowhere.
-  useEffect(() => {
-    if (showCompare && !repo.sandboxId) void ensureProject();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showCompare]);
   const compareRef = useRef<CompareHandle>(null);
   const queuedCompareRef = useRef<{ brief: string; picks?: { a: SeatModel; b: SeatModel } } | null>(null);
   const handleCompareBrief = useCallback((brief: string, picks?: { a: SeatModel; b: SeatModel }) => {
@@ -1080,6 +1041,23 @@ export function App() {
     queuedCompareRef.current = null;
     compareRef.current?.runBrief(q.brief, q.picks);
   }, [repo.sandboxId]);
+
+  const handleUseBuild = useCallback(async (build: BuildChoice) => {
+    if (!repo.sandboxId) {
+      setRestoreNote('Open a blank project or a GitHub repo first, then use the build again.');
+      return;
+    }
+    const results = await handleApply(Object.entries(build.files).map(([path, content]) => ({ path, content })));
+    const ok = results.filter(r => r.ok).map(r => r.path);
+    const failed = results.filter(r => !r.ok).map(r => r.path);
+    setShowCompare(false);
+    setMobileTab('chat');
+    chatRef.current?.addNote(
+      `Took "${build.title}" (${build.model}) from Compare into the project — ${ok.length} file${ok.length === 1 ? '' : 's'}: ${ok.join(', ')}.`
+      + (failed.length ? ` Couldn't write: ${failed.join(', ')}.` : '')
+      + ' Keep building on this version.',
+    );
+  }, [repo.sandboxId, handleApply]);
 
   const autoVerify = useAutoVerify(repo.root, repo.sandboxId, termRef, chatRef, repo.applyChanges);
 
@@ -1105,26 +1083,6 @@ export function App() {
     }
     return results;
   }, [handleApply, autoVerifyOn, repo.root, repo.sandboxId, runVerify]);
-
-  const handleUseBuild = useCallback(async (build: BuildChoice) => {
-    if (!repo.sandboxId) {
-      setRestoreNote('Open a blank project or a GitHub repo first, then use the build again.');
-      return;
-    }
-    // Same path as a normal build: write, then auto-test, so the orchestrator
-    // hears the real pass/fail for the version you picked (it used to only get
-    // a filename note and no test result).
-    const results = await handleApplyAndVerify(Object.entries(build.files).map(([path, content]) => ({ path, content })));
-    const ok = results.filter(r => r.ok).map(r => r.path);
-    const failed = results.filter(r => !r.ok).map(r => r.path);
-    setShowCompare(false);
-    setMobileTab('chat');
-    chatRef.current?.addNote(
-      `Took "${build.title}" (${build.model}) from Compare into the project — ${ok.length} file${ok.length === 1 ? '' : 's'}: ${ok.join(', ')}.`
-      + (failed.length ? ` Couldn't write: ${failed.join(', ')}.` : '')
-      + ' This is the live version now — keep building on it.',
-    );
-  }, [repo.sandboxId, handleApplyAndVerify]);
 
   // ── WIP backup to GitHub ──────────────────────────────────────────────────
   const runWipBackup = useCallback(async (reason?: string) => {
@@ -1576,8 +1534,7 @@ export function App() {
           </select>
         )}
         {modelScope === 'coders' ? (
-          <select value={coderKey(provider, model)}
-            onChange={e => { if (e.target.value === '__all') handleScopeChange('provider'); else handleCoderChange(e.target.value); }}
+          <select value={coderKey(provider, model)} onChange={e => handleCoderChange(e.target.value)}
             disabled={modelsLoading}
             title="Coding models — free ones run without a password, paid ones need the unlock"
             style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
@@ -1595,7 +1552,6 @@ export function App() {
                 })}
               </optgroup>
             ))}
-            <option value="__all">More models… (every model, any provider)</option>
             {/* A handoff from chat can arrive on a non-coder model; keep it
                 selectable so the dropdown never shows a blank value. */}
             {!flattenCoderModels(coderBrands).some(m => m.provider === provider && m.id === model) && (
@@ -1660,22 +1616,13 @@ export function App() {
             overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 120 }}
             title={repo.sandboxId}>● {repo.sandboxId.slice(0, 20)}</span>
         )}
-        <button type="button" className="ws-btn" onClick={() => setShowPlan(true)}
-          title="Build plan — the checklist the orchestrator keeps for this build"
-          aria-haspopup="dialog" aria-expanded={showPlan}
-          style={{ background: 'var(--surface-2)', color: 'var(--text-muted)',
-            border: '1px solid var(--border)', borderRadius: 'var(--radius)',
-            height: 30, padding: '0 9px', display: 'flex', alignItems: 'center', gap: 5,
-            cursor: 'pointer', fontSize: 13, marginLeft: 'auto' }}>
-          ☑{(() => { const p = parsePlan(buildPlan); return p.total ? ` ${p.done}/${p.total}` : ''; })()}
-        </button>
         <button type="button" className="ws-btn" onClick={() => setShowCompare(true)}
           title="Compare — two models, one prompt, two live previews"
           aria-haspopup="dialog" aria-expanded={showCompare}
           style={{ background: 'var(--surface-2)', color: 'var(--text-muted)',
             border: '1px solid var(--border)', borderRadius: 'var(--radius)',
             width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: 'pointer', fontSize: 15 }}>
+            cursor: 'pointer', fontSize: 15, marginLeft: 'auto' }}>
           ⇄
         </button>
         <button type="button" className="ws-btn" onClick={() => setShowSettings(true)}
@@ -1689,7 +1636,6 @@ export function App() {
           ⚙
         </button>
       </div>
-      <PlanPanel open={showPlan} onClose={() => setShowPlan(false)} plan={buildPlan} onChange={handleBuildPlan} />
       <SettingsPanel
         open={showSettings}
         onClose={() => setShowSettings(false)}
@@ -1872,8 +1818,6 @@ export function App() {
           persona={orchPersona}
           onModelReplaced={handleModelReplaced}
           onCompareBrief={handleCompareBrief}
-          buildPlan={buildPlan}
-          onBuildPlan={handleBuildPlan}
           askBeforeBuild={teamPrefs.askFirst}
           buildPicker={renderBuildPicker}
           fixer={teamPrefs.seats ? withKey(teamSeats.fix) : null}
@@ -1952,7 +1896,6 @@ export function App() {
       onStartBlank={() => { void repo.startBlankProject(); }}
       onAddToContext={repo.addToContext}
       onRemoveFromContext={repo.removeFromContext} onClearContext={repo.clearContext}
-      onViewFile={openFileViewer}
     />
   );
 
@@ -2016,73 +1959,8 @@ export function App() {
         </div>
       )}
 
-      {viewingFile && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 40, background: 'rgba(0,0,0,0.72)',
-          display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '24px 16px 16px' }}
-          onClick={() => setViewingFile(null)}>
-          <div role="dialog" aria-label={viewingFile.path}
-            onClick={e => e.stopPropagation()}
-            style={{ width: 'min(860px, 100%)', maxHeight: '90dvh', display: 'flex', flexDirection: 'column',
-              background: '#12151D', border: '1px solid #FF3D8E', borderRadius: 8, padding: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexShrink: 0 }}>
-              <h2 style={{ margin: 0, flex: 1, fontSize: 16, color: '#FF3D8E',
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {viewingFile.path}
-              </h2>
-              {!viewingFile.loading && 'content' in viewingFile && (
-                <>
-                  <button type="button"
-                    onClick={async () => {
-                      const ok = await copyText(viewingFile.content);
-                      if (ok) { setViewerCopied(true); setTimeout(() => setViewerCopied(false), 1500); }
-                    }}
-                    style={{ background: 'rgba(212,255,63,0.12)', color: '#FF3D8E', border: '1px solid #C81F6B',
-                      borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
-                      fontSize: 14, fontWeight: 700 }}>{viewerCopied ? 'Copied ✓' : 'Copy'}</button>
-                  <button type="button"
-                    onClick={() => downloadTextFile(viewingFile.path, viewingFile.content)}
-                    style={{ background: 'rgba(212,255,63,0.12)', color: '#FF3D8E', border: '1px solid #C81F6B',
-                      borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
-                      fontSize: 14, fontWeight: 700 }}>Download</button>
-                </>
-              )}
-              <button type="button" onClick={() => setViewingFile(null)}
-                style={{ background: 'transparent', color: '#9198AA', border: '1px solid #232838',
-                  borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
-                  fontSize: 14 }}>Close</button>
-            </div>
-            <div style={{ flex: 1, overflow: 'auto', background: '#0B0D12', border: '1px solid #232838',
-              borderRadius: 6, padding: 10 }}>
-              {viewingFile.loading ? (
-                <div style={{ color: '#656C7E', fontSize: 15 }}>Loading…</div>
-              ) : 'error' in viewingFile ? (
-                <div style={{ color: '#ff6a6a', fontSize: 15 }}>✗ {viewingFile.error}</div>
-              ) : (
-                <pre style={{ margin: 0, color: '#ECEEF3', fontSize: 14, lineHeight: 1.5,
-                  whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                  fontFamily: '"JetBrains Mono",ui-monospace,monospace' }}>
-                  {viewingFile.content || '(empty file)'}
-                </pre>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
       <ComparePanel ref={compareRef} open={showCompare} onClose={() => setShowCompare(false)}
-        sandboxId={repo.sandboxId} onUseBuild={handleUseBuild}
-        onNeedSandbox={(t) => handleCompareBrief(t)}
-        onStartBlank={() => repo.startBlankProject()}
-        onOpenRepo={(u) => repo.openRepo(u)}
-        onVersionsReady={(v) => {
-          // Give the orchestrator the two versions so it can answer about them
-          // if you ask — it does not jump in on its own.
-          chatRef.current?.addNote(
-            `Compare has two versions ready. A — ${v.a.model}: ${v.a.files.join(', ')}. `
-            + `B — ${v.b.model}: ${v.b.files.join(', ')}. `
-            + `If I'm asked which to use or how they differ, compare them; otherwise wait for the pick.`,
-          );
-        }} />
+        sandboxId={repo.sandboxId} onUseBuild={handleUseBuild} />
 
       {!isMobile ? (
         /* ── Desktop: 3-column grid (single ChatPane + Terminal) ── */

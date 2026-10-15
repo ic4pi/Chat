@@ -24,7 +24,6 @@ import {
   gatherIncoming,
   memoryContext,
   resolveOwner,
-  ClientAccessError,
   SUPABASE_PROJECT_REF,
   SUPABASE_KEY_REF,
   SUPABASE_KEY_MISMATCH,
@@ -39,23 +38,6 @@ import {
   storeMediaAsset,
   decodeDataUrl,
 } from '../../lib/hub.js';
-import { cleanProfile } from '../../lib/client-scope.js';
-import { createHash as nodeHash, randomBytes as nodeRandom } from 'node:crypto';
-
-/** resolveOwner that answers 403 for a client that is not the caller's; undefined = already answered. */
-async function ownerOr403(req, res, opts) {
-  try {
-    return await resolveOwner(req, res, opts);
-  } catch (err) {
-    if (err instanceof ClientAccessError) {
-      fail(res, 403, err.message);
-      return undefined;
-    }
-    throw err;
-  }
-}
-
-const MAX_CLIENTS = 50;
 
 /**
  * POST /api/hub/initiate?action=workspace|group|media
@@ -72,8 +54,7 @@ async function handle_initiate(req, res) {
   if (!requireHub(res)) return;
   if (req.method !== 'POST') return fail(res, 405, 'POST only');
 
-  const ownerId = await ownerOr403(req, res);
-  if (ownerId === undefined) return;
+  const ownerId = await resolveOwner(req, res);
   const action = req.query?.action;
   const { fromThreadId, seedContent, title, messageId, personaIds, mode, rounds } = req.body || {};
 
@@ -163,8 +144,7 @@ async function handle_moderate(req, res) {
   if (!requireHub(res)) return;
   if (req.method !== 'POST') return fail(res, 405, 'POST only');
 
-  const ownerId = await ownerOr403(req, res);
-  if (ownerId === undefined) return;
+  const ownerId = await resolveOwner(req, res);
   const { threadId, moderatorPersonaId, routeTo } = req.body || {};
   if (!threadId) return fail(res, 400, 'threadId required');
   if (routeTo && !['workspace', 'media'].includes(routeTo))
@@ -434,8 +414,7 @@ async function handle_document(req, res) {
   if (!requireHub(res)) return;
   if (req.method !== 'POST') return fail(res, 405, 'POST only');
 
-  const ownerId = await ownerOr403(req, res);
-  if (ownerId === undefined) return;
+  const ownerId = await resolveOwner(req, res);
   const { type, title, topicIds, documentId } = req.body || {};
   if (!type || !Array.isArray(topicIds) || !topicIds.length)
     return fail(res, 400, 'type and topicIds[] required');
@@ -650,8 +629,7 @@ async function handle_media(req, res) {
   if (!requireHub(res)) return;
   if (req.method !== 'POST') return fail(res, 405, 'POST only');
 
-  const ownerId = await ownerOr403(req, res);
-  if (ownerId === undefined) return;
+  const ownerId = await resolveOwner(req, res);
   const { threadId, kind = 'image', size, negativePrompt, model, seconds, accessKey } =
     req.body || {};
   if (!threadId) return fail(res, 400, 'threadId required');
@@ -844,13 +822,7 @@ async function handle_state(req, res) {
   // ref only, which is already public in the API URL, never the keys.
   if (action === 'diag') return diagnose(res);
 
-  // These act on the account itself, not on whichever client is open: client
-  // management, sync settings (teams and seat picks), and device links.
-  const PARENT_ACTIONS = new Set([
-    'settings', 'clients-list', 'client-create', 'client-update', 'client-delete', 'link-create', 'link-claim',
-  ]);
-  const ownerId = await ownerOr403(req, res, { parent: PARENT_ACTIONS.has(String(action)) });
-  if (ownerId === undefined) return;
+  const ownerId = await resolveOwner(req, res);
 
   if (req.method === 'GET') {
     // These reads used to destructure `data` only and return `data || []`, so
@@ -926,16 +898,6 @@ async function handle_state(req, res) {
         .join('\n\n');
       const md = `# ${doc.title}\n\n_Last updated: ${doc.updated_at}_\n\n${body}\n`;
       return res.end(md);
-    }
-
-    if (action === 'clients-list') {
-      const { data, error } = await db
-        .from('clients')
-        .select('id, name, profile, archived, created_at, updated_at')
-        .eq('parent_owner_id', ownerId)
-        .order('created_at', { ascending: true });
-      if (error) return fail(res, 503, 'memory database unreachable', error.message);
-      return res.json({ clients: data || [] });
     }
 
     if (action === 'settings') {
@@ -1155,66 +1117,6 @@ async function handle_state(req, res) {
       });
     }
 
-    if (action === 'client-create') {
-      const name = String(req.body?.name || '').trim().slice(0, 120);
-      if (!name) return fail(res, 400, 'name required');
-      const { count } = await db
-        .from('clients').select('id', { count: 'exact', head: true }).eq('parent_owner_id', ownerId);
-      if ((count || 0) >= MAX_CLIENTS) return fail(res, 400, `up to ${MAX_CLIENTS} clients`);
-      // The client's own owner row. Its secret is random and never handed to
-      // anyone, so no cookie can ever resolve to it — only its parent can reach it.
-      const { data: owner, error: ownerErr } = await db
-        .from('owners')
-        .insert({ token_hash: nodeHash('sha256').update(nodeRandom(32)).digest('hex'), parent_owner_id: ownerId, label: name })
-        .select('id')
-        .single();
-      if (ownerErr) return fail(res, 503, 'could not create client', ownerErr.message);
-      const { data: client, error } = await db
-        .from('clients')
-        .insert({ id: owner.id, parent_owner_id: ownerId, name, profile: cleanProfile(req.body?.profile) })
-        .select('id, name, profile, archived, created_at, updated_at')
-        .single();
-      if (error) {
-        await db.from('owners').delete().eq('id', owner.id);
-        return fail(res, 503, 'could not create client', error.message);
-      }
-      return res.json({ client });
-    }
-
-    if (action === 'client-update') {
-      const id = String(req.body?.id || '');
-      const patch = { updated_at: new Date().toISOString() };
-      if (typeof req.body?.name === 'string') {
-        const name = req.body.name.trim().slice(0, 120);
-        if (!name) return fail(res, 400, 'name cannot be empty');
-        patch.name = name;
-      }
-      if (req.body?.profile !== undefined) patch.profile = cleanProfile(req.body.profile);
-      if (typeof req.body?.archived === 'boolean') patch.archived = req.body.archived;
-      const { data, error } = await db
-        .from('clients')
-        .update(patch)
-        .eq('id', id)
-        .eq('parent_owner_id', ownerId)
-        .select('id, name, profile, archived, created_at, updated_at')
-        .maybeSingle();
-      if (error) return fail(res, 503, 'memory database unreachable', error.message);
-      if (!data) return fail(res, 404, 'unknown client');
-      return res.json({ client: data });
-    }
-
-    if (action === 'client-delete') {
-      const id = String(req.body?.id || '');
-      const { data: client } = await db
-        .from('clients').select('id, name').eq('id', id).eq('parent_owner_id', ownerId).maybeSingle();
-      if (!client) return fail(res, 404, 'unknown client');
-      // Typed confirmation: deleting removes the client's chats, memory, hooks and campaigns for good.
-      if (String(req.body?.confirmName || '') !== client.name) return fail(res, 400, 'type the client name to confirm');
-      const { error } = await db.from('owners').delete().eq('id', client.id).eq('parent_owner_id', ownerId);
-      if (error) return fail(res, 503, 'could not delete client', error.message);
-      return res.json({ ok: true });
-    }
-
     if (action === 'settings') {
       // Workspace coding teams and seat picks. One blob per owner, last write
       // wins; the client keeps localStorage as the fast copy and this as the
@@ -1304,7 +1206,6 @@ async function handle_state(req, res) {
     return fail(res, 400, 'unknown action', [
       'dismiss', 'register', 'append', 'turn', 'sweep-thread', 'settings',
       'link-create', 'link-claim', 'workspace-save', 'workspace-delete',
-      'client-create', 'client-update', 'client-delete',
     ]);
   }
 

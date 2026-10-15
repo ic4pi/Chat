@@ -31,7 +31,6 @@ import {
   type CatalogModel,
 } from './providerPrefs.js';
 import { deleteBuild, listBuilds, saveBuild, type SavedBuild } from './savedBuilds.js';
-import { copyText, downloadTextFile } from './downloadFile.js';
 
 const API_URL =
   (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http://localhost:3001';
@@ -50,25 +49,11 @@ export interface CompareHandle {
   runBrief: (brief: string, picks?: { a: { provider: string; model: string }; b: { provider: string; model: string } }) => void;
 }
 
-/** Both sides' finished output — handed to the orchestrator so it can answer
- *  questions about the two versions if you ask. */
-export interface CompareVersions {
-  a: { model: string; files: string[] };
-  b: { model: string; files: string[] };
-}
-
 interface Props {
   open: boolean;
   onClose: () => void;
   sandboxId: string | null;
   onUseBuild: (build: BuildChoice) => void | Promise<void>;
-  /** Fires once when both versions have finished building. */
-  onVersionsReady?: (v: CompareVersions) => void;
-  /** You sent a prompt with no sandbox open — open a project, then run it. */
-  onNeedSandbox?: (text: string) => void;
-  /** Open a blank project / clone a GitHub repo right from here. */
-  onStartBlank?: () => void | Promise<unknown>;
-  onOpenRepo?: (url: string) => void | Promise<unknown>;
 }
 
 interface SideState {
@@ -300,7 +285,7 @@ function treeOf(files: Record<string, string>): FileNode[] {
 }
 
 export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePanel(
-  { open, onClose, sandboxId, onUseBuild, onVersionsReady, onNeedSandbox, onStartBlank, onOpenRepo }, handleRef,
+  { open, onClose, sandboxId, onUseBuild }, handleRef,
 ) {
   const a = useSide('a');
   const b = useSide('b');
@@ -308,33 +293,7 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
   const [builds, setBuilds] = useState<SavedBuild[]>([]);
   const [showSaved, setShowSaved] = useState(false);
   const [storageError, setStorageError] = useState<string | null>(null);
-  const [repoUrl, setRepoUrl] = useState('');
-  const [opening, setOpening] = useState(false);
-  useEffect(() => { if (sandboxId) setOpening(false); }, [sandboxId]);
   const sending = a.state.busy || b.state.busy;
-
-  // Read a version's file as a document. Content is already in memory (the
-  // side's files), so this needs no sandbox round-trip.
-  const [viewing, setViewing] = useState<{ path: string; content: string } | null>(null);
-  const [viewCopied, setViewCopied] = useState(false);
-
-  // When both versions have finished, hand their shape to the orchestrator so
-  // it can answer "what are my two options?" if asked. Fires once per result
-  // pair (keyed by the two run ids), never mid-build.
-  const lastReported = useRef('');
-  useEffect(() => {
-    if (!onVersionsReady) return;
-    const aFiles = Object.keys(a.state.files);
-    const bFiles = Object.keys(b.state.files);
-    if (a.state.busy || b.state.busy || !aFiles.length || !bFiles.length) return;
-    const key = `${a.state.run}|${b.state.run}`;
-    if (lastReported.current === key) return;
-    lastReported.current = key;
-    onVersionsReady({
-      a: { model: a.state.model, files: aFiles },
-      b: { model: b.state.model, files: bFiles },
-    });
-  }, [a.state.busy, b.state.busy, a.state.files, b.state.files, a.state.run, b.state.run, a.state.model, b.state.model, onVersionsReady]);
 
   const refreshBuilds = useCallback(() => {
     listBuilds().then(setBuilds).catch((err: Error) => setStorageError(`Saved builds unavailable: ${err.message}`));
@@ -360,11 +319,10 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
 
   const sendToBoth = useCallback(async (text: string) => {
     const t = text.trim();
-    if (!t || sending) return;
+    if (!t || sending || !sandboxId) return;
     setPrompt('');
-    if (!sandboxId) { onNeedSandbox?.(t); return; }
     await Promise.all([a.send(t), b.send(t)]);
-  }, [sending, sandboxId, a, b, onNeedSandbox]);
+  }, [sending, sandboxId, a, b]);
 
   useImperativeHandle(handleRef, () => ({
     runBrief: (brief, picks) => {
@@ -455,23 +413,6 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
           <PreviewPanel key={s.dir} sandboxId={sandboxId} detectedPort={null} defaultPort={port}
             dir={s.dir} autoStartKey={s.state.previewKick} />
         </div>
-        {hasFiles && (
-          <div style={{ flexShrink: 0, borderTop: '1px solid #191D27', maxHeight: 120, overflowY: 'auto',
-            padding: '4px 0', background: '#0B0D12' }}>
-            <div style={{ fontSize: 12, color: '#656C7E', letterSpacing: '0.08em', textTransform: 'uppercase',
-              padding: '2px 10px' }}>// files — tap to read</div>
-            {Object.keys(s.state.files).sort().map(path => (
-              <div key={path} onClick={() => { setViewCopied(false); setViewing({ path, content: s.state.files[path] ?? '' }); }}
-                title="Open as a document"
-                style={{ padding: '3px 10px', fontSize: 14, color: '#ECEEF3', cursor: 'pointer',
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                onMouseEnter={e => (e.currentTarget.style.background = '#191D27')}
-                onMouseLeave={e => (e.currentTarget.style.background = '')}>
-                {path}
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     );
   };
@@ -481,68 +422,15 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
       position: 'fixed', inset: 0, zIndex: 50, background: '#0B0D12',
       display: open ? 'flex' : 'none', flexDirection: 'column',
     }}>
-      {viewing && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.72)',
-          display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '24px 16px 16px' }}
-          onClick={() => setViewing(null)}>
-          <div role="dialog" aria-label={viewing.path} onClick={e => e.stopPropagation()}
-            style={{ width: 'min(860px, 100%)', maxHeight: '90dvh', display: 'flex', flexDirection: 'column',
-              background: '#12151D', border: '1px solid #FF3D8E', borderRadius: 8, padding: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexShrink: 0 }}>
-              <h2 style={{ margin: 0, flex: 1, fontSize: 16, color: '#FF3D8E',
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{viewing.path}</h2>
-              <button type="button"
-                onClick={async () => { const okd = await copyText(viewing.content); if (okd) { setViewCopied(true); setTimeout(() => setViewCopied(false), 1500); } }}
-                style={{ background: 'rgba(212,255,63,0.12)', color: '#FF3D8E', border: '1px solid #C81F6B',
-                  borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 14, fontWeight: 700 }}>
-                {viewCopied ? 'Copied ✓' : 'Copy'}</button>
-              <button type="button" onClick={() => downloadTextFile(viewing.path, viewing.content)}
-                style={{ background: 'rgba(212,255,63,0.12)', color: '#FF3D8E', border: '1px solid #C81F6B',
-                  borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 14, fontWeight: 700 }}>Download</button>
-              <button type="button" onClick={() => setViewing(null)}
-                style={{ background: 'transparent', color: '#9198AA', border: '1px solid #232838',
-                  borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 14 }}>Close</button>
-            </div>
-            <div style={{ flex: 1, overflow: 'auto', background: '#0B0D12', border: '1px solid #232838',
-              borderRadius: 6, padding: 10 }}>
-              <pre style={{ margin: 0, color: '#ECEEF3', fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word', fontFamily: '"JetBrains Mono",ui-monospace,monospace' }}>
-                {viewing.content || '(empty file)'}
-              </pre>
-            </div>
-          </div>
-        </div>
-      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
         borderBottom: '1px solid #191D27', flexShrink: 0, flexWrap: 'wrap' }}>
         <strong style={{ color: '#FF3D8E', fontSize: 15, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
           Compare
         </strong>
         {!sandboxId && (
-          <div data-testid="compare-open-project" style={{ flexBasis: '100%', display: 'flex', gap: 8, flexWrap: 'wrap',
-            alignItems: 'center' }}>
-            <span style={{ fontSize: 14, color: '#ffcc66' }}>
-              No project open yet — start a blank one, clone a repo, or just send a prompt.
-            </span>
-            {onStartBlank && (
-              <button type="button" onClick={() => { setOpening(true); void Promise.resolve(onStartBlank()).finally(() => setOpening(false)); }} disabled={opening}
-                style={smallBtn(!opening, true)}>
-                {opening ? 'Opening…' : 'Start blank project'}
-              </button>
-            )}
-            {onOpenRepo && (
-              <form onSubmit={e => { e.preventDefault(); if (repoUrl.trim()) { setOpening(true); void Promise.resolve(onOpenRepo(repoUrl.trim())).finally(() => setOpening(false)); } }}
-                style={{ display: 'flex', gap: 6, flex: '1 1 260px', minWidth: 0 }}>
-                <input value={repoUrl} onChange={e => setRepoUrl(e.target.value)}
-                  placeholder="github.com/owner/repo"
-                  style={{ flex: 1, minWidth: 0, background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
-                    borderRadius: 4, padding: '6px 10px', fontFamily: 'inherit', fontSize: 15 }} />
-                <button type="submit" disabled={opening || !repoUrl.trim()} style={smallBtn(!opening && !!repoUrl.trim())}>
-                  Clone
-                </button>
-              </form>
-            )}
-          </div>
+          <span style={{ fontSize: 14, color: '#ffcc66' }}>
+            Open a blank project or GitHub repo first — Compare needs a sandbox to run both previews.
+          </span>
         )}
         <div style={{ flex: 1, display: 'flex', gap: 8, minWidth: 240 }}>
           <input
@@ -550,11 +438,12 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
             onChange={e => setPrompt(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendToBoth(prompt); } }}
             placeholder="Describe what to build — or send a brief from your persona with ⇄"
+            disabled={sending || !sandboxId}
             style={{ flex: 1, background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
               borderRadius: 4, padding: '7px 10px', fontFamily: 'inherit', fontSize: 15, minWidth: 0 }}
           />
-          <button type="button" onClick={() => void sendToBoth(prompt)} disabled={sending || !prompt.trim()}
-            style={smallBtn(!sending && !!prompt.trim(), true)}>
+          <button type="button" onClick={() => void sendToBoth(prompt)} disabled={sending || !prompt.trim() || !sandboxId}
+            style={smallBtn(!sending && !!prompt.trim() && !!sandboxId, true)}>
             {sending ? 'Building…' : 'Send to both'}
           </button>
         </div>
