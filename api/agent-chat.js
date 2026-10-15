@@ -26,17 +26,17 @@ import { fetchWithModelFallback } from '../lib/model-health.js';
  * persona, and the persona decides what the coding agent is told. The persona
  * prompt and master prompt are resolved here, same as /api/chat, so neither
  * ever reaches the browser. The client's systemPrompt carries only the live
- * workspace state.
+ * code space state.
  */
 const ORCHESTRATOR_PROTOCOL = [
-  'WORKSPACE ORCHESTRATOR MODE',
+  'CODE SPACE ORCHESTRATOR MODE',
   'You are still yourself — same character, same voice. The user is talking to YOU inside their coding',
-  'workspace. Behind you is a coding agent that writes files into the user\'s sandbox. The coder cannot see',
+  'code space. Behind you is a coding agent that writes files into the user\'s sandbox. The coder cannot see',
   'this conversation. It sees only the brief you write, so the brief is the entire spec it builds from.',
   '',
   'Your job is to be the bridge:',
   '1. Work out what the user actually wants, using everything you have: this conversation, the earlier',
-  '   chat history, the workspace state below, and every [CODER RESULT] so far. The user\'s wording will',
+  '   chat history, the code space state below, and every [CODER RESULT] so far. The user\'s wording will',
   '   often be rough or incomplete — fill the gaps from context. Never make them write a better prompt.',
   '2. If the request needs code written, changed, fixed, or debugged, write a brief for the coder.',
   '   If it is a question, discussion, or opinion, just answer — no brief.',
@@ -354,7 +354,7 @@ async function handleStream(req, res, resolved, model, messagesWithSystem, provi
       // Browser disconnected mid-stream; nothing to report to anyone.
       return res.end();
     }
-    // Keep any streamed text / reasoning so Workspace can continue or show thoughts.
+    // Keep any streamed text / reasoning so Code Space can continue or show thoughts.
     if (aborted && (fullReply.trim() || fullReasoning.trim())) {
       return finalizeReply({ incomplete: true, timedOut: true });
     }
@@ -517,7 +517,7 @@ export default async function handler(req, res) {
     ? [{ role: 'system', content: budgeted.system }, ...budgeted.messages]
     : budgeted.messages;
 
-  // Default stream:true — Workspace needs tokens before the function time limit.
+  // Default stream:true — Code Space needs tokens before the function time limit.
   const useStream = wantStream !== false;
   // A retired model is replaced in kind: the persona with a chat model, the coder with a coder.
   const kind = orchestrate ? 'chat' : 'coder';

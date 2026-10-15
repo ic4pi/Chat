@@ -1,7 +1,7 @@
 # Uncensored Chat
 
 Six things in one Vercel project, sharing one set of provider keys and one
-memory: an uncensored chat client, a coding workspace with real VMs, a
+memory: an uncensored chat client, a Code Space with real VMs, a
 multi-persona round table, a media studio, a cross-chat memory, and an admin
 page for the prompts behind all of it.
 
@@ -59,7 +59,7 @@ history; the server holds every prompt and key.
 - Reads that fail return 503 rather than an empty list, so "memory is down"
   and "nothing filed yet" cannot look the same.
 
-### 🛠 Workspace — `/agent`
+### 🛠 Code Space — `/agent`
 
 - A real **Vercel Sandbox VM** per session. Clone a GitHub repo (private
   repos use the token the push panel already saved) or start blank.
@@ -127,11 +127,11 @@ history; the server holds every prompt and key.
 | Path | Purpose | Auth |
 |------|---------|------|
 | `/` | Chat UI | none |
-| `/agent` | Workspace (coding VMs) | none |
+| `/agent` | Code Space (coding VMs) | none |
 | `/media` | Media Studio | none |
 | `/admin` | Persona + master-prompt editor | Basic auth |
 | `/api/chat` | Chat completions proxy (SSE or JSON) | none |
-| `/api/agent-chat` | Workspace agent turns | none |
+| `/api/agent-chat` | Code Space agent turns | none |
 | `/api/group-chat` | Multi-persona round table (SSE) | none |
 | `/api/campaign` | Campaign engine (SSE); `?op=hook` saves a winner | cookie-scoped hooks |
 | `/api/generate` | Multi-LLM code-slice orchestrator (SSE) | none |
@@ -140,7 +140,7 @@ history; the server holds every prompt and key.
 | `/api/tts` | Free neural TTS (Edge voices) | none |
 | `/api/assist` | Summaries + smart replies | none |
 | `/api/hub/*` | Memory: `initiate`, `state`, `document`, `media`, `moderate`, `sweep` | cookie-scoped |
-| `/api/sandbox/*` | Workspace ops (rewritten from `/api/run`, `/api/files`, …) | session header |
+| `/api/sandbox/*` | Code Space ops (rewritten from `/api/run`, `/api/files`, …) | session header |
 | `/api/models?provider=…` | Live model catalog per provider | none |
 | `/api/public-config` | Persona IDs and names — no prompts | none |
 | `/api/admin-config` | Full config including system prompts | Basic auth |
@@ -197,7 +197,7 @@ saying search was skipped — it never answers as if it searched when it didn't.
 | `HUB_MEDIA_BUCKET` | Optional storage bucket name |
 | `CRON_SECRET` | Guards the daily sweep endpoint |
 
-### Workspace
+### Code Space
 
 | Name | Purpose |
 |------|---------|
@@ -263,9 +263,9 @@ api/sandbox/    one entry, many ops — Hobby caps projects at 12 functions
 api/hub/        one entry for every memory route
 lib/            providers, vision, config, auth, kv, hub, model-meta,
                 code-slices, video-billing
-lib/sandbox-api/   the Workspace ops themselves (clone, run, push, preview)
+lib/sandbox-api/   the Code Space ops themselves (clone, run, push, preview)
 public/         chat UI (index.html, app.js), /media, prebuilt /agent bundle
-sandbox-terminal/  Workspace UI source (React + Vite) — build and copy
+sandbox-terminal/  Code Space UI source (React + Vite) — build and copy
                    dist/ into public/agent to ship a change
 modal/          the self-hosted GPU apps
 scripts/        pre-push checks and local media pipelines
@@ -274,7 +274,7 @@ hub-schema.sql  the memory database, one migration, RLS on every table
 
 ### Two things that will bite you
 
-- **The Workspace UI is a prebuilt bundle.** Editing `sandbox-terminal/src`
+- **The Code Space UI is a prebuilt bundle.** Editing `sandbox-terminal/src`
   changes nothing in production until you run `npx vite build` and copy
   `dist/` into `public/agent/`.
 - **`modal/*.py` is reconstructed, not recovered.** The code actually running

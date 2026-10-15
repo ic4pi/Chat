@@ -79,7 +79,7 @@ async function handle_initiate(req, res) {
         fromThreadId,
         toType: 'workspace',
         relation: 'promoted_to_workspace',
-        title: title || 'Untitled workspace',
+        title: title || 'Untitled code space',
         seedContent,
         seedMessageId: messageId || null,
       });
@@ -134,7 +134,7 @@ async function handle_initiate(req, res) {
  *   1. Extract each persona's actual claim (not their vibe).
  *   2. One vote round on those claims. No further debate.
  *   3. Write a resolution: summary + tally + decision, or explicit forks.
- *   4. Optionally promote the decision into workspace or media.
+ *   4. Optionally promote the decision into code space or media.
  *
  * Needs maxDuration 300 in vercel.json — it fans out to every persona model.
  */
@@ -792,7 +792,7 @@ function extractAsset(result) {
  *   POST /api/hub/state?action=dismiss    { nudgeId }
  *   POST /api/hub/state?action=register   { localId?, type, title, messages? } -> threadId
  *   POST /api/hub/state?action=append     { threadId, messages } -> inserted count
- *   GET  /api/hub/state?action=settings   -> { settings, updatedAt } (Workspace teams)
+ *   GET  /api/hub/state?action=settings   -> { settings, updatedAt } (Code Space teams)
  *   POST /api/hub/state?action=settings   { settings } -> { updatedAt }
  *   POST /api/hub/state?action=link-create            -> { code, expiresAt } (10 min)
  *   POST /api/hub/state?action=link-claim { code }     -> this browser joins that owner
@@ -877,7 +877,7 @@ async function handle_state(req, res) {
     }
 
     if (action === 'joke-bank-raw') {
-      // Plain markdown, not JSON — this is what the Workspace file-open link
+      // Plain markdown, not JSON — this is what the Code Space file-open link
       // hits, so it reads and edits like a real file instead of app UI.
       const { data: doc } = await db
         .from('documents')
@@ -1118,7 +1118,7 @@ async function handle_state(req, res) {
     }
 
     if (action === 'settings') {
-      // Workspace coding teams and seat picks. One blob per owner, last write
+      // Code Space coding teams and seat picks. One blob per owner, last write
       // wins; the client keeps localStorage as the fast copy and this as the
       // one that survives the browser wiping it.
       const settings = req.body?.settings;
@@ -1136,7 +1136,7 @@ async function handle_state(req, res) {
 
     if (action === 'link-create') {
       // A short code another device enters to become this same owner: your
-      // memory, coding teams and Workspace follow it. Ten minutes, one use.
+      // memory, coding teams and Code Space follow it. Ten minutes, one use.
       if (!(await rateLimit(req, res, { bucket: 'link-create', limit: 10, windowSeconds: 600 }))) return;
       const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O, 1/I/L
       const bytes = randomBytes(8);
@@ -1171,7 +1171,7 @@ async function handle_state(req, res) {
     }
 
     if (action === 'workspace-save') {
-      // One Workspace session (messages + the files the agent wrote), so a
+      // One Code Space session (messages + the files the agent wrote), so a
       // linked device or a wiped browser gets it back. Last write wins.
       const session = req.body?.session;
       const id = typeof session?.id === 'string' ? session.id.slice(0, 200) : '';
@@ -1181,7 +1181,7 @@ async function handle_state(req, res) {
       const { error } = await db.from('workspace_sessions').upsert({
         owner_id: ownerId,
         session_id: id,
-        title: String(session.title || 'Workspace').slice(0, 200),
+        title: String(session.title || 'Code Space').slice(0, 200),
         data: session,
         saved_at: Number(session.savedAt) || Date.now(),
         deleted: false,

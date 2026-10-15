@@ -553,7 +553,7 @@ body::before {
 }
 .mod-nav-btn {
   /* Size each tab to its own label, then share the slack — equal widths made
-     "Workspace" clip while "Chat" sat in empty space. */
+     "Code Space" clip while "Chat" sat in empty space. */
   flex: 1 1 auto; min-width: 0; overflow: hidden;
   display: flex; flex-direction: column; align-items: center; gap: 1px;
   padding: 4px 3px 3px;

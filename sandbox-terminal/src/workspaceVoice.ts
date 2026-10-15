@@ -1,5 +1,5 @@
 /**
- * Lightweight voice chat helpers for Workspace (mic STT + neural TTS).
+ * Lightweight voice chat helpers for Code Space (mic STT + neural TTS).
  * Mirrors main-chat behavior without pulling in the vanilla app.js state.
  */
 

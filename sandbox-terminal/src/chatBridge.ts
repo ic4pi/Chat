@@ -1,23 +1,23 @@
 /**
- * Chat ⇄ Workspace are one conversation, not two.
+ * Chat ⇄ Code Space are one conversation, not two.
  *
- * The main chat (public/app.js) and the Workspace (/agent) run on the same
+ * The main chat (public/app.js) and the Code Space (/agent) run on the same
  * origin, so they share localStorage. The chat stores everything under
  * `uncensored_chat_state_v3` as { chats: [{ id, messages, ... }], activeChatId }.
  *
- * The Workspace used to take a one-time sessionStorage snapshot of that chat
- * when you pressed "Open in Workspace". Re-enter any other way — back button,
+ * The Code Space used to take a one-time sessionStorage snapshot of that chat
+ * when you pressed "Open in Code Space". Re-enter any other way — back button,
  * reload, a second visit — and there was no snapshot, so you saw the stale
- * saved Workspace thread ("same old messages"). And nothing the persona said
- * in the Workspace ever went back to the chat.
+ * saved Code Space thread ("same old messages"). And nothing the persona said
+ * in the Code Space ever went back to the chat.
  *
  * This reads and writes that same chat live, keyed by chat id:
  *   readChatConversation()  the chat's current messages, whenever asked
- *   mirrorToChat()          the persona's and your Workspace turns, back into it
+ *   mirrorToChat()          the persona's and your Code Space turns, back into it
  *
  * Only the human-facing turns cross over — your messages and the persona's
  * replies. The coder's raw output, briefs, auto-test notes and UI-only lines
- * stay in the Workspace; they are noise in the chat.
+ * stay in the Code Space; they are noise in the chat.
  */
 
 const CHAT_STORAGE_KEY = 'uncensored_chat_state_v3';
@@ -62,7 +62,7 @@ const isHumanFacing = (m: ChatMsg) => m && (m.role === 'user' || m.role === 'ass
 
 /**
  * The chat's live conversation for this id (or the active chat). Returns null
- * when there is no matching chat — a project started inside the Workspace.
+ * when there is no matching chat — a project started inside the Code Space.
  */
 export function readChatConversation(chatId?: string): ChatConversation | null {
   const state = readState();
@@ -80,7 +80,7 @@ export function readChatConversation(chatId?: string): ChatConversation | null {
 }
 
 /**
- * Write the Workspace's human-facing turns back into the chat, appending any
+ * Write the Code Space's human-facing turns back into the chat, appending any
  * the chat does not already have (matched by signature). No chat for this id
  * (a Workspace-only project) → nothing happens. Never throws.
  */

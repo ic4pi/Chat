@@ -1,5 +1,5 @@
 /**
- * Workspace sessions — the chat with your persona and coder plus the files
+ * Code Space sessions — the chat with your persona and coder plus the files
  * the agent wrote — kept on the server too, per owner. That's what lets a
  * linked device open the same project, and a wiped browser or a dead sandbox
  * get it back.

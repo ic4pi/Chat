@@ -35,7 +35,7 @@ const ROLES_STORAGE = 'uncensored_role_models_v1';
 const PAID_PASS_STORAGE = 'uncensored_paid_password_v1';
 
 /**
- * Persist paid unlock in localStorage (same as BYOK keys) so Chat ↔ Workspace
+ * Persist paid unlock in localStorage (same as BYOK keys) so Chat ↔ Code Space
  * navigation and tab closes do not force re-entry. Migrates any leftover
  * sessionStorage value once.
  */

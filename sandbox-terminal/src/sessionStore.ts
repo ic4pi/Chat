@@ -1,7 +1,7 @@
 /**
- * Persist workspace sessions in the browser.
+ * Persist code space sessions in the browser.
  * Multiple conversations keyed by chatId so Home can list them,
- * and a handoff from Chat replaces that chat’s workspace thread.
+ * and a handoff from Chat replaces that chat’s code space thread.
  */
 
 const LEGACY_KEY = 'agent_session_v1';
@@ -82,7 +82,7 @@ function readStore(): SessionStore {
     const migrated: StoredSession = {
       v: 2,
       id,
-      title: 'Home workspace',
+      title: 'Home code space',
       savedAt: legacy.savedAt || Date.now(),
       repoUrl: legacy.repoUrl ?? null,
       sandboxId: legacy.sandboxId ?? null,
@@ -185,20 +185,20 @@ export function getSession(id: string): StoredSession | null {
 }
 
 /**
- * Re-opening Workspace from the same chat: keep everything done here
- * (workspace messages, drafts, files, sandbox) and add only the chat turns
+ * Re-opening Code Space from the same chat: keep everything done here
+ * (code space messages, drafts, files, sandbox) and add only the chat turns
  * that are new since last time. If the chat's history changed underneath
  * (edited, regenerated, trimmed), refresh that part and still keep the work.
  */
 /**
  * Back from chat into the same project: what you said in chat since last
- * time goes at the END, after the Workspace's own work — it's the newest
+ * time goes at the END, after the Code Space's own work — it's the newest
  * thing, and the persona has to read it as such.
  *
  * Matching is by role + the start of the text, not exact equality: saved
  * messages are cut at 40k characters and only the last 120 are kept, and an
  * exact prefix check failed on both — which put the whole chat back above
- * the Workspace work, so your new plans read as old history.
+ * the Code Space work, so your new plans read as old history.
  */
 export function mergeHandoffMessages(prev: StoredMessage[], imported: StoredMessage[]): StoredMessage[] {
   if (!prev.length) return imported;
@@ -232,7 +232,7 @@ export function saveSession(
     v: 2,
     savedAt: Date.now(),
     ...partial,
-    title: partial.title || prev?.title || 'Workspace',
+    title: partial.title || prev?.title || 'Code Space',
     messages: (partial.messages || []).slice(-120).map((m) => ({
       id: m.id,
       role: m.role,

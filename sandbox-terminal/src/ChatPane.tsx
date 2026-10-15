@@ -166,7 +166,7 @@ function buildSystemPrompt(
     'Be direct. No tutorials. No fake example tasks. No <placeholders>, TODOs, or "your-token-here".',
     'Every code file you output must be COMPLETE and ready to save.',
     '',
-    'HOW THIS WORKSPACE WORKS (read carefully):',
+    'HOW THIS CODE SPACE WORKS (read carefully):',
     '- You DO write real files into the user\'s actual project here — right now, in this chat. There is no',
     '  separate "apply" step, no human copying code out of your reply: the host parses your File:/Edit:',
     '  blocks below and saves them to disk in the sandbox the instant your reply finishes. This is not a',
@@ -424,7 +424,7 @@ function friendlyError(raw: string): string {
     return 'Request timed out waiting for the model. Try a faster model or a shorter prompt.';
   }
   if (lower.includes('http 504') || lower.includes('504') || lower.includes('gateway timeout')) {
-    return 'Workspace hit the server time limit before the model finished. Try a faster model, or ask to fix one file at a time.';
+    return 'Code Space hit the server time limit before the model finished. Try a faster model, or ask to fix one file at a time.';
   }
   return raw || 'Request failed';
 }
@@ -538,7 +538,7 @@ async function readAgentReply(
     }
   }
 
-  // Reasoning-only timeout: treat as incomplete so Workspace can continue.
+  // Reasoning-only timeout: treat as incomplete so Code Space can continue.
   if (timedOut && !reply.trim() && reasoning.trim()) {
     return { reply: '', incomplete: true, timedOut: true, reasoning, modelReplaced };
   }

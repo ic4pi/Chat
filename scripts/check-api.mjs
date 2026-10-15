@@ -62,7 +62,7 @@ for (const rel of SYNTAX_FILES) {
   if (INCOMPLETE_PATCH_RE.test(src)) {
     fail(
       `${rel} looks like an incomplete patch (contains "... existing" / stub comments). ` +
-        'Workspace must write FULL files, not diffs. Restore the file before pushing.',
+        'Code Space must write FULL files, not diffs. Restore the file before pushing.',
     );
   }
   const r = spawnSync(process.execPath, ['--check', abs], { encoding: 'utf8' });
@@ -237,7 +237,7 @@ ok('code-slices + generate contract');
 
 // 6) Reasoning models need Pro-length budgets — Hobby-era 55s/60s kills
 // mid-thought with nothing to show (Qwen uncensored, GLM Flash Heretic, etc.).
-// api/agent-chat.js (Workspace) gets the higher Fluid Compute ceiling (800s)
+// api/agent-chat.js (Code Space) gets the higher Fluid Compute ceiling (800s)
 // since its reasoning models routinely need more than 280s. api/group-chat.js
 // joined it there: a round talks to every persona sequentially, so one slow
 // model used to blow the 300s budget and take every remaining round with it.
@@ -330,11 +330,11 @@ if (!hasUnlockRewrite) {
 }
 ok(`function cap (${apiJs.length}/${FUNCTION_CAP})`);
 
-// 9) Coder-package parity. The Workspace is a separate Vite bundle and cannot
+// 9) Coder-package parity. The Code Space is a separate Vite bundle and cannot
 //    import public/model-packages.js, so sandbox-terminal/src/coderModels.ts
 //    keeps a typed copy of the `coder` package. Deliberate duplication, same
 //    as FALLBACK_MODELS ↔ PROVIDER_FALLBACKS — but duplication only stays
-//    honest if something checks it, so assert every model id in the Workspace
+//    honest if something checks it, so assert every model id in the Code Space
 //    copy still appears in the shared package.
 const sharedPkgSrc = readFileSync(path.join(root, 'public/model-packages.js'), 'utf8');
 const coderPkgStart = sharedPkgSrc.indexOf("id: 'coder'");
@@ -349,7 +349,7 @@ const workspaceCoderSrc = readFileSync(
   'utf8',
 );
 // The shared file passes ids positionally through free()/paid() helpers while
-// the Workspace copy uses an `ids:` key, so read each side in its own shape:
+// the Code Space copy uses an `ids:` key, so read each side in its own shape:
 // every quoted string in the shared package block, versus the ids arrays here.
 const quotedIn = (src) => new Set([...src.matchAll(/['"]([^'"\n]+)['"]/g)].map((m) => m[1]));
 const idsIn = (src) => {

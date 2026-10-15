@@ -1,9 +1,9 @@
 /**
- * Persona-as-orchestrator for the Workspace.
+ * Persona-as-orchestrator for the Code Space.
  *
  * The user talks to their chat persona, never to the coder directly. The
  * persona sees the whole conversation (including the main-chat history the
- * handoff brought in), the live workspace state, and a compact report of
+ * handoff brought in), the live code space state, and a compact report of
  * everything the coder did — then writes a <<<BRIEF … BRIEF>>> block that
  * becomes the coder's entire instruction. The coder never sees the raw chat.
  *
@@ -251,7 +251,7 @@ export function buildCoderHistory(msgs: OrchMessage[]): Turn[] {
     .map((m) => ({ role: m.role, content: m.content }));
 }
 
-// ── workspace state for the persona ──────────────────────────────────────
+// ── code space state for the persona ──────────────────────────────────────
 
 function flatten(nodes: FileNode[], prefix = ''): string[] {
   const out: string[] = [];
@@ -272,7 +272,7 @@ export function buildPersonaContext(opts: {
   coderLabel: string;
   role?: string;
 }): string {
-  const parts: string[] = ['WORKSPACE STATE (live, right now):'];
+  const parts: string[] = ['CODE SPACE STATE (live, right now):'];
   parts.push(`Repo: ${opts.repoUrl || (opts.repoRoot ? 'blank project' : 'nothing opened yet')}`);
   parts.push(`Coder model: ${opts.coderLabel}`);
   if (opts.role === 'plan') {

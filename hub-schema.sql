@@ -379,7 +379,7 @@ create or replace function match_campaign_hooks(
 $$ language sql stable;
 
 -- ---------------------------------------------------------------
--- WORKSPACE SETTINGS — coding teams and seat picks, per owner
+-- CODE SPACE SETTINGS — coding teams and seat picks, per owner
 -- ---------------------------------------------------------------
 -- One JSON blob per owner: the chosen team, saved custom teams, role models,
 -- orchestrator prefs. Lives here so it survives the browser wiping
@@ -394,10 +394,10 @@ create table if not exists workspace_settings (
 alter table workspace_settings enable row level security;
 
 -- ---------------------------------------------------------------
--- LINKED DEVICES + WORKSPACE SESSIONS
+-- LINKED DEVICES + CODE SPACE SESSIONS
 -- ---------------------------------------------------------------
 -- A one-time code (10 min) lets another browser become the same owner with
--- its own cookie secret. Workspace sessions (chat + files the agent wrote)
+-- its own cookie secret. Code Space sessions (chat + files the agent wrote)
 -- are kept per owner so a linked device or a wiped browser gets them back;
 -- a delete stays as a marker so other devices drop their copy.
 

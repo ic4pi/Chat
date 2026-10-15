@@ -1,5 +1,5 @@
 /**
- * Handoff from main chat → coding workspace (/agent).
+ * Handoff from main chat → Code Space (/agent).
  * Cached in-memory so React Strict Mode remounts don’t lose it after
  * sessionStorage is cleared on first consume.
  */
@@ -13,7 +13,7 @@ export interface WorkspaceHandoff {
   provider?: string;
   model?: string;
   role?: string;
-  /** Main-chat persona — becomes the Workspace orchestrator. */
+  /** Main-chat persona — becomes the Code Space orchestrator. */
   personaId?: string;
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
   createdAt: number;
