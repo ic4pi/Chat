@@ -16,6 +16,8 @@ export interface WorkspaceHandoff {
   /** Main-chat persona — becomes the Code Space orchestrator. */
   personaId?: string;
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+  /** The chat said it is ready to build: the orchestrator starts the brief on arrival. */
+  autoBrief?: boolean;
   createdAt: number;
 }
 

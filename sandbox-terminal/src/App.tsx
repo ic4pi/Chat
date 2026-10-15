@@ -295,9 +295,11 @@ export function App() {
   const roleModelsRef = useRef(loadRoleModels());
   type Boot = { session: StoredSession | null; fromChat: boolean };
   const bootRef = useRef<Boot | null>(null);
+  const autoBriefRef = useRef(false);
   if (!bootRef.current) {
     const handoff = peekWorkspaceHandoff();
     if (handoff) {
+      autoBriefRef.current = handoff.autoBrief === true;
       const id = handoff.chatId || `handoff-${handoff.createdAt || Date.now()}`;
       const title = handoff.title || 'From chat';
       // One conversation: the chat's LIVE messages (shared localStorage) win
@@ -773,6 +775,19 @@ export function App() {
         apiKey: (keys[orchPrefs.provider || provider] || '').trim() || undefined,
       }
     : null;
+
+  // Arrived from a chat that said it is ready to build: the orchestrator reads the conversation and
+  // writes the brief itself, so the user does not have to say it all again.
+  useEffect(() => {
+    if (!autoBriefRef.current) return;
+    const t = window.setTimeout(() => {
+      if (!autoBriefRef.current) return;
+      autoBriefRef.current = false;
+      void chatRef.current?.programmaticSend("I'm ready to build this. Write the brief for the coder from our conversation.", 'user');
+    }, 800);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Coding team: one agent per phase (codingTeam.ts) ───────────────────────
   const [teamPrefs, setTeamPrefs] = useState<TeamPrefs>(() => loadTeamPrefs());
