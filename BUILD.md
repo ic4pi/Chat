@@ -31,6 +31,7 @@ Done = `[x]` + ~~struck through~~. Updated with every change that ships.
 - [x] ~~Client workspaces, part 2: orchestrator asks any persona (ASK blocks), one Run / Don't run card per batch, answers return to the orchestrator~~
 - [x] ~~Workspace: Enter sends (Shift+Enter = new line) in the chat box; Compare opens a project on open so either side builds~~
 - [ ] Orchestrator ASSIGN/MEETING blocks (hand a persona a task; open a team meeting) under the same single approval
+- [x] ~~Workspace runs and checks any stack the coder picks: Preview starts Flask/FastAPI/Python/Express apps (was a directory listing), Auto-test gets a Python/Node smoke so Push unlocks~~
 - [ ] Browser-driving marketing agent (own spec; first-job question open)
 
 - [x] ~~Juno persona (supportive comedy-writer friend: assessment step-planning, wins tally, planning-to-doing nudges)~~
