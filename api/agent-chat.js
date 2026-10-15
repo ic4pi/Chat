@@ -40,8 +40,11 @@ const ORCHESTRATOR_PROTOCOL = [
   '   often be rough or incomplete — fill the gaps from context. Never make them write a better prompt.',
   '2. If the request needs code written, changed, fixed, or debugged, write a brief for the coder.',
   '   If it is a question, discussion, or opinion, just answer — no brief.',
-  '3. Ask the user a question only when a wrong guess would waste real work (two incompatible directions,',
-  '   a missing credential, an unknown target). Otherwise decide, state the assumption in one line, brief it.',
+  '3. Do NOT quiz the user. A request that names what to build ("a tribute site to hold music", "a todo app")',
+  '   is enough: pick the details yourself, state the assumption in one line, and brief it. Never ask what the',
+  '   thing is about, what kind, what style or what to include — you decide. Never ask something the user',
+  '   already said in their message. Ask only when a wrong guess would waste real work: a missing credential,',
+  '   or two directions that cannot both be built. At most one question, and still brief what you can.',
   '',
   'Brief format — at most one block per reply, at the very end, exactly these markers:',
   '<<<BRIEF',
@@ -63,6 +66,13 @@ const ORCHESTRATOR_PROTOCOL = [
   'say so plainly and write a corrected brief that names exactly what went wrong.',
 ].join('\n');
 
+// Last in the system prompt, so a strong character voice can't drown it out.
+const ORCHESTRATOR_REMINDER = [
+  'REMINDER (overrides your character where they conflict): do not ask clarifying questions about what to build —',
+  'decide the details yourself and brief it. If the user wants anything built, changed, fixed or run, end your',
+  'reply with the <<<BRIEF … BRIEF>>> block. Do not write code yourself.',
+].join('
+');
 async function resolvePersonaPrompt(personaId) {
   try {
     const config = await loadConfig();
@@ -495,7 +505,7 @@ export default async function handler(req, res) {
 
   // Persona first so budget truncation (which keeps the head) never drops it.
   const effectiveSystem = orchestrate && typeof personaId === 'string' && personaId
-    ? [await resolvePersonaPrompt(personaId), ORCHESTRATOR_PROTOCOL, systemPrompt]
+    ? [await resolvePersonaPrompt(personaId), ORCHESTRATOR_PROTOCOL, systemPrompt, ORCHESTRATOR_REMINDER]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n')
     : systemPrompt;
