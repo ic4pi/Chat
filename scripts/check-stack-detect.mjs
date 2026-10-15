@@ -30,5 +30,9 @@ ok('node smoke passes on good file', sh(NODE_ENTRY_SMOKE_COMMAND, proj({ 'server
 ok('node smoke fails on syntax error', sh(NODE_ENTRY_SMOKE_COMMAND, proj({ 'server.js': 'const = ;\n' })).code !== 0);
 ok('node smoke fails with no entry', sh(NODE_ENTRY_SMOKE_COMMAND, proj({ 'x.txt': 'a' })).code !== 0);
 
+import { codingReasoningCap } from '../lib/providers.js';
+ok('reasoning capped on OpenRouter coding calls', codingReasoningCap('openrouter').reasoning?.effort === 'low');
+ok('no reasoning field for other providers', Object.keys(codingReasoningCap('venice')).length === 0 && Object.keys(codingReasoningCap('groq')).length === 0);
+
 if (failed) { console.error(`\n${failed} check(s) failed`); process.exit(1); }
 console.log('\nall stack-detect checks passed');

@@ -15,7 +15,7 @@
  */
 
 import { estimateTokens } from '../lib/context-filters.js';
-import { resolveProvider, withProviderChatExtras, formatProviderError } from '../lib/providers.js';
+import { resolveProvider, withProviderChatExtras, codingReasoningCap, formatProviderError } from '../lib/providers.js';
 import { prepareImageMessages } from '../lib/vision.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
 import { loadConfig } from '../lib/config.js';
@@ -279,6 +279,7 @@ async function handleStream(req, res, resolved, model, messagesWithSystem, provi
               messages: messagesWithSystem,
               stream: true,
               max_tokens: CHUNK_MAX_TOKENS,
+              ...codingReasoningCap(providerId || resolved.id),
             },
             providerId || resolved.id || 'venice',
           ),
@@ -400,6 +401,7 @@ async function handleJson(req, res, resolved, model, messagesWithSystem, provide
               messages: messagesWithSystem,
               stream: false,
               max_tokens: CHUNK_MAX_TOKENS,
+              ...codingReasoningCap(providerId || resolved.id),
             },
             providerId || resolved.id || 'venice',
           ),
