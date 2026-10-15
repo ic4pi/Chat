@@ -3080,7 +3080,7 @@ async function callChat(provider, model, messages, personaId) {
 // A persona opens a new chat, and takes over a chat mid-conversation, by saying
 // who it is and how it works as the orchestrator: it talks the idea through
 // here, then turns it into a brief for the builder and moves the chat into the
-// Workspace. Written by the persona itself so each one sounds like itself.
+// Code Space. Written by the persona itself so each one sounds like itself.
 // The message is flagged `intro`: it is never sent back to the model as history,
 // and a chat holding only an introduction still counts as empty.
 // ---------------------------------------------------------------------------
@@ -3094,7 +3094,7 @@ function personaIntroPrompt(mode) {
       : '[INTRODUCE YOURSELF] The user just opened a new chat with you.',
     'Write your opening message, in your own voice, in 3 to 5 short sentences. Make clear what kind of',
     'orchestrator you are: you talk the idea through with them here, and when it is ready you turn it into a',
-    'precise brief for the builder and move the chat into the Workspace, where the code gets written and tested.',
+    'precise brief for the builder and move the chat into the Code Space, where the code gets written and tested.',
     'Say what you are best at and the style you bring. Be specific to who you are, not generic.',
     mode === 'switch' ? 'Say briefly that you are picking up from here.' : '',
     'End with one line inviting them to tell you what they want to make.',
@@ -4873,7 +4873,7 @@ function backupStorageKeys() {
     PERSONA_VOICES_KEY,
     PERSONA_MODELS_KEY,
     GROUP_DRAFT_KEY,
-    // Workspace (/agent): sessions with their files, coding teams, persona.
+    // Code Space (/agent): sessions with their files, coding teams, persona.
     'agent_sessions_v2',
     'agent_sessions_active_v2',
     'workspace_coding_team_v1',
@@ -4985,7 +4985,7 @@ async function renderAll() {
   if (els.input) {
     els.input.placeholder = chat?.kind === 'group'
       ? 'Address the table…'
-      : 'Plan or ask… (code builds in Workspace)';
+      : 'Plan or ask… (code builds in Code Space)';
   }
 }
 
@@ -5781,7 +5781,7 @@ els.previewVoiceBtn?.addEventListener('click', async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Neural spoken replies (Edge TTS via /api/tts) + Workspace handoff
+// Neural spoken replies (Edge TTS via /api/tts) + Code Space handoff
 // ---------------------------------------------------------------------------
 
 let speakReplies = false;
@@ -6300,7 +6300,7 @@ function openInWorkspace() {
     provider: state.activeProvider,
     model: state.activeModel,
     role: state.activeRole === 'plan' ? 'write' : state.activeRole,
-    // The persona you were talking to stays your voice in Workspace — it
+    // The persona you were talking to stays your voice in Code Space — it
     // orchestrates the coder instead of you prompting the coder directly.
     personaId: state.activePersonaId,
     messages,
@@ -6944,7 +6944,7 @@ els.exportBtn.addEventListener('click', exportData);
 // ---- Link a device --------------------------------------------------------
 // Your identity is this browser's owner cookie. A one-time code lets another
 // device become the same owner (its own cookie, same memory, teams and
-// Workspace). Chats are still per device — Export / Import moves those.
+// Code Space). Chats are still per device — Export / Import moves those.
 {
   const $l = (id) => document.getElementById(id);
   const modal = $l('linkModal');
@@ -6984,7 +6984,7 @@ els.exportBtn.addEventListener('click', exportData);
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       if (data.alreadyLinked) { status('This device is already linked to that one.'); return; }
       // This browser's sync stamps belong to its old identity: start fresh so
-      // the linked device's teams and Workspace come down, and anything only
+      // the linked device's teams and Code Space come down, and anything only
       // this browser has goes up to join them.
       for (const k of ['workspace_settings_sync_v1', 'workspace_sessions_sync_v1']) {
         try { localStorage.removeItem(k); } catch { /* ignore */ }
@@ -7046,7 +7046,7 @@ function showBootError(msg) {
 // iOS Safari does not shrink 100dvh when the on-screen keyboard appears — it
 // scrolls the whole page up to reveal the focused field. That pushed the
 // topbar and the module nav off the top of the screen, so once you tapped the
-// composer the only way to reach Workspace / Group / Media was to dismiss the
+// composer the only way to reach Code Space / Group / Media was to dismiss the
 // keyboard first. Sizing #app to visualViewport.height makes the layout
 // shrink instead, so the nav never leaves the screen.
 (function keepViewportSane() {
@@ -7161,7 +7161,7 @@ maybeShowResumePrompt();
 // ===========================================================================
 // Hub wiring — module handoff
 //
-// A thought in a chat can become a workspace project, a group discussion, an
+// A thought in a chat can become a code space project, a group discussion, an
 // image prompt, or a filed note. All of it goes through window.hub, which is
 // loaded as an ES module and degrades to nothing when the hub is unconfigured.
 // ===========================================================================

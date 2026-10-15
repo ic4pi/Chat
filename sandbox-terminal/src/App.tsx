@@ -312,7 +312,7 @@ export function App() {
           content: m.content,
           kind: 'imported',
         }));
-      // This chat's own workspace thread — never another chat's repo or sandbox.
+      // This chat's own code space thread — never another chat's repo or sandbox.
       const prev = getSession(id);
       // The chat persona becomes the orchestrator and keeps thinking on the chat
       // model; the coder stays on a coding model instead of inheriting it.
@@ -354,7 +354,7 @@ export function App() {
         setActiveSessionId(session.id);
         // Re-entered without a fresh handoff (back button, reload, a second
         // visit): fold in whatever was said in the chat since, so the
-        // Workspace is never behind the conversation.
+        // Code Space is never behind the conversation.
         const live = readChatConversation(session.id);
         if (live?.messages?.length) {
           const imported = live.messages
@@ -389,7 +389,7 @@ export function App() {
     () => FALLBACK_MODELS[provider] || FALLBACK_MODELS.venice,
   );
   const [modelsLoading, setModelsLoading] = useState(false);
-  // The Workspace writes code, so it opens on the Coders package rather than a
+  // The Code Space writes code, so it opens on the Coders package rather than a
   // raw provider catalog. 'provider' is the escape hatch to the full list.
   const [modelScope,   setModelScope]   = useState<'coders' | 'provider'>(
     () => (localStorage.getItem(MODEL_SCOPE_KEY) === 'provider' ? 'provider' : 'coders'),
@@ -444,7 +444,7 @@ export function App() {
     () => restored.current?.id || `home-${Date.now()}`,
   );
   const [sessionTitle, setSessionTitle] = useState(
-    () => restored.current?.title || 'Home workspace',
+    () => restored.current?.title || 'Home code space',
   );
   const [chatMessages, setChatMessages] = useState<Message[]>(() => {
     const m = restored.current?.messages;
@@ -653,7 +653,7 @@ export function App() {
   const openStoredSession = useCallback((s: StoredSession) => {
     setActiveSessionId(s.id);
     setSessionId(s.id);
-    setSessionTitle(s.title || 'Workspace');
+    setSessionTitle(s.title || 'Code Space');
     setProvider(s.provider || 'openrouter');
     setModel(s.model || 'openrouter/free');
     setAutoApplyOn(s.autoApplyOn ?? true);
@@ -683,7 +683,7 @@ export function App() {
     const session: StoredSession = {
       v: 2,
       id,
-      title: 'Home workspace',
+      title: 'Home code space',
       savedAt: Date.now(),
       repoUrl: null,
       sandboxId: null,
@@ -1094,7 +1094,7 @@ export function App() {
       const res = await fetch(`${API_URL}/git-push`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Sandbox-Session': repo.sandboxId },
-        body: JSON.stringify({ wip: true, token, message: reason || sessionTitle || 'Workspace progress', repoName: sessionTitle }),
+        body: JSON.stringify({ wip: true, token, message: reason || sessionTitle || 'Code Space progress', repoName: sessionTitle }),
       });
       const data = await res.json().catch(() => ({})) as { pushed?: boolean; branch?: string; checkPassed?: boolean; createdRepoUrl?: string; error?: string };
       if (!res.ok) { setBackupNote(`Backup failed: ${data.error || `HTTP ${res.status}`}`); return; }
@@ -1446,7 +1446,7 @@ export function App() {
         <a href="/" style={{ color: '#FF3D8E', fontSize: 16, textDecoration: 'none',
           whiteSpace: 'nowrap', padding: '2px 0', fontWeight: 700 }}>← Chat</a>
         <button type="button" onClick={() => { setHomeList(listSessions()); setShowHome(true); }}
-          title="Browse saved workspace conversations"
+          title="Browse saved code space conversations"
           style={{ background: showHome ? 'rgba(212,255,63,0.16)' : 'transparent',
             color: '#FF3D8E', border: '1px solid #C81F6B', borderRadius: 4,
             padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 14,
@@ -1490,7 +1490,7 @@ export function App() {
         {(repo.repoUrl || chatMessages.length > 0) && (
           <button type="button"
             onClick={() => {
-              if (!confirm('Delete this workspace conversation on this device?')) return;
+              if (!confirm('Delete this code space conversation on this device?')) return;
               clearSession(sessionId);
               const next = listSessions()[0];
               if (next) openStoredSession(next);
@@ -1913,13 +1913,13 @@ export function App() {
         <div style={{ position: 'fixed', inset: 0, zIndex: 40, background: 'rgba(0,0,0,0.72)',
           display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '48px 16px 16px' }}
           onClick={() => setShowHome(false)}>
-          <div role="dialog" aria-label="Workspace home"
+          <div role="dialog" aria-label="Code Space home"
             onClick={e => e.stopPropagation()}
             style={{ width: 'min(520px, 100%)', maxHeight: 'min(80dvh, 640px)', overflow: 'auto',
               background: '#12151D', border: '1px solid #FF3D8E', borderRadius: 8, padding: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
               <h2 style={{ margin: 0, flex: 1, fontSize: 18, letterSpacing: '0.08em',
-                textTransform: 'uppercase', color: '#FF3D8E' }}>Home · Workspaces</h2>
+                textTransform: 'uppercase', color: '#FF3D8E' }}>Home · Code Spaces</h2>
               <button type="button" onClick={startFreshHome}
                 style={{ background: 'rgba(212,255,63,0.12)', color: '#FF3D8E', border: '1px solid #C81F6B',
                   borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
@@ -1930,11 +1930,11 @@ export function App() {
                   fontSize: 15 }}>Close</button>
             </div>
             <p style={{ margin: '0 0 12px', fontSize: 16, color: '#9198AA', lineHeight: 1.4 }}>
-              Open a saved workspace conversation, or start a fresh Home workspace.
-              Opening <b style={{ color: '#FF3D8E' }}>Workspace</b> from Chat always loads that chat here.
+              Open a saved code space conversation, or start a fresh Home code space.
+              Opening <b style={{ color: '#FF3D8E' }}>Code Space</b> from Chat always loads that chat here.
             </p>
             {homeList.length === 0 ? (
-              <p style={{ color: '#656C7E', fontSize: 16 }}>No saved workspaces yet.</p>
+              <p style={{ color: '#656C7E', fontSize: 16 }}>No saved code spaces yet.</p>
             ) : (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 8 }}>
                 {homeList.map(s => (
@@ -1945,7 +1945,7 @@ export function App() {
                         padding: '10px 12px', cursor: 'pointer', fontFamily: 'inherit' }}>
                       <div style={{ color: '#FF3D8E', fontSize: 18, fontWeight: 700,
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {s.title || 'Workspace'}
+                        {s.title || 'Code Space'}
                       </div>
                       <div style={{ color: '#656C7E', fontSize: 15, marginTop: 4 }}>
                         {(s.messages || []).length} messages

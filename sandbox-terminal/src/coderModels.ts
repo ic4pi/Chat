@@ -1,13 +1,13 @@
 /**
- * The Coders package, for the Workspace model picker.
+ * The Coders package, for the Code Space model picker.
  *
  * Source of truth is the `coder` package in public/model-packages.js — this is
- * a typed copy, not an independent list, because the Workspace is a separate
+ * a typed copy, not an independent list, because the Code Space is a separate
  * Vite bundle that cannot import from the statically-served chat app. The
  * `coder-package parity` check in scripts/check-api.mjs fails the build if the
  * two drift, so edit the shared file first and mirror it here.
  *
- * Why the Workspace needs its own view of it: the provider dropdown loads one
+ * Why the Code Space needs its own view of it: the provider dropdown loads one
  * catalog at a time, so the coding models a user actually wants here are
  * scattered across three providers and buried in a few hundred rows. This
  * gathers them into one list — free options always selectable, paid ones
@@ -149,7 +149,7 @@ function resolveEntry(
 /**
  * Fetch the catalogs the Coders package spans and resolve it into brand
  * groups. Free models come first inside each brand — that is the one a locked
- * Workspace can actually run.
+ * Code Space can actually run.
  */
 export async function loadCoderModels(keys: ProviderKeys = {}): Promise<ResolvedCoderBrand[]> {
   const catalogs = new Map<string, CatalogModel[]>();
@@ -189,7 +189,7 @@ export function flattenCoderModels(brands: ResolvedCoderBrand[]): CoderModel[] {
 }
 
 /**
- * The model the Workspace should land on: a free coder if the paid tier is
+ * The model the Code Space should land on: a free coder if the paid tier is
  * locked, otherwise the first coder in the list.
  */
 export function pickDefaultCoder(brands: ResolvedCoderBrand[], unlocked: boolean): CoderModel | null {

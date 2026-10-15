@@ -5,7 +5,7 @@
  * copy, not the other way around. `syncChat()` registers a chat's thread on
  * first send and keeps appending new messages every turn after that, so the
  * daily sweep (jokes, notes, project-grouping suggestions) can see ordinary
- * chatting, not just chats explicitly promoted to Workspace/Media/a group
+ * chatting, not just chats explicitly promoted to Code Space/Media/a group
  * discussion — that handoff path (`ensureThread`/`promote`) is unchanged and
  * still registers lazily for those other thread types.
  *
@@ -104,7 +104,7 @@ export async function syncChat(chat) {
   }
 }
 
-/** Chat message -> workspace, media, or a group discussion. */
+/** Chat message -> code space, media, or a group discussion. */
 export async function promote(chat, action, payload = {}) {
   const fromThreadId = await ensureThread(chat);
   return hubFetch(`/api/hub/initiate?route=initiate&action=${action}`, {

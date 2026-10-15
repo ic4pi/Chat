@@ -68,7 +68,7 @@ export function SettingsPanel(props: Props) {
     >
       <div
         className="ws-panel"
-        role="dialog" aria-modal="true" aria-label="Workspace settings"
+        role="dialog" aria-modal="true" aria-label="Code Space settings"
         onClick={e => e.stopPropagation()}
         style={{ width: 'min(420px, 100vw)', height: '100%', background: 'var(--surface)',
           borderLeft: '1px solid var(--border)', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}

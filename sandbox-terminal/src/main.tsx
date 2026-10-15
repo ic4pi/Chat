@@ -5,7 +5,7 @@ import { pullSettings } from './settingsSync.js';
 import { startWorkspaceSync } from './workspaceSync.js';
 import './theme.css';
 
-// Teams, seat picks and Workspace sessions come from the server first when
+// Teams, seat picks and Code Space sessions come from the server first when
 // this browser lost them or another linked device moved on; a slow answer
 // that arrives late reloads once to use it.
 void Promise.all([

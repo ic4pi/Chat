@@ -3,7 +3,7 @@
  * re-run never loses it and you can load it back to keep developing.
  *
  * IndexedDB, not localStorage: a build is a whole set of files, and
- * localStorage's ~5MB is already shared with every workspace session.
+ * localStorage's ~5MB is already shared with every code space session.
  * Lives in this browser only.
  */
 
