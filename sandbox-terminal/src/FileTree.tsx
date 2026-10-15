@@ -180,6 +180,7 @@ export function FileTree({
             onChange={e => setInputPath(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleOpen()}
             placeholder="https://github.com/you/private-repo"
+            title="Private repos use the GitHub token from Push (saved in this browser). Paste one there once, then Open works."
             style={{ flex: 1, minWidth: 0, background: '#12151D', color: '#ECEEF3',
               border: '1px solid #232838', borderRadius: 4, padding: '4px 8px',
               fontFamily: 'inherit', fontSize: 15, outline: 'none' }} />
@@ -211,11 +212,7 @@ export function FileTree({
         {error && (
           <div style={{ marginTop: 5, fontSize: 15, color: '#ff6a6a' }}>✗ {error}</div>
         )}
-        <div style={{ marginTop: 6, fontSize: 14, color: '#656C7E', lineHeight: 1.4 }}>
-          Private repos use the GitHub token from Push (saved in this browser).
-          Paste one there once, then Open works without making the repo public.
-        </div>
-        {pythonReady != null && (
+        {pythonReady === false && (
           <div style={{
             marginTop: 5, fontSize: 14, lineHeight: 1.4,
             color: pythonReady ? '#34D399' : '#ff6a6a',
@@ -224,7 +221,7 @@ export function FileTree({
             {pythonDetail ? ` — ${pythonDetail.slice(0, 80)}` : ''}
           </div>
         )}
-        {rustReady != null && (
+        {rustReady === false && (
           <div style={{
             marginTop: 3, fontSize: 14, lineHeight: 1.4,
             color: rustReady ? '#34D399' : '#ff6a6a',
@@ -233,7 +230,7 @@ export function FileTree({
             {rustDetail ? ` — ${rustDetail.slice(0, 80)}` : ''}
           </div>
         )}
-        {goReady != null && (
+        {goReady === false && (
           <div style={{
             marginTop: 3, fontSize: 14, lineHeight: 1.4,
             color: goReady ? '#34D399' : '#ff6a6a',
@@ -278,9 +275,6 @@ export function FileTree({
                 fontSize: 14, cursor: 'pointer', padding: 0 }}>
               clear
             </button>
-          </div>
-          <div style={{ fontSize: 14, color: '#323A50', marginBottom: 6, lineHeight: 1.4 }}>
-            Optional — the agent already finds files from your question.
           </div>
           {[...contextFiles.keys()].map(p => (
             <div key={p} style={{ display: 'flex', alignItems: 'center',
