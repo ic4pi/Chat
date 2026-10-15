@@ -136,6 +136,8 @@ interface Props {
   onDismissAll:   () => void;
   onPush:         (token: string, message: string) => void;
   onCopyGitCommands?: () => void;
+  /** Start Auto-test now — shown beside "Push locked" so a locked Push always has a way out. */
+  onRunTest?:     () => void;
 }
 
 const btnBase: React.CSSProperties = {
@@ -145,7 +147,7 @@ const btnBase: React.CSSProperties = {
 
 export function DiffPanel({
   changes, applying, appliedPaths, canPush, pushBlockedReason, pushing, pushError, pushOk,
-  onApply, onDismiss, onDismissAll, onPush, onCopyGitCommands,
+  onApply, onDismiss, onDismissAll, onPush, onCopyGitCommands, onRunTest,
 }: Props) {
   // Collapsed by default — chat stays readable; expand to inspect diffs / push.
   const [expanded, setExpanded] = useState(false);
@@ -222,10 +224,19 @@ export function DiffPanel({
               {showPush ? 'Hide push' : 'Push'}
             </button>
           ) : (
-            <span style={{ fontSize: 14, color: '#323A50', whiteSpace: 'nowrap' }}
-              title={pushBlockedReason || 'Verify sandbox first'}>
-              Push locked
-            </span>
+            <>
+              {onRunTest && pushBlockedReason && !/still verifying/.test(pushBlockedReason) && (
+                <button type="button" onClick={onRunTest} data-testid="run-autotest-btn"
+                  style={{ ...btnBase, background: '#FF3D8E', color: '#0B0D12', border: 'none',
+                    fontWeight: 700, padding: '4px 12px' }}>
+                  Run Auto-test
+                </button>
+              )}
+              <span style={{ fontSize: 14, color: '#323A50', whiteSpace: 'nowrap' }}
+                title={pushBlockedReason || 'Verify sandbox first'}>
+                Push locked
+              </span>
+            </>
           )}
         </div>
         {!canPush && pushBlockedReason && (

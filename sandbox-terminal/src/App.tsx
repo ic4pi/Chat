@@ -1042,22 +1042,6 @@ export function App() {
     compareRef.current?.runBrief(q.brief, q.picks);
   }, [repo.sandboxId]);
 
-  const handleUseBuild = useCallback(async (build: BuildChoice) => {
-    if (!repo.sandboxId) {
-      setRestoreNote('Open a blank project or a GitHub repo first, then use the build again.');
-      return;
-    }
-    const results = await handleApply(Object.entries(build.files).map(([path, content]) => ({ path, content })));
-    const ok = results.filter(r => r.ok).map(r => r.path);
-    const failed = results.filter(r => !r.ok).map(r => r.path);
-    setShowCompare(false);
-    setMobileTab('chat');
-    chatRef.current?.addNote(
-      `Took "${build.title}" (${build.model}) from Compare into the project — ${ok.length} file${ok.length === 1 ? '' : 's'}: ${ok.join(', ')}.`
-      + (failed.length ? ` Couldn't write: ${failed.join(', ')}.` : '')
-      + ' Keep building on this version.',
-    );
-  }, [repo.sandboxId, handleApply]);
 
   const autoVerify = useAutoVerify(repo.root, repo.sandboxId, termRef, chatRef, repo.applyChanges);
 
@@ -1083,6 +1067,25 @@ export function App() {
     }
     return results;
   }, [handleApply, autoVerifyOn, repo.root, repo.sandboxId, runVerify]);
+
+  const handleUseBuild = useCallback(async (build: BuildChoice) => {
+    if (!repo.sandboxId) {
+      setRestoreNote('Open a blank project or a GitHub repo first, then use the build again.');
+      return;
+    }
+    // Same path as a normal build: write, then auto-test, so Push can unlock and the
+    // persona hears the real result for the version you picked.
+    const results = await handleApplyAndVerify(Object.entries(build.files).map(([path, content]) => ({ path, content })));
+    const ok = results.filter(r => r.ok).map(r => r.path);
+    const failed = results.filter(r => !r.ok).map(r => r.path);
+    setShowCompare(false);
+    setMobileTab('chat');
+    chatRef.current?.addNote(
+      `Took "${build.title}" (${build.model}) from Compare into the project — ${ok.length} file${ok.length === 1 ? '' : 's'}: ${ok.join(', ')}.`
+      + (failed.length ? ` Couldn't write: ${failed.join(', ')}.` : '')
+      + ' Keep building on this version.',
+    );
+  }, [repo.sandboxId, handleApplyAndVerify]);
 
   // ── WIP backup to GitHub ──────────────────────────────────────────────────
   const runWipBackup = useCallback(async (reason?: string) => {
@@ -1861,6 +1864,7 @@ export function App() {
         pushError={pushError}
         pushOk={pushOk}
         onApply={() => { void handleApplyAndVerify(); }}
+        onRunTest={() => { void runVerify(); }}
         onDismiss={p => repo.setPendingChanges(repo.pendingChanges.filter(c => c.path !== p))}
         onDismissAll={() => { repo.clearChanges(); setPushError(null); setPushOk(null); }}
         onPush={(token, message) => { void handlePush(token, message); }}
