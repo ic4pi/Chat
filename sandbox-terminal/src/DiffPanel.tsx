@@ -249,6 +249,15 @@ export function DiffPanel({
 
       {expanded && (
         <div style={{ overflowY: 'auto', minHeight: 0, flex: 1 }}>
+          {(pushError || pushOk) && (
+            <div data-testid="push-result" style={{ margin: '8px 10px 0', padding: '8px 10px', borderRadius: 6,
+              fontSize: 15, lineHeight: 1.4, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+              background: pushError ? 'rgba(255,106,106,.12)' : 'rgba(52,211,153,.12)',
+              border: `1px solid ${pushError ? '#ff6a6a' : '#34D399'}`,
+              color: pushError ? '#ff9a9a' : '#34D399' }}>
+              {pushError || pushOk}
+            </div>
+          )}
           {showPush && canPush && (
             <div style={{ margin: '8px 10px', padding: '8px 10px', background: '#0B0D12',
               border: '1px solid #232838', borderRadius: 6 }}>
@@ -282,7 +291,7 @@ export function DiffPanel({
                   background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
                   borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 16 }}
               />
-              <div style={{ display: 'flex', gap: 8, marginBottom: pushError || pushOk ? 8 : 0 }}>
+              <div style={{ display: 'flex', gap: 8 }}>
                 <button type="button"
                   disabled={pushing || !token.trim()}
                   onClick={() => {
@@ -320,12 +329,6 @@ export function DiffPanel({
                   </button>
                 )}
               </div>
-              {pushError && (
-                <div style={{ fontSize: 15, color: '#ff6a6a', lineHeight: 1.4 }}>{pushError}</div>
-              )}
-              {pushOk && (
-                <div style={{ fontSize: 15, color: '#34D399', lineHeight: 1.4 }}>{pushOk}</div>
-              )}
             </div>
           )}
 
