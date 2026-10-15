@@ -248,13 +248,6 @@ export function FileTree({
 
       {/* ── file tree ── */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
-        {tree.length === 0 && !loading && !repoRoot && (
-          <div style={{ padding: '12px 10px', fontSize: 15, color: '#323A50',
-            lineHeight: 1.6 }}>
-            Tap <b style={{ color: '#9198AA' }}>Start blank project</b> to begin without GitHub,
-            or paste a repo URL and Open.
-          </div>
-        )}
         {tree.map(node => (
           <TreeNode key={node.path} node={node} depth={0}
             contextPaths={contextPaths} onClickFile={handleClick} />

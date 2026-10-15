@@ -1598,12 +1598,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       background: '#0B0D12', color: '#ECEEF3',
       fontFamily: '"JetBrains Mono",ui-monospace,monospace' }}>
 
-      {/* header */}
-      <div style={{ padding: '7px 12px', borderBottom: '1px solid #191D27',
+      {/* status strip — only when there is something to say */}
+      {(error || autoSelectedFiles.length > 0 || contextFiles.size > 0) && (
+      <div style={{ padding: '5px 12px', borderBottom: '1px solid #191D27',
         background: '#0B0D12', flexShrink: 0, display: 'flex',
         alignItems: 'center', gap: 10 }}>
-        <span style={{ color: '#FF3D8E', fontSize: 14, letterSpacing: '0.1em',
-          textTransform: 'uppercase' }}>{persona ? `// ${persona.name} → coder` : '// agent'}</span>
         {(autoSelectedFiles.length > 0 || contextFiles.size > 0) && (
           <span style={{ fontSize: 14, color: '#656C7E' }}>
             reading {Math.max(autoSelectedFiles.length, contextFiles.size)} file
@@ -1614,27 +1613,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           ✗ {error}
         </span>}
       </div>
-
-      {/* Friendly status — no jargon about snippets/tokens/bundles */}
-      {autoSelectedFiles.length > 0 && (
-        <div style={{ padding: '5px 12px', background: 'rgba(212,255,63,.05)',
-          borderBottom: '1px solid rgba(212,255,63,.15)', flexShrink: 0,
-          fontSize: 14, color: '#C81F6B', lineHeight: 1.6 }}>
-          <span style={{ fontWeight: 700 }}>Looking at:</span>{' '}
-          {autoSelectedFiles.map(p => p.split('/').pop() || p).join(', ')}
-        </div>
       )}
 
       {/* messages */}
       <div data-testid="chat-messages" style={{ flex: 1, overflowY: 'auto', padding: '12px 14px',
         display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 }}>
-        {messages.length === 0 && !loading && (
-          <div style={{ fontSize: 16, color: '#323A50', lineHeight: 1.5 }}>
-            {persona
-              ? `Talk to ${persona.name}. It knows your chat and this workspace, and briefs the coder for you.`
-              : repoRoot ? 'Ask for a change.' : 'Start a blank project or open a GitHub URL, then ask.'}
-          </div>
-        )}
         {messages.map(msg => (
           <div key={msg.id} data-testid={msg.role === 'user' ? 'user-msg' : 'assistant-msg'} style={{
             alignSelf: msg.role === 'user' && msg.kind !== 'brief' ? 'flex-end' : 'flex-start',

@@ -151,8 +151,6 @@ export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function Sandbo
     term.open(containerRef.current);
     setTimeout(() => { try { fit.fit(); } catch { /* not laid out yet */ } }, 0);
 
-    term.writeln('\x1b[2;36m// Sandbox Terminal\x1b[0m');
-    term.writeln('\x1b[2;90m// Start a blank project or open a GitHub URL on the left, then code from chat runs here.\x1b[0m');
     term.writeln('');
 
     termRef.current = term;
@@ -392,11 +390,6 @@ export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function Sandbo
           textTransform: 'uppercase', whiteSpace: 'nowrap', userSelect: 'none' }}>
           // shell
         </span>
-        {!sandboxId && (
-          <span style={{ fontSize: 14, color: '#9198AA', whiteSpace: 'nowrap' }}>
-            open a repo to run
-          </span>
-        )}
         <input id="cmd-input" value={command}
           onChange={e => { setCommand(e.target.value); setHistIdx(-1); }}
           onKeyDown={handleKey} disabled={isRunning}
