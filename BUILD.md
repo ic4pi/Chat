@@ -30,7 +30,6 @@ Done = `[x]` + ~~struck through~~. Updated with every change that ships.
 - [x] ~~Client workspaces, part 1: walled-off clients (own owner row), profile brief injected into chat/agent/group/campaign, switcher + client page, per-client local data~~
 - [x] ~~Client workspaces, part 2: orchestrator asks any persona (ASK blocks), one Run / Don't run card per batch, answers return to the orchestrator~~
 - [x] ~~Workspace: Enter sends (Shift+Enter = new line) in the chat box; Compare opens a project on open so either side builds~~
-- [x] ~~Workspace coder defaults to one self-contained index.html for simple apps/games (no Next.js scaffold → no blank preview, no locked Push)~~
 - [ ] Orchestrator ASSIGN/MEETING blocks (hand a persona a task; open a team meeting) under the same single approval
 - [ ] Browser-driving marketing agent (own spec; first-job question open)
 
