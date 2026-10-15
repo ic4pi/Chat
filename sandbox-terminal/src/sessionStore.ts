@@ -18,7 +18,6 @@ export interface StoredMessage {
   pending?: boolean;
   wantCompare?: boolean;
   builtBy?: string;
-  reasoning?: string;
 }
 
 export interface StoredSession {
@@ -248,7 +247,6 @@ export function saveSession(
       pending: m.pending,
       wantCompare: m.wantCompare,
       builtBy: m.builtBy,
-      reasoning: m.reasoning,
     })),
     pendingChanges: (partial.pendingChanges || []).slice(0, 30).map((c) => ({
       path: c.path,

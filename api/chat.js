@@ -12,7 +12,6 @@ import { requirePaidAccess } from '../lib/model-meta.js';
 import { prepareImageMessages, hasImageParts } from '../lib/vision.js';
 import { extractQueryText, searchWeb, formatSearchContext } from '../lib/websearch.js';
 import { fetchWithModelFallback } from '../lib/model-health.js';
-import { loadClientBrief, ClientAccessError } from '../lib/hub.js';
 
 /**
  * Headroom under vercel.json maxDuration 300. Must stay below the platform
@@ -385,18 +384,8 @@ export default async function handler(req, res) {
   // True only when images survive preparation, i.e. the model claims vision.
   const sentImages = hasImageParts(chatMessages);
 
-  // Working for a client: their profile rides along, and a client that is not
-  // the caller's is refused outright (never answered from Personal).
-  let clientBriefText = '';
-  try {
-    clientBriefText = await loadClientBrief(req);
-  } catch (err) {
-    if (err instanceof ClientAccessError) return res.status(403).json({ error: err.message });
-    console.error('client brief:', err);
-  }
-
   const hasPriorTurn = chatMessages.some((m) => m.role === 'assistant');
-  const basePrompt = [await resolveSystemPrompt(personaId), clientBriefText, hasPriorTurn ? NO_REPEAT_INSTRUCTION : '']
+  const basePrompt = [await resolveSystemPrompt(personaId), hasPriorTurn ? NO_REPEAT_INSTRUCTION : '']
     .filter(Boolean)
     .join('\n\n');
 

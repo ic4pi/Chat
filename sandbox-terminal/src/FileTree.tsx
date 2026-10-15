@@ -1,8 +1,7 @@
 /**
  * FileTree — three-zone left panel:
  *   1. Repo path input + Open button
- *   2. Collapsible directory tree (click file = open in viewer; the ● dot
- *      pins/unpins it into LLM context without opening anything)
+ *   2. Collapsible directory tree (click file = add to LLM context)
  *   3. Active context list (files currently sent to the model)
  */
 
@@ -53,12 +52,11 @@ const EXT_COLOR: Record<string, string> = {
 // TreeNode
 // ---------------------------------------------------------------------------
 
-function TreeNode({ node, depth, contextPaths, onClickFile, onViewFile }: {
+function TreeNode({ node, depth, contextPaths, onClickFile }: {
   node: FileNode;
   depth: number;
   contextPaths: Set<string>;
   onClickFile: (n: FileNode) => void;
-  onViewFile: (n: FileNode) => void;
 }) {
   const [open, setOpen] = useState(depth < 2);
 
@@ -79,7 +77,7 @@ function TreeNode({ node, depth, contextPaths, onClickFile, onViewFile }: {
         </div>
         {open && node.children?.map(c => (
           <TreeNode key={c.path} node={c} depth={depth + 1}
-            contextPaths={contextPaths} onClickFile={onClickFile} onViewFile={onViewFile} />
+            contextPaths={contextPaths} onClickFile={onClickFile} />
         ))}
       </div>
     );
@@ -90,8 +88,8 @@ function TreeNode({ node, depth, contextPaths, onClickFile, onViewFile }: {
 
   return (
     <div
-      onClick={() => onViewFile(node)}
-      title="Click to open — pin icon adds it to LLM context"
+      onClick={() => onClickFile(node)}
+      title={inCtx ? 'Pinned — click to unpin' : 'Optional: pin this file'}
       style={{
         display: 'flex', alignItems: 'center', gap: 5,
         padding: '2px 4px 2px 0', paddingLeft: 8 + depth * 14,
@@ -110,14 +108,7 @@ function TreeNode({ node, depth, contextPaths, onClickFile, onViewFile }: {
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {node.name}
       </span>
-      <span
-        onClick={e => { e.stopPropagation(); onClickFile(node); }}
-        title={inCtx ? 'Pinned — click to unpin' : 'Pin to LLM context'}
-        style={{ fontSize: 13, color: inCtx ? '#FF3D8E' : '#323A50', opacity: inCtx ? 1 : .6,
-          padding: '0 4px', lineHeight: 1 }}
-      >
-        ●
-      </span>
+      {inCtx && <span style={{ fontSize: 12, color: '#FF3D8E', opacity: .7 }}>●</span>}
     </div>
   );
 }
@@ -144,14 +135,12 @@ interface Props {
   onAddToContext: (relPath: string) => void;
   onRemoveFromContext: (relPath: string) => void;
   onClearContext: () => void;
-  /** Open a file in the read-only viewer (copy / download live there). */
-  onViewFile:     (node: FileNode) => void;
 }
 
 export function FileTree({
   repoRoot, tree, totalFiles, contextFiles, loading, error,
   pythonReady, pythonDetail, rustReady, rustDetail, goReady, goDetail,
-  onOpenRepo, onStartBlank, onAddToContext, onRemoveFromContext, onClearContext, onViewFile,
+  onOpenRepo, onStartBlank, onAddToContext, onRemoveFromContext, onClearContext,
 }: Props) {
   const [inputPath, setInputPath] = useState(repoRoot || '');
   // Both buttons share one `loading` flag from the hook — track which one was
@@ -271,7 +260,7 @@ export function FileTree({
         )}
         {tree.map(node => (
           <TreeNode key={node.path} node={node} depth={0}
-            contextPaths={contextPaths} onClickFile={handleClick} onViewFile={onViewFile} />
+            contextPaths={contextPaths} onClickFile={handleClick} />
         ))}
       </div>
 

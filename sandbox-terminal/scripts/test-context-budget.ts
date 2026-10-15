@@ -10,9 +10,6 @@ import {
 import {
   looksLikeSuggestRequest,
   looksLikeApplyRequest,
-  mergeContinuation,
-  stripContinueMarkers,
-  adoptBareHtmlDocument,
   looksLikeLegacyWelcome,
   needsCodeContext,
 } from '../src/agentParse.ts';
@@ -59,11 +56,6 @@ assert(hist[hist.length - 1]!.content === 'latest question', 'keeps latest user 
 
 assert(looksLikeSuggestRequest('suggest additions and fixes'), 'suggest additions = suggest');
 assert(looksLikeSuggestRequest('audit and recommend changes/fixes'), 'audit = suggest');
-assert(!looksLikeSuggestRequest('Create a full HTML file for an interactive Kybalion explorer. Review the source texts for accuracy, add ideas for each principle. Code only.'), 'explicit build order with incidental review/ideas words is not suggest-only');
-assert(!looksLikeSuggestRequest('build me a landing page, any feedback on layout welcome'), 'build order wins over incidental feedback');
-assert(looksLikeApplyRequest('Generate a full HTML file for a Kybalion explorer. Code only.'), 'explicit build order = apply');
-assert(looksLikeSuggestRequest('review the page and suggest improvements, do not change anything'), 'review-only stays suggest');
-assert(looksLikeSuggestRequest('just suggest ideas for a single page app'), '"just suggest" stays suggest');
 assert(!looksLikeApplyRequest('suggest additions and fixes'), 'suggest is not apply');
 assert(looksLikeApplyRequest('apply that fix now'), 'apply that fix = apply');
 assert(looksLikeApplyRequest('fix the login bug'), 'fix the bug = apply');
@@ -71,19 +63,6 @@ assert(looksLikeLegacyWelcome('Fix the auth token expiry bug in src/auth.ts'), '
 assert(!needsCodeContext('hey'), 'hey stays light — no file dump');
 assert(!needsCodeContext('thanks'), 'thanks stays light');
 assert(needsCodeContext('suggest additions and fixes'), 'suggest pulls code context');
-
-// ── long single-file replies ──
-const cutHtml = 'File: a.html\n```html\n<!DOCTYPE html>\n<html><body><script>\nlet p = {};\np.speed\n\n⟦MORE⟧';
-assert(stripContinueMarkers(cutHtml).endsWith('p.speed'), 'markers stripped');
-assert(mergeContinuation(cutHtml, 'X = 1;\n</script></body></html>\n```') === 'File: a.html\n```html\n<!DOCTYPE html>\n<html><body><script>\nlet p = {};\np.speedX = 1;\n</script></body></html>\n```', 'mid-token cut joins without a break');
-const restarted = mergeContinuation(cutHtml, '```html\n<!DOCTYPE html>\n<html><body><script>\nlet p = {};\np.speed = 2;\n</script></body></html>\n```');
-assert(!/<!DOCTYPE[\s\S]*<!DOCTYPE/i.test(restarted), 'a restarted file is not duplicated: ' + restarted);
-const longCut = '```js\nfunction animateParticles(list) {\n  for (const particle of list) particle.speed';
-assert(mergeContinuation(longCut, 'function animateParticles(list) {\n  for (const particle of list) particle.speed *= 2;\n}\n```').split('function animateParticles').length === 2, 'repeated tail is dropped');
-const bare = adoptBareHtmlDocument('Here you go:\n```html\n<!DOCTYPE html><html><head><title>Hermetic Academy &amp; More</title></head><body>x</body></html>\n```');
-assert(/File: hermetic-academy-and-more\.html\n```html/.test(bare), 'bare html gets a File: header');
-assert(adoptBareHtmlDocument('File: x.html\n```html\n<!DOCTYPE html><html></html>\n```') === 'File: x.html\n```html\n<!DOCTYPE html><html></html>\n```', 'existing header untouched');
-assert(adoptBareHtmlDocument('```html\n<!DOCTYPE html><html><body>cut off') === '```html\n<!DOCTYPE html><html><body>cut off', 'incomplete doc is not adopted');
 
 const seeds = pickAuditSeedPaths([
   'public/agent/assets/index-X.js',

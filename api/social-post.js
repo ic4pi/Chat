@@ -9,7 +9,7 @@
 import { loadConfig } from '../lib/config.js';
 import { paidPasswordFromRequest, verifyPaidPassword, paidUnlockConfigured } from '../lib/model-meta.js';
 import { publishToAccount } from '../lib/social.js';
-import { resolveOwner, ClientAccessError } from '../lib/hub.js';
+import { resolveOwner } from '../lib/hub.js';
 import { logTeamAction } from '../lib/team-log.js';
 
 export default async function handler(req, res) {
@@ -53,16 +53,6 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'A recipient address is required to send email.' });
     }
 
-    // Decide whose space this post belongs to BEFORE publishing: a client that
-    // is not the caller's must stop the post, not just its log line.
-    let ownerId = null;
-    try {
-      ownerId = await resolveOwner(req, res);
-    } catch (err) {
-      if (err instanceof ClientAccessError) return res.status(403).json({ error: err.message });
-      console.error('post owner:', err);
-    }
-
     const result = await publishToAccount(account, {
       message: String(message || ''),
       imageUrl: imageUrl || undefined,
@@ -70,6 +60,7 @@ export default async function handler(req, res) {
       subject: subject || undefined,
     });
     try {
+      const ownerId = await resolveOwner(req, res);
       if (ownerId) {
         await logTeamAction(ownerId, {
           personaName: typeof personaName === 'string' ? personaName.slice(0, 80) : undefined,
