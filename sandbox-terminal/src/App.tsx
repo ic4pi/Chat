@@ -1059,6 +1059,12 @@ export function App() {
   }, [repo]);
 
   // ── Compare: the persona's brief to two coders, and the chosen version back ──
+  // Compare needs a sandbox for its two previews and file writes: open one as the panel opens,
+  // so typing straight into either side works instead of silently building nowhere.
+  useEffect(() => {
+    if (showCompare && !repo.sandboxId) void ensureProject();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCompare]);
   const compareRef = useRef<CompareHandle>(null);
   const queuedCompareRef = useRef<{ brief: string; picks?: { a: SeatModel; b: SeatModel } } | null>(null);
   const handleCompareBrief = useCallback((brief: string, picks?: { a: SeatModel; b: SeatModel }) => {

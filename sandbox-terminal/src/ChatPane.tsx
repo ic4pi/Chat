@@ -2077,6 +2077,13 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           value={input}
           rows={2}
           onChange={e => setInput(e.target.value)}
+          onKeyDown={e => {
+            // Enter sends (Shift+Enter = new line). Touch keyboards keep Enter as a new line.
+            if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
+            if (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) return;
+            e.preventDefault();
+            if (!loading && input.trim()) void send();
+          }}
           placeholder={loading ? 'Working… you can keep typing or paste your next message'
             : listening ? (speakOn ? 'Listening — will send…' : 'Listening…')
             : persona ? `Talk to ${persona.name}…` : 'What should change?'}
