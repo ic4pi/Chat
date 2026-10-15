@@ -46,6 +46,10 @@ Done = `[x]` + ~~struck through~~. Updated with every change that ships.
 
 ## Done log (newest first)
 
+- ~~Workspace persona reads files itself (full context + READ: a file on demand) — no more copy/paste~~
+- ~~Orchestrator gets the two Compare versions (answers if asked, silent otherwise)~~
+- ~~Chat→Workspace re-entry: new chat messages land at the end, not above the build~~
+- ~~Export fix (dropped a deleted key) + Workspace sessions included in backup~~
 - ~~Workspace Plan panel + orchestrator-owned build plan~~
 - ~~GitHub backup for work in progress~~
 - ~~Open/copy/download a file from the file tree~~
