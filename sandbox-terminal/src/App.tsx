@@ -1428,11 +1428,15 @@ export function App() {
         if (data.createdRepoUrl) bits.push(`New private repo: ${data.createdRepoUrl}`);
         if (data.pullRequestUrl) bits.push(`PR: ${data.pullRequestUrl}`);
         setPushOk(bits.join(' '));
+        chatRef.current?.addNote(bits.join(' '));
       } else {
         setPushOk(data.message ?? 'Nothing new to push.');
       }
     } catch (err: unknown) {
-      setPushError(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      setPushError(msg);
+      // The Push bar sits under the verify banner and is easy to miss: say it in the chat too.
+      chatRef.current?.addNote(`Push to GitHub failed: ${msg.slice(0, 700)}`);
     } finally {
       setPushing(false);
     }
