@@ -54,6 +54,8 @@ import {
   buildPersonaHistory,
   personaMeantToBrief,
   splitPersonaReply,
+  stripPushMarker,
+  wantsPushOpened,
   type OrchestratorPersona,
 } from './orchestrator.js';
 import { looksLikeRefusal } from './codingTeam.js';
@@ -799,6 +801,8 @@ interface Props {
   fixer?:            SeatPick | null;
   /** The server swapped a retired model; update the saved choice. */
   onModelReplaced?:  (swap: ModelSwap, who: 'persona' | 'coder') => void;
+  /** The persona asked to open the Push request (it ended its reply with the push marker). */
+  onOpenPush?:       () => void;
   /** From /api/init-repo — whether the sandbox toolchains are actually usable. */
   pythonReady?:      boolean | null;
   pythonDetail?:     string | null;
@@ -811,7 +815,7 @@ interface Props {
 export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   repoRoot, repoUrl, sandboxId, provider, model, role, persona = null, apiKey, tree, contextFiles, autoRun, appliedPaths,
   autoSelectedFiles, searchHits, initialMessages, onMessagesChange,
-  onRunCode, onFileChanges, onUploadText, onBeforeSend, onModelReplaced, onCompareBrief,
+  onRunCode, onFileChanges, onUploadText, onBeforeSend, onModelReplaced, onOpenPush, onCompareBrief,
   askBeforeBuild = false, buildPicker, fixer = null,
   pythonReady = null, pythonDetail = null,
   rustReady = null, rustDetail = null,
@@ -861,12 +865,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   const latestRef = useRef({
     repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onCompareBrief, askBeforeBuild, fixer,
+    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onOpenPush, onCompareBrief, askBeforeBuild, fixer,
   });
   latestRef.current = {
     repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onCompareBrief, askBeforeBuild, fixer,
+    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onOpenPush, onCompareBrief, askBeforeBuild, fixer,
   };
 
   useEffect(() => {
@@ -1176,13 +1180,17 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           orchPersona.apiKey || (pProv === prov ? key : undefined),
           { personaId: orchPersona.id, orchestrate: true },
         );
-        const raw = personaReply.reply === '(empty response)' ? '' : personaReply.reply.trim();
+        const rawWithMarker = personaReply.reply === '(empty response)' ? '' : personaReply.reply.trim();
+        const pushRequested = wantsPushOpened(rawWithMarker);
+        const raw = pushRequested ? stripPushMarker(rawWithMarker) : rawWithMarker;
         const split = splitPersonaReply(raw);
         brief = split.brief;
         const personaMsg: Message = {
           id: uid(), role: 'assistant', speaker: 'persona', content: raw || '(no reply)',
         };
         setMessages(m => [...m, personaMsg]);
+        // The orchestrator opens the Push request for the user; they still confirm it there.
+        if (pushRequested) latestRef.current.onOpenPush?.();
         if (speakOnRef.current && split.say && cleanForSpeech(split.say)) {
           void speakReply(split.say);
         }
@@ -1191,7 +1199,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         // The persona's model ignored the format (or handed you a prompt to
         // paste) on a turn that was meant to build something: the coder model
         // writes the brief from the conversation instead. It may decline.
-        if (!brief && personaMeantToBrief(text, split.say)) {
+        if (!brief && !pushRequested && personaMeantToBrief(text, split.say)) {
           phase = 'Coder';
           setLiveThoughts('');
           setLiveStatus('Writing the brief for the coder…');
