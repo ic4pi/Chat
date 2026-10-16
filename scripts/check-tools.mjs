@@ -1,0 +1,102 @@
+#!/usr/bin/env node
+// Offline checks for the / tool registry (no network, in-memory store, mocked LLM).
+import assert from 'node:assert/strict';
+process.env.OPENROUTER_API_KEY = 'test';
+
+const llmReplies = [];
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (url, opts) => {
+  if (String(url).includes('openrouter.ai')) {
+    const content = llmReplies.shift() ?? 'LLM-OUTPUT';
+    return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+  }
+  return realFetch(url, opts);
+};
+
+const { TOOLS, parseCommand, runTool, needsAuth, listTools } = await import('../lib/tools/index.js');
+const { budgetPlan } = await import('../lib/tools/growth.js');
+const { pageFacts } = await import('../lib/tools/util.js');
+const { parseWhen } = await import('../lib/tools/core.js');
+const run = (input, authed = false) => { const c = parseCommand(input); return runTool({ ...c, req: { headers: {} }, authed }); };
+
+// registry
+for (const n of ['email', 'post', 'search', 'image', 'voice', 'video', 'campaign', 'schedule', 'competitor', 'seo', 'trends', 'audit',
+  'brand', 'variants', 'landing', 'crm', 'outreach', 'proposal', 'contract', 'ads', 'metrics', 'report', 'track']) {
+  assert.ok(TOOLS.has(n), `missing /${n}`);
+}
+assert.equal(TOOLS.has('sms'), false);
+assert.equal(listTools().length, TOOLS.size);
+
+// parsing
+assert.deepEqual(parseCommand('/crm list new'), { name: 'crm', args: 'list new', client: '' });
+assert.deepEqual(parseCommand('/variants @Acme 3 | ad | go'), { name: 'variants', args: '3 | ad | go', client: 'acme' });
+assert.equal(parseCommand('hello'), null);
+
+// auth rules
+assert.equal(needsAuth(TOOLS.get('email'), 'a|b|c'), true);
+assert.equal(needsAuth(TOOLS.get('outreach'), 'list'), false);
+assert.equal(needsAuth(TOOLS.get('outreach'), 'send o1'), true);
+assert.equal(needsAuth(TOOLS.get('outreach'), 'auto o1 on'), true);
+assert.equal(needsAuth(TOOLS.get('post'), ''), false);
+assert.equal(needsAuth(TOOLS.get('post'), 'Page | hi'), true);
+assert.equal(needsAuth(TOOLS.get('crm'), 'add x'), false);
+
+// crm
+await run('/crm add Dana Lee | dana@acme.com | Acme | met at expo');
+let r = await run('/crm list');
+assert.match(r.text, /Dana Lee/); assert.match(r.text, /new 1/);
+await run('/crm status dana won');
+assert.match((await run('/crm list won')).text, /Dana Lee/);
+await run('/crm note dana | wants Q1 start');
+assert.match((await run('/crm show dana')).text, /wants Q1 start/);
+await assert.rejects(run('/crm status dana bogus'), /Usage/);
+
+// brand + @client
+await run('/brand set Acme Co | dry and direct | busy owners | navy/orange | no exclamation marks');
+assert.match((await run('/brand show acme-co')).text, /dry and direct/);
+llmReplies.push('ok');
+let seenPrompt = '';
+const f2 = globalThis.fetch;
+globalThis.fetch = async (url, opts) => { if (String(url).includes('openrouter.ai')) seenPrompt = JSON.parse(opts.body).messages.at(-1).content; return f2(url, opts); };
+await run('/variants @acme-co 3 | facebook ad | spring promo');
+assert.match(seenPrompt, /BRAND KIT for Acme Co/); assert.match(seenPrompt, /no exclamation marks/);
+globalThis.fetch = f2;
+
+// outreach cadence: drafts only, nothing sent; replied stops it
+llmReplies.push(JSON.stringify([1, 2, 3, 4].map((i) => ({ subject: `S${i}`, body: `B${i}` }))));
+r = await run('/outreach new dana | book a strategy call');
+assert.match(r.text, /nothing sent yet/);
+const id = /`(o\w+)`/.exec(r.text)[1];
+assert.match((await run(`/outreach show ${id}`)).text, /day \+14/);
+await assert.rejects(run(`/outreach send ${id}`, true), /email account|No email account/i);
+await run(`/outreach replied ${id}`);
+assert.match((await run('/crm show dana')).text, /replied/);
+assert.match((await run('/outreach list')).text, /replied/);
+
+// schedule
+assert.ok(parseWhen('in 2h') > Date.now() + 7000e3);
+await assert.rejects(run('/schedule add in 1h | /email a@b.c | s | body'), /unlock/);
+assert.match((await run('/schedule add in 1h | /crm list')).text, /Scheduled/);
+assert.match((await run('/schedule list')).text, /\/crm list/);
+const { processSchedule } = await import('../lib/tools/index.js');
+assert.equal((await processSchedule({ headers: {} })).length, 0);
+
+// track
+r = await run('/track https://site.com/offer | Facebook | paid social | Spring Promo');
+assert.match(r.text, /utm_source=facebook/); assert.match(r.text, /utm_medium=paid_social/);
+
+// ads math
+const m = budgetPlan('meta', 3000);
+assert.equal(m.daily, 100); assert.equal(m.test, 600);
+assert.ok(m.clicks[0] < m.clicks[1] && m.conv[0] <= m.conv[1]);
+await assert.rejects(run('/ads myspace | $100 | x | y'), /Usage/);
+
+// audit facts
+const facts = pageFacts('<html><head><title>Hi</title><meta name="description" content="d"></head><body><h1>Head</h1><img src=a><img src=b alt="x"><a href="/x">x</a></body></html>', 'https://e.com/');
+assert.equal(facts.title, 'Hi'); assert.equal(facts.imagesMissingAlt, 1); assert.equal(facts.h1[0], 'Head'); assert.equal(facts.viewportMeta, false);
+await assert.rejects(run('/audit localhost:3000'), /not reachable/);
+
+// metrics / report run without external accounts
+assert.match((await run('/metrics')).text, /Pipeline/);
+
+console.log('check-tools: ok');

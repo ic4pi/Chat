@@ -166,6 +166,10 @@
     },
     "api/admin-standing-tasks.js": {
       "includeFiles": "personas/**"
+    },
+    "api/tools.js": {
+      "maxDuration": 120,
+      "includeFiles": "personas/**"
     }
   },
   "crons": [

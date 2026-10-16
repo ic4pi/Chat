@@ -37,6 +37,8 @@ const SYNTAX_FILES = [
   'api/campaign.js',
   'lib/model-catalog.js',
   'lib/model-health.js',
+  'api/tools.js',
+  'lib/tools/index.js',
 ];
 
 function fail(msg) {

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vercel dev",
     "check": "node scripts/check-api.mjs",
-    "test": "node scripts/check-api.mjs && node scripts/check-campaign.mjs && node scripts/check-models.mjs && node scripts/check-stack-detect.mjs && node scripts/check-handoff.mjs",
+    "test": "node scripts/check-api.mjs && node scripts/check-campaign.mjs && node scripts/check-models.mjs && node scripts/check-stack-detect.mjs && node scripts/check-handoff.mjs && node scripts/check-tools.mjs",
     "animate": "node scripts/animate-sequence.mjs",
     "test:animate": "node scripts/test-animate-local.mjs",
     "check:packages": "node scripts/check-packages.mjs",
@@ -17,7 +17,8 @@
     "check:campaign": "node scripts/check-campaign.mjs",
     "check:models": "node scripts/check-models.mjs",
     "check:stack": "node scripts/check-stack-detect.mjs",
-    "check:handoff": "node scripts/check-handoff.mjs"
+    "check:handoff": "node scripts/check-handoff.mjs",
+    "check:tools": "node scripts/check-tools.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",

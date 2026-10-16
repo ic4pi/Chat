@@ -3501,10 +3501,105 @@ async function triggerSmartReplies(chat) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// / commands (tools). Server registry: GET /api/tools; run: POST /api/tools.
+// Unknown /words fall through as normal chat so pasted paths still work.
+// ---------------------------------------------------------------------------
+let slashTools = null;
+async function loadSlashTools() {
+  if (slashTools) return slashTools;
+  try {
+    const res = await fetch('/api/tools');
+    const data = await res.json();
+    slashTools = Array.isArray(data.tools) ? data.tools : [];
+  } catch { slashTools = []; }
+  return slashTools;
+}
+
+function slashHelpText(tools) {
+  const groups = {};
+  for (const t of tools) (groups[t.group] ||= []).push(t);
+  return Object.entries(groups).map(([g, list]) => `**${g}**\n` + list.map((t) => `- \`${t.usage}\` — ${t.summary}${t.sensitive ? ' 🔒' : ''}`).join('\n')).join('\n\n')
+    + '\n\nAdd `@client` to any command to apply that client\'s brand kit (`/brand`). 🔒 = acts for real, needs the unlock password.';
+}
+
+async function postSlash(input) {
+  const call = async () => {
+    const pw = loadPaidPassword();
+    const res = await fetch('/api/tools', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(pw ? { 'X-Paid-Password': pw } : {}) },
+      body: JSON.stringify({ input }),
+    });
+    return { res, data: await res.json().catch(() => ({})) };
+  };
+  let { res, data } = await call();
+  if (res.status === 403 && data.needsPassword) {
+    const pw = (prompt(data.error || 'Unlock password:') || '').trim();
+    if (!pw) throw new Error('Cancelled — nothing was sent.');
+    savePaidPassword(pw);
+    ({ res, data } = await call());
+  }
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data.text || '';
+}
+
+/** Returns true when the text was a / command and has been handled here. */
+async function handleSlashCommand(text) {
+  const m = /^\/(\w+)\s*([\s\S]*)$/.exec(text.trim());
+  if (!m || pendingUploads.length) return false;
+  const name = m[1].toLowerCase();
+  const rest = m[2].trim();
+  const tools = await loadSlashTools();
+  const known = name === 'help' || tools.some((t) => t.name === name);
+  if (!known) return false;
+
+  if (name === 'campaign') {
+    if (!rest) { sendMessage('Write a campaign — what are we promoting?'); return true; }
+    sendMessage(`Write a campaign for ${rest}`);
+    return true;
+  }
+
+  const chat = ensureActiveChat();
+  chat.messages.push({ role: 'user', content: text, ts: Date.now() });
+  if (chat.name === 'New chat' || chat.name === 'Untitled') chat.name = text.slice(0, 40).trim();
+  const reply = (content) => {
+    chat.messages.push({ role: 'assistant', content, ts: Date.now(), tool: name });
+    chat.updatedAt = Date.now();
+    saveState();
+    renderChatList();
+    renderMessages({ scroll: 'bottom' });
+  };
+  saveState();
+  renderMessages({ scroll: 'bottom' });
+
+  if (name === 'help') { reply(slashHelpText(tools)); return true; }
+  if (name === 'voice') {
+    if (!rest) { reply('Usage: `/voice text to speak`'); return true; }
+    reply('🔊 Speaking…');
+    void speakReply(rest, { force: true });
+    return true;
+  }
+  if (name === 'video') { reply('Video studio: [open /media](/media)'); return true; }
+
+  setGeneratingUi(true);
+  setTypingActive(true, `Running /${name}…`);
+  try {
+    reply(await postSlash(text));
+  } catch (err) {
+    reply(`⚠ /${name}: ${err.message || err}`);
+  } finally {
+    setTypingActive(false);
+    setGeneratingUi(false);
+  }
+  return true;
+}
+
 async function sendMessage(text) {
   // Accidental Enter while a reply is streaming must NOT start another request.
   if (chatBusy) return;
   clearSmartReplyChips();
+  if (text && text.trim().startsWith('/') && await handleSlashCommand(text)) return;
 
   const chat = ensureActiveChat();
   // A group chat stays a group chat on send. Only an explicit tap of the 🏢
