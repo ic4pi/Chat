@@ -1063,6 +1063,13 @@ export function App() {
     finally { verifyingRef.current = false; }
   }, [autoVerify]);
 
+  // The orchestrator opens the Push request: the form shows once the check has passed (it runs it if not).
+  const [openPushSignal, setOpenPushSignal] = useState(0);
+  const handleOpenPush = useCallback(() => {
+    if (autoVerify.pushAllowed) { setOpenPushSignal(n => n + 1); return; }
+    void runVerify().then(outcome => { if (outcome === 'passed') setOpenPushSignal(n => n + 1); });
+  }, [autoVerify.pushAllowed, runVerify]);
+
   const handleApplyAndVerify = useCallback(async (files?: PendingChange[]) => {
     const results = await handleApply(files);
     const written = results.filter(r => r.ok).map(r => r.path);
@@ -1834,6 +1841,7 @@ export function App() {
           role={role}
           persona={orchPersona}
           onModelReplaced={handleModelReplaced}
+          onOpenPush={handleOpenPush}
           onCompareBrief={handleCompareBrief}
           askBeforeBuild={teamPrefs.askFirst}
           buildPicker={renderBuildPicker}
@@ -1864,6 +1872,7 @@ export function App() {
         appliedPaths={appliedPaths}
         canPush={!!repo.sandboxId && autoVerify.pushAllowed}
         projectOpen={!!repo.sandboxId}
+        openPushSignal={openPushSignal}
         pushBlockedReason={
           !repo.sandboxId
             ? null

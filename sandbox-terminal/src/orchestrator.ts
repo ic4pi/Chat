@@ -143,6 +143,23 @@ export function personaMeantToBrief(userText: string, personaSay: string): boole
 
 export const NO_BRIEF = 'NO_BRIEF';
 
+/** The persona ends a reply with this line to open the Push request for the user. */
+export const OPEN_PUSH_MARKER = '<<<OPEN_PUSH>>>';
+const OPEN_PUSH_RE = /<<<\s*OPEN[_ ]PUSH\s*>>>/i;
+
+export function wantsPushOpened(text: string): boolean {
+  return OPEN_PUSH_RE.test(String(text || ''));
+}
+
+/** Hides the marker (and a half-arrived one) from what the user reads and hears. */
+export function stripPushMarker(text: string): string {
+  let out = String(text || '').replace(new RegExp(OPEN_PUSH_RE.source, 'gi'), '');
+  for (let k = OPEN_PUSH_MARKER.length - 1; k >= 3; k--) {
+    if (out.endsWith(OPEN_PUSH_MARKER.slice(0, k))) { out = out.slice(0, out.length - k); break; }
+  }
+  return out.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 /** Written by the coder model when the persona's own model fumbled the format. */
 export const BRIEF_WRITER_SYSTEM = [
   'You write the brief a coding agent works from. The coder cannot see the conversation: the brief is its whole spec.',

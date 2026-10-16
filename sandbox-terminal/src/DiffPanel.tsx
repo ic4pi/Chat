@@ -3,7 +3,7 @@
  * Collapsed by default so it does not bury the chat transcript.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { PendingChange } from './useRepoContext.js';
 import { copyText, downloadAllFiles, downloadTextFile } from './downloadFile.js';
 
@@ -140,6 +140,8 @@ interface Props {
   onRunTest?:     () => void;
   /** A project is open: keep a slim Push bar even when nothing is waiting to be saved. */
   projectOpen?:   boolean;
+  /** Bumped when the orchestrator opens the Push request: show the form. */
+  openPushSignal?: number;
 }
 
 const btnBase: React.CSSProperties = {
@@ -149,7 +151,7 @@ const btnBase: React.CSSProperties = {
 
 export function DiffPanel({
   changes, applying, appliedPaths, canPush, pushBlockedReason, pushing, pushError, pushOk,
-  onApply, onDismiss, onDismissAll, onPush, onCopyGitCommands, onRunTest, projectOpen,
+  onApply, onDismiss, onDismissAll, onPush, onCopyGitCommands, onRunTest, projectOpen, openPushSignal,
 }: Props) {
   // Collapsed by default — chat stays readable; expand to inspect diffs / push.
   const [expanded, setExpanded] = useState(false);
@@ -168,6 +170,7 @@ export function DiffPanel({
     return '';
   });
   const [commitMsg, setCommitMsg] = useState('Apply agent changes from sandbox');
+  useEffect(() => { if (openPushSignal) { setShowPush(true); setExpanded(true); } }, [openPushSignal]);
 
   // Saved work still needs a way to reach GitHub: with a project open and nothing unsaved, show just Push.
   if (changes.length === 0 && !projectOpen) return null;
