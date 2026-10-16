@@ -1905,7 +1905,7 @@ export function App() {
 
   const fileTree = (
     <FileTree
-      repoRoot={repo.root} tree={repo.tree} totalFiles={repo.totalFiles}
+      repoRoot={repo.root} repoUrl={repo.repoUrl} tree={repo.tree} totalFiles={repo.totalFiles}
       contextFiles={repo.contextFiles} loading={repo.loading} error={repo.error}
       pythonReady={repo.pythonReady} pythonDetail={repo.pythonDetail}
       rustReady={repo.rustReady} rustDetail={repo.rustDetail}
