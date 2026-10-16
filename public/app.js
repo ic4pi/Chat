@@ -3546,7 +3546,11 @@ async function sendMessage(text) {
   renderMessages({ scroll: 'bottom' });
   // "I'm ready — build it": the persona is told in its instructions to take it to the Code Space,
   // and if it doesn't, we still do, because the user said so.
-  const userReady = chat.kind === 'chat' && userSaysReadyToBuild(text);
+  // The orchestrator is the one who takes the chat over. The user asking is only the backup, for when
+  // it does not act or hangs: then the move happens anyway.
+  const userWantsMove = chat.kind === 'chat' && (userSaysReadyToBuild(text) || userAsksForCodeSpace(text));
+  const hasSubstance = () => chat.messages.filter((m) => m.role === 'user' && !m.autoContinue).length > 1;
+  let moveFallbackTimer = null;
 
   // Answer to "marketing meeting first?" — only the very next message counts;
   // anything that isn't a yes/no is a normal message (they moved on).
@@ -3604,6 +3608,14 @@ async function sendMessage(text) {
   let autoRound = 0;
   let emptyTimeoutRetries = 0;
   let firstAssistantTs = null;
+  if (userWantsMove) {
+    moveFallbackTimer = setTimeout(() => {
+      moveFallbackTimer = null;
+      if (activeChat()?.id !== chat.id || !chatBusy) return;
+      noteCodeSpaceMove(chat);
+      goToCodeSpaceSoon(chat, { autoBrief: hasSubstance(), delayMs: 300 });
+    }, CODE_SPACE_HANG_MS);
+  }
 
   try {
     while (true) {
@@ -3924,8 +3936,11 @@ async function sendMessage(text) {
     if (personaSaidGo) lastMsg.content = stripCodeSpaceMarker(lastMsg.content).trim();
     saveState();
     void triggerSmartReplies(chat);
-    if (!activeChatUserStopped && chat.kind === 'chat' && lastMsg?.role === 'assistant' && (personaSaidGo || userReady)) {
-      offerCodeSpace(chat, personaSaidGo ? 'persona' : 'you');
+    if (!activeChatUserStopped && chat.kind === 'chat'
+      && ((personaSaidGo && lastMsg?.role === 'assistant') || (userWantsMove && !personaSaidGo))) {
+      // The orchestrator said it in its own words; only add a line when it did not.
+      if (!personaSaidGo) noteCodeSpaceMove(chat);
+      goToCodeSpaceSoon(chat, { autoBrief: userWantsMove ? hasSubstance() : true });
     }
   } catch (err) {
     const idx = chat.messages.findIndex((m) => m.role === 'assistant' && m.streaming);
@@ -3949,7 +3964,12 @@ async function sendMessage(text) {
     }
     saveState();
     renderMessages({ scroll: 'bottom' });
+    if (userWantsMove && !activeChatUserStopped) {
+      noteCodeSpaceMove(chat);
+      goToCodeSpaceSoon(chat, { autoBrief: hasSubstance() });
+    }
   } finally {
+    if (moveFallbackTimer) { clearTimeout(moveFallbackTimer); moveFallbackTimer = null; }
     if (tickTimer) clearInterval(tickTimer);
     setGeneratingUi(false);
     activeChatUserStopped = false;
@@ -6319,13 +6339,26 @@ const WORKSPACE_HANDOFF_KEY = 'chat_to_workspace_v1';
 const READY_TO_BUILD_RE = new RegExp([
   // "I'm ready", "ready to build", "ready for the code space" — anywhere in a short message
   "\\b(i['’]?m|i am|we['’]?re|we are|im)\\s+ready\\b",
-  "\\bready\\s+(to|for)\\s+(build|the\\s+code\\s?space|code\\s?space)\\b",
+  "\\bready\\s+(to|for)\\s+(build|the\\s+(code|work)\\s?space|(code|work)\\s?space)\\b",
   // bare commands only: the message must END with them ("build it", "let's build", "go build it")
   "\\b(let['’]?s|lets|go|time to|please|ok(ay)?|now)[,\\s]+(build|start building)(\\s+(it|this|that))?(\\s+now)?\\s*[.!]*\\s*$",
   "^\\W*(ok(ay)?[,\\s]+)?(please\\s+)?build\\s+(it|this|that)(\\s+now)?\\s*[.!]*\\s*$",
-  "\\b(send|take|move|hand)\\s+(it|this|that)\\s+(over\\s+)?(to|into)\\s+(the\\s+)?code\\s?space\\b",
-  "\\b(open|go to|switch to)\\s+(the\\s+)?code\\s?space\\s*[.!]*\\s*$",
 ].join('|'), 'i');
+
+/**
+ * Asking to go to the Code Space itself ("open the code space", "take me there", "can we go to the
+ * workspace") — the old name still works. Whole short messages only, so "open code space settings" or a
+ * description that happens to mention it does not count.
+ */
+const ASK_FOR_CODE_SPACE_RE = new RegExp([
+  "^\\W*(ok(ay)?[,\\s]+|please[,\\s]+|hey[,\\s]+)*",
+  "((can|could|would|will)\\s+(you|we)\\s+(please\\s+)?)?",
+  "(i\\s+(want|wanna|need|would like|['’]d like)\\s+to\\s+)?",
+  "(let['’]?s\\s+)?",
+  "(open|go\\s+to|goto|take\\s+(me|us)\\s+to|bring\\s+(me|us)\\s+to|get\\s+(me|us)\\s+to|send\\s+(me|us)\\s+to|switch\\s+to|jump\\s+to|head\\s+(over\\s+)?to|move\\s+(over\\s+)?to|use)\\s+",
+  "(the\\s+)?(code|work)\\s?space",
+  "(\\s+(please|now|pls|thanks|thank\\s+you))*\\s*[.!?]*\\s*$",
+].join(''), 'i');
 
 function userSaysReadyToBuild(text) {
   const t = String(text || '').trim();
@@ -6333,51 +6366,40 @@ function userSaysReadyToBuild(text) {
   return t.length > 0 && t.length <= 200 && READY_TO_BUILD_RE.test(t);
 }
 
-let codeSpaceOfferTimer = null;
-let codeSpaceOfferEl = null;
+function userAsksForCodeSpace(text) {
+  const t = String(text || '').trim();
+  return t.length > 0 && t.length <= 120 && (ASK_FOR_CODE_SPACE_RE.test(t) || /^\W*(code|work)\s?space\W*$/i.test(t));
+}
 
-function clearCodeSpaceOffer() {
-  if (codeSpaceOfferTimer) { clearTimeout(codeSpaceOfferTimer); codeSpaceOfferTimer = null; }
-  if (codeSpaceOfferEl) { codeSpaceOfferEl.remove(); codeSpaceOfferEl = null; }
+// How long the orchestrator gets to answer before a user's ask for the Code Space is honoured anyway.
+const CODE_SPACE_HANG_MS = 25_000;
+
+let codeSpaceTimer = null;
+
+function cancelCodeSpaceHandoff() {
+  if (codeSpaceTimer) { clearTimeout(codeSpaceTimer); codeSpaceTimer = null; }
 }
 
 /**
- * Calm, not abrupt: say it is going, leave a few seconds to read the reply and say "stay",
- * then open the Code Space. Typing or sending anything also cancels it.
+ * Seamless, not abrupt, and with nothing new on screen: the persona's own sentence says it is
+ * going, a couple of seconds let it be read, then the Code Space opens. Typing in the composer
+ * means the user is not done talking, so it quietly stands down.
  */
-function offerCodeSpace(chat, who) {
-  clearCodeSpaceOffer();
-  const name = activePersona()?.name || 'Your orchestrator';
-  const el = document.createElement('div');
-  el.id = 'codeSpaceOffer';
-  el.setAttribute('role', 'status');
-  el.style.cssText = [
-    'position:fixed', 'left:50%', 'bottom:120px', 'transform:translateX(-50%)', 'z-index:60',
-    'display:flex', 'align-items:center', 'gap:12px', 'max-width:calc(100vw - 32px)',
-    'padding:10px 14px', 'border-radius:12px', 'background:#12151D', 'color:#ECEEF3',
-    'border:1px solid hsl(var(--id-h, 30) 78% 68% / .45)', 'font-size:14px',
-    'box-shadow:0 8px 30px rgba(0,0,0,.45)',
-  ].join(';');
-  const label = document.createElement('span');
-  label.textContent = who === 'you'
-    ? `Opening the Code Space — ${name} will write the brief there.`
-    : `${name} is taking this to the Code Space…`;
-  const stay = document.createElement('button');
-  stay.type = 'button';
-  stay.textContent = 'Stay here';
-  stay.style.cssText = 'background:transparent;color:#9198AA;border:1px solid #232838;border-radius:8px;padding:4px 10px;cursor:pointer;font:inherit';
-  stay.addEventListener('click', clearCodeSpaceOffer);
-  el.append(label, stay);
-  document.body.appendChild(el);
-  codeSpaceOfferEl = el;
-  // Anything the user does with the composer means they are not done talking.
-  els.input?.addEventListener('input', clearCodeSpaceOffer, { once: true });
-  codeSpaceOfferTimer = setTimeout(() => {
-    codeSpaceOfferTimer = null;
-    if (activeChat()?.id !== chat.id) { clearCodeSpaceOffer(); return; }
-    clearCodeSpaceOffer();
-    openInWorkspace({ autoBrief: true });
-  }, 4000);
+function goToCodeSpaceSoon(chat, opts = {}) {
+  cancelCodeSpaceHandoff();
+  els.input?.addEventListener('input', cancelCodeSpaceHandoff, { once: true });
+  codeSpaceTimer = setTimeout(() => {
+    codeSpaceTimer = null;
+    if (activeChat()?.id !== chat.id) return;
+    openInWorkspace({ autoBrief: opts.autoBrief === true });
+  }, opts.delayMs ?? 2500);
+}
+
+/** A plain line in the transcript (same style as "Stopped.") when the persona did not say it itself. */
+function noteCodeSpaceMove(chat) {
+  chat.messages.push({ role: 'info', content: 'Taking this to the Code Space.', ts: Date.now() });
+  saveState();
+  renderMessages({ scroll: 'bottom' });
 }
 
 function openInWorkspace(opts = {}) {

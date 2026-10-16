@@ -8,7 +8,7 @@ const ok = (name, cond) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`); i
 ok('nothing is injected unless the client asks', codeSpaceHandoffInstruction(undefined) === '' && codeSpaceHandoffInstruction(false) === '' && codeSpaceHandoffInstruction('yes') === '');
 const text = codeSpaceHandoffInstruction(true);
 ok('the instruction carries the exact marker', text.includes(CODE_SPACE_MARKER));
-ok('the instruction says not to rush and to act when the user is ready', /never in a hurry/.test(text) && /ready to build, do it now/.test(text));
+ok('the instruction says not to rush, and to act when the user is ready or asks', /never in a hurry/.test(text) && /ready to build, or asks to go to the Code Space, do it now/.test(text));
 const chatApi = readFileSync(new URL('../api/chat.js', import.meta.url), 'utf8');
 ok('/api/chat only adds it when codeSpaceHandoff is sent', /codeSpaceHandoffInstruction\(codeSpaceHandoff\)/.test(chatApi));
 const client = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
