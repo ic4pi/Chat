@@ -41,28 +41,27 @@ const listening = (port) => new Promise((res) => { const c = net.connect(port, '
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const withoutTools = (hide) => { // a PATH where the listed tools are not found
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bin-'));
-  for (const t of ['bash', 'sh', 'node', 'grep', 'cut', 'sort', 'sleep', 'cat', 'rm', 'kill', 'command', 'env', 'ps', 'ss', 'lsof', 'fuser', 'awk', 'sed', 'tr']) {
+  for (const t of ['bash', 'sh', 'node', 'grep', 'cut', 'sort', 'sleep', 'cat', 'rm', 'kill', 'command', 'env', 'ps', 'ss', 'lsof', 'fuser', 'awk', 'sed', 'tr', 'readlink', 'netstat']) {
     if (hide.includes(t)) continue;
     try { fs.symlinkSync(execFileSync('bash', ['-c', `command -v ${t}`], { encoding: 'utf8' }).trim(), path.join(dir, t)); } catch { /* not installed */ }
   }
   return dir;
 };
-for (const [label, hide] of [['lsof', ['fuser', 'ss']], ['fuser', ['lsof', 'ss']]]) {
-  let have = true;
-  try { execFileSync('bash', ['-c', `command -v ${label}`], { stdio: 'pipe' }); } catch { have = false; }
-  if (!have) { console.log(`skip free-port via ${label} (not installed here)`); continue; }
+// The real sandbox has no lsof, fuser, ss or netstat — only /proc. Hide them all so the test does too.
+{
+  const label = '/proc, no lsof/fuser/ss';
+  const hide = ['lsof', 'fuser', 'ss', 'netstat'];
   const port = 41000 + Math.floor(Math.random() * 1000);
-  const srv = spawn('sh', ['-c', `node -e "require('http').createServer((q,r)=>r.end('x')).listen(${port})"`], { detached: true, stdio: 'ignore' });
+  const srv = spawn('sh', ['-c', `node -e "require('http').createServer((q,r)=>r.end('x')).listen(${port}, '127.0.0.1')"`], { detached: true, stdio: 'ignore' });
   await sleep(800);
-  const sh = srv.pid;
-  try { process.kill(sh, 'SIGKILL'); } catch { /* gone */ }
+  try { process.kill(srv.pid, 'SIGKILL'); } catch { /* gone */ }
   await sleep(300);
   const heldBefore = await listening(port);
   try { execFileSync('bash', ['-c', freePortLines(port).join('\n')], { env: { ...process.env, PATH: withoutTools(hide) }, stdio: 'pipe' }); } catch { /* ignore */ }
   await sleep(300);
   const heldAfter = await listening(port);
-  ok(`killing only the launcher leaves the port held (repro, via ${label})`, heldBefore);
-  ok(`free-port step releases it (via ${label})`, !heldAfter);
+  ok(`killing only the launcher leaves the port held (repro, ${label})`, heldBefore);
+  ok(`free-port step releases it (${label})`, !heldAfter);
   if (heldAfter) { try { execFileSync('bash', ['-c', `fuser -k ${port}/tcp`], { stdio: 'pipe' }); } catch { /* cleanup */ } }
 }
 ok('free-port refuses privileged/invalid ports', freePortLines(80).length === 0 && freePortLines('x').length === 0);
