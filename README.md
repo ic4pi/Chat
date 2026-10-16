@@ -288,3 +288,7 @@ Drop `personas/<id>.md` files (frontmatter `name`, `description`; body = system 
 ## / commands (tools)
 
 Type `/help` in chat. Tools live in `lib/tools/` (one export per command, grouped by file) and run through `POST /api/tools`; they belong to no persona. Commands that act for real (`/email`, `/post`, `/outreach send|auto`) need the unlock password. Add `@client` to any command to apply that client's `/brand` kit. `/schedule` jobs and auto-send `/outreach` follow-ups run on the hourly cron. Needs `OPENROUTER_API_KEY` for the writing tools and KV for durable CRM/outreach data.
+
+## Agencies
+
+`personas/` (characters) · `roles/` (a job: persona + tools) · `agencies/` (which roles, plus a playbook). Every agency extends `agencies/base.md`. `/agency` and `/ask agency/role | request` in chat. See `roles/README.md` and `agencies/README.md`.

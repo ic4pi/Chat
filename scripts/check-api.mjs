@@ -39,6 +39,7 @@ const SYNTAX_FILES = [
   'lib/model-health.js',
   'api/tools.js',
   'lib/tools/index.js',
+  'lib/agencies.js',
 ];
 
 function fail(msg) {

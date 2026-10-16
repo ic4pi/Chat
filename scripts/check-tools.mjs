@@ -99,4 +99,69 @@ await assert.rejects(run('/audit localhost:3000'), /not reachable/);
 // metrics / report run without external accounts
 assert.match((await run('/metrics')).text, /Pipeline/);
 
+
+// ---- agencies / roles -------------------------------------------------------------------------
+const { resolveAgency, listAgencyIds, loadRoles, findPersona, runSeat } = await import('../lib/agencies.js');
+const { loadFilePersonas, DEFAULT_PERSONAS } = await import('../lib/config.js');
+const { registry } = await import('../lib/tools/index.js');
+// Personas as they exist live: repo files + built-ins + the ones saved in /admin (by name).
+const live = ['Phoenix', 'Victoria', 'Gizzlaine', 'Joe King', 'Vera — Strategist', 'Dez — Copywriter', 'Cole — Booking & Outreach',
+  'Nia — Social & Content', 'Priya — Growth & Analytics', 'Marcus — Client Relations & Closer', 'Ash — Recon & OSINT',
+  'Rook — Web App Security', 'Voss — Network & Infra Security', 'Ilya — Malware & Reverse Engineering', 'Toma — Blue Team & Detection']
+  .map((name, i) => ({ id: 'kv' + i, name, systemPrompt: `You are ${name}.` }));
+const personas = [...DEFAULT_PERSONAS, ...(await loadFilePersonas()), ...live];
+assert.equal(findPersona(personas, 'Phoenix').name, 'Phoenix');
+assert.equal(findPersona(personas, 'vera').name, 'Vera — Strategist');
+assert.equal(findPersona(personas, 'moises').id, 'moises');
+
+const roles = await loadRoles();
+assert.ok(roles.size >= 18);
+for (const r of roles.values()) {
+  assert.ok(r.name && r.persona && r.body, `role ${r.id} incomplete`);
+  for (const t of r.tools) { assert.ok(TOOLS.has(t), `role ${r.id}: unknown tool /${t}`); assert.ok(!TOOLS.get(t).client, `role ${r.id}: /${t} is browser-only`); }
+}
+const agencyIds = (await listAgencyIds()).map((a) => a.id);
+assert.ok(agencyIds.length >= 10 && !agencyIds.includes('base'));
+for (const id of agencyIds) {
+  const a = await resolveAgency(id, { personas });
+  assert.ok(a.seats.length >= 3 && a.seats[0].id === 'strategist', `${id}: base strategist missing`);
+  assert.match(a.playbook, /goal first/, `${id}: base playbook missing`);
+  for (const seat of a.seats) {
+    assert.ok(seat.persona, `${id}/${seat.id}: persona "${seat.personaRef}" not found`);
+    for (const t of ['search', 'brand', 'crm', 'report']) assert.ok(seat.tools.includes(t), `${id}/${seat.id} missing base tool /${t}`);
+  }
+}
+const mk = await resolveAgency('marketing', { personas });
+assert.deepEqual(mk.seats.map((s) => s.id).slice(0, 4), ['strategist', 'copywriter', 'guerrilla', 'designer']);
+assert.equal(mk.seats.find((s) => s.id === 'guerrilla').persona.name, 'Moises — Guerrilla Marketing');
+assert.ok(mk.seats.find((s) => s.id === 'media-buyer'));
+// tools belong to roles: no persona file mentions a tool list
+for (const p of await loadFilePersonas()) assert.ok(!/\btools:/.test(p.systemPrompt), `persona ${p.id} carries tools`);
+await assert.rejects(resolveAgency('nope', { personas }), /No agency/);
+
+// running a seat: tool call → result fed back → final answer; sensitive + out-of-toolset tools refused
+await run('/crm add Zed | zed@x.com | Zco');
+const seen = [];
+globalThis.fetch = async (url, opts) => {
+  if (!String(url).includes('openrouter.ai')) return realFetch(url, opts);
+  const msgs = JSON.parse(opts.body).messages;
+  seen.push(msgs);
+  const last = msgs.at(-1).content;
+  const reply = msgs.length === 2 ? '<<tool>>/crm list<</tool>>\n<<tool>>/email a@b.c | s | b<</tool>>\n<<tool>>/ads meta | $100 | x | y<</tool>>'
+    : 'FINAL: ' + (/Zed/.test(last) ? 'saw Zed' : 'no data');
+  return new Response(JSON.stringify({ choices: [{ message: { content: reply } }] }), { status: 200 });
+};
+const { llm } = await import('../lib/hub.js');
+const out = await runSeat({ agencyId: 'marketing', roleId: 'closer', request: 'who do we have?', registry, clientContext: '', llm: (a) => llm(a), model: 'm', personas });
+assert.match(out, /Marcus/); assert.match(out, /FINAL: saw Zed/);
+const toolMsg = seen.at(-1).at(-1).content;
+assert.match(toolMsg, /not run: this acts for real/);      // /email never auto-runs
+assert.match(toolMsg, /\/ads[^\n]*\n→ not in your toolset/); // closer has no /ads
+assert.match(seen[0][0].content, /goal first/);              // system prompt carries the playbook
+assert.match(seen[0][0].content, /Marcus/);                  // ...and the persona
+assert.match(seen[0][0].content, /YOUR ROLE:/);
+assert.match(out, /Used: \/crm list/);
+const viaTool = await run('/ask marketing/closer | who do we have?').catch((e) => e);
+assert.ok(typeof viaTool.text === 'string' || /OPENROUTER|persona/.test(String(viaTool.message)));
+
 console.log('check-tools: ok');
