@@ -280,3 +280,7 @@ hub-schema.sql  the memory database, one migration, RLS on every table
 - **`modal/*.py` is reconstructed, not recovered.** The code actually running
   on Modal has never been in this repo — these files were rebuilt from the
   request/response contract the client encodes. See `modal/README.md`.
+
+## Personas from the repo
+
+Drop `personas/<id>.md` files (frontmatter `name`, `description`; body = system prompt) and push. The next deploy serves them; they override admin/KV personas with the same id. See `personas/README.md`.

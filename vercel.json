@@ -117,16 +117,19 @@
   ],
   "functions": {
     "api/chat.js": {
-      "maxDuration": 300
+      "maxDuration": 300,
+      "includeFiles": "personas/**"
     },
     "api/sandbox/[op].js": {
       "maxDuration": 120
     },
     "api/agent-chat.js": {
-      "maxDuration": 800
+      "maxDuration": 800,
+      "includeFiles": "personas/**"
     },
     "api/group-chat.js": {
-      "maxDuration": 800
+      "maxDuration": 800,
+      "includeFiles": "personas/**"
     },
     "api/campaign.js": {
       "maxDuration": 800
@@ -145,6 +148,24 @@
     },
     "api/hub/[route].js": {
       "maxDuration": 300
+    },
+    "api/social-post.js": {
+      "includeFiles": "personas/**"
+    },
+    "api/admin-config.js": {
+      "includeFiles": "personas/**"
+    },
+    "api/public-config.js": {
+      "includeFiles": "personas/**"
+    },
+    "api/webhooks/meta.js": {
+      "includeFiles": "personas/**"
+    },
+    "api/cron/run-standing-tasks.js": {
+      "includeFiles": "personas/**"
+    },
+    "api/admin-standing-tasks.js": {
+      "includeFiles": "personas/**"
     }
   },
   "crons": [
