@@ -119,6 +119,8 @@ function TreeNode({ node, depth, contextPaths, onClickFile }: {
 
 interface Props {
   repoRoot:       string;
+  /** The repo this project came from — shown in the address box so a restored project never looks empty. */
+  repoUrl?:       string | null;
   tree:           FileNode[];
   totalFiles:     number;
   contextFiles:   Map<string, string>;
@@ -138,11 +140,13 @@ interface Props {
 }
 
 export function FileTree({
-  repoRoot, tree, totalFiles, contextFiles, loading, error,
+  repoRoot, repoUrl, tree, totalFiles, contextFiles, loading, error,
   pythonReady, pythonDetail, rustReady, rustDetail, goReady, goDetail,
   onOpenRepo, onStartBlank, onAddToContext, onRemoveFromContext, onClearContext,
 }: Props) {
-  const [inputPath, setInputPath] = useState(repoRoot || '');
+  const [inputPath, setInputPath] = useState(repoUrl || repoRoot || '');
+  // A project that comes back after a break (reconnected or rebuilt) puts its repo in the box.
+  useEffect(() => { if (repoUrl) setInputPath(repoUrl); }, [repoUrl]);
   // Both buttons share one `loading` flag from the hook — track which one was
   // actually pressed so the staged status text doesn't animate on the other.
   const [pendingAction, setPendingAction] = useState<'open' | 'blank' | null>(null);
