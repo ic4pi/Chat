@@ -153,6 +153,15 @@ export function FileTree({
   useEffect(() => {
     if (!loading) setPendingAction(null);
   }, [loading]);
+  // With a project open the clone box and "Start blank project" are put away: they made a connected
+  // repo look unconnected. "Change" brings them back.
+  const [changing, setChanging] = useState(false);
+  useEffect(() => { setChanging(false); }, [repoRoot, repoUrl]);
+  const connected = !!repoRoot && !loading && !error;
+  const showOpenForm = !connected || changing;
+  const connectedName = repoUrl
+    ? repoUrl.replace(/^https?:\/\/(www\.)?github\.com\//i, '').replace(/\.git$/i, '')
+    : 'Blank project (not on GitHub yet)';
 
   const handleOpen = useCallback(() => {
     const p = inputPath.trim();
@@ -178,6 +187,17 @@ export function FileTree({
       <div style={{ padding: '8px 10px', borderBottom: '1px solid #191D27', flexShrink: 0 }}>
         <div style={{ fontSize: 14, color: '#656C7E', letterSpacing: '0.1em',
           textTransform: 'uppercase', marginBottom: 6 }}>// project</div>
+        {connected && !changing && (
+          <div data-testid="project-connected" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ color: '#34D399', fontSize: 14 }}>●</span>
+            <span style={{ flex: 1, minWidth: 0, fontSize: 15, color: '#ECEEF3', overflow: 'hidden',
+              textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={repoUrl || connectedName}>{connectedName}</span>
+            <button type="button" onClick={() => setChanging(true)} data-testid="project-change"
+              style={{ background: 'transparent', color: '#9198AA', border: '1px solid #232838', borderRadius: 4,
+                padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 14 }}>Change</button>
+          </div>
+        )}
+        {showOpenForm && (<>
         <div style={{ display: 'flex', gap: 6 }}>
           <input
             value={inputPath}
@@ -213,6 +233,7 @@ export function FileTree({
             {blankLabel}
           </button>
         )}
+        </>)}
         {error && (
           <div style={{ marginTop: 5, fontSize: 15, color: '#ff6a6a' }}>✗ {error}</div>
         )}
