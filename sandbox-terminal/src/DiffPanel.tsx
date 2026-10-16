@@ -138,6 +138,8 @@ interface Props {
   onCopyGitCommands?: () => void;
   /** Start Auto-test now — shown beside "Push locked" so a locked Push always has a way out. */
   onRunTest?:     () => void;
+  /** A project is open: keep a slim Push bar even when nothing is waiting to be saved. */
+  projectOpen?:   boolean;
 }
 
 const btnBase: React.CSSProperties = {
@@ -147,7 +149,7 @@ const btnBase: React.CSSProperties = {
 
 export function DiffPanel({
   changes, applying, appliedPaths, canPush, pushBlockedReason, pushing, pushError, pushOk,
-  onApply, onDismiss, onDismissAll, onPush, onCopyGitCommands, onRunTest,
+  onApply, onDismiss, onDismissAll, onPush, onCopyGitCommands, onRunTest, projectOpen,
 }: Props) {
   // Collapsed by default — chat stays readable; expand to inspect diffs / push.
   const [expanded, setExpanded] = useState(false);
@@ -167,7 +169,8 @@ export function DiffPanel({
   });
   const [commitMsg, setCommitMsg] = useState('Apply agent changes from sandbox');
 
-  if (changes.length === 0) return null;
+  // Saved work still needs a way to reach GitHub: with a project open and nothing unsaved, show just Push.
+  if (changes.length === 0 && !projectOpen) return null;
 
   const pending = changes.filter(c => !appliedPaths.has(c.path));
   const allFiles = changes.map(c => ({ path: c.path, content: c.content }));
@@ -185,6 +188,8 @@ export function DiffPanel({
       <div style={{ padding: '6px 10px', background: '#0B0D12',
         borderBottom: expanded ? '1px solid #191D27' : 'none', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          {changes.length > 0 ? (
+            <>
           <button type="button" onClick={() => setExpanded(e => !e)}
             data-testid="diff-expand-btn"
             title={expanded ? 'Collapse changes panel' : 'Expand to review diffs'}
@@ -216,6 +221,8 @@ export function DiffPanel({
               cursor: pending.length > 0 ? 'pointer' : 'default' }}>
             {applying ? 'Saving…' : 'Save'}
           </button>
+            </>
+          ) : <span style={{ flex: 1 }} />}
           {canPush ? (
             <button type="button" onClick={() => { setShowPush(s => !s); setExpanded(true); }}
               data-testid="push-toggle-btn"

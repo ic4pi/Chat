@@ -11,6 +11,8 @@ ok('the instruction carries the exact marker', text.includes(CODE_SPACE_MARKER))
 ok('the instruction says not to rush, and to act when the user is ready or asks', /never in a hurry/.test(text) && /ready to build, or asks to go to the Code Space, do it now/.test(text));
 const chatApi = readFileSync(new URL('../api/chat.js', import.meta.url), 'utf8');
 ok('/api/chat only adds it when codeSpaceHandoff is sent', /codeSpaceHandoffInstruction\(codeSpaceHandoff\)/.test(chatApi));
+const agentApi = readFileSync(new URL('../api/agent-chat.js', import.meta.url), 'utf8');
+ok('the orchestrator is told that pushing is not a build', /Pushing is not a build/.test(agentApi) && /no BRIEF/.test(agentApi));
 const client = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 ok('the client looks for the same marker', client.includes('<<<OPEN_CODE_SPACE>>>'));
 

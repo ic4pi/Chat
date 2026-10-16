@@ -1863,6 +1863,7 @@ export function App() {
         changes={repo.pendingChanges} applying={applying}
         appliedPaths={appliedPaths}
         canPush={!!repo.sandboxId && autoVerify.pushAllowed}
+        projectOpen={!!repo.sandboxId}
         pushBlockedReason={
           !repo.sandboxId
             ? null
