@@ -12,6 +12,7 @@ import {
   looksLikeApplyRequest,
   looksLikeLegacyWelcome,
   needsCodeContext,
+  looksLikeToolMimic,
 } from '../src/agentParse.ts';
 
 let failed = 0;
@@ -75,6 +76,12 @@ const seeds = pickAuditSeedPaths([
 assert(seeds.includes('api/agent-chat.js'), 'audit seeds prefer api source');
 assert(seeds.includes('sandbox-terminal/src/ChatPane.tsx'), 'audit seeds prefer agent UI source');
 assert(!seeds.includes('public/agent/assets/index-X.js'), 'audit seeds skip bundles');
+
+assert(looksLikeToolMimic('**Read:** /workspace/compare-a-x/.gitignore\n\n**Read:** /workspace/compare-a-x\n\n[MORE]\n(empty response)'), 'Read: lines then nothing is a tool mimic');
+assert(looksLikeToolMimic('(empty response)'), 'an empty reply is a failed build');
+assert(!looksLikeToolMimic('File: index.html\n```html\n<h1>Hi</h1>\n```'), 'a File: block is a real build');
+assert(!looksLikeToolMimic('Here is a plan.\n1. Do this\n2. Do that'), 'a prose plan is not a tool mimic');
+assert(!looksLikeToolMimic('**Read:** /a.txt\n```js\nconsole.log(1)\n```'), 'code present is not a mimic');
 
 if (failed) { console.error(`\n${failed} failure(s)`); process.exit(1); }
 console.log('\nAll context-budget tests passed.');
