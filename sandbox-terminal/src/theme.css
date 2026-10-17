@@ -3,7 +3,7 @@
  * its own hex values inline — this is the single source of truth, and the
  * only place that can express hover states, focus rings, or animation
  * (inline React style objects can't do any of those). Palette values match
- * what was already scattered through the app (accent #FF3D8E, bg #0B0D12,
+ * what was already scattered through the app (accent #FF1F5A, bg #0B0D12,
  * etc.) — this doesn't reskin the app, it unifies and extends it.
  */
 
@@ -21,9 +21,9 @@
   --text-dim:   #656C7E;
 
   /* Accent + status */
-  --accent:       #FF3D8E;
-  --accent-dim:   rgba(255, 61, 142, .16);
-  --accent-glow:  rgba(255, 61, 142, .35);
+  --accent:       #FF1F5A;
+  --accent-dim:   rgba(255,31,90, .16);
+  --accent-glow:  rgba(255,31,90, .35);
   --success:      #34D399;
   --success-dim:  rgba(52, 211, 153, .16);
   --danger:       #ff9b9b;

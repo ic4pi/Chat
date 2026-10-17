@@ -76,8 +76,8 @@ const badgeStyle: React.CSSProperties = {
   padding: '2px 7px',
   borderRadius: 999,
   background: 'rgba(212,255,63,0.12)',
-  color: '#FF3D8E',
-  border: '1px solid #C81F6B',
+  color: '#FF1F5A',
+  border: '1px solid #C8123F',
   whiteSpace: 'nowrap',
   maxWidth: 140,
   overflow: 'hidden',
@@ -330,7 +330,7 @@ export function ChunkModelPanel({
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
         <h2
           id="chunk-model-panel-title"
-          style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#FF3D8E', letterSpacing: '0.06em', textTransform: 'uppercase' }}
+          style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#FF1F5A', letterSpacing: '0.06em', textTransform: 'uppercase' }}
         >
           LLM per code slice
         </h2>
@@ -388,7 +388,7 @@ export function ChunkModelPanel({
                   checked={!!enabled[chunk.id]}
                   onChange={(e) => handleToggle(chunk.id, e.target.checked)}
                   aria-labelledby={rowLabelId}
-                  style={{ accentColor: '#FF3D8E' }}
+                  style={{ accentColor: '#FF1F5A' }}
                 />
               </label>
 
@@ -504,7 +504,7 @@ export function ChunkModelPanel({
             aria-busy={busy}
             title={!sandboxReady ? 'Open a blank project or repo first' : 'Generate enabled slices'}
             style={{
-              background: busy || !sandboxReady ? '#191D27' : '#FF3D8E',
+              background: busy || !sandboxReady ? '#191D27' : '#FF1F5A',
               color: busy || !sandboxReady ? '#9198AA' : '#0B0D12',
               border: 'none',
               borderRadius: 4,

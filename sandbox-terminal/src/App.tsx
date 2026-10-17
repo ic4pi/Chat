@@ -216,7 +216,7 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
   const running = verifyState === 'running' || verifyState === 'detecting'
     || String(verifyState).startsWith('retry');
   const color = passed ? '#0B0D12' : failed ? '#fff' : '#0B0D12';
-  const bg = passed ? '#34D399' : failed ? '#8a1f1f' : '#FF3D8E';
+  const bg = passed ? '#34D399' : failed ? '#8a1f1f' : '#FF1F5A';
   const shortCmd = testCommand
     ? (testCommand.length > 64 ? `${testCommand.slice(0, 64)}…` : testCommand)
     : '…';
@@ -238,7 +238,7 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
           style={{ flex: 1, background: '#171B26', color: '#ECEEF3', border: '1px solid #232838',
             borderRadius: 4, padding: '4px 8px', fontFamily: 'inherit', fontSize: 16, outline: 'none' }} />
         <button onClick={() => cmd.trim() && onSetCommand(cmd.trim())}
-          style={{ background: '#FF3D8E', color: '#0B0D12', border: 'none', borderRadius: 4,
+          style={{ background: '#FF1F5A', color: '#0B0D12', border: 'none', borderRadius: 4,
             padding: '4px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 15, fontWeight: 700 }}>
           Set & Run</button>
         <button onClick={onDismiss}
@@ -250,7 +250,7 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
   );
   return (
     <div data-testid="verify-banner" style={{ display: 'flex', alignItems: 'center', gap: 10,
-      padding: '10px 12px', background: bg, borderTop: `2px solid ${passed ? '#1FAE7E' : failed ? '#ff6a6a' : '#FF6FAE'}`,
+      padding: '10px 12px', background: bg, borderTop: `2px solid ${passed ? '#1FAE7E' : failed ? '#ff6a6a' : '#FF5C84'}`,
       flexShrink: 0 }}>
       <div style={{ width: 10, height: 10, borderRadius: '50%',
         background: passed || running ? '#0B0D12' : '#fff', flexShrink: 0 }} />
@@ -1465,23 +1465,23 @@ export function App() {
       borderBottom: '1px solid #191D27', background: '#0B0D12' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
         padding: '6px 12px' }}>
-        <a href="/" style={{ color: '#FF3D8E', fontSize: 16, textDecoration: 'none',
+        <a href="/" style={{ color: '#FF1F5A', fontSize: 16, textDecoration: 'none',
           whiteSpace: 'nowrap', padding: '2px 0', fontWeight: 700 }}>← Chat</a>
         <button type="button" onClick={() => { setHomeList(listSessions()); setShowHome(true); }}
           title="Browse saved code space conversations"
           style={{ background: showHome ? 'rgba(212,255,63,0.16)' : 'transparent',
-            color: '#FF3D8E', border: '1px solid #C81F6B', borderRadius: 4,
+            color: '#FF1F5A', border: '1px solid #C8123F', borderRadius: 4,
             padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 14,
             fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
           Home
         </button>
-        <span style={{ color: '#FF3D8E', fontSize: 15, whiteSpace: 'nowrap',
+        <span style={{ color: '#FF1F5A', fontSize: 15, whiteSpace: 'nowrap',
           overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 }}
           title={sessionTitle}>
           {sessionTitle}
         </span>
         {fromChat && (
-          <span style={{ fontSize: 14, color: '#C81F6B', whiteSpace: 'nowrap' }}>
+          <span style={{ fontSize: 14, color: '#C8123F', whiteSpace: 'nowrap' }}>
             from chat
           </span>
         )}
@@ -1529,8 +1529,8 @@ export function App() {
           title={orchPersona
             ? `You talk to ${orchPersona.name} (on ${orchPersona.model}); it briefs the coder below`
             : 'Off — your messages go straight to the coder'}
-          style={{ background: orchPersona ? 'rgba(255,61,142,.12)' : '#12151D', color: '#ECEEF3',
-            border: `1px solid ${orchPersona ? '#C81F6B' : '#232838'}`,
+          style={{ background: orchPersona ? 'rgba(255,31,90,.12)' : '#12151D', color: '#ECEEF3',
+            border: `1px solid ${orchPersona ? '#C8123F' : '#232838'}`,
             borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 15, cursor: 'pointer' }}>
           {(personaList.length ? personaList : orchPrefs.personaId
             ? [{ id: orchPrefs.personaId, name: orchPrefs.personaId }] : []
@@ -1941,12 +1941,12 @@ export function App() {
           <div role="dialog" aria-label="Code Space home"
             onClick={e => e.stopPropagation()}
             style={{ width: 'min(520px, 100%)', maxHeight: 'min(80dvh, 640px)', overflow: 'auto',
-              background: '#12151D', border: '1px solid #FF3D8E', borderRadius: 8, padding: 14 }}>
+              background: '#12151D', border: '1px solid #FF1F5A', borderRadius: 8, padding: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
               <h2 style={{ margin: 0, flex: 1, fontSize: 18, letterSpacing: '0.08em',
-                textTransform: 'uppercase', color: '#FF3D8E' }}>Home · Code Spaces</h2>
+                textTransform: 'uppercase', color: '#FF1F5A' }}>Home · Code Spaces</h2>
               <button type="button" onClick={startFreshHome}
-                style={{ background: 'rgba(212,255,63,0.12)', color: '#FF3D8E', border: '1px solid #C81F6B',
+                style={{ background: 'rgba(212,255,63,0.12)', color: '#FF1F5A', border: '1px solid #C8123F',
                   borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
                   fontSize: 15, fontWeight: 700 }}>New</button>
               <button type="button" onClick={() => setShowHome(false)}
@@ -1956,7 +1956,7 @@ export function App() {
             </div>
             <p style={{ margin: '0 0 12px', fontSize: 16, color: '#9198AA', lineHeight: 1.4 }}>
               Open a saved code space conversation, or start a fresh Home code space.
-              Opening <b style={{ color: '#FF3D8E' }}>Code Space</b> from Chat always loads that chat here.
+              Opening <b style={{ color: '#FF1F5A' }}>Code Space</b> from Chat always loads that chat here.
             </p>
             {homeList.length === 0 ? (
               <p style={{ color: '#656C7E', fontSize: 16 }}>No saved code spaces yet.</p>
@@ -1966,9 +1966,9 @@ export function App() {
                   <li key={s.id}>
                     <button type="button" onClick={() => openStoredSession(s)}
                       style={{ width: '100%', textAlign: 'left', background: s.id === sessionId ? 'rgba(212,255,63,0.1)' : '#0B0D12',
-                        border: `1px solid ${s.id === sessionId ? '#FF3D8E' : '#232838'}`, borderRadius: 6,
+                        border: `1px solid ${s.id === sessionId ? '#FF1F5A' : '#232838'}`, borderRadius: 6,
                         padding: '10px 12px', cursor: 'pointer', fontFamily: 'inherit' }}>
-                      <div style={{ color: '#FF3D8E', fontSize: 18, fontWeight: 700,
+                      <div style={{ color: '#FF1F5A', fontSize: 18, fontWeight: 700,
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {s.title || 'Code Space'}
                       </div>
@@ -2007,8 +2007,8 @@ export function App() {
               {(['terminal', 'preview'] as const).map(t => (
                 <button key={t} type="button" onClick={() => setDesktopRightTab(t)}
                   style={{ flex: 1, padding: '8px 0', background: desktopRightTab === t ? '#12151D' : 'transparent',
-                    color: desktopRightTab === t ? '#FF3D8E' : '#9198AA', border: 'none',
-                    borderBottom: desktopRightTab === t ? '2px solid #FF3D8E' : '2px solid transparent',
+                    color: desktopRightTab === t ? '#FF1F5A' : '#9198AA', border: 'none',
+                    borderBottom: desktopRightTab === t ? '2px solid #FF1F5A' : '2px solid transparent',
                     fontFamily: 'inherit', fontSize: 15, fontWeight: desktopRightTab === t ? 700 : 500,
                     cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                   {t === 'terminal' ? 'Terminal' : 'Preview'}
@@ -2063,8 +2063,8 @@ export function App() {
                 aria-current={mobileTab === t.id ? 'page' : undefined}
                 style={{ flex: 1, padding: '14px 0', minHeight: 48,
                   background: mobileTab === t.id ? '#12151D' : 'transparent',
-                  color: mobileTab === t.id ? '#FF3D8E' : '#9198AA', border: 'none',
-                  borderTop: mobileTab === t.id ? '2px solid #FF3D8E' : '2px solid transparent',
+                  color: mobileTab === t.id ? '#FF1F5A' : '#9198AA', border: 'none',
+                  borderTop: mobileTab === t.id ? '2px solid #FF1F5A' : '2px solid transparent',
                   fontFamily: 'inherit', fontSize: 16, fontWeight: mobileTab === t.id ? 700 : 500,
                   cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.08em',
                   WebkitTapHighlightColor: 'transparent' }}>

@@ -107,7 +107,7 @@ export function PreviewPanel({ sandboxId, detectedPort, autoStartKey = 0, dir, d
             borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 16 }}
         />
         <button type="button" onClick={() => void start()} disabled={starting}
-          style={{ background: '#FF3D8E', color: '#0B0D12', border: 'none', borderRadius: 4,
+          style={{ background: '#FF1F5A', color: '#0B0D12', border: 'none', borderRadius: 4,
             padding: '6px 12px', cursor: starting ? 'default' : 'pointer', fontFamily: 'inherit',
             fontSize: 16, fontWeight: 700, opacity: starting ? 0.6 : 1, whiteSpace: 'nowrap' }}>
           {starting ? 'Starting…' : url ? 'Restart' : 'Start preview'}

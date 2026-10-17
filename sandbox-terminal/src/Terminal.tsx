@@ -49,12 +49,12 @@ export interface TerminalHandle {
 // ── xterm theme ──────────────────────────────────────────────────────────────
 const THEME = {
   background: '#0B0D12', foreground: '#ECEEF3',
-  cursor: '#FF3D8E', cursorAccent: '#0B0D12',
+  cursor: '#FF1F5A', cursorAccent: '#0B0D12',
   selectionBackground: 'rgba(212,255,63,.2)',
-  black: '#0B0D12', red: '#ff6a6a', green: '#34D399', yellow: '#FF3D8E',
+  black: '#0B0D12', red: '#ff6a6a', green: '#34D399', yellow: '#FF1F5A',
   blue: '#5b8dee', magenta: '#c792ea', cyan: '#89ddff', white: '#ECEEF3',
   brightBlack: '#656C7E', brightRed: '#ff9b9b', brightGreen: '#7FE0B8',
-  brightYellow: '#FF6FAE', brightBlue: '#82aaff', brightMagenta: '#dbb0f0',
+  brightYellow: '#FF5C84', brightBlue: '#82aaff', brightMagenta: '#dbb0f0',
   brightCyan: '#aadeff', brightWhite: '#ffffff',
 };
 
@@ -386,7 +386,7 @@ export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function Sandbo
       {/* toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
         borderBottom: '1px solid #191D27', background: '#0B0D12', flexShrink: 0 }}>
-        <span style={{ color: '#FF3D8E', fontSize: 15, letterSpacing: '0.1em',
+        <span style={{ color: '#FF1F5A', fontSize: 15, letterSpacing: '0.1em',
           textTransform: 'uppercase', whiteSpace: 'nowrap', userSelect: 'none' }}>
           // shell
         </span>
@@ -403,7 +403,7 @@ export const SandboxTerminal = forwardRef<TerminalHandle, Props>(function Sandbo
                 borderRadius: 4, padding: '5px 14px', cursor: 'pointer',
                 fontFamily: 'inherit', fontSize: 16, fontWeight: 700 }}>Cancel</button>
           : <button onClick={runShellInput} disabled={!command.trim()} data-testid="run-btn"
-              style={{ background: command.trim() ? '#FF3D8E' : '#191D27',
+              style={{ background: command.trim() ? '#FF1F5A' : '#191D27',
                 color: command.trim() ? '#0B0D12' : '#323A50', border: 'none',
                 borderRadius: 4, padding: '5px 16px', cursor: command.trim() ? 'pointer' : 'default',
                 fontFamily: 'inherit', fontSize: 16, fontWeight: 700 }}>Run</button>}
