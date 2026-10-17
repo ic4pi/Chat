@@ -578,15 +578,15 @@ function FileChangeBlock({ path, content, isApplied }: {
         padding: '5px 10px', borderBottom: '1px solid rgba(52,211,153,.16)', gap: 8, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
           <span style={{ fontSize: 14, color: '#34D399', fontWeight: 700 }}>FILE</span>
-          <span style={{ fontSize: 15, color: '#ECEEF3', overflow: 'hidden',
+          <span style={{ fontSize: 15, color: '#F2ECEF', overflow: 'hidden',
             textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{path}</span>
-          <span style={{ fontSize: 14, color: '#656C7E' }}>{lines} lines</span>
-          {isApplied && <span style={{ fontSize: 14, color: '#FF3D8E' }}>✓ saved</span>}
+          <span style={{ fontSize: 14, color: '#756B7B' }}>{lines} lines</span>
+          {isApplied && <span style={{ fontSize: 14, color: '#FF1F5A' }}>✓ saved</span>}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <button type="button"
             onClick={() => downloadTextFile(path, content)}
-            style={{ background: '#FF3D8E', color: '#0B0D12', border: 'none',
+            style={{ background: '#FF1F5A', color: '#09080C', border: 'none',
               borderRadius: 4, padding: '3px 10px', cursor: 'pointer',
               fontFamily: 'inherit', fontSize: 15, fontWeight: 700 }}>
             Download
@@ -596,13 +596,13 @@ function FileChangeBlock({ path, content, isApplied }: {
               const ok = await copyText(content);
               if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
             }}
-            style={{ background: 'transparent', color: copied ? '#FF3D8E' : '#34D399',
+            style={{ background: 'transparent', color: copied ? '#FF1F5A' : '#34D399',
               border: '1px solid rgba(52,211,153,.16)', borderRadius: 4, padding: '3px 8px',
               cursor: 'pointer', fontFamily: 'inherit', fontSize: 15 }}>
             {copied ? 'Copied' : 'Copy'}
           </button>
           <button onClick={() => setShowCode(s => !s)}
-            style={{ background: 'transparent', color: '#656C7E', border: 'none',
+            style={{ background: 'transparent', color: '#756B7B', border: 'none',
               fontSize: 15, cursor: 'pointer', padding: 0 }}>
             {showCode ? 'hide' : 'show'}
           </button>
@@ -610,7 +610,7 @@ function FileChangeBlock({ path, content, isApplied }: {
       </div>
       {showCode && (
         <pre style={{ margin: 0, padding: '8px 12px', overflowX: 'auto',
-          fontSize: 16, lineHeight: 1.5, color: '#ECEEF3', maxHeight: 400 }}>
+          fontSize: 16, lineHeight: 1.5, color: '#F2ECEF', maxHeight: 400 }}>
           {content}
         </pre>
       )}
@@ -629,11 +629,11 @@ function CodeBlock({ lang, content, onRun }: {
   // with a nonsense syntax error. Markup needs to be rendered, not run.
   const isHtml = /^(html|htm)$/i.test((lang || '').trim());
   return (
-    <div style={{ margin: '8px 0', background: '#0B0D12',
-      border: '1px solid #232838', borderRadius: 6, overflow: 'hidden' }}>
+    <div style={{ margin: '8px 0', background: '#09080C',
+      border: '1px solid #2A2030', borderRadius: 6, overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '4px 10px', borderBottom: '1px solid #191D27', gap: 8 }}>
-        <span style={{ fontSize: 14, color: '#656C7E', textTransform: 'uppercase',
+        padding: '4px 10px', borderBottom: '1px solid #18151D', gap: 8 }}>
+        <span style={{ fontSize: 14, color: '#756B7B', textTransform: 'uppercase',
           letterSpacing: '0.1em' }}>{lang || 'code'}</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <button type="button" data-testid="copy-code-btn"
@@ -641,7 +641,7 @@ function CodeBlock({ lang, content, onRun }: {
               const ok = await copyText(content);
               if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
             }}
-            style={{ background: 'transparent', color: copied ? '#FF3D8E' : '#34D399',
+            style={{ background: 'transparent', color: copied ? '#FF1F5A' : '#34D399',
               border: '1px solid rgba(52,211,153,.16)', borderRadius: 4, padding: '2px 10px',
               cursor: 'pointer', fontFamily: 'inherit', fontSize: 15 }}>
             {copied ? 'Copied' : 'Copy'}
@@ -669,11 +669,11 @@ function CodeBlock({ lang, content, onRun }: {
           title="HTML preview"
           srcDoc={content}
           sandbox="allow-scripts allow-forms allow-popups"
-          style={{ width: '100%', height: 320, border: 'none', borderBottom: '1px solid #191D27', background: '#fff' }}
+          style={{ width: '100%', height: 320, border: 'none', borderBottom: '1px solid #18151D', background: '#fff' }}
         />
       )}
       <pre style={{ margin: 0, padding: '8px 12px', overflowX: 'auto',
-        fontSize: 16, lineHeight: 1.5, color: '#ECEEF3',
+        fontSize: 16, lineHeight: 1.5, color: '#F2ECEF',
         maxHeight: 300, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
         {content}
       </pre>
@@ -693,7 +693,7 @@ function AssistantBody({ msg, appliedPaths, onRunCode }: {
         {segs.map((seg, i) => {
           if (seg.type === 'text') return (
             <p key={i} style={{ margin: '4px 0', fontSize: 18, lineHeight: 1.6,
-              color: '#ECEEF3', whiteSpace: 'pre-wrap' }}>{seg.content.trim()}</p>
+              color: '#F2ECEF', whiteSpace: 'pre-wrap' }}>{seg.content.trim()}</p>
           );
           if (seg.type === 'file-change') return (
             <FileChangeBlock key={i} path={seg.path} lang={seg.lang}
@@ -713,7 +713,7 @@ function AssistantBody({ msg, appliedPaths, onRunCode }: {
   // MUST still render — previously these were invisible.
   return (
     <p data-testid="assistant-text" style={{ margin: '4px 0', fontSize: 18, lineHeight: 1.6,
-      color: '#ECEEF3', whiteSpace: 'pre-wrap' }}>{msg.content}</p>
+      color: '#F2ECEF', whiteSpace: 'pre-wrap' }}>{msg.content}</p>
   );
 }
 
@@ -1603,16 +1603,16 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
   return (
     <div data-testid="chat-pane" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
-      background: '#0B0D12', color: '#ECEEF3',
+      background: '#09080C', color: '#F2ECEF',
       fontFamily: '"JetBrains Mono",ui-monospace,monospace' }}>
 
       {/* status strip — only when there is something to say */}
       {(error || autoSelectedFiles.length > 0 || contextFiles.size > 0) && (
-      <div style={{ padding: '5px 12px', borderBottom: '1px solid #191D27',
-        background: '#0B0D12', flexShrink: 0, display: 'flex',
+      <div style={{ padding: '5px 12px', borderBottom: '1px solid #18151D',
+        background: '#09080C', flexShrink: 0, display: 'flex',
         alignItems: 'center', gap: 10 }}>
         {(autoSelectedFiles.length > 0 || contextFiles.size > 0) && (
-          <span style={{ fontSize: 14, color: '#656C7E' }}>
+          <span style={{ fontSize: 14, color: '#756B7B' }}>
             reading {Math.max(autoSelectedFiles.length, contextFiles.size)} file
             {Math.max(autoSelectedFiles.length, contextFiles.size) !== 1 ? 's' : ''} for you
           </span>
@@ -1637,22 +1637,22 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 border: '1px dashed rgba(52,211,153,.16)', borderRadius: 6,
                 fontSize: 15, color: '#7FE0B8', whiteSpace: 'pre-wrap',
                 maxHeight: 160, overflowY: 'auto' }}>
-                <span style={{ fontWeight: 700, display: 'block', marginBottom: 3, color: '#FF3D8E' }}>
+                <span style={{ fontWeight: 700, display: 'block', marginBottom: 3, color: '#FF1F5A' }}>
                   ⟳ Auto-retry — test failure injected
                 </span>
                 {msg.content.slice(0, 500)}{msg.content.length > 500 ? '…' : ''}
               </div>
             ) : msg.kind === 'note' ? (
-              <div data-testid="note-msg" style={{ fontSize: 14, color: '#9198AA', fontStyle: 'italic',
+              <div data-testid="note-msg" style={{ fontSize: 14, color: '#A39AA8', fontStyle: 'italic',
                 padding: '2px 4px' }}>
                 {msg.content}
               </div>
             ) : msg.role === 'user' && msg.kind === 'brief' ? (
-              <div data-testid="brief-msg" style={{ background: '#12151D',
-                border: '1px solid #323A50', borderRadius: 6, padding: '6px 10px' }}>
+              <div data-testid="brief-msg" style={{ background: '#100E14',
+                border: '1px solid #3E3048', borderRadius: 6, padding: '6px 10px' }}>
                 <details>
                   <summary style={{ cursor: 'pointer', fontSize: 14, fontWeight: 700,
-                    letterSpacing: '0.08em', textTransform: 'uppercase', color: '#9198AA' }}>
+                    letterSpacing: '0.08em', textTransform: 'uppercase', color: '#A39AA8' }}>
                     Brief → coder
                   </summary>
                   <pre style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
@@ -1665,14 +1665,14 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                   wantCompare: !!msg.wantCompare,
                   onBuild: (req) => buildPending(msg.id, msg.content, req),
                 }) : msg.builtBy ? (
-                  <div style={{ fontSize: 13, color: '#9198AA', marginTop: 4 }}>Built by {msg.builtBy}</div>
+                  <div style={{ fontSize: 13, color: '#A39AA8', marginTop: 4 }}>Built by {msg.builtBy}</div>
                 ) : null}
                 {onCompareBrief && !msg.pending && (
                   <button type="button" data-testid="brief-compare-btn"
                     onClick={() => onCompareBrief(msg.content)}
                     title="Two coders build this brief side by side — pick the one you like"
-                    style={{ marginTop: 6, background: 'transparent', color: '#FF9FC4',
-                      border: '1px solid rgba(255,61,142,.5)', borderRadius: 4, padding: '3px 10px',
+                    style={{ marginTop: 6, background: 'transparent', color: '#FF8FA8',
+                      border: '1px solid rgba(255,31,90,.5)', borderRadius: 4, padding: '3px 10px',
                       cursor: 'pointer', fontFamily: 'inherit', fontSize: 14 }}>
                     ⇄ Build two versions
                   </button>
@@ -1695,7 +1695,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                   fontWeight: 700,
                   letterSpacing: '0.08em',
                   textTransform: 'uppercase',
-                  color: '#FF3D8E',
+                  color: '#FF1F5A',
                   marginBottom: 4,
                 }}>
                   You asked
@@ -1720,10 +1720,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             ) : msg.speaker === 'persona' || (persona && msg.kind === 'imported') ? (
               <div data-testid="persona-msg">
                 <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: '0.08em',
-                  textTransform: 'uppercase', color: '#FF9FC4', marginBottom: 4 }}>
+                  textTransform: 'uppercase', color: '#FF8FA8', marginBottom: 4 }}>
                   {persona?.name || 'Persona'}
                 </div>
-                <p style={{ margin: '4px 0', fontSize: 18, lineHeight: 1.6, color: '#ECEEF3',
+                <p style={{ margin: '4px 0', fontSize: 18, lineHeight: 1.6, color: '#F2ECEF',
                   whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                   {(() => {
                     const { say, brief } = splitPersonaReply(msg.content);
@@ -1752,19 +1752,19 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           <div data-testid="thinking" style={{ alignSelf: 'flex-start', maxWidth: '92%', width: '100%' }}>
             <div style={{
               display: 'flex', alignItems: 'center', gap: 8,
-              background: 'rgba(255,61,142,.08)', border: '1px solid rgba(255,61,142,.3)',
+              background: 'rgba(255,31,90,.08)', border: '1px solid rgba(255,31,90,.3)',
               borderRadius: 6, padding: '8px 12px', marginBottom: liveThoughts ? 6 : 0,
             }}>
               <span aria-hidden="true" style={{
-                width: 9, height: 9, borderRadius: '50%', background: '#FF3D8E', flexShrink: 0,
+                width: 9, height: 9, borderRadius: '50%', background: '#FF1F5A', flexShrink: 0,
                 animation: 'agent-pulse 1.1s ease-in-out infinite',
               }} />
-              <span style={{ fontSize: 18, fontWeight: 600, color: '#FF9FC4', flex: 1 }}>
+              <span style={{ fontSize: 18, fontWeight: 600, color: '#FF8FA8', flex: 1 }}>
                 {liveStatus || 'Working…'} · {elapsedSecs}s
               </span>
               <button type="button" data-testid="cancel-send" onClick={cancelSend}
                 title="Stop waiting and pick a different model"
-                style={{ background: 'transparent', color: '#FF9FC4', border: '1px solid rgba(255,61,142,.5)',
+                style={{ background: 'transparent', color: '#FF8FA8', border: '1px solid rgba(255,31,90,.5)',
                   borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
                   fontSize: 14, fontWeight: 600, flexShrink: 0 }}>
                 Cancel
@@ -1779,9 +1779,9 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 wordBreak: 'break-word',
                 fontSize: 15,
                 lineHeight: 1.45,
-                color: '#9198AA',
-                background: '#0B0D12',
-                border: '1px solid #191D27',
+                color: '#A39AA8',
+                background: '#09080C',
+                border: '1px solid #18151D',
                 borderRadius: 4,
                 padding: '8px 10px',
                 fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
@@ -1793,16 +1793,16 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       </div>
 
       {uploads.length > 0 && (
-        <div style={{ padding: '6px 12px', borderTop: '1px solid #191D27',
-          display: 'flex', flexWrap: 'wrap', gap: 6, background: '#0B0D12' }}>
+        <div style={{ padding: '6px 12px', borderTop: '1px solid #18151D',
+          display: 'flex', flexWrap: 'wrap', gap: 6, background: '#09080C' }}>
           {uploads.map((u, i) => (
             <span key={`${u.name}-${i}`} style={{
-              fontSize: 14, color: '#9198AA', background: '#171B26', border: '1px solid #232838',
+              fontSize: 14, color: '#A39AA8', background: '#16131B', border: '1px solid #2A2030',
               borderRadius: 4, padding: '2px 8px', display: 'inline-flex', gap: 6, alignItems: 'center',
             }}>
               {u.kind === 'image' ? '🖼' : '📄'} {u.name}
               <button type="button" onClick={() => setUploads(list => list.filter((_, j) => j !== i))}
-                style={{ background: 'transparent', border: 'none', color: '#656C7E', cursor: 'pointer', padding: 0 }}>×</button>
+                style={{ background: 'transparent', border: 'none', color: '#756B7B', cursor: 'pointer', padding: 0 }}>×</button>
             </span>
           ))}
         </div>
@@ -1810,33 +1810,33 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       {/* input */}
       <form data-testid="chat-form" onSubmit={e => { e.preventDefault(); void send(); }}
-        style={{ borderTop: '1px solid #191D27', padding: '10px 12px',
+        style={{ borderTop: '1px solid #18151D', padding: '10px 12px',
           display: 'flex', gap: 8, flexShrink: 0, alignItems: 'flex-end',
-          background: '#0B0D12' }}>
+          background: '#09080C' }}>
         <input ref={fileInputRef} type="file" multiple accept="image/*,.txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.css,.html,.yml,.yaml,.toml,.env,.csv"
           style={{ display: 'none' }}
           onChange={e => { void handleFiles(e.target.files); }} />
         <button type="button" title="Upload photo or file"
           onClick={() => fileInputRef.current?.click()}
           disabled={loading}
-          style={{ background: '#171B26', color: '#9198AA', border: '1px solid #232838',
+          style={{ background: '#16131B', color: '#A39AA8', border: '1px solid #2A2030',
             borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
             fontFamily: 'inherit', fontSize: 16, alignSelf: 'flex-end' }}>📎</button>
         <button type="button" data-testid="workspace-mic" title={listening ? 'Stop listening' : (speakOn ? 'Voice chat — tap to talk' : 'Dictate into the box')}
           onClick={toggleMic}
           disabled={loading}
-          style={{ background: listening ? '#3a1a1a' : '#171B26',
-            color: listening ? '#ff8a8a' : '#9198AA',
-            border: `1px solid ${listening ? '#6a2a2a' : '#232838'}`,
+          style={{ background: listening ? '#3a1a1a' : '#16131B',
+            color: listening ? '#ff8a8a' : '#A39AA8',
+            border: `1px solid ${listening ? '#6a2a2a' : '#2A2030'}`,
             borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
             fontFamily: 'inherit', fontSize: 16, alignSelf: 'flex-end' }}>
           {listening ? '●' : '🎙'}
         </button>
         <button type="button" data-testid="workspace-speak" title={speakOn ? 'Voice replies on — tap to mute' : 'Voice replies off — tap to speak answers'}
           onClick={toggleSpeak}
-          style={{ background: speakOn ? 'rgba(52,211,153,.16)' : '#171B26',
-            color: speakOn ? '#FF3D8E' : '#9198AA',
-            border: `1px solid ${speakOn ? 'rgba(52,211,153,.16)' : '#232838'}`,
+          style={{ background: speakOn ? 'rgba(52,211,153,.16)' : '#16131B',
+            color: speakOn ? '#FF1F5A' : '#A39AA8',
+            border: `1px solid ${speakOn ? 'rgba(52,211,153,.16)' : '#2A2030'}`,
             borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
             fontFamily: 'inherit', fontSize: 16, alignSelf: 'flex-end' }}>
           {speakOn ? '🔊' : '🔇'}
@@ -1851,15 +1851,15 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             : listening ? (speakOn ? 'Listening — will send…' : 'Listening…')
             : persona ? `Talk to ${persona.name}…` : 'What should change?'}
           disabled={loading}
-          style={{ flex: 1, background: '#12151D', color: '#ECEEF3',
-            border: '1px solid #232838', borderRadius: 4,
+          style={{ flex: 1, background: '#100E14', color: '#F2ECEF',
+            border: '1px solid #2A2030', borderRadius: 4,
             padding: '7px 10px', fontFamily: 'inherit', fontSize: 22,
             outline: 'none', resize: 'vertical', minHeight: 48, maxHeight: 120,
-            WebkitTextFillColor: '#ECEEF3',
+            WebkitTextFillColor: '#F2ECEF',
             opacity: 1 }} />
         <button type="submit" data-testid="chat-send" disabled={(!input.trim() && uploads.length === 0) || loading}
-          style={{ background: (input.trim() || uploads.length) && !loading ? '#FF3D8E' : '#191D27',
-            color: (input.trim() || uploads.length) && !loading ? '#0B0D12' : '#9198AA',
+          style={{ background: (input.trim() || uploads.length) && !loading ? '#FF1F5A' : '#18151D',
+            color: (input.trim() || uploads.length) && !loading ? '#09080C' : '#A39AA8',
             border: 'none', borderRadius: 4, padding: '8px 16px',
             cursor: (input.trim() || uploads.length) && !loading ? 'pointer' : 'default',
             fontFamily: 'inherit', fontSize: 16, fontWeight: 700,
