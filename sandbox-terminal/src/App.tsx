@@ -394,7 +394,7 @@ export function App() {
   // The Code Space writes code, so it opens on the Coders package rather than a
   // raw provider catalog. 'provider' is the escape hatch to the full list.
   const [modelScope,   setModelScope]   = useState<'coders' | 'provider'>(
-    () => (localStorage.getItem(MODEL_SCOPE_KEY) === 'provider' ? 'provider' : 'coders'),
+    () => (localStorage.getItem(MODEL_SCOPE_KEY) === 'coders' ? 'coders' : 'provider'),
   );
   const [coderBrands,  setCoderBrands]  = useState<ResolvedCoderBrand[]>([]);
   const [keys,         setKeys]         = useState(() => loadProviderKeys());
@@ -1561,7 +1561,8 @@ export function App() {
           </select>
         )}
         {modelScope === 'coders' ? (
-          <select value={coderKey(provider, model)} onChange={e => handleCoderChange(e.target.value)}
+          <select value={coderKey(provider, model)}
+            onChange={e => { if (e.target.value === '__all') handleScopeChange('provider'); else handleCoderChange(e.target.value); }}
             disabled={modelsLoading}
             title="Coding models — free ones run without a password, paid ones need the unlock"
             style={{ background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
@@ -1579,6 +1580,7 @@ export function App() {
                 })}
               </optgroup>
             ))}
+            <option value="__all">More models… (every model, any provider)</option>
             {/* A handoff from chat can arrive on a non-coder model; keep it
                 selectable so the dropdown never shows a blank value. */}
             {!flattenCoderModels(coderBrands).some(m => m.provider === provider && m.id === model) && (

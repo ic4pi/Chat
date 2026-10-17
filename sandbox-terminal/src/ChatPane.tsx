@@ -26,6 +26,11 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import type { PendingChange } from './useRepoContext.js';
 import type { FileNode } from './types.js';
 import {
+  adoptBareHtmlDocument,
+  hasExplicitBuildIntent,
+  continuationPrompt,
+  mergeContinuation,
+  stripContinueMarkers,
   extractFileChangeReport,
   formatRejectedSandboxWarning,
   looksLikeApplyRequest,
@@ -47,6 +52,7 @@ import {
 import { copyText, downloadTextFile } from './downloadFile.js';
 import { loadPaidPassword } from './providerPrefs.js';
 import {
+  asksAboutWork,
   BRIEF_WRITER_SYSTEM,
   NO_BRIEF,
   buildBriefWriterTurns,
@@ -1214,6 +1220,19 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             brief = splitPersonaReply(out).brief ?? out;
           }
         }
+        // The persona answered in character and never briefed (it wrote code or told
+        // you to paste something), but you clearly asked for a build: the request
+        // itself becomes the brief, so the work still reaches the coder.
+        if (!brief && !asksAboutWork(text) && (hasExplicitBuildIntent(text) || looksLikeApplyRequest(text))) {
+          const code = [...raw.matchAll(/```[\w+\-.]*\n([\s\S]*?)```/g)].map(m => m[1]!.trim()).join('\n\n').slice(0, 6000);
+          brief = [
+            `Goal: ${text.trim().slice(0, 6000)}`,
+            `Context: this is the user's request as written. Lead's notes: ${split.say.slice(0, 1200) || '(none)'}`,
+            code ? `Reference code the lead drafted (may be incomplete or wrong — write the real files):\n${code}` : '',
+            'Requirements: 1. Build exactly what the request asks for, as COMPLETE files via File: blocks. 2. Follow every instruction in the request (single file, code only, etc.).',
+            'Done when: the files are written and run.',
+          ].filter(Boolean).join('\n');
+        }
         if (!brief) return [];
 
         // You pick the agents before any code: the brief waits on "Who builds this?".
@@ -1854,15 +1873,14 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           value={input}
           rows={2}
           onChange={e => setInput(e.target.value)}
-          placeholder={loading ? 'Waiting for reply…'
+          placeholder={loading ? 'Working… you can keep typing or paste your next message'
             : listening ? (speakOn ? 'Listening — will send…' : 'Listening…')
             : persona ? `Talk to ${persona.name}…` : 'What should change?'}
-          disabled={loading}
-          style={{ flex: 1, background: '#100E14', color: '#F2ECEF',
-            border: '1px solid #2A2030', borderRadius: 4,
+          style={{ flex: 1, background: '#12151D', color: '#ECEEF3',
+            border: '1px solid #232838', borderRadius: 4,
             padding: '7px 10px', fontFamily: 'inherit', fontSize: 22,
-            outline: 'none', resize: 'vertical', minHeight: 48, maxHeight: 120,
-            WebkitTextFillColor: '#F2ECEF',
+            outline: 'none', resize: 'vertical', minHeight: 48, maxHeight: '40vh',
+            WebkitTextFillColor: '#ECEEF3',
             opacity: 1 }} />
         <button type="submit" data-testid="chat-send" disabled={(!input.trim() && uploads.length === 0) || loading}
           style={{ background: (input.trim() || uploads.length) && !loading ? '#FF1F5A' : '#18151D',

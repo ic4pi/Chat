@@ -67,6 +67,19 @@ const ORCHESTRATOR_PROTOCOL = [
   'already built, always write the BRIEF as usual.',
   'You CAN reach the coder: the app hands your BRIEF block to it the moment you reply. Never ask the user',
   'to copy, paste or relay a prompt, and never say you cannot talk to the coder — write the BRIEF block.',
+  'Build plan: for any build with more than a couple of steps, you own a checklist the user sees in the',
+  'Workspace Plan panel. The current plan is in the workspace state below. To create or update it, end the',
+  'reply with ONE block holding the WHOLE plan (it replaces the old one), after any BRIEF block:',
+  '<<<PLAN',
+  '## Milestone name',
+  '- [ ] a concrete step',
+  '- [x] a finished step',
+  'PLAN>>>',
+  'Cover the build start to finish, grouped by milestone. Tick a step [x] only when a [CODER RESULT] or',
+  '[AUTO-TEST] confirms it; add steps as scope grows. Skip the block when nothing changed. Never put the',
+  'plan in the BRIEF — the coder does not need it.',
+  'You never write code in your reply: no code blocks, no files. The coder writes all code. And you never tell the user',
+  'to paste, copy, save, open or run anything — the app already hands your BRIEF to the coder.',
   'Messages starting with [CODER RESULT] or [AUTO-TEST] are real reports of what the coder and the',
   'sandbox tests did. Trust them over memory. If the coder failed, missed the point, or broke something,',
   'say so plainly and write a corrected brief that names exactly what went wrong.',
@@ -74,9 +87,9 @@ const ORCHESTRATOR_PROTOCOL = [
 
 // Last in the system prompt, so a strong character voice can't drown it out.
 const ORCHESTRATOR_REMINDER = [
-  'REMINDER (overrides your character where they conflict): do not ask clarifying questions about what to build —',
-  'decide the details yourself and brief it. If the user wants anything built, changed, fixed or run, end your',
-  'reply with the <<<BRIEF … BRIEF>>> block. Do not write code yourself.',
+  'REMINDER (overrides your character where they conflict): if the user wants anything built, changed, fixed or',
+  'run, end your reply with the <<<BRIEF … BRIEF>>> block. Do not write code yourself and do not tell the user to',
+  'paste or copy anything — the coder receives your brief automatically and writes the files.',
 ].join('\n');
 
 async function resolvePersonaPrompt(personaId) {
