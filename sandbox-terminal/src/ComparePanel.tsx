@@ -58,6 +58,9 @@ interface Props {
   onVersionsReady?: (v: CompareVersions) => void;
   /** You sent a prompt with no sandbox open — open a project, then run it. */
   onNeedSandbox?: (text: string) => void;
+  /** Open a blank project / clone a GitHub repo right from here. */
+  onStartBlank?: () => void | Promise<unknown>;
+  onOpenRepo?: (url: string) => void | Promise<unknown>;
 }
 
 interface SideState {
@@ -289,7 +292,7 @@ function treeOf(files: Record<string, string>): FileNode[] {
 }
 
 export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePanel(
-  { open, onClose, sandboxId, onUseBuild, onVersionsReady, onNeedSandbox }, handleRef,
+  { open, onClose, sandboxId, onUseBuild, onVersionsReady, onNeedSandbox, onStartBlank, onOpenRepo }, handleRef,
 ) {
   const a = useSide('a');
   const b = useSide('b');
@@ -297,6 +300,9 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
   const [builds, setBuilds] = useState<SavedBuild[]>([]);
   const [showSaved, setShowSaved] = useState(false);
   const [storageError, setStorageError] = useState<string | null>(null);
+  const [repoUrl, setRepoUrl] = useState('');
+  const [opening, setOpening] = useState(false);
+  useEffect(() => { if (sandboxId) setOpening(false); }, [sandboxId]);
   const sending = a.state.busy || b.state.busy;
 
   const refreshBuilds = useCallback(() => {
@@ -433,9 +439,30 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
           Compare
         </strong>
         {!sandboxId && (
-          <span style={{ fontSize: 14, color: '#ffcc66' }}>
-            No project open yet — one starts automatically when you send.
-          </span>
+          <div data-testid="compare-open-project" style={{ flexBasis: '100%', display: 'flex', gap: 8, flexWrap: 'wrap',
+            alignItems: 'center' }}>
+            <span style={{ fontSize: 14, color: '#ffcc66' }}>
+              No project open yet — start a blank one, clone a repo, or just send a prompt.
+            </span>
+            {onStartBlank && (
+              <button type="button" onClick={() => { setOpening(true); void Promise.resolve(onStartBlank()).finally(() => setOpening(false)); }} disabled={opening}
+                style={smallBtn(!opening, true)}>
+                {opening ? 'Opening…' : 'Start blank project'}
+              </button>
+            )}
+            {onOpenRepo && (
+              <form onSubmit={e => { e.preventDefault(); if (repoUrl.trim()) { setOpening(true); void Promise.resolve(onOpenRepo(repoUrl.trim())).finally(() => setOpening(false)); } }}
+                style={{ display: 'flex', gap: 6, flex: '1 1 260px', minWidth: 0 }}>
+                <input value={repoUrl} onChange={e => setRepoUrl(e.target.value)}
+                  placeholder="github.com/owner/repo"
+                  style={{ flex: 1, minWidth: 0, background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+                    borderRadius: 4, padding: '6px 10px', fontFamily: 'inherit', fontSize: 15 }} />
+                <button type="submit" disabled={opening || !repoUrl.trim()} style={smallBtn(!opening && !!repoUrl.trim())}>
+                  Clone
+                </button>
+              </form>
+            )}
+          </div>
         )}
         <div style={{ flex: 1, display: 'flex', gap: 8, minWidth: 240 }}>
           <input
