@@ -54,8 +54,6 @@ interface Props {
   onClose: () => void;
   sandboxId: string | null;
   onUseBuild: (build: BuildChoice) => void | Promise<void>;
-  /** Fires once when both versions have finished building. */
-  onVersionsReady?: (v: CompareVersions) => void;
   /** You sent a prompt with no sandbox open — open a project, then run it. */
   onNeedSandbox?: (text: string) => void;
   /** Open a blank project / clone a GitHub repo right from here. */
@@ -292,7 +290,7 @@ function treeOf(files: Record<string, string>): FileNode[] {
 }
 
 export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePanel(
-  { open, onClose, sandboxId, onUseBuild, onVersionsReady, onNeedSandbox, onStartBlank, onOpenRepo }, handleRef,
+  { open, onClose, sandboxId, onUseBuild, onNeedSandbox, onStartBlank, onOpenRepo }, handleRef,
 ) {
   const a = useSide('a');
   const b = useSide('b');

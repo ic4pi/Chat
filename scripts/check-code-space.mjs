@@ -10,6 +10,7 @@ const server=http.createServer((req,res)=>{ const u=req.url.split('?')[0];
  if(u.startsWith('/api/')){ let b=''; req.on('data',d=>b+=d); req.on('end',()=>{
   if(u==='/api/agent-chat'){ const j=JSON.parse(b); calls.push({orch:!!j.orchestrate,sys:String(j.systemPrompt||'')});
     if(j.orchestrate){ orchN++; if(orchN===1) return sse(res,"Plan's up — building the page.\n<<<BRIEF\nGoal: a hello page\nFiles: index.html\nBRIEF>>>\n<<<PLAN\n## Build\n- [ ] Write index.html\n- [ ] Style it\n## Ship\n- [ ] Deploy\nPLAN>>>"); return sse(res,"Noted."); }
+    if (/exactly NO_BRIEF/.test(String(j.systemPrompt||'')) && globalThis.__declineBrief) return sse(res,'NO_BRIEF');
     return sse(res,'File: index.html\n```html\n<!doctype html><h1>Hello</h1>\n```'); }
   res.setHeader('content-type','application/json'); res.end(JSON.stringify({sandboxId:'sb1',sessionId:'sb1',ok:true,files:[],tree:[],results:[]})); }); return; }
  let f=path.join(root,u.endsWith('/')?u+'index.html':u); if(fs.existsSync(f)&&fs.statSync(f).isDirectory()) f=path.join(f,'index.html'); if(!fs.existsSync(f)){res.statusCode=404;return res.end();}
@@ -33,8 +34,15 @@ const wf0=api.filter(x=>x.includes('write-files')).length;
 await pg.locator('button:has-text("Save"):visible').last().click(); await pg.waitForTimeout(2500);
 check('Save writes the file to the sandbox', api.filter(x=>x.includes('write-files')).length>wf0 || (await pg.locator('text=/1 file/').count())===0);
 check('Code Space did not navigate away', new URL(pg.url()).pathname.startsWith('/agent'));
+globalThis.__declineBrief=true;
+// The persona answers a build order without a brief: the request itself must become the brief (no crash).
+await pg.locator('[data-testid=chat-input]:visible').first().fill('Build a single self-contained html page about metaphysics. Code only.');
+await pg.locator('button:has-text("Send"):visible').first().click(); await pg.waitForTimeout(5000);
+const txt=await pg.locator('body').innerText();
+check('persona answering without a brief does not crash ("Can\'t find variable" / "is not defined")', !/can'?t find variable|is not defined/i.test(txt));
+check('that build order still becomes a brief for the coder', (await pg.locator('text=/brief/i').count())>0);
 await pg.locator('text=PREVIEW >> visible=true').first().click(); await pg.waitForTimeout(1000);
-await pg.screenshot({path:'csf2.png'});
+
 const btns=await pg.locator('button:visible').allTextContents(); console.log('buttons now:', btns.map(x=>x.trim()).filter(Boolean).join(' | ').slice(0,300));
 const sp=pg.locator('button:has-text("Start preview"):visible, button:has-text("Restart"):visible').first();
 if (await sp.count()) { await sp.click(); await pg.waitForTimeout(3000); }

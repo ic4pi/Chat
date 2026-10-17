@@ -33,7 +33,7 @@ const dtxt=await dlg.innerText();
 check('panel lists both milestones and all three steps', ['Build','Ship','Write index.html','Style it','Deploy'].every(x=>dtxt.includes(x)));
 await dlg.locator('input[type=checkbox]').first().click(); await pg.waitForTimeout(300);
 check('ticking a step moves the button to 1/3', (await planBtn.textContent()).includes('1/3'));
-await pg.screenshot({path:'plan-open.png'});
+
 await pg.keyboard.press('Escape'); await pg.waitForTimeout(300);
 if (await pg.locator('[role=dialog]').count()) { await pg.locator('[role=dialog]').last().locator('button[aria-label*="lose"], button:has-text("×")').first().click().catch(()=>{}); }
 await pg.waitForTimeout(300);

@@ -28,6 +28,7 @@ import type { PendingChange } from './useRepoContext.js';
 import type { FileNode } from './types.js';
 import {
   adoptBareHtmlDocument,
+  hasExplicitBuildIntent,
   continuationPrompt,
   mergeContinuation,
   stripContinueMarkers,
