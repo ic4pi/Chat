@@ -54,6 +54,11 @@ interface Props {
   onClose: () => void;
   sandboxId: string | null;
   onUseBuild: (build: BuildChoice) => void | Promise<void>;
+  /** You sent a prompt with no sandbox open — open a project, then run it. */
+  onNeedSandbox?: (text: string) => void;
+  /** Open a blank project / clone a GitHub repo right from here. */
+  onStartBlank?: () => void | Promise<unknown>;
+  onOpenRepo?: (url: string) => void | Promise<unknown>;
 }
 
 interface SideState {
@@ -285,7 +290,7 @@ function treeOf(files: Record<string, string>): FileNode[] {
 }
 
 export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePanel(
-  { open, onClose, sandboxId, onUseBuild }, handleRef,
+  { open, onClose, sandboxId, onUseBuild, onNeedSandbox, onStartBlank, onOpenRepo }, handleRef,
 ) {
   const a = useSide('a');
   const b = useSide('b');
@@ -293,6 +298,9 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
   const [builds, setBuilds] = useState<SavedBuild[]>([]);
   const [showSaved, setShowSaved] = useState(false);
   const [storageError, setStorageError] = useState<string | null>(null);
+  const [repoUrl, setRepoUrl] = useState('');
+  const [opening, setOpening] = useState(false);
+  useEffect(() => { if (sandboxId) setOpening(false); }, [sandboxId]);
   const sending = a.state.busy || b.state.busy;
 
   const refreshBuilds = useCallback(() => {
@@ -319,10 +327,11 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
 
   const sendToBoth = useCallback(async (text: string) => {
     const t = text.trim();
-    if (!t || sending || !sandboxId) return;
+    if (!t || sending) return;
     setPrompt('');
+    if (!sandboxId) { onNeedSandbox?.(t); return; }
     await Promise.all([a.send(t), b.send(t)]);
-  }, [sending, sandboxId, a, b]);
+  }, [sending, sandboxId, a, b, onNeedSandbox]);
 
   useImperativeHandle(handleRef, () => ({
     runBrief: (brief, picks) => {
@@ -428,9 +437,30 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
           Compare
         </strong>
         {!sandboxId && (
-          <span style={{ fontSize: 14, color: '#ffcc66' }}>
-            Open a blank project or GitHub repo first — Compare needs a sandbox to run both previews.
-          </span>
+          <div data-testid="compare-open-project" style={{ flexBasis: '100%', display: 'flex', gap: 8, flexWrap: 'wrap',
+            alignItems: 'center' }}>
+            <span style={{ fontSize: 14, color: '#ffcc66' }}>
+              No project open yet — start a blank one, clone a repo, or just send a prompt.
+            </span>
+            {onStartBlank && (
+              <button type="button" onClick={() => { setOpening(true); void Promise.resolve(onStartBlank()).finally(() => setOpening(false)); }} disabled={opening}
+                style={smallBtn(!opening, true)}>
+                {opening ? 'Opening…' : 'Start blank project'}
+              </button>
+            )}
+            {onOpenRepo && (
+              <form onSubmit={e => { e.preventDefault(); if (repoUrl.trim()) { setOpening(true); void Promise.resolve(onOpenRepo(repoUrl.trim())).finally(() => setOpening(false)); } }}
+                style={{ display: 'flex', gap: 6, flex: '1 1 260px', minWidth: 0 }}>
+                <input value={repoUrl} onChange={e => setRepoUrl(e.target.value)}
+                  placeholder="github.com/owner/repo"
+                  style={{ flex: 1, minWidth: 0, background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
+                    borderRadius: 4, padding: '6px 10px', fontFamily: 'inherit', fontSize: 15 }} />
+                <button type="submit" disabled={opening || !repoUrl.trim()} style={smallBtn(!opening && !!repoUrl.trim())}>
+                  Clone
+                </button>
+              </form>
+            )}
+          </div>
         )}
         <div style={{ flex: 1, display: 'flex', gap: 8, minWidth: 240 }}>
           <input
@@ -438,12 +468,11 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
             onChange={e => setPrompt(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendToBoth(prompt); } }}
             placeholder="Describe what to build — or send a brief from your persona with ⇄"
-            disabled={sending || !sandboxId}
             style={{ flex: 1, background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
               borderRadius: 4, padding: '7px 10px', fontFamily: 'inherit', fontSize: 15, minWidth: 0 }}
           />
-          <button type="button" onClick={() => void sendToBoth(prompt)} disabled={sending || !prompt.trim() || !sandboxId}
-            style={smallBtn(!sending && !!prompt.trim() && !!sandboxId, true)}>
+          <button type="button" onClick={() => void sendToBoth(prompt)} disabled={sending || !prompt.trim()}
+            style={smallBtn(!sending && !!prompt.trim(), true)}>
             {sending ? 'Building…' : 'Send to both'}
           </button>
         </div>

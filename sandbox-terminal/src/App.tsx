@@ -71,6 +71,8 @@ import {
 } from './coderModels.js';
 import type { GenerateChunkResult } from './ChunkModelPanel.js';
 import { SettingsPanel } from './SettingsPanel.js';
+import { PlanPanel } from './PlanPanel.js';
+import { loadPlan, savePlan, parsePlan } from './buildPlan.js';
 import { ComparePanel, type BuildChoice, type CompareHandle } from './ComparePanel.js';
 import { BuildPicker, type BuildChoiceSeats, type TeamOption } from './BuildPicker.js';
 import {
@@ -394,12 +396,13 @@ export function App() {
   // The Code Space writes code, so it opens on the Coders package rather than a
   // raw provider catalog. 'provider' is the escape hatch to the full list.
   const [modelScope,   setModelScope]   = useState<'coders' | 'provider'>(
-    () => (localStorage.getItem(MODEL_SCOPE_KEY) === 'provider' ? 'provider' : 'coders'),
+    () => (localStorage.getItem(MODEL_SCOPE_KEY) === 'coders' ? 'coders' : 'provider'),
   );
   const [coderBrands,  setCoderBrands]  = useState<ResolvedCoderBrand[]>([]);
   const [keys,         setKeys]         = useState(() => loadProviderKeys());
   const [showSettings, setShowSettings] = useState(false);
   const [showCompare,  setShowCompare]  = useState(false);
+  const [showPlan,     setShowPlan]     = useState(false);
   const [roleModels,   setRoleModels]   = useState(() => loadRoleModels());
   // Auto-save ON — generated files go to the sandbox immediately so you can download/push.
   const [autoRun,      setAutoRun]      = useState(false);
@@ -467,6 +470,13 @@ export function App() {
   const [showHome, setShowHome] = useState(false);
   const [homeList, setHomeList] = useState<StoredSession[]>(() => listSessions());
   const [sessionKey,   setSessionKey]   = useState(0);
+  // Build plan: the orchestrator's checklist for this workspace session.
+  const [buildPlan, setBuildPlan] = useState(() => loadPlan(sessionId));
+  useEffect(() => { setBuildPlan(loadPlan(sessionId)); }, [sessionId]);
+  const handleBuildPlan = useCallback((md: string) => {
+    savePlan(sessionId, md);
+    setBuildPlan(md);
+  }, [sessionId]);
   const isMobile = useIsMobile();
   const activeApiKey = (keys[provider] || '').trim();
 
@@ -1043,6 +1053,12 @@ export function App() {
   }, [repo]);
 
   // ── Compare: the persona's brief to two coders, and the chosen version back ──
+  // Compare needs a sandbox for its two previews and file writes: open one as the panel opens,
+  // so typing straight into either side works instead of silently building nowhere.
+  useEffect(() => {
+    if (showCompare && !repo.sandboxId) void ensureProject();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCompare]);
   const compareRef = useRef<CompareHandle>(null);
   const queuedCompareRef = useRef<{ brief: string; picks?: { a: SeatModel; b: SeatModel } } | null>(null);
   const handleCompareBrief = useCallback((brief: string, picks?: { a: SeatModel; b: SeatModel }) => {
@@ -1568,12 +1584,13 @@ export function App() {
           </select>
         )}
         {modelScope === 'coders' ? (
-          <select value={coderKey(provider, model)} onChange={e => handleCoderChange(e.target.value)}
+          <select value={coderKey(provider, model)}
+            onChange={e => { if (e.target.value === '__all') handleScopeChange('provider'); else handleCoderChange(e.target.value); }}
             disabled={modelsLoading}
             title="Coding models — free ones run without a password, paid ones need the unlock"
             style={{ background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
               borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 15,
-              cursor: 'pointer', maxWidth: 260, flex: 1, minWidth: 0 }}>
+              cursor: 'pointer', maxWidth: 260, flex: 1, minWidth: 150 }}>
             {coderBrands.map(brand => (
               <optgroup key={brand.id} label={brand.paidOnly ? `${brand.label} · unlock to use` : brand.label}>
                 {brand.models.map(m => {
@@ -1586,6 +1603,7 @@ export function App() {
                 })}
               </optgroup>
             ))}
+            <option value="__all">More models… (every model, any provider)</option>
             {/* A handoff from chat can arrive on a non-coder model; keep it
                 selectable so the dropdown never shows a blank value. */}
             {!flattenCoderModels(coderBrands).some(m => m.provider === provider && m.id === model) && (
@@ -1599,7 +1617,7 @@ export function App() {
             disabled={modelsLoading}
             style={{ background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
               borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 15,
-              cursor: 'pointer', maxWidth: 220, flex: 1, minWidth: 0 }}>
+              cursor: 'pointer', maxWidth: 220, flex: 1, minWidth: 150 }}>
             {models.map(m => {
               const locked = m.free === false && !paidUnlocked();
               return (
@@ -1650,13 +1668,22 @@ export function App() {
             overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 120 }}
             title={repo.sandboxId}>● {repo.sandboxId.slice(0, 20)}</span>
         )}
+        <button type="button" className="ws-btn" onClick={() => setShowPlan(true)}
+          title="Build plan — the checklist the orchestrator keeps for this build"
+          aria-haspopup="dialog" aria-expanded={showPlan}
+          style={{ background: 'var(--surface-2)', color: 'var(--text-muted)',
+            border: '1px solid var(--border)', borderRadius: 'var(--radius)',
+            height: 30, padding: '0 9px', display: 'flex', alignItems: 'center', gap: 5,
+            cursor: 'pointer', fontSize: 13, marginLeft: 'auto' }}>
+          ☑{(() => { const p = parsePlan(buildPlan); return p.total ? ` ${p.done}/${p.total}` : ''; })()}
+        </button>
         <button type="button" className="ws-btn" onClick={() => setShowCompare(true)}
           title="Compare — two models, one prompt, two live previews"
           aria-haspopup="dialog" aria-expanded={showCompare}
           style={{ background: 'var(--surface-2)', color: 'var(--text-muted)',
             border: '1px solid var(--border)', borderRadius: 'var(--radius)',
             width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: 'pointer', fontSize: 15, marginLeft: 'auto' }}>
+            cursor: 'pointer', fontSize: 15 }}>
           ⇄
         </button>
         <button type="button" className="ws-btn" onClick={() => setShowSettings(true)}
@@ -1670,6 +1697,7 @@ export function App() {
           ⚙
         </button>
       </div>
+      <PlanPanel open={showPlan} onClose={() => setShowPlan(false)} plan={buildPlan} onChange={handleBuildPlan} />
       <SettingsPanel
         open={showSettings}
         onClose={() => setShowSettings(false)}
@@ -1853,6 +1881,8 @@ export function App() {
           onModelReplaced={handleModelReplaced}
           onOpenPush={handleOpenPush}
           onCompareBrief={handleCompareBrief}
+          buildPlan={buildPlan}
+          onBuildPlan={handleBuildPlan}
           askBeforeBuild={teamPrefs.askFirst}
           buildPicker={renderBuildPicker}
           fixer={teamPrefs.seats ? withKey(teamSeats.fix) : null}
@@ -1998,7 +2028,10 @@ export function App() {
       )}
 
       <ComparePanel ref={compareRef} open={showCompare} onClose={() => setShowCompare(false)}
-        sandboxId={repo.sandboxId} onUseBuild={handleUseBuild} />
+        sandboxId={repo.sandboxId} onUseBuild={handleUseBuild}
+        onNeedSandbox={(t) => handleCompareBrief(t)}
+        onStartBlank={() => repo.startBlankProject()}
+        onOpenRepo={(u) => repo.openRepo(u)} />
 
       {!isMobile ? (
         /* ── Desktop: 3-column grid (single ChatPane + Terminal) ── */

@@ -22,10 +22,16 @@
  * are rendered as runnable snippets with "▶ Run in Sandbox".
  */
 
+import { extractPlanBlock } from './buildPlan.js';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { PendingChange } from './useRepoContext.js';
 import type { FileNode } from './types.js';
 import {
+  adoptBareHtmlDocument,
+  hasExplicitBuildIntent,
+  continuationPrompt,
+  mergeContinuation,
+  stripContinueMarkers,
   extractFileChangeReport,
   formatRejectedSandboxWarning,
   looksLikeApplyRequest,
@@ -47,6 +53,7 @@ import {
 import { copyText, downloadTextFile } from './downloadFile.js';
 import { loadPaidPassword } from './providerPrefs.js';
 import {
+  asksAboutWork,
   BRIEF_WRITER_SYSTEM,
   NO_BRIEF,
   buildBriefWriterTurns,
@@ -126,7 +133,7 @@ const CONTINUE_LOOP_BUDGET_MS = 900_000;
  *  to get there on a 4th; better to fail loud and fast than retry quietly
  *  for the better part of an hour. */
 const EMPTY_THINK_MAX_CONTINUES = 3;
-const MID_OUTPUT_MAX_CONTINUES = 2;
+const MID_OUTPUT_MAX_CONTINUES = 4;
 
 /** Plain-words ask for two takes at once — routed to Compare. */
 function wantsTwoVersions(text: string): boolean {
@@ -451,21 +458,6 @@ function looksTruncatedReply(text: string): boolean {
     }
   }
   return false;
-}
-
-function mergeContinuation(prev: string, next: string): string {
-  const a = prev.replace(/\s+$/, '');
-  const b = next.replace(/^\s+/, '');
-  // Model often restarts the open fence — strip a duplicated opener.
-  if (a.endsWith('```') || /```[a-zA-Z0-9_+\-.]*$/.test(a)) {
-    return `${a}\n${b}`;
-  }
-  if (b.startsWith('```') && (a.match(/```/g) || []).length % 2 === 1) {
-    // Continuation reopened the fence — keep body only
-    const nl = b.indexOf('\n');
-    return nl >= 0 ? `${a}\n${b.slice(nl + 1)}` : a + b;
-  }
-  return `${a}\n${b}`;
 }
 
 /** Read SSE from /api/agent-chat (stream:true). Falls back if the body is plain JSON.
@@ -794,6 +786,9 @@ interface Props {
   } | void>;
   /** Send a brief to both Compare coders instead of (or as well as) this one. */
   onCompareBrief?:   (brief: string, picks?: { a: SeatPick; b: SeatPick }) => void;
+  /** The build plan (markdown) and where the orchestrator's updates go. */
+  buildPlan?:        string;
+  onBuildPlan?:      (md: string) => void;
   /** Hold persona briefs until you pick who builds them. */
   askBeforeBuild?:   boolean;
   /** Renders "Who builds this?" under a pending brief. */
@@ -817,6 +812,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   repoRoot, repoUrl, sandboxId, provider, model, role, persona = null, apiKey, tree, contextFiles, autoRun, appliedPaths,
   autoSelectedFiles, searchHits, initialMessages, onMessagesChange,
   onRunCode, onFileChanges, onUploadText, onBeforeSend, onModelReplaced, onOpenPush, onCompareBrief,
+  buildPlan = '', onBuildPlan,
   askBeforeBuild = false, buildPicker, fixer = null,
   pythonReady = null, pythonDetail = null,
   rustReady = null, rustDetail = null,
@@ -866,12 +862,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   const latestRef = useRef({
     repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onOpenPush, onCompareBrief, askBeforeBuild, fixer,
+    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onOpenPush, onCompareBrief, askBeforeBuild, fixer, buildPlan, onBuildPlan,
   });
   latestRef.current = {
     repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onOpenPush, onCompareBrief, askBeforeBuild, fixer,
+    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onOpenPush, onCompareBrief, askBeforeBuild, fixer, buildPlan, onBuildPlan,
   };
 
   useEffect(() => {
@@ -1077,29 +1073,30 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         const contPrompt = emptyThink
           ? 'Previous attempt timed out during thinking before any answer text. '
             + 'Answer now with complete File: / fenced blocks. Spend less time thinking.'
-          : 'Your previous reply was cut off mid-output. Continue EXACTLY from where you left off. '
-            + 'Finish any open File: / fenced blocks with COMPLETE file contents. '
-            + 'Do not restart files you already finished. Do not apologize.';
+          : continuationPrompt(reply);
         const contHistory = emptyThink
           ? [...history, { role: 'user', content: contPrompt }]
           : [
               ...history,
-              { role: 'assistant', content: reply },
+              { role: 'assistant', content: stripContinueMarkers(reply) },
               { role: 'user', content: contPrompt },
             ];
         setLiveThoughts('');
         setLiveStatus('Continuing…');
         result = await callAgent(contHistory, systemPrompt, sid, prov, mod, key);
+        const before = reply.length;
         reply = emptyThink
           ? result.reply
           : mergeContinuation(reply, result.reply);
+        // A continuation that added nothing new won't on the next try either.
+        if (!emptyThink && reply.length <= stripContinueMarkers(reply).length && reply.length - before < 20 && !result.incomplete) break;
         emptyThink = result.timedOut && (!reply.trim() || reply === '(empty response)');
         hadReasoningEvidence = !!result.reasoning?.trim();
         if (!result.incomplete && !looksTruncatedReply(result.reply) && result.reply.trim() && result.reply !== '(empty response)') {
           break;
         }
       }
-      return reply;
+      return stripContinueMarkers(reply);
     };
 
     try {
@@ -1168,6 +1165,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           hits,
           coderLabel: `${prov} / ${mod}`,
           role: activeRole,
+          plan: latestRef.current.buildPlan,
         });
         const pProv = orchPersona.provider || prov;
         const pMod = orchPersona.model || mod;
@@ -1183,7 +1181,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         );
         const rawWithMarker = personaReply.reply === '(empty response)' ? '' : personaReply.reply.trim();
         const pushRequested = wantsPushOpened(rawWithMarker);
-        const raw = pushRequested ? stripPushMarker(rawWithMarker) : rawWithMarker;
+        const rawFull = pushRequested ? stripPushMarker(rawWithMarker) : rawWithMarker;
+        // The orchestrator keeps the build plan current with a <<<PLAN>>> block.
+        const { text: raw, plan: newPlan } = extractPlanBlock(rawFull);
+        if (newPlan) latestRef.current.onBuildPlan?.(newPlan);
         const split = splitPersonaReply(raw);
         brief = split.brief;
         const personaMsg: Message = {
@@ -1213,6 +1214,19 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           if (out && !out.startsWith(NO_BRIEF) && out.length > 20) {
             brief = splitPersonaReply(out).brief ?? out;
           }
+        }
+        // The persona answered in character and never briefed (it wrote code or told
+        // you to paste something), but you clearly asked for a build: the request
+        // itself becomes the brief, so the work still reaches the coder.
+        if (!brief && !asksAboutWork(text) && (hasExplicitBuildIntent(text) || looksLikeApplyRequest(text))) {
+          const code = [...raw.matchAll(/```[\w+\-.]*\n([\s\S]*?)```/g)].map(m => m[1]!.trim()).join('\n\n').slice(0, 6000);
+          brief = [
+            `Goal: ${text.trim().slice(0, 6000)}`,
+            `Context: this is the user's request as written. Lead's notes: ${split.say.slice(0, 1200) || '(none)'}`,
+            code ? `Reference code the lead drafted (may be incomplete or wrong — write the real files):\n${code}` : '',
+            'Requirements: 1. Build exactly what the request asks for, as COMPLETE files via File: blocks. 2. Follow every instruction in the request (single file, code only, etc.).',
+            'Done when: the files are written and run.',
+          ].filter(Boolean).join('\n');
         }
         if (!brief) return [];
 
@@ -1315,7 +1329,9 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           + 'into the user\'s actual project in this sandbox, it is not a hypothetical or a described interface. '
           + 'Do not say you are "just a text-based AI" or that you cannot provide code/an interface "directly" — '
           + 'that is false here. Do not hand back a design blueprint, description, or plan instead of code. Write '
-          + 'the File:/Edit: blocks now.';
+          + 'the File:/Edit: blocks now. If the user asks for "code only" or one complete HTML file, your whole reply '
+          + 'is `File: name.html` followed by ONE fenced block holding the complete self-contained file, with no prose '
+          + 'around it. That is the code-only output: raw code pasted without a File: header is never saved or previewed.';
       } else if (runTurn) {
         systemPrompt +=
           '\n\nRUN this turn: the user wants a file/script actually EXECUTED, not written or explained. '
@@ -1343,6 +1359,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         setLiveStatus('Builder is fixing it…');
         reply = await callAgentWithContinue(history, systemPrompt, sid, prov, mod, key);
       }
+      if (!brief || userish) reply = adoptBareHtmlDocument(reply);
       let segs  = parseSegments(reply);
       let report = extractFileChangeReport(reply);
       // Full-file writes (new files / explicit rewrites) + unresolved Edit:
@@ -1491,6 +1508,17 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       return add.length ? [...m, ...add] : m;
     }),
   }), [sendText]);
+
+  // Paste without relying on the long-press menu: read the clipboard on a tap,
+  // or fall back to a prompt (which always accepts a paste) when the browser
+  // won't hand it over.
+  const pasteIntoInput = useCallback(async () => {
+    let text = '';
+    try { text = await navigator.clipboard.readText(); } catch { /* denied or unsupported */ }
+    if (!text) text = window.prompt('Paste your text here, then press OK') || '';
+    if (!text) return;
+    setInput(prev => (prev ? `${prev}\n${text}` : text));
+  }, []);
 
   const send = useCallback(async () => {
     const text = input.trim();
@@ -1753,6 +1781,33 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 <AssistantBody msg={msg} appliedPaths={appliedPaths} onRunCode={onRunCode} />
               </div>
             )}
+            {msg.role === 'user' && (!msg.kind || msg.kind === 'user') && msg.content && (
+              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 4 }}>
+                <button type="button" data-testid="copy-user-message"
+                  onClick={() => { void copyText(msg.content); }}
+                  style={{ background: 'transparent', color: '#756B7B', border: '1px solid #2A2030',
+                    borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13 }}>
+                  Copy
+                </button>
+                <button type="button" data-testid="reuse-user-message" title="Put this message back in the box to edit and resend"
+                  onClick={() => { setInput(msg.content); }}
+                  style={{ background: 'transparent', color: '#756B7B', border: '1px solid #2A2030',
+                    borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13 }}>
+                  Reuse
+                </button>
+              </div>
+            )}
+            {msg.role === 'assistant' && msg.kind !== 'welcome' && msg.content && !msg.content.startsWith('⏸') && (
+              <button type="button" data-testid="copy-message"
+                onClick={() => {
+                  const t = msg.speaker === 'persona' ? (splitPersonaReply(msg.content).say || msg.content) : msg.content;
+                  void copyText(t);
+                }}
+                style={{ marginTop: 4, background: 'transparent', color: '#756B7B', border: '1px solid #2A2030',
+                  borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13 }}>
+                Copy
+              </button>
+            )}
           </div>
         ))}
         {loading && (
@@ -1829,6 +1884,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           style={{ background: '#16131B', color: '#A39AA8', border: '1px solid #2A2030',
             borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
             fontFamily: 'inherit', fontSize: 16, alignSelf: 'flex-end' }}>📎</button>
+        <button type="button" data-testid="workspace-paste" title="Paste from clipboard into the box"
+          onClick={() => { void pasteIntoInput(); }}
+          style={{ background: '#16131B', color: '#A39AA8', border: '1px solid #2A2030',
+            borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
+            fontFamily: 'inherit', fontSize: 16, alignSelf: 'flex-end' }}>📋</button>
         <button type="button" data-testid="workspace-mic" title={listening ? 'Stop listening' : (speakOn ? 'Voice chat — tap to talk' : 'Dictate into the box')}
           onClick={toggleMic}
           disabled={loading}
@@ -1854,14 +1914,19 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           value={input}
           rows={2}
           onChange={e => setInput(e.target.value)}
-          placeholder={loading ? 'Waiting for reply…'
+          onKeyDown={e => {
+            // Same as the main chat: Enter is a new line; Ctrl+Enter / Cmd+Enter sends (the Send button too).
+            if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || e.nativeEvent.isComposing) return;
+            e.preventDefault();
+            if (!loading && input.trim()) void send();
+          }}
+          placeholder={loading ? 'Working… you can keep typing or paste your next message'
             : listening ? (speakOn ? 'Listening — will send…' : 'Listening…')
             : persona ? `Talk to ${persona.name}…` : 'What should change?'}
-          disabled={loading}
           style={{ flex: 1, background: '#100E14', color: '#F2ECEF',
             border: '1px solid #2A2030', borderRadius: 4,
             padding: '7px 10px', fontFamily: 'inherit', fontSize: 22,
-            outline: 'none', resize: 'vertical', minHeight: 48, maxHeight: 120,
+            outline: 'none', resize: 'vertical', minHeight: 48, maxHeight: '40vh',
             WebkitTextFillColor: '#F2ECEF',
             opacity: 1 }} />
         <button type="submit" data-testid="chat-send" disabled={(!input.trim() && uploads.length === 0) || loading}
