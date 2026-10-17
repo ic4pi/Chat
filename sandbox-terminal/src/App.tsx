@@ -72,6 +72,11 @@ import {
 import type { GenerateChunkResult } from './ChunkModelPanel.js';
 import { SettingsPanel } from './SettingsPanel.js';
 import { PlanPanel } from './PlanPanel.js';
+import { ClawPanel, type ClawPending, type ClawRunState } from './ClawPanel.js';
+import {
+  clawStatus as fetchClawStatus, clawCreateJob, clawGetJob, clawStopJob, formatClawResult, isFinished,
+  cleanActionList, type ClawStatus,
+} from './claw.js';
 import { loadPlan, savePlan, parsePlan } from './buildPlan.js';
 import { ComparePanel, type BuildChoice, type CompareHandle } from './ComparePanel.js';
 import { BuildPicker, type BuildChoiceSeats, type TeamOption } from './BuildPicker.js';
@@ -403,6 +408,13 @@ export function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showCompare,  setShowCompare]  = useState(false);
   const [showPlan,     setShowPlan]     = useState(false);
+  // Claw: the helper on your computer. Steps are proposed by the orchestrator and only run after you tap Run.
+  const [showClaw,     setShowClaw]     = useState(false);
+  const [clawState,    setClawState]    = useState<ClawStatus | null>(null);
+  const [clawStatusErr, setClawStatusErr] = useState('');
+  const [clawPending,  setClawPending]  = useState<ClawPending | null>(null);
+  const [clawRun,      setClawRun]      = useState<ClawRunState | null>(null);
+  const clawJobRef = useRef<string | null>(null);
   const [roleModels,   setRoleModels]   = useState(() => loadRoleModels());
   // Auto-save ON — generated files go to the sandbox immediately so you can download/push.
   const [autoRun,      setAutoRun]      = useState(false);
@@ -473,6 +485,66 @@ export function App() {
   // Build plan: the orchestrator's checklist for this workspace session.
   const [buildPlan, setBuildPlan] = useState(() => loadPlan(sessionId));
   useEffect(() => { setBuildPlan(loadPlan(sessionId)); }, [sessionId]);
+  const refreshClaw = useCallback(async () => {
+    try { setClawState(await fetchClawStatus()); setClawStatusErr(''); }
+    catch (e) { setClawStatusErr(e instanceof Error ? e.message : String(e)); }
+  }, []);
+  useEffect(() => {
+    void refreshClaw();
+    const t = setInterval(() => { void refreshClaw(); }, showClaw ? 4000 : 12000);
+    return () => clearInterval(t);
+  }, [refreshClaw, showClaw]);
+
+  /** The orchestrator proposed steps. Show the Run card; nothing runs yet. */
+  const handleClawPlan = useCallback((raw: unknown[], errors: string[]) => {
+    const { actions, errors: bad } = cleanActionList(raw);
+    if (!actions.length && !errors.length && !bad.length) return;
+    setClawRun(null);
+    setClawPending({ actions, errors: [...errors, ...bad] });
+    setShowClaw(true);
+    void refreshClaw();
+  }, [refreshClaw]);
+
+  /** The one tap: create the job, follow it to the end, hand the result back to the orchestrator. */
+  const runClaw = useCallback(async () => {
+    const plan = clawPending;
+    if (!plan || !plan.actions.length) return;
+    setClawPending(null);
+    setClawRun({ job: null, starting: true, error: '' });
+    try {
+      const { id } = await clawCreateJob(plan.actions);
+      clawJobRef.current = id;
+      const t0 = Date.now();
+      for (;;) {
+        const { job } = await clawGetJob(id);
+        setClawRun({ job, starting: false, error: '' });
+        if (isFinished(job.status)) {
+          clawJobRef.current = null;
+          // Back to the orchestrator, so it can carry on with what happened. Waits if it is mid-reply.
+          const text = formatClawResult(job);
+          for (let i = 0; i < 60 && chatRef.current?.isBusy(); i++) await new Promise(r => setTimeout(r, 1000));
+          if (!chatRef.current?.isBusy()) void chatRef.current?.programmaticSend(text, 'user');
+          return;
+        }
+        if (Date.now() - t0 > 16 * 60_000) throw new Error('Gave up waiting for the helper.');
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    } catch (e) {
+      clawJobRef.current = null;
+      setClawRun(r => ({ job: r?.job ?? null, starting: false, error: e instanceof Error ? e.message : String(e) }));
+    }
+  }, [clawPending]);
+
+  const declineClaw = useCallback(() => {
+    setClawPending(null);
+    chatRef.current?.addNote('You chose not to run those steps on your computer.');
+    setShowClaw(false);
+  }, []);
+  const stopClaw = useCallback(() => {
+    const id = clawJobRef.current;
+    if (id) void clawStopJob(id);
+  }, []);
+
   const handleBuildPlan = useCallback((md: string) => {
     savePlan(sessionId, md);
     setBuildPlan(md);
@@ -1670,6 +1742,15 @@ export function App() {
             cursor: 'pointer', fontSize: 13, marginLeft: 'auto' }}>
           ☑{(() => { const p = parsePlan(buildPlan); return p.total ? ` ${p.done}/${p.total}` : ''; })()}
         </button>
+        <button type="button" className="ws-btn" data-testid="claw-open" onClick={() => setShowClaw(true)}
+          title="Claw — steps you approve, run on your computer by the helper"
+          aria-haspopup="dialog" aria-expanded={showClaw}
+          style={{ background: 'var(--surface-2)', color: clawPending ? 'var(--accent)' : 'var(--text-muted)',
+            border: `1px solid ${clawPending ? 'var(--accent)' : 'var(--border)'}`, borderRadius: 'var(--radius)',
+            height: 30, padding: '0 9px', display: 'flex', alignItems: 'center', gap: 5,
+            cursor: 'pointer', fontSize: 13 }}>
+          <span style={{ color: clawState?.online ? '#34D399' : 'var(--text-dim)' }}>{clawState?.online ? '●' : '○'}</span> Claw
+        </button>
         <button type="button" className="ws-btn" onClick={() => setShowCompare(true)}
           title="Compare — two models, one prompt, two live previews"
           aria-haspopup="dialog" aria-expanded={showCompare}
@@ -1690,6 +1771,9 @@ export function App() {
           ⚙
         </button>
       </div>
+      <ClawPanel open={showClaw} onClose={() => setShowClaw(false)} status={clawState} statusError={clawStatusErr}
+        onRefresh={() => { void refreshClaw(); }} pending={clawPending} onRun={() => { void runClaw(); }}
+        onDecline={declineClaw} run={clawRun} onStop={stopClaw} onDismissRun={() => { setClawRun(null); setShowClaw(false); }} />
       <PlanPanel open={showPlan} onClose={() => setShowPlan(false)} plan={buildPlan} onChange={handleBuildPlan} />
       <SettingsPanel
         open={showSettings}
@@ -1876,6 +1960,9 @@ export function App() {
           onCompareBrief={handleCompareBrief}
           buildPlan={buildPlan}
           onBuildPlan={handleBuildPlan}
+          clawOnline={!!clawState?.online}
+          clawWorkdir={clawState?.devices.find(d => d.online)?.workdir || ''}
+          onClawPlan={handleClawPlan}
           askBeforeBuild={teamPrefs.askFirst}
           buildPicker={renderBuildPicker}
           fixer={teamPrefs.seats ? withKey(teamSeats.fix) : null}

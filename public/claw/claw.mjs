@@ -458,7 +458,7 @@ async function doAction(a, ctx) {
 
 // ── talking to the server ────────────────────────────────────────────────
 async function api(cfg, action, body, { auth = true } = {}) {
-  const res = await fetch(`${cfg.server.replace(/\/$/, '')}/api/hub/claw?action=${action}`, {
+  const res = await fetch(`${cfg.server.replace(/\/$/, '')}/api/hub/claw?route=claw&action=${action}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: `Bearer ${cfg.token}` } : {}) },
     body: JSON.stringify(body || {}),

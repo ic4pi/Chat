@@ -23,6 +23,7 @@
  */
 
 import { extractPlanBlock } from './buildPlan.js';
+import { extractClawBlock } from './claw.js';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { PendingChange } from './useRepoContext.js';
 import type { FileNode } from './types.js';
@@ -96,6 +97,8 @@ export interface ChatHandle {
   /** Record something that happened outside this chat (e.g. a version picked
    *  in Compare) so the persona and coder both know about it. */
   addNote: (text: string) => void;
+  /** True while a reply is being produced (a programmatic send would be ignored). */
+  isBusy: () => boolean;
   /** Fold in messages said in the main chat (shared conversation) that this
    *  thread doesn't have yet — appended in order, deduped by content. */
   syncExternal: (messages: Array<{ role: 'user' | 'assistant'; content: string }>) => void;
@@ -789,6 +792,11 @@ interface Props {
   /** The build plan (markdown) and where the orchestrator's updates go. */
   buildPlan?:        string;
   onBuildPlan?:      (md: string) => void;
+  /** The helper on your computer is running (the orchestrator is told, and may propose steps). */
+  clawOnline?:       boolean;
+  clawWorkdir?:      string;
+  /** The orchestrator proposed steps for your computer — show the Run card. Nothing runs until you tap Run. */
+  onClawPlan?:       (actions: unknown[], errors: string[]) => void;
   /** Hold persona briefs until you pick who builds them. */
   askBeforeBuild?:   boolean;
   /** Renders "Who builds this?" under a pending brief. */
@@ -812,7 +820,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   repoRoot, repoUrl, sandboxId, provider, model, role, persona = null, apiKey, tree, contextFiles, autoRun, appliedPaths,
   autoSelectedFiles, searchHits, initialMessages, onMessagesChange,
   onRunCode, onFileChanges, onUploadText, onBeforeSend, onModelReplaced, onOpenPush, onCompareBrief,
-  buildPlan = '', onBuildPlan,
+  buildPlan = '', onBuildPlan, clawOnline = false, clawWorkdir = '', onClawPlan,
   askBeforeBuild = false, buildPicker, fixer = null,
   pythonReady = null, pythonDetail = null,
   rustReady = null, rustDetail = null,
@@ -862,12 +870,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   const latestRef = useRef({
     repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onOpenPush, onCompareBrief, askBeforeBuild, fixer, buildPlan, onBuildPlan,
+    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onOpenPush, onCompareBrief, askBeforeBuild, fixer, buildPlan, onBuildPlan, clawOnline, clawWorkdir, onClawPlan,
   });
   latestRef.current = {
     repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onOpenPush, onCompareBrief, askBeforeBuild, fixer, buildPlan, onBuildPlan,
+    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onOpenPush, onCompareBrief, askBeforeBuild, fixer, buildPlan, onBuildPlan, clawOnline, clawWorkdir, onClawPlan,
   };
 
   useEffect(() => {
@@ -1166,7 +1174,9 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           coderLabel: `${prov} / ${mod}`,
           role: activeRole,
           plan: latestRef.current.buildPlan,
-        });
+        }) + (latestRef.current.clawOnline
+          ? `\n\nCLAW HELPER: connected. Working folder on the user's computer: ${latestRef.current.clawWorkdir || '~/Jive-Workspace'}.`
+          : '\n\nCLAW HELPER: not connected (do not propose steps for the user\'s computer).');
         const pProv = orchPersona.provider || prov;
         const pMod = orchPersona.model || mod;
         const personaTurns = trimMessageHistory(buildPersonaHistory(withUser));
@@ -1177,14 +1187,20 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           pProv,
           pMod,
           orchPersona.apiKey || (pProv === prov ? key : undefined),
-          { personaId: orchPersona.id, orchestrate: true },
+          { personaId: orchPersona.id, orchestrate: true, claw: latestRef.current.clawOnline === true },
         );
         const rawWithMarker = personaReply.reply === '(empty response)' ? '' : personaReply.reply.trim();
         const pushRequested = wantsPushOpened(rawWithMarker);
         const rawFull = pushRequested ? stripPushMarker(rawWithMarker) : rawWithMarker;
         // The orchestrator keeps the build plan current with a <<<PLAN>>> block.
-        const { text: raw, plan: newPlan } = extractPlanBlock(rawFull);
+        const { text: rawNoPlan, plan: newPlan } = extractPlanBlock(rawFull);
         if (newPlan) latestRef.current.onBuildPlan?.(newPlan);
+        // Steps for your computer: shown on a Run card; nothing happens until you tap Run.
+        const clawBlock = extractClawBlock(rawNoPlan);
+        const raw = clawBlock.text;
+        if (clawBlock.actions || clawBlock.errors.length) {
+          latestRef.current.onClawPlan?.(clawBlock.actions ?? [], clawBlock.errors);
+        }
         const split = splitPersonaReply(raw);
         brief = split.brief;
         const personaMsg: Message = {
@@ -1500,6 +1516,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   useImperativeHandle(ref, () => ({
     programmaticSend: (text, role = 'retry-inject') => sendText(text, role),
     addNote: (text) => setMessages(m => [...m, { id: uid(), role: 'user', kind: 'note', content: text }]),
+    isBusy: () => sendingRef.current,
     syncExternal: (incoming) => setMessages(m => {
       const have = new Set(m.map(x => sigOf(x.role, x.content)));
       const add = incoming

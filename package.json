@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vercel dev",
     "check": "node scripts/check-api.mjs",
-    "test": "node scripts/check-api.mjs && node scripts/check-campaign.mjs && node scripts/check-models.mjs && node scripts/check-stack-detect.mjs && node scripts/check-handoff.mjs && npm run check:types",
+    "test": "node scripts/check-api.mjs && node scripts/check-campaign.mjs && node scripts/check-models.mjs && node scripts/check-stack-detect.mjs && node scripts/check-handoff.mjs && npm run check:claw && npm run check:types",
     "animate": "node scripts/animate-sequence.mjs",
     "test:animate": "node scripts/test-animate-local.mjs",
     "check:packages": "node scripts/check-packages.mjs",
@@ -18,8 +18,9 @@
     "check:models": "node scripts/check-models.mjs",
     "check:stack": "node scripts/check-stack-detect.mjs",
     "check:handoff": "node scripts/check-handoff.mjs",
-    "check:browser": "node scripts/check-plan-panel.mjs && node scripts/check-code-space.mjs",
-    "check:types": "cd sandbox-terminal && npx tsc --noEmit -p tsconfig.app.json"
+    "check:browser": "node scripts/check-plan-panel.mjs && node scripts/check-code-space.mjs && node scripts/check-claw-e2e.mjs",
+    "check:types": "cd sandbox-terminal && npx tsc --noEmit -p tsconfig.app.json",
+    "check:claw": "node scripts/check-claw-risk.mjs && node scripts/check-claw-api.mjs && node scripts/check-claw-helper.mjs && node scripts/build-claw.mjs --check"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",
