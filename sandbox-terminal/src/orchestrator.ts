@@ -14,6 +14,7 @@ import type { FileNode } from './types.js';
 import { formatSearchHits, type SearchHit } from './contextBudget.js';
 import { looksLikeApplyRequest, looksLikeLegacyWelcome } from './agentParse.js';
 import { noteSettingsChanged } from './settingsSync.js';
+import { planForPersona } from './buildPlan.js';
 
 export interface OrchestratorPersona {
   id: string;
@@ -288,6 +289,8 @@ export function buildPersonaContext(opts: {
   hits: SearchHit[];
   coderLabel: string;
   role?: string;
+  /** Build plan markdown (may be empty). */
+  plan?: string;
 }): string {
   const parts: string[] = ['CODE SPACE STATE (live, right now):'];
   parts.push(`Repo: ${opts.repoUrl || (opts.repoRoot ? 'blank project' : 'nothing opened yet')}`);
@@ -311,6 +314,7 @@ export function buildPersonaContext(opts: {
   if (opts.openFiles.length) {
     parts.push('', `Files the coder will have open in full: ${opts.openFiles.join(', ')}`);
   }
+  parts.push('', planForPersona(opts.plan || ''));
   const hitBlock = formatSearchHits(opts.hits, 6_000);
   if (hitBlock) parts.push('', hitBlock);
   return parts.join('\n');
