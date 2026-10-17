@@ -215,7 +215,7 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
   const failed = verifyState === 'failed';
   const running = verifyState === 'running' || verifyState === 'detecting'
     || String(verifyState).startsWith('retry');
-  const color = passed ? '#0B0D12' : failed ? '#fff' : '#0B0D12';
+  const color = passed ? '#09080C' : failed ? '#fff' : '#09080C';
   const bg = passed ? '#34D399' : failed ? '#8a1f1f' : '#FF1F5A';
   const shortCmd = testCommand
     ? (testCommand.length > 64 ? `${testCommand.slice(0, 64)}…` : testCommand)
@@ -235,14 +235,14 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
         <input value={cmd} onChange={e => setCmd(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && cmd.trim() && onSetCommand(cmd.trim())}
           placeholder="npm test"
-          style={{ flex: 1, background: '#171B26', color: '#ECEEF3', border: '1px solid #232838',
+          style={{ flex: 1, background: '#16131B', color: '#F2ECEF', border: '1px solid #2A2030',
             borderRadius: 4, padding: '4px 8px', fontFamily: 'inherit', fontSize: 16, outline: 'none' }} />
         <button onClick={() => cmd.trim() && onSetCommand(cmd.trim())}
-          style={{ background: '#FF1F5A', color: '#0B0D12', border: 'none', borderRadius: 4,
+          style={{ background: '#FF1F5A', color: '#09080C', border: 'none', borderRadius: 4,
             padding: '4px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 15, fontWeight: 700 }}>
           Set & Run</button>
         <button onClick={onDismiss}
-          style={{ background: '#191D27', color: '#9198AA', border: '1px solid #232838',
+          style={{ background: '#18151D', color: '#A39AA8', border: '1px solid #2A2030',
             borderRadius: 4, padding: '4px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 15 }}>
           Later</button>
       </div>
@@ -253,7 +253,7 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
       padding: '10px 12px', background: bg, borderTop: `2px solid ${passed ? '#1FAE7E' : failed ? '#ff6a6a' : '#FF5C84'}`,
       flexShrink: 0 }}>
       <div style={{ width: 10, height: 10, borderRadius: '50%',
-        background: passed || running ? '#0B0D12' : '#fff', flexShrink: 0 }} />
+        background: passed || running ? '#09080C' : '#fff', flexShrink: 0 }} />
       <span style={{ fontSize: 18, fontWeight: 800, color, flex: 1, lineHeight: 1.35,
         letterSpacing: '0.02em' }}>{label}</span>
       {(passed || failed) && (
@@ -1462,7 +1462,7 @@ export function App() {
   // ── Shared topbar ────────────────────────────────────────────────────────
   const topbar = (
     <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0,
-      borderBottom: '1px solid #191D27', background: '#0B0D12' }}>
+      borderBottom: '1px solid #18151D', background: '#09080C' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
         padding: '6px 12px' }}>
         <a href="/" style={{ color: '#FF1F5A', fontSize: 16, textDecoration: 'none',
@@ -1486,7 +1486,7 @@ export function App() {
           </span>
         )}
         <button type="button" onClick={startFreshHome}
-          style={{ background: 'transparent', color: '#9198AA', border: '1px solid #232838',
+          style={{ background: 'transparent', color: '#A39AA8', border: '1px solid #2A2030',
             borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
             fontFamily: 'inherit', fontSize: 14 }}>
           New
@@ -1497,7 +1497,7 @@ export function App() {
             ? 'Auto-backup to GitHub is ON — saves your progress to a branch (flagged broken when tests fail) after each change and every few minutes. Tap to turn off.'
             : 'Auto-backup to GitHub: keep your progress safe from a VM reset even while the app is broken. Needs a GitHub token (paste once in Push). Tap to turn on.'}
           style={{ background: wipBackupOn ? 'rgba(96,165,250,.16)' : 'transparent',
-            color: wipBackupOn ? '#8CC2FF' : '#9198AA', border: `1px solid ${wipBackupOn ? '#2B6CB0' : '#232838'}`,
+            color: wipBackupOn ? '#8CC2FF' : '#A39AA8', border: `1px solid ${wipBackupOn ? '#2B6CB0' : '#2A2030'}`,
             borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 14, whiteSpace: 'nowrap' }}>
           {wipBackupOn ? '⟲ Backup on' : '⟲ Backup'}
         </button>
@@ -1518,7 +1518,7 @@ export function App() {
               if (next) openStoredSession(next);
               else startFreshHome();
             }}
-            style={{ background: 'transparent', color: '#656C7E', border: '1px solid #232838',
+            style={{ background: 'transparent', color: '#756B7B', border: '1px solid #2A2030',
               borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
               fontFamily: 'inherit', fontSize: 14 }}>
             Delete
@@ -1529,8 +1529,8 @@ export function App() {
           title={orchPersona
             ? `You talk to ${orchPersona.name} (on ${orchPersona.model}); it briefs the coder below`
             : 'Off — your messages go straight to the coder'}
-          style={{ background: orchPersona ? 'rgba(255,31,90,.12)' : '#12151D', color: '#ECEEF3',
-            border: `1px solid ${orchPersona ? '#C8123F' : '#232838'}`,
+          style={{ background: orchPersona ? 'rgba(255,31,90,.12)' : '#100E14', color: '#F2ECEF',
+            border: `1px solid ${orchPersona ? '#C8123F' : '#2A2030'}`,
             borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 15, cursor: 'pointer' }}>
           {(personaList.length ? personaList : orchPrefs.personaId
             ? [{ id: orchPrefs.personaId, name: orchPrefs.personaId }] : []
@@ -1539,20 +1539,20 @@ export function App() {
         </select>
         <select value={role} onChange={e => handleRoleChange(e.target.value as RoleId)}
           title="Role — uses the model you assigned for write / review / plan"
-          style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+          style={{ background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
             borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 15, cursor: 'pointer' }}>
           {ROLE_LIST.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
         </select>
         <select value={modelScope} onChange={e => handleScopeChange(e.target.value as 'coders' | 'provider')}
           title="Coders shows the coding models across every provider; All models shows one provider's full catalog"
-          style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+          style={{ background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
             borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 15, cursor: 'pointer' }}>
           <option value="coders">Coders</option>
           <option value="provider">All models</option>
         </select>
         {modelScope === 'provider' && (
           <select value={provider} onChange={e => handleProviderChange(e.target.value)}
-            style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+            style={{ background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
               borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 15, cursor: 'pointer' }}>
             {PROVIDER_LIST.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
           </select>
@@ -1561,7 +1561,7 @@ export function App() {
           <select value={coderKey(provider, model)} onChange={e => handleCoderChange(e.target.value)}
             disabled={modelsLoading}
             title="Coding models — free ones run without a password, paid ones need the unlock"
-            style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+            style={{ background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
               borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 15,
               cursor: 'pointer', maxWidth: 260, flex: 1, minWidth: 0 }}>
             {coderBrands.map(brand => (
@@ -1587,7 +1587,7 @@ export function App() {
         ) : (
           <select value={model} onChange={e => handleModelChange(e.target.value)}
             disabled={modelsLoading}
-            style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+            style={{ background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
               borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 15,
               cursor: 'pointer', maxWidth: 220, flex: 1, minWidth: 0 }}>
             {models.map(m => {
@@ -1629,14 +1629,14 @@ export function App() {
               .catch((err: Error) => window.alert(err.message || 'Unlock failed'));
           }}
           title={paidUnlocked() ? 'Paid models unlocked on this device — click to lock' : 'Unlock paid models'}
-          style={{ background: paidUnlocked() ? 'rgba(52,211,153,.16)' : '#171B26',
-            color: paidUnlocked() ? '#34D399' : '#9198AA',
-            border: '1px solid #232838', borderRadius: 4, padding: '3px 8px',
+          style={{ background: paidUnlocked() ? 'rgba(52,211,153,.16)' : '#16131B',
+            color: paidUnlocked() ? '#34D399' : '#A39AA8',
+            border: '1px solid #2A2030', borderRadius: 4, padding: '3px 8px',
             cursor: 'pointer', fontFamily: 'inherit', fontSize: 14 }}>
           {paidUnlocked() ? 'Paid ✓' : 'Unlock'}
         </button>
         {repo.sandboxId && (
-          <span style={{ fontSize: 12, color: '#323A50', whiteSpace: 'nowrap',
+          <span style={{ fontSize: 12, color: '#3E3048', whiteSpace: 'nowrap',
             overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 120 }}
             title={repo.sandboxId}>● {repo.sandboxId.slice(0, 20)}</span>
         )}
@@ -1814,7 +1814,7 @@ export function App() {
           display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
           <span style={{ flex: 1 }}>{restoreNote}</span>
           <button type="button" onClick={() => setRestoreNote(null)}
-            style={{ background: 'transparent', border: 'none', color: '#9198AA', cursor: 'pointer', fontSize: 16 }}>✕</button>
+            style={{ background: 'transparent', border: 'none', color: '#A39AA8', cursor: 'pointer', fontSize: 16 }}>✕</button>
         </div>
       )}
       {backupNote && (
@@ -1823,7 +1823,7 @@ export function App() {
           display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
           <span style={{ flex: 1 }}>{backupNote}</span>
           <button type="button" onClick={() => setBackupNote(null)}
-            style={{ background: 'transparent', border: 'none', color: '#9198AA', cursor: 'pointer', fontSize: 16 }}>✕</button>
+            style={{ background: 'transparent', border: 'none', color: '#A39AA8', cursor: 'pointer', fontSize: 16 }}>✕</button>
         </div>
       )}
       {applyBanner}
@@ -1930,7 +1930,7 @@ export function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column',
       height: '100dvh', maxHeight: '100dvh', width: '100%', maxWidth: '100%',
-      background: '#0B0D12', fontFamily: '"JetBrains Mono",ui-monospace,monospace',
+      background: '#09080C', fontFamily: '"JetBrains Mono",ui-monospace,monospace',
       overflow: 'hidden' }}>
       {topbar}
 
@@ -1941,7 +1941,7 @@ export function App() {
           <div role="dialog" aria-label="Code Space home"
             onClick={e => e.stopPropagation()}
             style={{ width: 'min(520px, 100%)', maxHeight: 'min(80dvh, 640px)', overflow: 'auto',
-              background: '#12151D', border: '1px solid #FF1F5A', borderRadius: 8, padding: 14 }}>
+              background: '#100E14', border: '1px solid #FF1F5A', borderRadius: 8, padding: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
               <h2 style={{ margin: 0, flex: 1, fontSize: 18, letterSpacing: '0.08em',
                 textTransform: 'uppercase', color: '#FF1F5A' }}>Home · Code Spaces</h2>
@@ -1950,29 +1950,29 @@ export function App() {
                   borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
                   fontSize: 15, fontWeight: 700 }}>New</button>
               <button type="button" onClick={() => setShowHome(false)}
-                style={{ background: 'transparent', color: '#9198AA', border: '1px solid #232838',
+                style={{ background: 'transparent', color: '#A39AA8', border: '1px solid #2A2030',
                   borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
                   fontSize: 15 }}>Close</button>
             </div>
-            <p style={{ margin: '0 0 12px', fontSize: 16, color: '#9198AA', lineHeight: 1.4 }}>
+            <p style={{ margin: '0 0 12px', fontSize: 16, color: '#A39AA8', lineHeight: 1.4 }}>
               Open a saved code space conversation, or start a fresh Home code space.
               Opening <b style={{ color: '#FF1F5A' }}>Code Space</b> from Chat always loads that chat here.
             </p>
             {homeList.length === 0 ? (
-              <p style={{ color: '#656C7E', fontSize: 16 }}>No saved code spaces yet.</p>
+              <p style={{ color: '#756B7B', fontSize: 16 }}>No saved code spaces yet.</p>
             ) : (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 8 }}>
                 {homeList.map(s => (
                   <li key={s.id}>
                     <button type="button" onClick={() => openStoredSession(s)}
-                      style={{ width: '100%', textAlign: 'left', background: s.id === sessionId ? 'rgba(212,255,63,0.1)' : '#0B0D12',
-                        border: `1px solid ${s.id === sessionId ? '#FF1F5A' : '#232838'}`, borderRadius: 6,
+                      style={{ width: '100%', textAlign: 'left', background: s.id === sessionId ? 'rgba(212,255,63,0.1)' : '#09080C',
+                        border: `1px solid ${s.id === sessionId ? '#FF1F5A' : '#2A2030'}`, borderRadius: 6,
                         padding: '10px 12px', cursor: 'pointer', fontFamily: 'inherit' }}>
                       <div style={{ color: '#FF1F5A', fontSize: 18, fontWeight: 700,
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {s.title || 'Code Space'}
                       </div>
-                      <div style={{ color: '#656C7E', fontSize: 15, marginTop: 4 }}>
+                      <div style={{ color: '#756B7B', fontSize: 15, marginTop: 4 }}>
                         {(s.messages || []).length} messages
                         {s.fromChat ? ' · from chat' : ''}
                         {' · '}
@@ -1994,20 +1994,20 @@ export function App() {
         /* ── Desktop: 3-column grid (single ChatPane + Terminal) ── */
         <div style={{ flex: 1, minHeight: 0, display: 'grid',
           gridTemplateColumns: '240px 1fr 420px', overflow: 'hidden' }}>
-          <div style={{ borderRight: '1px solid #191D27', overflow: 'hidden',
+          <div style={{ borderRight: '1px solid #18151D', overflow: 'hidden',
             display: 'flex', flexDirection: 'column' }}>
             {fileTree}
           </div>
-          <div style={{ borderRight: '1px solid #191D27', overflow: 'hidden',
+          <div style={{ borderRight: '1px solid #18151D', overflow: 'hidden',
             display: 'flex', flexDirection: 'column' }}>
             {chatColumn}
           </div>
           <div style={{ overflow: 'hidden', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', borderBottom: '1px solid #191D27', flexShrink: 0 }}>
+            <div style={{ display: 'flex', borderBottom: '1px solid #18151D', flexShrink: 0 }}>
               {(['terminal', 'preview'] as const).map(t => (
                 <button key={t} type="button" onClick={() => setDesktopRightTab(t)}
-                  style={{ flex: 1, padding: '8px 0', background: desktopRightTab === t ? '#12151D' : 'transparent',
-                    color: desktopRightTab === t ? '#FF1F5A' : '#9198AA', border: 'none',
+                  style={{ flex: 1, padding: '8px 0', background: desktopRightTab === t ? '#100E14' : 'transparent',
+                    color: desktopRightTab === t ? '#FF1F5A' : '#A39AA8', border: 'none',
                     borderBottom: desktopRightTab === t ? '2px solid #FF1F5A' : '2px solid transparent',
                     fontFamily: 'inherit', fontSize: 15, fontWeight: desktopRightTab === t ? 700 : 500,
                     cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
@@ -2049,8 +2049,8 @@ export function App() {
               <PreviewPanel sandboxId={repo.sandboxId} detectedPort={previewPort} autoStartKey={previewKick} />
             </div>
           </div>
-          <div style={{ display: 'flex', flexShrink: 0, borderTop: '1px solid #191D27',
-            background: '#0B0D12', paddingBottom: 'env(safe-area-inset-bottom)',
+          <div style={{ display: 'flex', flexShrink: 0, borderTop: '1px solid #18151D',
+            background: '#09080C', paddingBottom: 'env(safe-area-inset-bottom)',
             position: 'relative', zIndex: 50 }}
             className="mobile-tabs">
             {([
@@ -2062,8 +2062,8 @@ export function App() {
               <button key={t.id} type="button" onClick={() => setMobileTab(t.id)}
                 aria-current={mobileTab === t.id ? 'page' : undefined}
                 style={{ flex: 1, padding: '14px 0', minHeight: 48,
-                  background: mobileTab === t.id ? '#12151D' : 'transparent',
-                  color: mobileTab === t.id ? '#FF1F5A' : '#9198AA', border: 'none',
+                  background: mobileTab === t.id ? '#100E14' : 'transparent',
+                  color: mobileTab === t.id ? '#FF1F5A' : '#A39AA8', border: 'none',
                   borderTop: mobileTab === t.id ? '2px solid #FF1F5A' : '2px solid transparent',
                   fontFamily: 'inherit', fontSize: 16, fontWeight: mobileTab === t.id ? 700 : 500,
                   cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.08em',

@@ -67,9 +67,9 @@ function TreeNode({ node, depth, contextPaths, onClickFile }: {
           onClick={() => setOpen(o => !o)}
           style={{ display: 'flex', alignItems: 'center', gap: 4,
             padding: '2px 0 2px 4px', cursor: 'pointer', fontSize: 16,
-            color: '#9198AA', paddingLeft: 8 + depth * 14,
+            color: '#A39AA8', paddingLeft: 8 + depth * 14,
             userSelect: 'none', borderRadius: 3 }}
-          onMouseEnter={e => (e.currentTarget.style.background = '#191D27')}
+          onMouseEnter={e => (e.currentTarget.style.background = '#18151D')}
           onMouseLeave={e => (e.currentTarget.style.background = '')}
         >
           <span style={{ fontSize: 14, opacity: .6 }}>{open ? '▾' : '▸'}</span>
@@ -84,7 +84,7 @@ function TreeNode({ node, depth, contextPaths, onClickFile }: {
   }
 
   const inCtx = contextPaths.has(node.path);
-  const color  = EXT_COLOR[node.ext ?? ''] ?? '#9198AA';
+  const color  = EXT_COLOR[node.ext ?? ''] ?? '#A39AA8';
 
   return (
     <div
@@ -97,14 +97,14 @@ function TreeNode({ node, depth, contextPaths, onClickFile }: {
         background: inCtx ? 'rgba(212,255,63,.08)' : 'transparent',
         borderLeft: inCtx ? '2px solid #FF1F5A' : '2px solid transparent',
       }}
-      onMouseEnter={e => (e.currentTarget.style.background = inCtx ? 'rgba(212,255,63,.12)' : '#191D27')}
+      onMouseEnter={e => (e.currentTarget.style.background = inCtx ? 'rgba(212,255,63,.12)' : '#18151D')}
       onMouseLeave={e => (e.currentTarget.style.background = inCtx ? 'rgba(212,255,63,.08)' : '')}
     >
       <span style={{ color, fontSize: 14, fontWeight: 700, minWidth: 26,
         textAlign: 'right', opacity: .7 }}>
         {node.ext?.slice(1) ?? ''}
       </span>
-      <span style={{ color: inCtx ? '#ECEEF3' : '#ECEEF3', flex: 1,
+      <span style={{ color: inCtx ? '#F2ECEF' : '#F2ECEF', flex: 1,
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {node.name}
       </span>
@@ -181,19 +181,19 @@ export function FileTree({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%',
-      background: '#0B0D12', fontFamily: '"JetBrains Mono",ui-monospace,monospace' }}>
+      background: '#09080C', fontFamily: '"JetBrains Mono",ui-monospace,monospace' }}>
 
       {/* ── repo path input ── */}
-      <div style={{ padding: '8px 10px', borderBottom: '1px solid #191D27', flexShrink: 0 }}>
-        <div style={{ fontSize: 14, color: '#656C7E', letterSpacing: '0.1em',
+      <div style={{ padding: '8px 10px', borderBottom: '1px solid #18151D', flexShrink: 0 }}>
+        <div style={{ fontSize: 14, color: '#756B7B', letterSpacing: '0.1em',
           textTransform: 'uppercase', marginBottom: 6 }}>// project</div>
         {connected && !changing && (
           <div data-testid="project-connected" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ color: '#34D399', fontSize: 14 }}>●</span>
-            <span style={{ flex: 1, minWidth: 0, fontSize: 15, color: '#ECEEF3', overflow: 'hidden',
+            <span style={{ flex: 1, minWidth: 0, fontSize: 15, color: '#F2ECEF', overflow: 'hidden',
               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={repoUrl || connectedName}>{connectedName}</span>
             <button type="button" onClick={() => setChanging(true)} data-testid="project-change"
-              style={{ background: 'transparent', color: '#9198AA', border: '1px solid #232838', borderRadius: 4,
+              style={{ background: 'transparent', color: '#A39AA8', border: '1px solid #2A2030', borderRadius: 4,
                 padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 14 }}>Change</button>
           </div>
         )}
@@ -205,12 +205,12 @@ export function FileTree({
             onKeyDown={e => e.key === 'Enter' && handleOpen()}
             placeholder="https://github.com/you/private-repo"
             title="Private repos use the GitHub token from Push (saved in this browser). Paste one there once, then Open works."
-            style={{ flex: 1, minWidth: 0, background: '#12151D', color: '#ECEEF3',
-              border: '1px solid #232838', borderRadius: 4, padding: '4px 8px',
+            style={{ flex: 1, minWidth: 0, background: '#100E14', color: '#F2ECEF',
+              border: '1px solid #2A2030', borderRadius: 4, padding: '4px 8px',
               fontFamily: 'inherit', fontSize: 15, outline: 'none' }} />
           <button onClick={handleOpen} disabled={loading || !inputPath.trim()}
-            style={{ background: inputPath.trim() ? '#FF1F5A' : '#191D27',
-              color: inputPath.trim() ? '#0B0D12' : '#323A50',
+            style={{ background: inputPath.trim() ? '#FF1F5A' : '#18151D',
+              color: inputPath.trim() ? '#09080C' : '#3E3048',
               border: 'none', borderRadius: 4, padding: '4px 10px',
               cursor: inputPath.trim() ? 'pointer' : 'default',
               fontFamily: 'inherit', fontSize: 15, fontWeight: 700 }}>
@@ -224,7 +224,7 @@ export function FileTree({
             disabled={loading}
             style={{
               marginTop: 8, width: '100%',
-              background: '#191D27', color: '#FF1F5A',
+              background: '#18151D', color: '#FF1F5A',
               border: '1px solid rgba(52,211,153,.16)', borderRadius: 4,
               padding: '6px 10px', cursor: loading ? 'default' : 'pointer',
               fontFamily: 'inherit', fontSize: 15, fontWeight: 700,
@@ -265,7 +265,7 @@ export function FileTree({
           </div>
         )}
         {repoRoot && !loading && (
-          <div style={{ marginTop: 4, fontSize: 14, color: '#656C7E' }}>
+          <div style={{ marginTop: 4, fontSize: 14, color: '#756B7B' }}>
             {totalFiles} files
           </div>
         )}
@@ -281,7 +281,7 @@ export function FileTree({
 
       {/* ── optional pinned files (advanced; auto-pick does the real work) ── */}
       {contextFiles.size > 0 && (
-        <div style={{ borderTop: '1px solid #191D27', padding: '8px 10px', flexShrink: 0 }}>
+        <div style={{ borderTop: '1px solid #18151D', padding: '8px 10px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center',
             justifyContent: 'space-between', marginBottom: 5 }}>
             <span style={{ fontSize: 14, color: '#FF1F5A', letterSpacing: '0.08em',
@@ -289,7 +289,7 @@ export function FileTree({
               Pinned ({contextFiles.size})
             </span>
             <button onClick={onClearContext}
-              style={{ background: 'transparent', color: '#656C7E', border: 'none',
+              style={{ background: 'transparent', color: '#756B7B', border: 'none',
                 fontSize: 14, cursor: 'pointer', padding: 0 }}>
               clear
             </button>
@@ -297,11 +297,11 @@ export function FileTree({
           {[...contextFiles.keys()].map(p => (
             <div key={p} style={{ display: 'flex', alignItems: 'center',
               justifyContent: 'space-between', padding: '2px 0', gap: 6 }}>
-              <span style={{ fontSize: 14, color: '#9198AA', flex: 1,
+              <span style={{ fontSize: 14, color: '#A39AA8', flex: 1,
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                 title={p}>{p.split('/').pop()}</span>
               <button onClick={() => onRemoveFromContext(p)}
-                style={{ background: 'transparent', color: '#656C7E', border: 'none',
+                style={{ background: 'transparent', color: '#756B7B', border: 'none',
                   fontSize: 15, cursor: 'pointer', padding: 0, lineHeight: 1 }}>×</button>
             </div>
           ))}

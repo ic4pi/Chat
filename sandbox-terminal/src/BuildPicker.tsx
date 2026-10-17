@@ -62,7 +62,7 @@ function SeatSelect({ value, catalogs, unlocked, onChange, testId, teamOptions =
   const known = inTeams || PROVIDER_GROUPS.some(g => (catalogs[g.provider] || []).some(m => g.keep(m) && m.id === value.model && g.provider === value.provider));
   return (
     <select data-testid={testId} value={key(value)} onChange={e => onChange(parse(e.target.value))}
-      style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838', borderRadius: 4,
+      style={{ background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030', borderRadius: 4,
         padding: '5px 6px', fontFamily: 'inherit', fontSize: 14, minWidth: 0, flex: '1 1 220px', maxWidth: 440 }}>
       {!known && <option value={key(value)}>{value.model}</option>}
       {teamOptions.length > 0 && (
@@ -131,7 +131,7 @@ export function BuildPicker({ seats, teamOptions, teamStars = {}, lockedNote, pr
           Who builds this?
         </strong>
         <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 13, color: '#9198AA' }}>Team</span>
+        <span style={{ fontSize: 13, color: '#A39AA8' }}>Team</span>
         <select data-testid="team-preset" value={preset !== 'custom' ? preset : savedId && savedTeams.some(t => t.id === savedId) ? `saved:${savedId}` : ''}
           onChange={e => {
             const v = e.target.value;
@@ -139,7 +139,7 @@ export function BuildPicker({ seats, teamOptions, teamStars = {}, lockedNote, pr
             else if (v) onPreset(v as PresetId);
           }}
           title={preset === 'custom' ? 'Your own seats' : PRESETS[preset].blurb}
-          style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838', borderRadius: 4,
+          style={{ background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030', borderRadius: 4,
             padding: '3px 6px', fontFamily: 'inherit', fontSize: 14, maxWidth: '100%' }}>
           {preset === 'custom' && !(savedId && savedTeams.some(t => t.id === savedId)) && <option value="">Custom</option>}
           <optgroup label="Teams">
@@ -173,7 +173,7 @@ export function BuildPicker({ seats, teamOptions, teamStars = {}, lockedNote, pr
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <button type="button" data-testid="build-go"
           onClick={() => onBuild({ builder, fixer, second: compare ? second : null })}
-          style={{ background: '#FF1F5A', color: '#0B0D12', border: 'none', borderRadius: 4, padding: '6px 16px',
+          style={{ background: '#FF1F5A', color: '#09080C', border: 'none', borderRadius: 4, padding: '6px 16px',
             fontFamily: 'inherit', fontSize: 15, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
           {compare ? 'Build both' : 'Build it'}
         </button>
@@ -190,7 +190,7 @@ export function BuildPicker({ seats, teamOptions, teamStars = {}, lockedNote, pr
             ★ Save team
           </button>
         )}
-        <span style={{ fontSize: 12, color: '#656C7E', flex: '1 1 220px' }}>
+        <span style={{ fontSize: 12, color: '#756B7B', flex: '1 1 220px' }}>
           {preset !== 'custom' ? PRESETS[preset].blurb
             : savedTeams.find(t => t.id === savedId) ? `Your team “${savedTeams.find(t => t.id === savedId)!.name}”.` : 'Your own seats.'}
         </span>

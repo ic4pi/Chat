@@ -56,9 +56,9 @@ export interface ChunkModelPanelProps {
 }
 
 const selectStyle: React.CSSProperties = {
-  background: '#12151D',
-  color: '#ECEEF3',
-  border: '1px solid #232838',
+  background: '#100E14',
+  color: '#F2ECEF',
+  border: '1px solid #2A2030',
   borderRadius: 4,
   padding: '5px 8px',
   fontFamily: 'inherit',
@@ -321,8 +321,8 @@ export function ChunkModelPanel({
       aria-labelledby="chunk-model-panel-title"
       style={{
         padding: '10px 12px 12px',
-        borderTop: '1px solid #191D27',
-        background: '#0B0D12',
+        borderTop: '1px solid #18151D',
+        background: '#09080C',
         maxHeight: 'min(55vh, 480px)',
         overflow: 'auto',
       }}
@@ -334,7 +334,7 @@ export function ChunkModelPanel({
         >
           LLM per code slice
         </h2>
-        <span style={{ fontSize: 14, color: '#656C7E' }}>
+        <span style={{ fontSize: 14, color: '#756B7B' }}>
           Choices save here. Default run: HTML + CSS + JS (max 6). Needs an open sandbox to save files.
         </span>
       </div>
@@ -373,9 +373,9 @@ export function ChunkModelPanel({
                 gap: 8,
                 alignItems: 'start',
                 padding: '8px 10px',
-                border: '1px solid #191D27',
+                border: '1px solid #18151D',
                 borderRadius: 6,
-                background: enabled[chunk.id] ? '#0B0D12' : '#0B0D12',
+                background: enabled[chunk.id] ? '#09080C' : '#09080C',
                 opacity: enabled[chunk.id] ? 1 : 0.55,
               }}
             >
@@ -394,7 +394,7 @@ export function ChunkModelPanel({
 
               <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span id={rowLabelId} style={{ fontSize: 18, fontWeight: 600, color: '#ECEEF3' }}>
+                  <span id={rowLabelId} style={{ fontSize: 18, fontWeight: 600, color: '#F2ECEF' }}>
                     {chunk.label}
                   </span>
                   <span
@@ -405,7 +405,7 @@ export function ChunkModelPanel({
                   >
                     {badge}
                   </span>
-                  <span style={{ fontSize: 14, color: '#656C7E' }}>{chunk.description}</span>
+                  <span style={{ fontSize: 14, color: '#756B7B' }}>{chunk.description}</span>
                 </div>
 
                 <div
@@ -416,7 +416,7 @@ export function ChunkModelPanel({
                   }}
                 >
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    <label id={provLabelId} htmlFor={`chunk-provider-${chunk.id}`} style={{ fontSize: 14, color: '#9198AA', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    <label id={provLabelId} htmlFor={`chunk-provider-${chunk.id}`} style={{ fontSize: 14, color: '#A39AA8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                       Provider
                     </label>
                     <select
@@ -434,7 +434,7 @@ export function ChunkModelPanel({
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    <label id={modelLabelId} htmlFor={`chunk-model-${chunk.id}`} style={{ fontSize: 14, color: '#9198AA', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    <label id={modelLabelId} htmlFor={`chunk-model-${chunk.id}`} style={{ fontSize: 14, color: '#A39AA8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                       Model
                     </label>
                     <select
@@ -472,7 +472,7 @@ export function ChunkModelPanel({
       </ul>
 
       <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
-        <label htmlFor="chunk-generate-prompt" style={{ fontSize: 14, color: '#9198AA', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        <label htmlFor="chunk-generate-prompt" style={{ fontSize: 14, color: '#A39AA8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
           Feature prompt
         </label>
         <textarea
@@ -491,8 +491,8 @@ export function ChunkModelPanel({
             cursor: 'text',
           }}
         />
-        <p id="chunk-generate-hint" style={{ margin: 0, fontSize: 14, color: '#656C7E' }}>
-          Generate → <code style={{ color: '#9198AA' }}>POST /api/generate</code>.
+        <p id="chunk-generate-hint" style={{ margin: 0, fontSize: 14, color: '#756B7B' }}>
+          Generate → <code style={{ color: '#A39AA8' }}>POST /api/generate</code>.
           Unconfigured models fall back to general-purpose. Keep ≤6 slices enabled.
         </p>
 
@@ -504,8 +504,8 @@ export function ChunkModelPanel({
             aria-busy={busy}
             title={!sandboxReady ? 'Open a blank project or repo first' : 'Generate enabled slices'}
             style={{
-              background: busy || !sandboxReady ? '#191D27' : '#FF1F5A',
-              color: busy || !sandboxReady ? '#9198AA' : '#0B0D12',
+              background: busy || !sandboxReady ? '#18151D' : '#FF1F5A',
+              color: busy || !sandboxReady ? '#A39AA8' : '#09080C',
               border: 'none',
               borderRadius: 4,
               padding: '8px 16px',
@@ -525,8 +525,8 @@ export function ChunkModelPanel({
               onClick={handleCancel}
               style={{
                 background: 'transparent',
-                color: '#9198AA',
-                border: '1px solid #232838',
+                color: '#A39AA8',
+                border: '1px solid #2A2030',
                 borderRadius: 4,
                 padding: '7px 12px',
                 fontFamily: 'inherit',

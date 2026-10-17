@@ -3,22 +3,22 @@
  * its own hex values inline — this is the single source of truth, and the
  * only place that can express hover states, focus rings, or animation
  * (inline React style objects can't do any of those). Palette values match
- * what was already scattered through the app (accent #FF1F5A, bg #0B0D12,
+ * what was already scattered through the app (accent #FF1F5A, bg #09080C,
  * etc.) — this doesn't reskin the app, it unifies and extends it.
  */
 
 :root {
   /* Surfaces, darkest to lightest */
-  --bg:         #0B0D12;
-  --surface:    #12151D;
-  --surface-2:  #171B26;
-  --border:     #232838;
-  --border-hi:  #323A50;
+  --bg:         #09080C;
+  --surface:    #100E14;
+  --surface-2:  #16131B;
+  --border:     #2A2030;
+  --border-hi:  #3E3048;
 
   /* Text */
-  --text:       #ECEEF3;
-  --text-muted: #9198AA;
-  --text-dim:   #656C7E;
+  --text:       #F2ECEF;
+  --text-muted: #A39AA8;
+  --text-dim:   #756B7B;
 
   /* Accent + status */
   --accent:       #FF1F5A;
@@ -26,7 +26,7 @@
   --accent-glow:  rgba(255,31,90, .35);
   --success:      #34D399;
   --success-dim:  rgba(52, 211, 153, .16);
-  --danger:       #ff9b9b;
+  --danger:       #FFB070;
 
   /* Shape + motion */
   --radius:     6px;
