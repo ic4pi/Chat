@@ -1268,3 +1268,8 @@ button:hover:not(:disabled) { text-shadow: 0 0 8px rgba(255,31,90,.5); }
 ::-webkit-scrollbar-thumb { background: #3E3048; }
 ::-webkit-scrollbar-thumb:hover { background: var(--brass-dk); }
 #sendBtn:not(:disabled) { box-shadow: var(--neon-glow); }
+
+/* Brand lockup: cat mark + wordmark replace the star and text */
+.brand-logo{height:44px;width:auto;flex:0 0 auto;filter:drop-shadow(0 0 8px rgba(255,31,90,.5))}
+.brand-wordmark{height:44px;width:auto;flex:0 0 auto;filter:drop-shadow(0 0 8px rgba(255,31,90,.45))}
+.topbar-logo{height:30px;width:auto;flex:0 0 auto;margin-right:2px;filter:drop-shadow(0 0 6px rgba(255,31,90,.5))}
