@@ -3548,7 +3548,7 @@ async function sendMessage(text) {
   // and if it doesn't, we still do, because the user said so.
   // The orchestrator is the one who takes the chat over. The user asking is only the backup, for when
   // it does not act or hangs: then the move happens anyway.
-  const userWantsMove = chat.kind === 'chat' && (userSaysReadyToBuild(text) || userAsksForCodeSpace(text));
+  const userWantsMove = AUTO_OPEN_CODE_SPACE && chat.kind === 'chat' && (userSaysReadyToBuild(text) || userAsksForCodeSpace(text));
   const hasSubstance = () => chat.messages.filter((m) => m.role === 'user' && !m.autoContinue).length > 1;
   let moveFallbackTimer = null;
 
@@ -3711,7 +3711,7 @@ async function sendMessage(text) {
             }
           }
         },
-        { codeSpaceHandoff: true },
+        { codeSpaceHandoff: AUTO_OPEN_CODE_SPACE },
       );
       let usedFallback = null;
 
@@ -3741,7 +3741,7 @@ async function sendMessage(text) {
                 speakNewSentences();
               }
             },
-            { codeSpaceHandoff: true },
+            { codeSpaceHandoff: AUTO_OPEN_CODE_SPACE },
           );
           if (retry.ok) {
             attempt = retry;
@@ -6374,6 +6374,10 @@ function userAsksForCodeSpace(text) {
 // How long the orchestrator gets to answer before a user's ask for the Code Space is honoured anyway.
 const CODE_SPACE_HANG_MS = 25_000;
 
+// Code Space opens only when the user presses its button. Nothing in the chat (a timer, the persona,
+// a typed "code space") opens it on its own.
+const AUTO_OPEN_CODE_SPACE = false;
+
 let codeSpaceTimer = null;
 
 function cancelCodeSpaceHandoff() {
@@ -6386,6 +6390,7 @@ function cancelCodeSpaceHandoff() {
  * means the user is not done talking, so it quietly stands down.
  */
 function goToCodeSpaceSoon(chat, opts = {}) {
+  if (!AUTO_OPEN_CODE_SPACE) return;
   cancelCodeSpaceHandoff();
   els.input?.addEventListener('input', cancelCodeSpaceHandoff, { once: true });
   codeSpaceTimer = setTimeout(() => {
@@ -6397,6 +6402,7 @@ function goToCodeSpaceSoon(chat, opts = {}) {
 
 /** A plain line in the transcript (same style as "Stopped.") when the persona did not say it itself. */
 function noteCodeSpaceMove(chat) {
+  if (!AUTO_OPEN_CODE_SPACE) return;
   chat.messages.push({ role: 'info', content: 'Taking this to the Code Space.', ts: Date.now() });
   saveState();
   renderMessages({ scroll: 'bottom' });
