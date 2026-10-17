@@ -1907,7 +1907,8 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           onKeyDown={e => {
             // Enter sends (Shift+Enter = new line). Touch keyboards keep Enter as a new line.
             if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
-            if (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) return;
+            // Ctrl/Cmd+Enter always sends; plain Enter on a touch screen stays a new line.
+            if (!e.ctrlKey && !e.metaKey && typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) return;
             e.preventDefault();
             if (!loading && input.trim()) void send();
           }}

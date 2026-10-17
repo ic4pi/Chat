@@ -5064,7 +5064,11 @@ els.input.addEventListener('keydown', (e) => {
       setTypingActive(true, 'Stopping…');
     }
   }
-  // Enter is just a newline now — there's already a Send button for sending.
+  // Enter is a newline; Ctrl+Enter (Cmd+Enter on a Mac) sends, same as the Send button.
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+    e.preventDefault();
+    if (!chatBusy && els.input.value.trim()) document.getElementById('inputForm')?.requestSubmit();
+  }
 });
 
 function handleNewChat() {
