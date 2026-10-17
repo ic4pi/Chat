@@ -92,6 +92,8 @@ export interface RepoContextActions {
   /** Write pending (or explicitly provided) changes to disk/sandbox. */
   applyChanges:    (files?: PendingChange[]) => Promise<{ path: string; ok: boolean; error?: string }[]>;
   clearChanges:    () => void;
+  /** Drop the open project entirely (tree, sandbox, context) — for starting a new code space. */
+  resetProject:    () => void;
 }
 
 export function useRepoContext(): RepoContextState & RepoContextActions {
@@ -410,6 +412,23 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
 
   const clearChanges = useCallback(() => setPendingChanges([]), []);
 
+  const resetProject = useCallback(() => {
+    setRoot('');
+    setSandboxId(null);
+    setIsRemote(false);
+    setRepoUrl(null);
+    setTree([]);
+    setTotalFiles(0);
+    setContextFiles(new Map());
+    setPendingChanges([]);
+    setError(null);
+    setLoading(false);
+    setPythonReady(null); setPythonDetail(null);
+    setRustReady(null); setRustDetail(null);
+    setGoReady(null); setGoDetail(null);
+    setSnapshot({});
+  }, []);
+
   return {
     root, sandboxId, isRemote, repoUrl, tree, totalFiles,
     contextFiles, pendingChanges, loading, error,
@@ -418,6 +437,6 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     goReady, goDetail, snapshot,
     openRepo, startBlankProject, restoreProject,
     addToContext, injectContextFile, removeFromContext, clearContext,
-    setPendingChanges, applyChanges, clearChanges,
+    setPendingChanges, applyChanges, clearChanges, resetProject,
   };
 }
