@@ -455,7 +455,7 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
                 style={{ display: 'flex', gap: 6, flex: '1 1 260px', minWidth: 0 }}>
                 <input value={repoUrl} onChange={e => setRepoUrl(e.target.value)}
                   placeholder="github.com/owner/repo"
-                  style={{ flex: 1, minWidth: 0, background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+                  style={{ flex: 1, minWidth: 0, background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
                     borderRadius: 4, padding: '6px 10px', fontFamily: 'inherit', fontSize: 15 }} />
                 <button type="submit" disabled={opening || !repoUrl.trim()} style={smallBtn(!opening && !!repoUrl.trim())}>
                   Clone
@@ -470,7 +470,7 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
             onChange={e => setPrompt(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendToBoth(prompt); } }}
             placeholder="Describe what to build — or send a brief from your persona with ⇄"
-            style={{ flex: 1, background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+            style={{ flex: 1, background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
               borderRadius: 4, padding: '7px 10px', fontFamily: 'inherit', fontSize: 15, minWidth: 0 }}
           />
           <button type="button" onClick={() => void sendToBoth(prompt)} disabled={sending || !prompt.trim()}

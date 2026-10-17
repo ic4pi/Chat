@@ -1787,13 +1787,13 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
               <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 4 }}>
                 <button type="button" data-testid="copy-user-message"
                   onClick={() => { void copyText(msg.content); }}
-                  style={{ background: 'transparent', color: '#656C7E', border: '1px solid #232838',
+                  style={{ background: 'transparent', color: '#756B7B', border: '1px solid #2A2030',
                     borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13 }}>
                   Copy
                 </button>
                 <button type="button" data-testid="reuse-user-message" title="Put this message back in the box to edit and resend"
                   onClick={() => { setInput(msg.content); }}
-                  style={{ background: 'transparent', color: '#656C7E', border: '1px solid #232838',
+                  style={{ background: 'transparent', color: '#756B7B', border: '1px solid #2A2030',
                     borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13 }}>
                   Reuse
                 </button>
@@ -1805,7 +1805,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                   const t = msg.speaker === 'persona' ? (splitPersonaReply(msg.content).say || msg.content) : msg.content;
                   void copyText(t);
                 }}
-                style={{ marginTop: 4, background: 'transparent', color: '#656C7E', border: '1px solid #232838',
+                style={{ marginTop: 4, background: 'transparent', color: '#756B7B', border: '1px solid #2A2030',
                   borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13 }}>
                 Copy
               </button>
@@ -1888,7 +1888,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             fontFamily: 'inherit', fontSize: 16, alignSelf: 'flex-end' }}>📎</button>
         <button type="button" data-testid="workspace-paste" title="Paste from clipboard into the box"
           onClick={() => { void pasteIntoInput(); }}
-          style={{ background: '#171B26', color: '#9198AA', border: '1px solid #232838',
+          style={{ background: '#16131B', color: '#A39AA8', border: '1px solid #2A2030',
             borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
             fontFamily: 'inherit', fontSize: 16, alignSelf: 'flex-end' }}>📋</button>
         <button type="button" data-testid="workspace-mic" title={listening ? 'Stop listening' : (speakOn ? 'Voice chat — tap to talk' : 'Dictate into the box')}
@@ -1926,11 +1926,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           placeholder={loading ? 'Working… you can keep typing or paste your next message'
             : listening ? (speakOn ? 'Listening — will send…' : 'Listening…')
             : persona ? `Talk to ${persona.name}…` : 'What should change?'}
-          style={{ flex: 1, background: '#12151D', color: '#ECEEF3',
-            border: '1px solid #232838', borderRadius: 4,
+          style={{ flex: 1, background: '#100E14', color: '#F2ECEF',
+            border: '1px solid #2A2030', borderRadius: 4,
             padding: '7px 10px', fontFamily: 'inherit', fontSize: 22,
             outline: 'none', resize: 'vertical', minHeight: 48, maxHeight: '40vh',
-            WebkitTextFillColor: '#ECEEF3',
+            WebkitTextFillColor: '#F2ECEF',
             opacity: 1 }} />
         <button type="submit" data-testid="chat-send" disabled={(!input.trim() && uploads.length === 0) || loading}
           style={{ background: (input.trim() || uploads.length) && !loading ? '#FF1F5A' : '#18151D',
