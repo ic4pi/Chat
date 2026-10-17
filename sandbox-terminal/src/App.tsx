@@ -684,6 +684,13 @@ export function App() {
     setPushOk(null);
     setShowHome(false);
     setSessionKey(k => k + 1);
+    // A session with no project must not inherit the previous one's tree/sandbox.
+    if (!s.repoUrl && !s.sandboxId && !(s.files && Object.keys(s.files).length)) {
+      restoringRef.current = null;
+      blankStartRef.current = null;
+      setRestoreNote(null);
+      repo.resetProject();
+    }
     void restoreSaved(s).then(() => {
       if (s.pendingChanges?.length) repo.setPendingChanges(s.pendingChanges);
       else repo.clearChanges();
