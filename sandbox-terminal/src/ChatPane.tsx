@@ -1511,6 +1511,17 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
     }),
   }), [sendText]);
 
+  // Paste without relying on the long-press menu: read the clipboard on a tap,
+  // or fall back to a prompt (which always accepts a paste) when the browser
+  // won't hand it over.
+  const pasteIntoInput = useCallback(async () => {
+    let text = '';
+    try { text = await navigator.clipboard.readText(); } catch { /* denied or unsupported */ }
+    if (!text) text = window.prompt('Paste your text here, then press OK') || '';
+    if (!text) return;
+    setInput(prev => (prev ? `${prev}\n${text}` : text));
+  }, []);
+
   const send = useCallback(async () => {
     const text = input.trim();
     if ((!text && uploads.length === 0) || sendingRef.current) return;
@@ -1772,6 +1783,17 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 <AssistantBody msg={msg} appliedPaths={appliedPaths} onRunCode={onRunCode} />
               </div>
             )}
+            {msg.role === 'assistant' && msg.kind !== 'welcome' && msg.content && !msg.content.startsWith('⏸') && (
+              <button type="button" data-testid="copy-message"
+                onClick={() => {
+                  const t = msg.speaker === 'persona' ? (splitPersonaReply(msg.content).say || msg.content) : msg.content;
+                  void copyText(t);
+                }}
+                style={{ marginTop: 4, background: 'transparent', color: '#656C7E', border: '1px solid #232838',
+                  borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13 }}>
+                Copy
+              </button>
+            )}
           </div>
         ))}
         {loading && (
@@ -1848,6 +1870,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           style={{ background: '#16131B', color: '#A39AA8', border: '1px solid #2A2030',
             borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
             fontFamily: 'inherit', fontSize: 16, alignSelf: 'flex-end' }}>📎</button>
+        <button type="button" data-testid="workspace-paste" title="Paste from clipboard into the box"
+          onClick={() => { void pasteIntoInput(); }}
+          style={{ background: '#171B26', color: '#9198AA', border: '1px solid #232838',
+            borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
+            fontFamily: 'inherit', fontSize: 16, alignSelf: 'flex-end' }}>📋</button>
         <button type="button" data-testid="workspace-mic" title={listening ? 'Stop listening' : (speakOn ? 'Voice chat — tap to talk' : 'Dictate into the box')}
           onClick={toggleMic}
           disabled={loading}
