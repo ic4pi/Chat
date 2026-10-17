@@ -301,3 +301,19 @@ export function nudgeAfterRejects(rejected: RejectedFileChange[]): string {
     '```'
   );
 }
+
+
+/**
+ * Some coder models act like they have file tools: they answer with lines such as
+ * `**Read:** /workspace/x/.gitignore`, then a ⟦MORE⟧ marker and nothing else.
+ * No file ever gets written. True for that reply (or an empty one), so the turn
+ * can be retried with a plain "write the file now" instruction.
+ */
+export function looksLikeToolMimic(reply: string): boolean {
+  const t = String(reply || '').replace(/⟦\s*(?:MORE|DONE)\s*⟧|\[\s*MORE\s*\]/gi, '').trim();
+  if (!t || t === '(empty response)') return true;
+  if (/```|(?:^|\n)\s*(?:File|Edit):\s*\S/.test(t)) return false;
+  const lines = t.split('\n').map((l) => l.trim()).filter(Boolean);
+  const toolish = lines.filter((l) => /^\*{0,2}(?:Read|List|Open|Search|Run|cat|ls)\*{0,2}:?\*{0,2}\s*\/?[\w./-]+/i.test(l) && /^\*{0,2}(?:Read|List|Open|Search|Run|cat|ls)\b/i.test(l));
+  return toolish.length > 0 && toolish.length >= lines.length - 1;
+}

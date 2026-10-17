@@ -34,6 +34,7 @@ import {
   looksLikeLegacyWelcome,
   needsCodeContext,
   nudgeAfterRejects,
+  looksLikeToolMimic,
   NUDGE_PROMPT,
 } from './agentParse.js';
 import {
@@ -1380,9 +1381,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       // Also nudge when stubs were rejected (sandbox would otherwise stay broken-looking).
       // Skip if the first call already used most of the Pro time window (avoids a second timeout).
       const rejectedFirst = report.rejected;
+      // A model that "reads files" instead of writing them (Read: lines, then nothing) built
+      // nothing whatever you asked: always worth one retry on a build turn.
+      const mimicked = userish && !suggestTurn && fc.length === 0 && looksLikeToolMimic(reply);
       const shouldNudge = (fc.length === 0 || rejectedFirst.length > 0)
         && userish
-        && applyTurn
+        && (applyTurn || mimicked)
         && !suggestTurn
         && (!!root || ctx.size > 0)
         && (Date.now() - sendStartedAt) < NUDGE_BUDGET_MS;
@@ -1390,7 +1394,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       if (shouldNudge) {
         const nudgeText = rejectedFirst.length > 0
           ? nudgeAfterRejects(rejectedFirst)
-          : NUDGE_PROMPT;
+          : mimicked
+            ? 'You have NO tools here: you cannot read, list or open files, so never write "Read:" lines. ' +
+              'Everything you need is in this conversation. Write the complete files now.\n\n' + NUDGE_PROMPT
+            : NUDGE_PROMPT;
         const nudgeMsg: Message = {
           id: uid(), role: 'user', content: nudgeText, kind: 'retry-inject',
         };
