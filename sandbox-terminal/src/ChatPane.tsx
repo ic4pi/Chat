@@ -1783,6 +1783,22 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 <AssistantBody msg={msg} appliedPaths={appliedPaths} onRunCode={onRunCode} />
               </div>
             )}
+            {msg.role === 'user' && (!msg.kind || msg.kind === 'user') && msg.content && (
+              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 4 }}>
+                <button type="button" data-testid="copy-user-message"
+                  onClick={() => { void copyText(msg.content); }}
+                  style={{ background: 'transparent', color: '#656C7E', border: '1px solid #232838',
+                    borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13 }}>
+                  Copy
+                </button>
+                <button type="button" data-testid="reuse-user-message" title="Put this message back in the box to edit and resend"
+                  onClick={() => { setInput(msg.content); }}
+                  style={{ background: 'transparent', color: '#656C7E', border: '1px solid #232838',
+                    borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13 }}>
+                  Reuse
+                </button>
+              </div>
+            )}
             {msg.role === 'assistant' && msg.kind !== 'welcome' && msg.content && !msg.content.startsWith('⏸') && (
               <button type="button" data-testid="copy-message"
                 onClick={() => {
