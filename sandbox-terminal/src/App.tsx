@@ -394,7 +394,7 @@ export function App() {
   // The Code Space writes code, so it opens on the Coders package rather than a
   // raw provider catalog. 'provider' is the escape hatch to the full list.
   const [modelScope,   setModelScope]   = useState<'coders' | 'provider'>(
-    () => (localStorage.getItem(MODEL_SCOPE_KEY) === 'provider' ? 'provider' : 'coders'),
+    () => (localStorage.getItem(MODEL_SCOPE_KEY) === 'coders' ? 'coders' : 'provider'),
   );
   const [coderBrands,  setCoderBrands]  = useState<ResolvedCoderBrand[]>([]);
   const [keys,         setKeys]         = useState(() => loadProviderKeys());
@@ -1036,6 +1036,12 @@ export function App() {
   }, [repo]);
 
   // ── Compare: the persona's brief to two coders, and the chosen version back ──
+  // Compare needs a sandbox for its two previews and file writes: open one as the panel opens,
+  // so typing straight into either side works instead of silently building nowhere.
+  useEffect(() => {
+    if (showCompare && !repo.sandboxId) void ensureProject();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCompare]);
   const compareRef = useRef<CompareHandle>(null);
   const queuedCompareRef = useRef<{ brief: string; picks?: { a: SeatModel; b: SeatModel } } | null>(null);
   const handleCompareBrief = useCallback((brief: string, picks?: { a: SeatModel; b: SeatModel }) => {
@@ -1561,7 +1567,8 @@ export function App() {
           </select>
         )}
         {modelScope === 'coders' ? (
-          <select value={coderKey(provider, model)} onChange={e => handleCoderChange(e.target.value)}
+          <select value={coderKey(provider, model)}
+            onChange={e => { if (e.target.value === '__all') handleScopeChange('provider'); else handleCoderChange(e.target.value); }}
             disabled={modelsLoading}
             title="Coding models — free ones run without a password, paid ones need the unlock"
             style={{ background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
@@ -1579,6 +1586,7 @@ export function App() {
                 })}
               </optgroup>
             ))}
+            <option value="__all">More models… (every model, any provider)</option>
             {/* A handoff from chat can arrive on a non-coder model; keep it
                 selectable so the dropdown never shows a blank value. */}
             {!flattenCoderModels(coderBrands).some(m => m.provider === provider && m.id === model) && (
@@ -1991,7 +1999,19 @@ export function App() {
       )}
 
       <ComparePanel ref={compareRef} open={showCompare} onClose={() => setShowCompare(false)}
-        sandboxId={repo.sandboxId} onUseBuild={handleUseBuild} />
+        sandboxId={repo.sandboxId} onUseBuild={handleUseBuild}
+        onNeedSandbox={(t) => handleCompareBrief(t)}
+        onStartBlank={() => repo.startBlankProject()}
+        onOpenRepo={(u) => repo.openRepo(u)}
+        onVersionsReady={(v) => {
+          // Give the orchestrator the two versions so it can answer about them
+          // if you ask — it does not jump in on its own.
+          chatRef.current?.addNote(
+            `Compare has two versions ready. A — ${v.a.model}: ${v.a.files.join(', ')}. `
+            + `B — ${v.b.model}: ${v.b.files.join(', ')}. `
+            + `If I'm asked which to use or how they differ, compare them; otherwise wait for the pick.`,
+          );
+        }} />
 
       {!isMobile ? (
         /* ── Desktop: 3-column grid (single ChatPane + Terminal) ── */

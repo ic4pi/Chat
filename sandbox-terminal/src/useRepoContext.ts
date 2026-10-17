@@ -21,6 +21,15 @@ const API_URL =
  * Sent to /api/init-repo so a private repo can be cloned — the same token the
  * push path sends, to the same origin, and never persisted server-side.
  */
+/** "github.com/owner/repo" and "owner/repo" mean the GitHub URL, not a local path. */
+export function normalizeRepoInput(input: string): string {
+  const t = input.trim();
+  if (/^https?:\/\/|^git@/.test(t)) return t;
+  if (/^(?:www\.)?github\.com\//i.test(t)) return `https://${t.replace(/^www\./i, '')}`;
+  if (/^[\w.-]+\/[\w.-]+$/.test(t) && !t.startsWith('.') && !t.startsWith('/')) return `https://github.com/${t}`;
+  return t;
+}
+
 function savedGitHubToken(): string | undefined {
   try {
     const saved =
@@ -161,7 +170,8 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     }
   }, []);
 
-  const openRepo = useCallback(async (rootPathOrUrl: string) => {
+  const openRepo = useCallback(async (rawInput: string) => {
+    const rootPathOrUrl = normalizeRepoInput(rawInput);
     setLoading(true);
     setError(null);
     setTree([]);
