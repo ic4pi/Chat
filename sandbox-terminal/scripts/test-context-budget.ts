@@ -7,6 +7,7 @@ import {
   trimMessageHistory,
   pickAuditSeedPaths,
 } from '../src/contextBudget.ts';
+import { parsePlan, togglePlanLine, extractPlanBlock, planForPersona, loadPlan, savePlan } from '../src/buildPlan.ts';
 import {
   looksLikeSuggestRequest,
   looksLikeApplyRequest,
@@ -103,6 +104,48 @@ assert(looksLikeToolMimic('(empty response)'), 'an empty reply is a failed build
 assert(!looksLikeToolMimic('File: index.html\n```html\n<h1>Hi</h1>\n```'), 'a File: block is a real build');
 assert(!looksLikeToolMimic('Here is a plan.\n1. Do this\n2. Do that'), 'a prose plan is not a tool mimic');
 assert(!looksLikeToolMimic('**Read:** /a.txt\n```js\nconsole.log(1)\n```'), 'code present is not a mimic');
+
+// ── build plan ───────────────────────────────────────────────────────────
+{
+  const md = '## Setup\n- [x] ~~Scaffold~~\n- [ ] Add API\n\n## Ship\n* [X] Deploy\n- [ ] Announce';
+  const p = parsePlan(md);
+  assert(p.total === 4 && p.done === 2, 'plan counts done/total across groups and bullet styles');
+  assert(p.groups.length === 2 && p.groups[0]!.name === 'Setup' && p.groups[1]!.name === 'Ship', 'plan groups by heading');
+  assert(p.groups[0]!.items[0]!.text === 'Scaffold' && p.groups[0]!.items[0]!.done, 'strikethrough the model adds is stripped');
+  assert(parsePlan('just some prose, no checkboxes').total === 0, 'prose is not a plan');
+  assert(parsePlan('- [ ] loose item').groups[0]!.name === '', 'items before any heading go in an unnamed group');
+  const t = togglePlanLine(md, 2);
+  assert(t.split('\n')[2] === '- [x] Add API' && t.replace('- [x] Add API', '- [ ] Add API') === md, 'toggle flips only that line');
+  assert(togglePlanLine(t, 2) === md, 'toggle twice returns the original');
+  assert(togglePlanLine(md, 0) === md && togglePlanLine(md, 99) === md, 'toggling a heading or a missing line changes nothing');
+}
+{
+  const reply = "On it.\n<<<BRIEF\nGoal: x\nBRIEF>>>\n<<<PLAN\n## A\n- [ ] one\n- [x] two\nPLAN>>>";
+  const r = extractPlanBlock(reply);
+  assert(r.plan === '## A\n- [ ] one\n- [x] two', 'plan block is extracted whole');
+  assert(r.text.includes('<<<BRIEF') && !r.text.includes('PLAN'), 'plan block removed from the visible text, brief kept');
+  const cut = extractPlanBlock('Sure.\n<<<PLAN\n## A\n- [ ] one\n- [ ] tw');
+  assert(cut.plan !== null && cut.plan.includes('one') && !cut.text.includes('PLAN'), 'a cut-off plan block still counts');
+  const empty = extractPlanBlock('Hi\n<<<PLAN\nno checkboxes here\nPLAN>>>');
+  assert(empty.plan === null && !empty.text.includes('<<<PLAN'), 'a plan with no checkboxes never replaces the old plan');
+  assert(extractPlanBlock('plain reply').plan === null && extractPlanBlock('plain reply').text === 'plain reply', 'no block, no change');
+}
+{
+  assert(planForPersona('').startsWith('BUILD PLAN: none yet'), 'orchestrator is told when there is no plan');
+  assert(planForPersona('## A\n- [x] a\n- [ ] b').startsWith('BUILD PLAN (1/2 done'), 'orchestrator sees progress and the plan');
+  const store: Record<string, string> = {};
+  (globalThis as unknown as { localStorage: unknown }).localStorage = {
+    getItem: (k: string) => (k in store ? store[k] : null),
+    setItem: (k: string, v: string) => { store[k] = v; },
+    removeItem: (k: string) => { delete store[k]; },
+  };
+  savePlan('s1', '## A\n- [ ] a'); savePlan('s2', '## B\n- [ ] b');
+  assert(loadPlan('s1') === '## A\n- [ ] a' && loadPlan('s2') === '## B\n- [ ] b' && loadPlan('nope') === '', 'plans are stored per session');
+  savePlan('s1', '   ');
+  assert(loadPlan('s1') === '' && loadPlan('s2') !== '', 'saving an empty plan clears only that session');
+  store['workspace_build_plan_v1'] = '{not json';
+  assert(loadPlan('s2') === '', 'corrupt storage reads as no plan, never throws');
+}
 
 if (failed) { console.error(`\n${failed} failure(s)`); process.exit(1); }
 console.log('\nAll context-budget tests passed.');

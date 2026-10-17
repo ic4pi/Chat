@@ -17,7 +17,8 @@
     "check:campaign": "node scripts/check-campaign.mjs",
     "check:models": "node scripts/check-models.mjs",
     "check:stack": "node scripts/check-stack-detect.mjs",
-    "check:handoff": "node scripts/check-handoff.mjs"
+    "check:handoff": "node scripts/check-handoff.mjs",
+    "check:browser": "node scripts/check-plan-panel.mjs && node scripts/check-code-space.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",
