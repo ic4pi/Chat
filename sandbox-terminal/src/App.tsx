@@ -1466,7 +1466,10 @@ export function App() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
         padding: '6px 12px' }}>
         <a href="/" style={{ color: '#FF1F5A', fontSize: 16, textDecoration: 'none',
-          whiteSpace: 'nowrap', padding: '2px 0', fontWeight: 700 }}>← Chat</a>
+          whiteSpace: 'nowrap', padding: '2px 0', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <img src="/logo-mark.png" alt="Jive" style={{ height: 30, width: 'auto', filter: 'drop-shadow(0 0 6px rgba(255,31,90,.5))' }} />
+          ← Chat
+        </a>
         <button type="button" onClick={() => { setHomeList(listSessions()); setShowHome(true); }}
           title="Browse saved code space conversations"
           style={{ background: showHome ? 'rgba(212,255,63,0.16)' : 'transparent',
