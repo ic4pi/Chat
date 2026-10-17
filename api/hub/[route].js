@@ -38,6 +38,7 @@ import {
   storeMediaAsset,
   decodeDataUrl,
 } from '../../lib/hub.js';
+import { makeClawRoute } from '../../lib/claw-api.js';
 
 /**
  * POST /api/hub/initiate?action=workspace|group|media
@@ -1814,6 +1815,7 @@ async function raiseGroupSuggestions(ownerId, topicIds) {
 
 
 const ROUTES = {
+  claw: makeClawRoute({ db, resolveOwner, fail, requireHub, rateLimit }),
   initiate: handle_initiate,
   moderate: handle_moderate,
   document: handle_document,
@@ -1828,6 +1830,9 @@ const ROUTES = {
 // `state` covers mostly-cheap reads (plus the writes guarded individually
 // below) so it gets a looser one.
 const ROUTE_RATE_LIMITS = {
+  // The helper polls every few seconds and the Code Space checks status: generous, and
+  // the sensitive actions (pairing, job creation) carry their own tighter limits.
+  claw: { limit: 1200, windowSeconds: 300 },
   initiate: { limit: 20, windowSeconds: 300 },
   moderate: { limit: 30, windowSeconds: 300 },
   document: { limit: 20, windowSeconds: 300 },
