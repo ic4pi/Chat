@@ -117,16 +117,19 @@
   ],
   "functions": {
     "api/chat.js": {
-      "maxDuration": 300
+      "maxDuration": 300,
+      "includeFiles": "{personas,roles,agencies}/**"
     },
     "api/sandbox/[op].js": {
       "maxDuration": 120
     },
     "api/agent-chat.js": {
-      "maxDuration": 800
+      "maxDuration": 800,
+      "includeFiles": "{personas,roles,agencies}/**"
     },
     "api/group-chat.js": {
-      "maxDuration": 800
+      "maxDuration": 800,
+      "includeFiles": "{personas,roles,agencies}/**"
     },
     "api/campaign.js": {
       "maxDuration": 800
@@ -145,6 +148,28 @@
     },
     "api/hub/[route].js": {
       "maxDuration": 300
+    },
+    "api/social-post.js": {
+      "includeFiles": "{personas,roles,agencies}/**"
+    },
+    "api/admin-config.js": {
+      "includeFiles": "{personas,roles,agencies}/**"
+    },
+    "api/public-config.js": {
+      "includeFiles": "{personas,roles,agencies}/**"
+    },
+    "api/webhooks/meta.js": {
+      "includeFiles": "{personas,roles,agencies}/**"
+    },
+    "api/cron/run-standing-tasks.js": {
+      "includeFiles": "{personas,roles,agencies}/**"
+    },
+    "api/admin-standing-tasks.js": {
+      "includeFiles": "{personas,roles,agencies}/**"
+    },
+    "api/tools.js": {
+      "maxDuration": 120,
+      "includeFiles": "{personas,roles,agencies}/**"
     }
   },
   "crons": [

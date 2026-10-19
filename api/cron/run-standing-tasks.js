@@ -4,6 +4,8 @@
 import { checkAdminAuth } from '../../lib/auth.js';
 import { listStandingTasks, saveStandingTasks, isTaskDue } from '../../lib/standing-tasks.js';
 import { runStandingTask } from '../../lib/run-standing-task.js';
+import { processSchedule } from '../../lib/tools/index.js';
+import { processDueOutreach } from '../../lib/tools/ops.js';
 
 export default async function handler(req, res) {
   // Vercel signs real cron invocations with this header; an admin-authed
@@ -32,5 +34,9 @@ export default async function handler(req, res) {
 
   if (due.length) await saveStandingTasks(tasks);
 
-  return res.status(200).json({ checked: tasks.length, ran: due.length, results });
+  // Same hourly tick also drains /schedule jobs and auto-send outreach follow-ups.
+  const scheduled = await processSchedule(req).catch((e) => [{ ok: false, error: e.message }]);
+  const outreach = await processDueOutreach().catch((e) => [{ ok: false, error: e.message }]);
+
+  return res.status(200).json({ checked: tasks.length, ran: due.length, results, scheduled, outreach });
 }
