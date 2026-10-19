@@ -1521,8 +1521,6 @@ export function App() {
         body: JSON.stringify({
           token,
           message,
-          // The Push button is the owner publishing: land on the branch, no PR detour.
-          direct: true,
           // Empty => git add -A (covers already-saved sandbox edits too)
           files: paths.length ? paths : undefined,
         }),
