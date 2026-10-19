@@ -21,6 +21,15 @@ const API_URL =
  * Sent to /api/init-repo so a private repo can be cloned — the same token the
  * push path sends, to the same origin, and never persisted server-side.
  */
+/** "github.com/owner/repo" and "owner/repo" mean the GitHub URL, not a local path. */
+export function normalizeRepoInput(input: string): string {
+  const t = input.trim();
+  if (/^https?:\/\/|^git@/.test(t)) return t;
+  if (/^(?:www\.)?github\.com\//i.test(t)) return `https://${t.replace(/^www\./i, '')}`;
+  if (/^[\w.-]+\/[\w.-]+$/.test(t) && !t.startsWith('.') && !t.startsWith('/')) return `https://github.com/${t}`;
+  return t;
+}
+
 function savedGitHubToken(): string | undefined {
   try {
     const saved =
@@ -92,6 +101,8 @@ export interface RepoContextActions {
   /** Write pending (or explicitly provided) changes to disk/sandbox. */
   applyChanges:    (files?: PendingChange[]) => Promise<{ path: string; ok: boolean; error?: string }[]>;
   clearChanges:    () => void;
+  /** Drop the open project entirely (tree, sandbox, context) — for starting a new code space. */
+  resetProject:    () => void;
 }
 
 export function useRepoContext(): RepoContextState & RepoContextActions {
@@ -161,7 +172,8 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     }
   }, []);
 
-  const openRepo = useCallback(async (rootPathOrUrl: string) => {
+  const openRepo = useCallback(async (rawInput: string) => {
+    const rootPathOrUrl = normalizeRepoInput(rawInput);
     setLoading(true);
     setError(null);
     setTree([]);
@@ -410,6 +422,23 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
 
   const clearChanges = useCallback(() => setPendingChanges([]), []);
 
+  const resetProject = useCallback(() => {
+    setRoot('');
+    setSandboxId(null);
+    setIsRemote(false);
+    setRepoUrl(null);
+    setTree([]);
+    setTotalFiles(0);
+    setContextFiles(new Map());
+    setPendingChanges([]);
+    setError(null);
+    setLoading(false);
+    setPythonReady(null); setPythonDetail(null);
+    setRustReady(null); setRustDetail(null);
+    setGoReady(null); setGoDetail(null);
+    setSnapshot({});
+  }, []);
+
   return {
     root, sandboxId, isRemote, repoUrl, tree, totalFiles,
     contextFiles, pendingChanges, loading, error,
@@ -418,6 +447,6 @@ export function useRepoContext(): RepoContextState & RepoContextActions {
     goReady, goDetail, snapshot,
     openRepo, startBlankProject, restoreProject,
     addToContext, injectContextFile, removeFromContext, clearContext,
-    setPendingChanges, applyChanges, clearChanges,
+    setPendingChanges, applyChanges, clearChanges, resetProject,
   };
 }

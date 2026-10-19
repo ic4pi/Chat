@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
-import { previewResolveLines, freePortLines, PYTHON_SMOKE_COMMAND, NODE_ENTRY_SMOKE_COMMAND } from '../lib/sandbox-api/stack-detect.js';
+import { pickEntryPage, previewResolveLines, freePortLines, PYTHON_SMOKE_COMMAND, NODE_ENTRY_SMOKE_COMMAND } from '../lib/sandbox-api/stack-detect.js';
 
 let failed = 0;
 const ok = (name, cond, extra = '') => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}${cond ? '' : ' ' + extra}`); if (!cond) failed++; };
@@ -65,6 +65,10 @@ const withoutTools = (hide) => { // a PATH where the listed tools are not found
   if (heldAfter) { try { execFileSync('bash', ['-c', `fuser -k ${port}/tcp`], { stdio: 'pipe' }); } catch { /* cleanup */ } }
 }
 ok('free-port refuses privileged/invalid ports', freePortLines(80).length === 0 && freePortLines('x').length === 0);
+
+ok('preview opens the only html page when there is no index.html', pickEntryPage(['metaphysics101.html']) === 'metaphysics101.html');
+ok('preview leaves the root alone when index.html exists', pickEntryPage(['a.html', 'index.html']) === null);
+ok('preview ignores non-html', pickEntryPage(['README.md']) === null && pickEntryPage([]) === null);
 
 if (failed) { console.error(`\n${failed} check(s) failed`); process.exit(1); }
 console.log('\nall stack-detect checks passed');

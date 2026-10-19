@@ -71,6 +71,13 @@ import {
 } from './coderModels.js';
 import type { GenerateChunkResult } from './ChunkModelPanel.js';
 import { SettingsPanel } from './SettingsPanel.js';
+import { PlanPanel } from './PlanPanel.js';
+import { ClawPanel, type ClawPending, type ClawRunState } from './ClawPanel.js';
+import {
+  clawStatus as fetchClawStatus, clawCreateJob, clawGetJob, clawStopJob, formatClawResult, isFinished,
+  cleanActionList, type ClawStatus,
+} from './claw.js';
+import { loadPlan, savePlan, parsePlan } from './buildPlan.js';
 import { ComparePanel, type BuildChoice, type CompareHandle } from './ComparePanel.js';
 import { BuildPicker, type BuildChoiceSeats, type TeamOption } from './BuildPicker.js';
 import {
@@ -215,8 +222,8 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
   const failed = verifyState === 'failed';
   const running = verifyState === 'running' || verifyState === 'detecting'
     || String(verifyState).startsWith('retry');
-  const color = passed ? '#0B0D12' : failed ? '#fff' : '#0B0D12';
-  const bg = passed ? '#34D399' : failed ? '#8a1f1f' : '#FF3D8E';
+  const color = passed ? '#09080C' : failed ? '#fff' : '#09080C';
+  const bg = passed ? '#34D399' : failed ? '#8a1f1f' : '#FF1F5A';
   const shortCmd = testCommand
     ? (testCommand.length > 64 ? `${testCommand.slice(0, 64)}…` : testCommand)
     : '…';
@@ -235,14 +242,14 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
         <input value={cmd} onChange={e => setCmd(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && cmd.trim() && onSetCommand(cmd.trim())}
           placeholder="npm test"
-          style={{ flex: 1, background: '#171B26', color: '#ECEEF3', border: '1px solid #232838',
+          style={{ flex: 1, background: '#16131B', color: '#F2ECEF', border: '1px solid #2A2030',
             borderRadius: 4, padding: '4px 8px', fontFamily: 'inherit', fontSize: 16, outline: 'none' }} />
         <button onClick={() => cmd.trim() && onSetCommand(cmd.trim())}
-          style={{ background: '#FF3D8E', color: '#0B0D12', border: 'none', borderRadius: 4,
+          style={{ background: '#FF1F5A', color: '#09080C', border: 'none', borderRadius: 4,
             padding: '4px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 15, fontWeight: 700 }}>
           Set & Run</button>
         <button onClick={onDismiss}
-          style={{ background: '#191D27', color: '#9198AA', border: '1px solid #232838',
+          style={{ background: '#18151D', color: '#A39AA8', border: '1px solid #2A2030',
             borderRadius: 4, padding: '4px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 15 }}>
           Later</button>
       </div>
@@ -250,10 +257,10 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
   );
   return (
     <div data-testid="verify-banner" style={{ display: 'flex', alignItems: 'center', gap: 10,
-      padding: '10px 12px', background: bg, borderTop: `2px solid ${passed ? '#1FAE7E' : failed ? '#ff6a6a' : '#FF6FAE'}`,
+      padding: '10px 12px', background: bg, borderTop: `2px solid ${passed ? '#1FAE7E' : failed ? '#ff6a6a' : '#FF5C84'}`,
       flexShrink: 0 }}>
       <div style={{ width: 10, height: 10, borderRadius: '50%',
-        background: passed || running ? '#0B0D12' : '#fff', flexShrink: 0 }} />
+        background: passed || running ? '#09080C' : '#fff', flexShrink: 0 }} />
       <span style={{ fontSize: 18, fontWeight: 800, color, flex: 1, lineHeight: 1.35,
         letterSpacing: '0.02em' }}>{label}</span>
       {(passed || failed) && (
@@ -394,12 +401,20 @@ export function App() {
   // The Code Space writes code, so it opens on the Coders package rather than a
   // raw provider catalog. 'provider' is the escape hatch to the full list.
   const [modelScope,   setModelScope]   = useState<'coders' | 'provider'>(
-    () => (localStorage.getItem(MODEL_SCOPE_KEY) === 'provider' ? 'provider' : 'coders'),
+    () => (localStorage.getItem(MODEL_SCOPE_KEY) === 'coders' ? 'coders' : 'provider'),
   );
   const [coderBrands,  setCoderBrands]  = useState<ResolvedCoderBrand[]>([]);
   const [keys,         setKeys]         = useState(() => loadProviderKeys());
   const [showSettings, setShowSettings] = useState(false);
   const [showCompare,  setShowCompare]  = useState(false);
+  const [showPlan,     setShowPlan]     = useState(false);
+  // Claw: the helper on your computer. Steps are proposed by the orchestrator and only run after you tap Run.
+  const [showClaw,     setShowClaw]     = useState(false);
+  const [clawState,    setClawState]    = useState<ClawStatus | null>(null);
+  const [clawStatusErr, setClawStatusErr] = useState('');
+  const [clawPending,  setClawPending]  = useState<ClawPending | null>(null);
+  const [clawRun,      setClawRun]      = useState<ClawRunState | null>(null);
+  const clawJobRef = useRef<string | null>(null);
   const [roleModels,   setRoleModels]   = useState(() => loadRoleModels());
   // Auto-save ON — generated files go to the sandbox immediately so you can download/push.
   const [autoRun,      setAutoRun]      = useState(false);
@@ -467,6 +482,73 @@ export function App() {
   const [showHome, setShowHome] = useState(false);
   const [homeList, setHomeList] = useState<StoredSession[]>(() => listSessions());
   const [sessionKey,   setSessionKey]   = useState(0);
+  // Build plan: the orchestrator's checklist for this workspace session.
+  const [buildPlan, setBuildPlan] = useState(() => loadPlan(sessionId));
+  useEffect(() => { setBuildPlan(loadPlan(sessionId)); }, [sessionId]);
+  const refreshClaw = useCallback(async () => {
+    try { setClawState(await fetchClawStatus()); setClawStatusErr(''); }
+    catch (e) { setClawStatusErr(e instanceof Error ? e.message : String(e)); }
+  }, []);
+  useEffect(() => {
+    void refreshClaw();
+    const t = setInterval(() => { void refreshClaw(); }, showClaw ? 4000 : 12000);
+    return () => clearInterval(t);
+  }, [refreshClaw, showClaw]);
+
+  /** The orchestrator proposed steps. Show the Run card; nothing runs yet. */
+  const handleClawPlan = useCallback((raw: unknown[], errors: string[]) => {
+    const { actions, errors: bad } = cleanActionList(raw);
+    if (!actions.length && !errors.length && !bad.length) return;
+    setClawRun(null);
+    setClawPending({ actions, errors: [...errors, ...bad] });
+    setShowClaw(true);
+    void refreshClaw();
+  }, [refreshClaw]);
+
+  /** The one tap: create the job, follow it to the end, hand the result back to the orchestrator. */
+  const runClaw = useCallback(async () => {
+    const plan = clawPending;
+    if (!plan || !plan.actions.length) return;
+    setClawPending(null);
+    setClawRun({ job: null, starting: true, error: '' });
+    try {
+      const { id } = await clawCreateJob(plan.actions);
+      clawJobRef.current = id;
+      const t0 = Date.now();
+      for (;;) {
+        const { job } = await clawGetJob(id);
+        setClawRun({ job, starting: false, error: '' });
+        if (isFinished(job.status)) {
+          clawJobRef.current = null;
+          // Back to the orchestrator, so it can carry on with what happened. Waits if it is mid-reply.
+          const text = formatClawResult(job);
+          for (let i = 0; i < 60 && chatRef.current?.isBusy(); i++) await new Promise(r => setTimeout(r, 1000));
+          if (!chatRef.current?.isBusy()) void chatRef.current?.programmaticSend(text, 'user');
+          return;
+        }
+        if (Date.now() - t0 > 16 * 60_000) throw new Error('Gave up waiting for the helper.');
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    } catch (e) {
+      clawJobRef.current = null;
+      setClawRun(r => ({ job: r?.job ?? null, starting: false, error: e instanceof Error ? e.message : String(e) }));
+    }
+  }, [clawPending]);
+
+  const declineClaw = useCallback(() => {
+    setClawPending(null);
+    chatRef.current?.addNote('You chose not to run those steps on your computer.');
+    setShowClaw(false);
+  }, []);
+  const stopClaw = useCallback(() => {
+    const id = clawJobRef.current;
+    if (id) void clawStopJob(id);
+  }, []);
+
+  const handleBuildPlan = useCallback((md: string) => {
+    savePlan(sessionId, md);
+    setBuildPlan(md);
+  }, [sessionId]);
   const isMobile = useIsMobile();
   const activeApiKey = (keys[provider] || '').trim();
 
@@ -674,6 +756,13 @@ export function App() {
     setPushOk(null);
     setShowHome(false);
     setSessionKey(k => k + 1);
+    // A session with no project must not inherit the previous one's tree/sandbox.
+    if (!s.repoUrl && !s.sandboxId && !(s.files && Object.keys(s.files).length)) {
+      restoringRef.current = null;
+      blankStartRef.current = null;
+      setRestoreNote(null);
+      repo.resetProject();
+    }
     void restoreSaved(s).then(() => {
       if (s.pendingChanges?.length) repo.setPendingChanges(s.pendingChanges);
       else repo.clearChanges();
@@ -1036,6 +1125,12 @@ export function App() {
   }, [repo]);
 
   // ── Compare: the persona's brief to two coders, and the chosen version back ──
+  // Compare needs a sandbox for its two previews and file writes: open one as the panel opens,
+  // so typing straight into either side works instead of silently building nowhere.
+  useEffect(() => {
+    if (showCompare && !repo.sandboxId) void ensureProject();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCompare]);
   const compareRef = useRef<CompareHandle>(null);
   const queuedCompareRef = useRef<{ brief: string; picks?: { a: SeatModel; b: SeatModel } } | null>(null);
   const handleCompareBrief = useCallback((brief: string, picks?: { a: SeatModel; b: SeatModel }) => {
@@ -1462,31 +1557,34 @@ export function App() {
   // ── Shared topbar ────────────────────────────────────────────────────────
   const topbar = (
     <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0,
-      borderBottom: '1px solid #191D27', background: '#0B0D12' }}>
+      borderBottom: '1px solid #18151D', background: '#09080C' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
         padding: '6px 12px' }}>
-        <a href="/" style={{ color: '#FF3D8E', fontSize: 16, textDecoration: 'none',
-          whiteSpace: 'nowrap', padding: '2px 0', fontWeight: 700 }}>← Chat</a>
+        <a href="/" style={{ color: '#FF1F5A', fontSize: 16, textDecoration: 'none',
+          whiteSpace: 'nowrap', padding: '2px 0', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <img src="/logo-mark.png" alt="Jive" style={{ height: 30, width: 'auto', filter: 'drop-shadow(0 0 6px rgba(255,31,90,.5))' }} />
+          ← Chat
+        </a>
         <button type="button" onClick={() => { setHomeList(listSessions()); setShowHome(true); }}
           title="Browse saved code space conversations"
           style={{ background: showHome ? 'rgba(212,255,63,0.16)' : 'transparent',
-            color: '#FF3D8E', border: '1px solid #C81F6B', borderRadius: 4,
+            color: '#FF1F5A', border: '1px solid #C8123F', borderRadius: 4,
             padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 14,
             fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
           Home
         </button>
-        <span style={{ color: '#FF3D8E', fontSize: 15, whiteSpace: 'nowrap',
+        <span style={{ color: '#FF1F5A', fontSize: 15, whiteSpace: 'nowrap',
           overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 }}
           title={sessionTitle}>
           {sessionTitle}
         </span>
         {fromChat && (
-          <span style={{ fontSize: 14, color: '#C81F6B', whiteSpace: 'nowrap' }}>
+          <span style={{ fontSize: 14, color: '#C8123F', whiteSpace: 'nowrap' }}>
             from chat
           </span>
         )}
         <button type="button" onClick={startFreshHome}
-          style={{ background: 'transparent', color: '#9198AA', border: '1px solid #232838',
+          style={{ background: 'transparent', color: '#A39AA8', border: '1px solid #2A2030',
             borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
             fontFamily: 'inherit', fontSize: 14 }}>
           New
@@ -1497,7 +1595,7 @@ export function App() {
             ? 'Auto-backup to GitHub is ON — saves your progress to a branch (flagged broken when tests fail) after each change and every few minutes. Tap to turn off.'
             : 'Auto-backup to GitHub: keep your progress safe from a VM reset even while the app is broken. Needs a GitHub token (paste once in Push). Tap to turn on.'}
           style={{ background: wipBackupOn ? 'rgba(96,165,250,.16)' : 'transparent',
-            color: wipBackupOn ? '#8CC2FF' : '#9198AA', border: `1px solid ${wipBackupOn ? '#2B6CB0' : '#232838'}`,
+            color: wipBackupOn ? '#8CC2FF' : '#A39AA8', border: `1px solid ${wipBackupOn ? '#2B6CB0' : '#2A2030'}`,
             borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 14, whiteSpace: 'nowrap' }}>
           {wipBackupOn ? '⟲ Backup on' : '⟲ Backup'}
         </button>
@@ -1518,7 +1616,7 @@ export function App() {
               if (next) openStoredSession(next);
               else startFreshHome();
             }}
-            style={{ background: 'transparent', color: '#656C7E', border: '1px solid #232838',
+            style={{ background: 'transparent', color: '#756B7B', border: '1px solid #2A2030',
               borderRadius: 4, padding: '2px 8px', cursor: 'pointer',
               fontFamily: 'inherit', fontSize: 14 }}>
             Delete
@@ -1529,8 +1627,8 @@ export function App() {
           title={orchPersona
             ? `You talk to ${orchPersona.name} (on ${orchPersona.model}); it briefs the coder below`
             : 'Off — your messages go straight to the coder'}
-          style={{ background: orchPersona ? 'rgba(255,61,142,.12)' : '#12151D', color: '#ECEEF3',
-            border: `1px solid ${orchPersona ? '#C81F6B' : '#232838'}`,
+          style={{ background: orchPersona ? 'rgba(255,31,90,.12)' : '#100E14', color: '#F2ECEF',
+            border: `1px solid ${orchPersona ? '#C8123F' : '#2A2030'}`,
             borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 15, cursor: 'pointer' }}>
           {(personaList.length ? personaList : orchPrefs.personaId
             ? [{ id: orchPrefs.personaId, name: orchPrefs.personaId }] : []
@@ -1539,31 +1637,32 @@ export function App() {
         </select>
         <select value={role} onChange={e => handleRoleChange(e.target.value as RoleId)}
           title="Role — uses the model you assigned for write / review / plan"
-          style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+          style={{ background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
             borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 15, cursor: 'pointer' }}>
           {ROLE_LIST.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
         </select>
         <select value={modelScope} onChange={e => handleScopeChange(e.target.value as 'coders' | 'provider')}
           title="Coders shows the coding models across every provider; All models shows one provider's full catalog"
-          style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+          style={{ background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
             borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 15, cursor: 'pointer' }}>
           <option value="coders">Coders</option>
           <option value="provider">All models</option>
         </select>
         {modelScope === 'provider' && (
           <select value={provider} onChange={e => handleProviderChange(e.target.value)}
-            style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+            style={{ background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
               borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 15, cursor: 'pointer' }}>
             {PROVIDER_LIST.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
           </select>
         )}
         {modelScope === 'coders' ? (
-          <select value={coderKey(provider, model)} onChange={e => handleCoderChange(e.target.value)}
+          <select value={coderKey(provider, model)}
+            onChange={e => { if (e.target.value === '__all') handleScopeChange('provider'); else handleCoderChange(e.target.value); }}
             disabled={modelsLoading}
             title="Coding models — free ones run without a password, paid ones need the unlock"
-            style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+            style={{ background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
               borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 15,
-              cursor: 'pointer', maxWidth: 260, flex: 1, minWidth: 0 }}>
+              cursor: 'pointer', maxWidth: 260, flex: 1, minWidth: 150 }}>
             {coderBrands.map(brand => (
               <optgroup key={brand.id} label={brand.paidOnly ? `${brand.label} · unlock to use` : brand.label}>
                 {brand.models.map(m => {
@@ -1576,6 +1675,7 @@ export function App() {
                 })}
               </optgroup>
             ))}
+            <option value="__all">More models… (every model, any provider)</option>
             {/* A handoff from chat can arrive on a non-coder model; keep it
                 selectable so the dropdown never shows a blank value. */}
             {!flattenCoderModels(coderBrands).some(m => m.provider === provider && m.id === model) && (
@@ -1587,9 +1687,9 @@ export function App() {
         ) : (
           <select value={model} onChange={e => handleModelChange(e.target.value)}
             disabled={modelsLoading}
-            style={{ background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+            style={{ background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
               borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 15,
-              cursor: 'pointer', maxWidth: 220, flex: 1, minWidth: 0 }}>
+              cursor: 'pointer', maxWidth: 220, flex: 1, minWidth: 150 }}>
             {models.map(m => {
               const locked = m.free === false && !paidUnlocked();
               return (
@@ -1629,24 +1729,42 @@ export function App() {
               .catch((err: Error) => window.alert(err.message || 'Unlock failed'));
           }}
           title={paidUnlocked() ? 'Paid models unlocked on this device — click to lock' : 'Unlock paid models'}
-          style={{ background: paidUnlocked() ? 'rgba(52,211,153,.16)' : '#171B26',
-            color: paidUnlocked() ? '#34D399' : '#9198AA',
-            border: '1px solid #232838', borderRadius: 4, padding: '3px 8px',
+          style={{ background: paidUnlocked() ? 'rgba(52,211,153,.16)' : '#16131B',
+            color: paidUnlocked() ? '#34D399' : '#A39AA8',
+            border: '1px solid #2A2030', borderRadius: 4, padding: '3px 8px',
             cursor: 'pointer', fontFamily: 'inherit', fontSize: 14 }}>
           {paidUnlocked() ? 'Paid ✓' : 'Unlock'}
         </button>
         {repo.sandboxId && (
-          <span style={{ fontSize: 12, color: '#323A50', whiteSpace: 'nowrap',
+          <span style={{ fontSize: 12, color: '#3E3048', whiteSpace: 'nowrap',
             overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 120 }}
             title={repo.sandboxId}>● {repo.sandboxId.slice(0, 20)}</span>
         )}
+        <button type="button" className="ws-btn" onClick={() => setShowPlan(true)}
+          title="Build plan — the checklist the orchestrator keeps for this build"
+          aria-haspopup="dialog" aria-expanded={showPlan}
+          style={{ background: 'var(--surface-2)', color: 'var(--text-muted)',
+            border: '1px solid var(--border)', borderRadius: 'var(--radius)',
+            height: 30, padding: '0 9px', display: 'flex', alignItems: 'center', gap: 5,
+            cursor: 'pointer', fontSize: 13, marginLeft: 'auto' }}>
+          ☑{(() => { const p = parsePlan(buildPlan); return p.total ? ` ${p.done}/${p.total}` : ''; })()}
+        </button>
+        <button type="button" className="ws-btn" data-testid="claw-open" onClick={() => setShowClaw(true)}
+          title="Claw — steps you approve, run on your computer by the helper"
+          aria-haspopup="dialog" aria-expanded={showClaw}
+          style={{ background: 'var(--surface-2)', color: clawPending ? 'var(--accent)' : 'var(--text-muted)',
+            border: `1px solid ${clawPending ? 'var(--accent)' : 'var(--border)'}`, borderRadius: 'var(--radius)',
+            height: 30, padding: '0 9px', display: 'flex', alignItems: 'center', gap: 5,
+            cursor: 'pointer', fontSize: 13 }}>
+          <span style={{ color: clawState?.online ? '#34D399' : 'var(--text-dim)' }}>{clawState?.online ? '●' : '○'}</span> Claw
+        </button>
         <button type="button" className="ws-btn" onClick={() => setShowCompare(true)}
           title="Compare — two models, one prompt, two live previews"
           aria-haspopup="dialog" aria-expanded={showCompare}
           style={{ background: 'var(--surface-2)', color: 'var(--text-muted)',
             border: '1px solid var(--border)', borderRadius: 'var(--radius)',
             width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: 'pointer', fontSize: 15, marginLeft: 'auto' }}>
+            cursor: 'pointer', fontSize: 15 }}>
           ⇄
         </button>
         <button type="button" className="ws-btn" onClick={() => setShowSettings(true)}
@@ -1660,6 +1778,10 @@ export function App() {
           ⚙
         </button>
       </div>
+      <ClawPanel open={showClaw} onClose={() => setShowClaw(false)} status={clawState} statusError={clawStatusErr}
+        onRefresh={() => { void refreshClaw(); }} pending={clawPending} onRun={() => { void runClaw(); }}
+        onDecline={declineClaw} run={clawRun} onStop={stopClaw} onDismissRun={() => { setClawRun(null); setShowClaw(false); }} />
+      <PlanPanel open={showPlan} onClose={() => setShowPlan(false)} plan={buildPlan} onChange={handleBuildPlan} />
       <SettingsPanel
         open={showSettings}
         onClose={() => setShowSettings(false)}
@@ -1814,7 +1936,7 @@ export function App() {
           display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
           <span style={{ flex: 1 }}>{restoreNote}</span>
           <button type="button" onClick={() => setRestoreNote(null)}
-            style={{ background: 'transparent', border: 'none', color: '#9198AA', cursor: 'pointer', fontSize: 16 }}>✕</button>
+            style={{ background: 'transparent', border: 'none', color: '#A39AA8', cursor: 'pointer', fontSize: 16 }}>✕</button>
         </div>
       )}
       {backupNote && (
@@ -1823,7 +1945,7 @@ export function App() {
           display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
           <span style={{ flex: 1 }}>{backupNote}</span>
           <button type="button" onClick={() => setBackupNote(null)}
-            style={{ background: 'transparent', border: 'none', color: '#9198AA', cursor: 'pointer', fontSize: 16 }}>✕</button>
+            style={{ background: 'transparent', border: 'none', color: '#A39AA8', cursor: 'pointer', fontSize: 16 }}>✕</button>
         </div>
       )}
       {applyBanner}
@@ -1843,6 +1965,11 @@ export function App() {
           onModelReplaced={handleModelReplaced}
           onOpenPush={handleOpenPush}
           onCompareBrief={handleCompareBrief}
+          buildPlan={buildPlan}
+          onBuildPlan={handleBuildPlan}
+          clawOnline={!!clawState?.online}
+          clawWorkdir={clawState?.devices.find(d => d.online)?.workdir || ''}
+          onClawPlan={handleClawPlan}
           askBeforeBuild={teamPrefs.askFirst}
           buildPicker={renderBuildPicker}
           fixer={teamPrefs.seats ? withKey(teamSeats.fix) : null}
@@ -1930,7 +2057,7 @@ export function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column',
       height: '100dvh', maxHeight: '100dvh', width: '100%', maxWidth: '100%',
-      background: '#0B0D12', fontFamily: '"JetBrains Mono",ui-monospace,monospace',
+      background: '#09080C', fontFamily: '"JetBrains Mono",ui-monospace,monospace',
       overflow: 'hidden' }}>
       {topbar}
 
@@ -1941,38 +2068,38 @@ export function App() {
           <div role="dialog" aria-label="Code Space home"
             onClick={e => e.stopPropagation()}
             style={{ width: 'min(520px, 100%)', maxHeight: 'min(80dvh, 640px)', overflow: 'auto',
-              background: '#12151D', border: '1px solid #FF3D8E', borderRadius: 8, padding: 14 }}>
+              background: '#100E14', border: '1px solid #FF1F5A', borderRadius: 8, padding: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
               <h2 style={{ margin: 0, flex: 1, fontSize: 18, letterSpacing: '0.08em',
-                textTransform: 'uppercase', color: '#FF3D8E' }}>Home · Code Spaces</h2>
+                textTransform: 'uppercase', color: '#FF1F5A' }}>Home · Code Spaces</h2>
               <button type="button" onClick={startFreshHome}
-                style={{ background: 'rgba(212,255,63,0.12)', color: '#FF3D8E', border: '1px solid #C81F6B',
+                style={{ background: 'rgba(212,255,63,0.12)', color: '#FF1F5A', border: '1px solid #C8123F',
                   borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
                   fontSize: 15, fontWeight: 700 }}>New</button>
               <button type="button" onClick={() => setShowHome(false)}
-                style={{ background: 'transparent', color: '#9198AA', border: '1px solid #232838',
+                style={{ background: 'transparent', color: '#A39AA8', border: '1px solid #2A2030',
                   borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
                   fontSize: 15 }}>Close</button>
             </div>
-            <p style={{ margin: '0 0 12px', fontSize: 16, color: '#9198AA', lineHeight: 1.4 }}>
+            <p style={{ margin: '0 0 12px', fontSize: 16, color: '#A39AA8', lineHeight: 1.4 }}>
               Open a saved code space conversation, or start a fresh Home code space.
-              Opening <b style={{ color: '#FF3D8E' }}>Code Space</b> from Chat always loads that chat here.
+              Opening <b style={{ color: '#FF1F5A' }}>Code Space</b> from Chat always loads that chat here.
             </p>
             {homeList.length === 0 ? (
-              <p style={{ color: '#656C7E', fontSize: 16 }}>No saved code spaces yet.</p>
+              <p style={{ color: '#756B7B', fontSize: 16 }}>No saved code spaces yet.</p>
             ) : (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 8 }}>
                 {homeList.map(s => (
                   <li key={s.id}>
                     <button type="button" onClick={() => openStoredSession(s)}
-                      style={{ width: '100%', textAlign: 'left', background: s.id === sessionId ? 'rgba(212,255,63,0.1)' : '#0B0D12',
-                        border: `1px solid ${s.id === sessionId ? '#FF3D8E' : '#232838'}`, borderRadius: 6,
+                      style={{ width: '100%', textAlign: 'left', background: s.id === sessionId ? 'rgba(212,255,63,0.1)' : '#09080C',
+                        border: `1px solid ${s.id === sessionId ? '#FF1F5A' : '#2A2030'}`, borderRadius: 6,
                         padding: '10px 12px', cursor: 'pointer', fontFamily: 'inherit' }}>
-                      <div style={{ color: '#FF3D8E', fontSize: 18, fontWeight: 700,
+                      <div style={{ color: '#FF1F5A', fontSize: 18, fontWeight: 700,
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {s.title || 'Code Space'}
                       </div>
-                      <div style={{ color: '#656C7E', fontSize: 15, marginTop: 4 }}>
+                      <div style={{ color: '#756B7B', fontSize: 15, marginTop: 4 }}>
                         {(s.messages || []).length} messages
                         {s.fromChat ? ' · from chat' : ''}
                         {' · '}
@@ -1988,27 +2115,30 @@ export function App() {
       )}
 
       <ComparePanel ref={compareRef} open={showCompare} onClose={() => setShowCompare(false)}
-        sandboxId={repo.sandboxId} onUseBuild={handleUseBuild} />
+        sandboxId={repo.sandboxId} onUseBuild={handleUseBuild}
+        onNeedSandbox={(t) => handleCompareBrief(t)}
+        onStartBlank={() => repo.startBlankProject()}
+        onOpenRepo={(u) => repo.openRepo(u)} />
 
       {!isMobile ? (
         /* ── Desktop: 3-column grid (single ChatPane + Terminal) ── */
         <div style={{ flex: 1, minHeight: 0, display: 'grid',
           gridTemplateColumns: '240px 1fr 420px', overflow: 'hidden' }}>
-          <div style={{ borderRight: '1px solid #191D27', overflow: 'hidden',
+          <div style={{ borderRight: '1px solid #18151D', overflow: 'hidden',
             display: 'flex', flexDirection: 'column' }}>
             {fileTree}
           </div>
-          <div style={{ borderRight: '1px solid #191D27', overflow: 'hidden',
+          <div style={{ borderRight: '1px solid #18151D', overflow: 'hidden',
             display: 'flex', flexDirection: 'column' }}>
             {chatColumn}
           </div>
           <div style={{ overflow: 'hidden', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', borderBottom: '1px solid #191D27', flexShrink: 0 }}>
+            <div style={{ display: 'flex', borderBottom: '1px solid #18151D', flexShrink: 0 }}>
               {(['terminal', 'preview'] as const).map(t => (
                 <button key={t} type="button" onClick={() => setDesktopRightTab(t)}
-                  style={{ flex: 1, padding: '8px 0', background: desktopRightTab === t ? '#12151D' : 'transparent',
-                    color: desktopRightTab === t ? '#FF3D8E' : '#9198AA', border: 'none',
-                    borderBottom: desktopRightTab === t ? '2px solid #FF3D8E' : '2px solid transparent',
+                  style={{ flex: 1, padding: '8px 0', background: desktopRightTab === t ? '#100E14' : 'transparent',
+                    color: desktopRightTab === t ? '#FF1F5A' : '#A39AA8', border: 'none',
+                    borderBottom: desktopRightTab === t ? '2px solid #FF1F5A' : '2px solid transparent',
                     fontFamily: 'inherit', fontSize: 15, fontWeight: desktopRightTab === t ? 700 : 500,
                     cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                   {t === 'terminal' ? 'Terminal' : 'Preview'}
@@ -2049,8 +2179,8 @@ export function App() {
               <PreviewPanel sandboxId={repo.sandboxId} detectedPort={previewPort} autoStartKey={previewKick} />
             </div>
           </div>
-          <div style={{ display: 'flex', flexShrink: 0, borderTop: '1px solid #191D27',
-            background: '#0B0D12', paddingBottom: 'env(safe-area-inset-bottom)',
+          <div style={{ display: 'flex', flexShrink: 0, borderTop: '1px solid #18151D',
+            background: '#09080C', paddingBottom: 'env(safe-area-inset-bottom)',
             position: 'relative', zIndex: 50 }}
             className="mobile-tabs">
             {([
@@ -2062,9 +2192,9 @@ export function App() {
               <button key={t.id} type="button" onClick={() => setMobileTab(t.id)}
                 aria-current={mobileTab === t.id ? 'page' : undefined}
                 style={{ flex: 1, padding: '14px 0', minHeight: 48,
-                  background: mobileTab === t.id ? '#12151D' : 'transparent',
-                  color: mobileTab === t.id ? '#FF3D8E' : '#9198AA', border: 'none',
-                  borderTop: mobileTab === t.id ? '2px solid #FF3D8E' : '2px solid transparent',
+                  background: mobileTab === t.id ? '#100E14' : 'transparent',
+                  color: mobileTab === t.id ? '#FF1F5A' : '#A39AA8', border: 'none',
+                  borderTop: mobileTab === t.id ? '2px solid #FF1F5A' : '2px solid transparent',
                   fontFamily: 'inherit', fontSize: 16, fontWeight: mobileTab === t.id ? 700 : 500,
                   cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.08em',
                   WebkitTapHighlightColor: 'transparent' }}>

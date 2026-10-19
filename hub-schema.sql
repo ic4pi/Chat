@@ -428,3 +428,40 @@ create table if not exists workspace_sessions (
   primary key (owner_id, session_id)
 );
 alter table workspace_sessions enable row level security;
+
+-- Claw helper (runs jobs you approve on your own computer). One-time pairing
+-- code -> device token (stored hashed) -> jobs the Code Space creates when you
+-- tap Run and the helper picks up.
+create table if not exists claw_pair_codes (
+  code_hash  text primary key,
+  owner_id   uuid not null references owners(id) on delete cascade,
+  expires_at timestamptz not null
+);
+alter table claw_pair_codes enable row level security;
+
+create table if not exists claw_devices (
+  id           uuid primary key default gen_random_uuid(),
+  owner_id     uuid not null references owners(id) on delete cascade,
+  token_hash   text not null unique,
+  label        text,
+  workdir      text,
+  last_seen_at timestamptz,
+  created_at   timestamptz not null default now()
+);
+create index if not exists claw_devices_owner_idx on claw_devices(owner_id);
+alter table claw_devices enable row level security;
+
+create table if not exists claw_jobs (
+  id         uuid primary key default gen_random_uuid(),
+  owner_id   uuid not null references owners(id) on delete cascade,
+  device_id  uuid references claw_devices(id) on delete set null,
+  status     text not null default 'approved'
+             check (status in ('approved','running','done','failed','cancelled')),
+  actions    jsonb not null,
+  results    jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists claw_jobs_owner_idx on claw_jobs(owner_id, created_at desc);
+create index if not exists claw_jobs_open_idx on claw_jobs(owner_id, status);
+alter table claw_jobs enable row level security;

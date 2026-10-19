@@ -10,22 +10,22 @@
 
 :root {
   /* Surfaces — ink blue-black, not flat black. */
-  --bg:       #0B0D12;
-  --panel:    #12151D;
-  --panel-2:  #171B26;
-  --raised:   #191D27;
-  --border:   #232838;
-  --border-2: #323A50;
+  --bg:       #09080C;
+  --panel:    #100E14;
+  --panel-2:  #16131B;
+  --raised:   #18151D;
+  --border:   #2A2030;
+  --border-2: #3E3048;
 
-  --text:    #ECEEF3;
-  --muted:   #9198AA;
-  --muted-2: #656C7E;
+  --text:    #F2ECEF;
+  --muted:   #A39AA8;
+  --muted-2: #756B7B;
 
   /* Brand accent — the pink half of the gradient mark, used as the solid
      "accent" color anywhere a single tone (not a gradient) is needed. */
-  --brass:      #FF3D8E;
-  --brass-lt:   #FF6FAE;
-  --brass-dk:   #C81F6B;
+  --brass:      #FF1F5A;
+  --brass-lt:   #FF5C84;
+  --brass-dk:   #C8123F;
   --copper:     #34D399;
   --brass-ink:  #FFFFFF;
 
@@ -33,11 +33,11 @@
   --verdigris:  #34D399;
   --verdigris-soft: rgba(52,211,153,.16);
 
-  --danger:      #FF6B6B;
-  --danger-soft: rgba(255,107,107,.14);
+  --danger:      #FF8A3D;
+  --danger-soft: rgba(255,138,61,.14);
 
-  --user-bubble: #191D27;
-  --code-bg:     #08090C;
+  --user-bubble: #18151D;
+  --code-bg:     #060509;
 
   /* Persona identity hue drives accents specific to the active persona
      (chip, focus ring, ambient glow) without touching the brand accent,
@@ -1249,3 +1249,27 @@ body.kb-open .context-row { padding: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) { *, *::before { transition: none !important; } }
+
+/* =============================================================================
+   Neon pass — glow on the accent, same palette. Appended last so it wins.
+   ============================================================================= */
+:root {
+  --neon-glow:   0 0 10px rgba(255,31,90,.55), 0 0 28px rgba(255,31,90,.28);
+  --neon-glow-s: 0 0 0 1px rgba(255,31,90,.55), 0 0 14px rgba(255,31,90,.35);
+}
+body { background: radial-gradient(ellipse at 50% -10%, rgba(255,31,90,.07), transparent 55%), var(--bg); background-attachment: fixed; }
+.brand-mark { filter: drop-shadow(0 0 6px rgba(255,31,90,.65)); }
+.brand-word { text-shadow: 0 0 12px rgba(255,31,90,.55); }
+:focus-visible { box-shadow: var(--neon-glow-s); }
+.input-row:focus-within { border-color: var(--brass); box-shadow: var(--neon-glow-s); }
+select:focus, input:focus, textarea:focus { border-color: var(--brass); box-shadow: var(--neon-glow-s); }
+button:hover:not(:disabled) { text-shadow: 0 0 8px rgba(255,31,90,.5); }
+::selection { background: rgba(255,31,90,.35); color: #fff; }
+::-webkit-scrollbar-thumb { background: #3E3048; }
+::-webkit-scrollbar-thumb:hover { background: var(--brass-dk); }
+#sendBtn:not(:disabled) { box-shadow: var(--neon-glow); }
+
+/* Brand lockup: cat mark + wordmark replace the star and text */
+.brand-logo{height:44px;width:auto;flex:0 0 auto;filter:drop-shadow(0 0 8px rgba(255,31,90,.5))}
+.brand-wordmark{height:44px;width:auto;flex:0 0 auto;filter:drop-shadow(0 0 8px rgba(255,31,90,.45))}
+.topbar-logo{height:30px;width:auto;flex:0 0 auto;margin-right:2px;filter:drop-shadow(0 0 6px rgba(255,31,90,.5))}

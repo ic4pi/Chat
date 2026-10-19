@@ -91,23 +91,23 @@ export function PreviewPanel({ sandboxId, detectedPort, autoStartKey = 0, dir, d
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <div style={{ display: 'flex', gap: 6, padding: 10, borderBottom: '1px solid #191D27', flexShrink: 0 }}>
+      <div style={{ display: 'flex', gap: 6, padding: 10, borderBottom: '1px solid #18151D', flexShrink: 0 }}>
         <input
           value={command}
           onChange={e => setCommand(e.target.value)}
           placeholder="auto (html → python server, else npm run dev)"
-          style={{ flex: 1, background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+          style={{ flex: 1, background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
             borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 16 }}
         />
         <input
           value={port}
           onChange={e => setPort(e.target.value.replace(/[^\d]/g, ''))}
           placeholder="port"
-          style={{ width: 64, background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+          style={{ width: 64, background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
             borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 16 }}
         />
         <button type="button" onClick={() => void start()} disabled={starting}
-          style={{ background: '#FF3D8E', color: '#0B0D12', border: 'none', borderRadius: 4,
+          style={{ background: '#FF1F5A', color: '#09080C', border: 'none', borderRadius: 4,
             padding: '6px 12px', cursor: starting ? 'default' : 'pointer', fontFamily: 'inherit',
             fontSize: 16, fontWeight: 700, opacity: starting ? 0.6 : 1, whiteSpace: 'nowrap' }}>
           {starting ? 'Starting…' : url ? 'Restart' : 'Start preview'}
@@ -115,12 +115,12 @@ export function PreviewPanel({ sandboxId, detectedPort, autoStartKey = 0, dir, d
         {url && (
           <>
             <button type="button" onClick={() => setReloadKey(k => k + 1)}
-              style={{ background: '#171B26', color: '#9198AA', border: '1px solid #232838',
+              style={{ background: '#16131B', color: '#A39AA8', border: '1px solid #2A2030',
                 borderRadius: 4, padding: '6px 10px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 16 }}>
               ↻
             </button>
             <a href={url} target="_blank" rel="noreferrer"
-              style={{ background: '#171B26', color: '#9198AA', border: '1px solid #232838',
+              style={{ background: '#16131B', color: '#A39AA8', border: '1px solid #2A2030',
                 borderRadius: 4, padding: '6px 10px', fontFamily: 'inherit', fontSize: 16,
                 textDecoration: 'none', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
               Open ↗
@@ -130,7 +130,7 @@ export function PreviewPanel({ sandboxId, detectedPort, autoStartKey = 0, dir, d
       </div>
 
       {error && (
-        <div style={{ padding: '8px 12px', color: '#ff9b9b', fontSize: 16, borderBottom: '1px solid #191D27' }}>
+        <div style={{ padding: '8px 12px', color: '#ff9b9b', fontSize: 16, borderBottom: '1px solid #18151D' }}>
           {error}
         </div>
       )}
@@ -145,7 +145,7 @@ export function PreviewPanel({ sandboxId, detectedPort, autoStartKey = 0, dir, d
         />
       ) : (
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: '#656C7E', fontSize: 16, textAlign: 'center', padding: 20 }}>
+          color: '#756B7B', fontSize: 16, textAlign: 'center', padding: 20 }}>
           Write a file (or hit Start preview). Plain HTML pages are served automatically —
           no npm, no typed command.
         </div>

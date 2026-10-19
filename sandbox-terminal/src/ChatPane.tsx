@@ -22,10 +22,17 @@
  * are rendered as runnable snippets with "▶ Run in Sandbox".
  */
 
+import { extractPlanBlock } from './buildPlan.js';
+import { extractClawBlock } from './claw.js';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { PendingChange } from './useRepoContext.js';
 import type { FileNode } from './types.js';
 import {
+  adoptBareHtmlDocument,
+  hasExplicitBuildIntent,
+  continuationPrompt,
+  mergeContinuation,
+  stripContinueMarkers,
   extractFileChangeReport,
   formatRejectedSandboxWarning,
   looksLikeApplyRequest,
@@ -34,6 +41,7 @@ import {
   looksLikeLegacyWelcome,
   needsCodeContext,
   nudgeAfterRejects,
+  looksLikeToolMimic,
   NUDGE_PROMPT,
 } from './agentParse.js';
 import {
@@ -46,6 +54,7 @@ import {
 import { copyText, downloadTextFile } from './downloadFile.js';
 import { loadPaidPassword } from './providerPrefs.js';
 import {
+  asksAboutWork,
   BRIEF_WRITER_SYSTEM,
   NO_BRIEF,
   buildBriefWriterTurns,
@@ -88,6 +97,8 @@ export interface ChatHandle {
   /** Record something that happened outside this chat (e.g. a version picked
    *  in Compare) so the persona and coder both know about it. */
   addNote: (text: string) => void;
+  /** True while a reply is being produced (a programmatic send would be ignored). */
+  isBusy: () => boolean;
   /** Fold in messages said in the main chat (shared conversation) that this
    *  thread doesn't have yet — appended in order, deduped by content. */
   syncExternal: (messages: Array<{ role: 'user' | 'assistant'; content: string }>) => void;
@@ -125,7 +136,7 @@ const CONTINUE_LOOP_BUDGET_MS = 900_000;
  *  to get there on a 4th; better to fail loud and fast than retry quietly
  *  for the better part of an hour. */
 const EMPTY_THINK_MAX_CONTINUES = 3;
-const MID_OUTPUT_MAX_CONTINUES = 2;
+const MID_OUTPUT_MAX_CONTINUES = 4;
 
 /** Plain-words ask for two takes at once — routed to Compare. */
 function wantsTwoVersions(text: string): boolean {
@@ -452,21 +463,6 @@ function looksTruncatedReply(text: string): boolean {
   return false;
 }
 
-function mergeContinuation(prev: string, next: string): string {
-  const a = prev.replace(/\s+$/, '');
-  const b = next.replace(/^\s+/, '');
-  // Model often restarts the open fence — strip a duplicated opener.
-  if (a.endsWith('```') || /```[a-zA-Z0-9_+\-.]*$/.test(a)) {
-    return `${a}\n${b}`;
-  }
-  if (b.startsWith('```') && (a.match(/```/g) || []).length % 2 === 1) {
-    // Continuation reopened the fence — keep body only
-    const nl = b.indexOf('\n');
-    return nl >= 0 ? `${a}\n${b.slice(nl + 1)}` : a + b;
-  }
-  return `${a}\n${b}`;
-}
-
 /** Read SSE from /api/agent-chat (stream:true). Falls back if the body is plain JSON.
  *  onEvent receives status/token/thinking/done/error for live UI updates.
  */
@@ -578,15 +574,15 @@ function FileChangeBlock({ path, content, isApplied }: {
         padding: '5px 10px', borderBottom: '1px solid rgba(52,211,153,.16)', gap: 8, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
           <span style={{ fontSize: 14, color: '#34D399', fontWeight: 700 }}>FILE</span>
-          <span style={{ fontSize: 15, color: '#ECEEF3', overflow: 'hidden',
+          <span style={{ fontSize: 15, color: '#F2ECEF', overflow: 'hidden',
             textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{path}</span>
-          <span style={{ fontSize: 14, color: '#656C7E' }}>{lines} lines</span>
-          {isApplied && <span style={{ fontSize: 14, color: '#FF3D8E' }}>✓ saved</span>}
+          <span style={{ fontSize: 14, color: '#756B7B' }}>{lines} lines</span>
+          {isApplied && <span style={{ fontSize: 14, color: '#FF1F5A' }}>✓ saved</span>}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <button type="button"
             onClick={() => downloadTextFile(path, content)}
-            style={{ background: '#FF3D8E', color: '#0B0D12', border: 'none',
+            style={{ background: '#FF1F5A', color: '#09080C', border: 'none',
               borderRadius: 4, padding: '3px 10px', cursor: 'pointer',
               fontFamily: 'inherit', fontSize: 15, fontWeight: 700 }}>
             Download
@@ -596,13 +592,13 @@ function FileChangeBlock({ path, content, isApplied }: {
               const ok = await copyText(content);
               if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
             }}
-            style={{ background: 'transparent', color: copied ? '#FF3D8E' : '#34D399',
+            style={{ background: 'transparent', color: copied ? '#FF1F5A' : '#34D399',
               border: '1px solid rgba(52,211,153,.16)', borderRadius: 4, padding: '3px 8px',
               cursor: 'pointer', fontFamily: 'inherit', fontSize: 15 }}>
             {copied ? 'Copied' : 'Copy'}
           </button>
           <button onClick={() => setShowCode(s => !s)}
-            style={{ background: 'transparent', color: '#656C7E', border: 'none',
+            style={{ background: 'transparent', color: '#756B7B', border: 'none',
               fontSize: 15, cursor: 'pointer', padding: 0 }}>
             {showCode ? 'hide' : 'show'}
           </button>
@@ -610,7 +606,7 @@ function FileChangeBlock({ path, content, isApplied }: {
       </div>
       {showCode && (
         <pre style={{ margin: 0, padding: '8px 12px', overflowX: 'auto',
-          fontSize: 16, lineHeight: 1.5, color: '#ECEEF3', maxHeight: 400 }}>
+          fontSize: 16, lineHeight: 1.5, color: '#F2ECEF', maxHeight: 400 }}>
           {content}
         </pre>
       )}
@@ -629,11 +625,11 @@ function CodeBlock({ lang, content, onRun }: {
   // with a nonsense syntax error. Markup needs to be rendered, not run.
   const isHtml = /^(html|htm)$/i.test((lang || '').trim());
   return (
-    <div style={{ margin: '8px 0', background: '#0B0D12',
-      border: '1px solid #232838', borderRadius: 6, overflow: 'hidden' }}>
+    <div style={{ margin: '8px 0', background: '#09080C',
+      border: '1px solid #2A2030', borderRadius: 6, overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '4px 10px', borderBottom: '1px solid #191D27', gap: 8 }}>
-        <span style={{ fontSize: 14, color: '#656C7E', textTransform: 'uppercase',
+        padding: '4px 10px', borderBottom: '1px solid #18151D', gap: 8 }}>
+        <span style={{ fontSize: 14, color: '#756B7B', textTransform: 'uppercase',
           letterSpacing: '0.1em' }}>{lang || 'code'}</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <button type="button" data-testid="copy-code-btn"
@@ -641,7 +637,7 @@ function CodeBlock({ lang, content, onRun }: {
               const ok = await copyText(content);
               if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
             }}
-            style={{ background: 'transparent', color: copied ? '#FF3D8E' : '#34D399',
+            style={{ background: 'transparent', color: copied ? '#FF1F5A' : '#34D399',
               border: '1px solid rgba(52,211,153,.16)', borderRadius: 4, padding: '2px 10px',
               cursor: 'pointer', fontFamily: 'inherit', fontSize: 15 }}>
             {copied ? 'Copied' : 'Copy'}
@@ -669,11 +665,11 @@ function CodeBlock({ lang, content, onRun }: {
           title="HTML preview"
           srcDoc={content}
           sandbox="allow-scripts allow-forms allow-popups"
-          style={{ width: '100%', height: 320, border: 'none', borderBottom: '1px solid #191D27', background: '#fff' }}
+          style={{ width: '100%', height: 320, border: 'none', borderBottom: '1px solid #18151D', background: '#fff' }}
         />
       )}
       <pre style={{ margin: 0, padding: '8px 12px', overflowX: 'auto',
-        fontSize: 16, lineHeight: 1.5, color: '#ECEEF3',
+        fontSize: 16, lineHeight: 1.5, color: '#F2ECEF',
         maxHeight: 300, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
         {content}
       </pre>
@@ -693,7 +689,7 @@ function AssistantBody({ msg, appliedPaths, onRunCode }: {
         {segs.map((seg, i) => {
           if (seg.type === 'text') return (
             <p key={i} style={{ margin: '4px 0', fontSize: 18, lineHeight: 1.6,
-              color: '#ECEEF3', whiteSpace: 'pre-wrap' }}>{seg.content.trim()}</p>
+              color: '#F2ECEF', whiteSpace: 'pre-wrap' }}>{seg.content.trim()}</p>
           );
           if (seg.type === 'file-change') return (
             <FileChangeBlock key={i} path={seg.path} lang={seg.lang}
@@ -713,7 +709,7 @@ function AssistantBody({ msg, appliedPaths, onRunCode }: {
   // MUST still render — previously these were invisible.
   return (
     <p data-testid="assistant-text" style={{ margin: '4px 0', fontSize: 18, lineHeight: 1.6,
-      color: '#ECEEF3', whiteSpace: 'pre-wrap' }}>{msg.content}</p>
+      color: '#F2ECEF', whiteSpace: 'pre-wrap' }}>{msg.content}</p>
   );
 }
 
@@ -793,6 +789,14 @@ interface Props {
   } | void>;
   /** Send a brief to both Compare coders instead of (or as well as) this one. */
   onCompareBrief?:   (brief: string, picks?: { a: SeatPick; b: SeatPick }) => void;
+  /** The build plan (markdown) and where the orchestrator's updates go. */
+  buildPlan?:        string;
+  onBuildPlan?:      (md: string) => void;
+  /** The helper on your computer is running (the orchestrator is told, and may propose steps). */
+  clawOnline?:       boolean;
+  clawWorkdir?:      string;
+  /** The orchestrator proposed steps for your computer — show the Run card. Nothing runs until you tap Run. */
+  onClawPlan?:       (actions: unknown[], errors: string[]) => void;
   /** Hold persona briefs until you pick who builds them. */
   askBeforeBuild?:   boolean;
   /** Renders "Who builds this?" under a pending brief. */
@@ -816,6 +820,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   repoRoot, repoUrl, sandboxId, provider, model, role, persona = null, apiKey, tree, contextFiles, autoRun, appliedPaths,
   autoSelectedFiles, searchHits, initialMessages, onMessagesChange,
   onRunCode, onFileChanges, onUploadText, onBeforeSend, onModelReplaced, onOpenPush, onCompareBrief,
+  buildPlan = '', onBuildPlan, clawOnline = false, clawWorkdir = '', onClawPlan,
   askBeforeBuild = false, buildPicker, fixer = null,
   pythonReady = null, pythonDetail = null,
   rustReady = null, rustDetail = null,
@@ -865,12 +870,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   const latestRef = useRef({
     repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onOpenPush, onCompareBrief, askBeforeBuild, fixer,
+    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onOpenPush, onCompareBrief, askBeforeBuild, fixer, buildPlan, onBuildPlan, clawOnline, clawWorkdir, onClawPlan,
   });
   latestRef.current = {
     repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onOpenPush, onCompareBrief, askBeforeBuild, fixer,
+    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onOpenPush, onCompareBrief, askBeforeBuild, fixer, buildPlan, onBuildPlan, clawOnline, clawWorkdir, onClawPlan,
   };
 
   useEffect(() => {
@@ -1076,29 +1081,30 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         const contPrompt = emptyThink
           ? 'Previous attempt timed out during thinking before any answer text. '
             + 'Answer now with complete File: / fenced blocks. Spend less time thinking.'
-          : 'Your previous reply was cut off mid-output. Continue EXACTLY from where you left off. '
-            + 'Finish any open File: / fenced blocks with COMPLETE file contents. '
-            + 'Do not restart files you already finished. Do not apologize.';
+          : continuationPrompt(reply);
         const contHistory = emptyThink
           ? [...history, { role: 'user', content: contPrompt }]
           : [
               ...history,
-              { role: 'assistant', content: reply },
+              { role: 'assistant', content: stripContinueMarkers(reply) },
               { role: 'user', content: contPrompt },
             ];
         setLiveThoughts('');
         setLiveStatus('Continuing…');
         result = await callAgent(contHistory, systemPrompt, sid, prov, mod, key);
+        const before = reply.length;
         reply = emptyThink
           ? result.reply
           : mergeContinuation(reply, result.reply);
+        // A continuation that added nothing new won't on the next try either.
+        if (!emptyThink && reply.length <= stripContinueMarkers(reply).length && reply.length - before < 20 && !result.incomplete) break;
         emptyThink = result.timedOut && (!reply.trim() || reply === '(empty response)');
         hadReasoningEvidence = !!result.reasoning?.trim();
         if (!result.incomplete && !looksTruncatedReply(result.reply) && result.reply.trim() && result.reply !== '(empty response)') {
           break;
         }
       }
-      return reply;
+      return stripContinueMarkers(reply);
     };
 
     try {
@@ -1167,7 +1173,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           hits,
           coderLabel: `${prov} / ${mod}`,
           role: activeRole,
-        });
+          plan: latestRef.current.buildPlan,
+        }) + (latestRef.current.clawOnline
+          ? `\n\nCLAW HELPER: connected. Working folder on the user's computer: ${latestRef.current.clawWorkdir || '~/Jive-Workspace'}.`
+          : '\n\nCLAW HELPER: not connected (do not propose steps for the user\'s computer).');
         const pProv = orchPersona.provider || prov;
         const pMod = orchPersona.model || mod;
         const personaTurns = trimMessageHistory(buildPersonaHistory(withUser));
@@ -1178,11 +1187,20 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           pProv,
           pMod,
           orchPersona.apiKey || (pProv === prov ? key : undefined),
-          { personaId: orchPersona.id, orchestrate: true },
+          { personaId: orchPersona.id, orchestrate: true, claw: latestRef.current.clawOnline === true },
         );
         const rawWithMarker = personaReply.reply === '(empty response)' ? '' : personaReply.reply.trim();
         const pushRequested = wantsPushOpened(rawWithMarker);
-        const raw = pushRequested ? stripPushMarker(rawWithMarker) : rawWithMarker;
+        const rawFull = pushRequested ? stripPushMarker(rawWithMarker) : rawWithMarker;
+        // The orchestrator keeps the build plan current with a <<<PLAN>>> block.
+        const { text: rawNoPlan, plan: newPlan } = extractPlanBlock(rawFull);
+        if (newPlan) latestRef.current.onBuildPlan?.(newPlan);
+        // Steps for your computer: shown on a Run card; nothing happens until you tap Run.
+        const clawBlock = extractClawBlock(rawNoPlan);
+        const raw = clawBlock.text;
+        if (clawBlock.actions || clawBlock.errors.length) {
+          latestRef.current.onClawPlan?.(clawBlock.actions ?? [], clawBlock.errors);
+        }
         const split = splitPersonaReply(raw);
         brief = split.brief;
         const personaMsg: Message = {
@@ -1212,6 +1230,19 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           if (out && !out.startsWith(NO_BRIEF) && out.length > 20) {
             brief = splitPersonaReply(out).brief ?? out;
           }
+        }
+        // The persona answered in character and never briefed (it wrote code or told
+        // you to paste something), but you clearly asked for a build: the request
+        // itself becomes the brief, so the work still reaches the coder.
+        if (!brief && !asksAboutWork(text) && (hasExplicitBuildIntent(text) || looksLikeApplyRequest(text))) {
+          const code = [...raw.matchAll(/```[\w+\-.]*\n([\s\S]*?)```/g)].map(m => m[1]!.trim()).join('\n\n').slice(0, 6000);
+          brief = [
+            `Goal: ${text.trim().slice(0, 6000)}`,
+            `Context: this is the user's request as written. Lead's notes: ${split.say.slice(0, 1200) || '(none)'}`,
+            code ? `Reference code the lead drafted (may be incomplete or wrong — write the real files):\n${code}` : '',
+            'Requirements: 1. Build exactly what the request asks for, as COMPLETE files via File: blocks. 2. Follow every instruction in the request (single file, code only, etc.).',
+            'Done when: the files are written and run.',
+          ].filter(Boolean).join('\n');
         }
         if (!brief) return [];
 
@@ -1314,7 +1345,9 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           + 'into the user\'s actual project in this sandbox, it is not a hypothetical or a described interface. '
           + 'Do not say you are "just a text-based AI" or that you cannot provide code/an interface "directly" — '
           + 'that is false here. Do not hand back a design blueprint, description, or plan instead of code. Write '
-          + 'the File:/Edit: blocks now.';
+          + 'the File:/Edit: blocks now. If the user asks for "code only" or one complete HTML file, your whole reply '
+          + 'is `File: name.html` followed by ONE fenced block holding the complete self-contained file, with no prose '
+          + 'around it. That is the code-only output: raw code pasted without a File: header is never saved or previewed.';
       } else if (runTurn) {
         systemPrompt +=
           '\n\nRUN this turn: the user wants a file/script actually EXECUTED, not written or explained. '
@@ -1342,6 +1375,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         setLiveStatus('Builder is fixing it…');
         reply = await callAgentWithContinue(history, systemPrompt, sid, prov, mod, key);
       }
+      if (!brief || userish) reply = adoptBareHtmlDocument(reply);
       let segs  = parseSegments(reply);
       let report = extractFileChangeReport(reply);
       // Full-file writes (new files / explicit rewrites) + unresolved Edit:
@@ -1380,9 +1414,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       // Also nudge when stubs were rejected (sandbox would otherwise stay broken-looking).
       // Skip if the first call already used most of the Pro time window (avoids a second timeout).
       const rejectedFirst = report.rejected;
+      // A model that "reads files" instead of writing them (Read: lines, then nothing) built
+      // nothing whatever you asked: always worth one retry on a build turn.
+      const mimicked = userish && !suggestTurn && fc.length === 0 && looksLikeToolMimic(reply);
       const shouldNudge = (fc.length === 0 || rejectedFirst.length > 0)
         && userish
-        && applyTurn
+        && (applyTurn || mimicked)
         && !suggestTurn
         && (!!root || ctx.size > 0)
         && (Date.now() - sendStartedAt) < NUDGE_BUDGET_MS;
@@ -1390,7 +1427,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       if (shouldNudge) {
         const nudgeText = rejectedFirst.length > 0
           ? nudgeAfterRejects(rejectedFirst)
-          : NUDGE_PROMPT;
+          : mimicked
+            ? 'You have NO tools here: you cannot read, list or open files, so never write "Read:" lines. ' +
+              'Everything you need is in this conversation. Write the complete files now.\n\n' + NUDGE_PROMPT
+            : NUDGE_PROMPT;
         const nudgeMsg: Message = {
           id: uid(), role: 'user', content: nudgeText, kind: 'retry-inject',
         };
@@ -1476,6 +1516,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   useImperativeHandle(ref, () => ({
     programmaticSend: (text, role = 'retry-inject') => sendText(text, role),
     addNote: (text) => setMessages(m => [...m, { id: uid(), role: 'user', kind: 'note', content: text }]),
+    isBusy: () => sendingRef.current,
     syncExternal: (incoming) => setMessages(m => {
       const have = new Set(m.map(x => sigOf(x.role, x.content)));
       const add = incoming
@@ -1484,6 +1525,17 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       return add.length ? [...m, ...add] : m;
     }),
   }), [sendText]);
+
+  // Paste without relying on the long-press menu: read the clipboard on a tap,
+  // or fall back to a prompt (which always accepts a paste) when the browser
+  // won't hand it over.
+  const pasteIntoInput = useCallback(async () => {
+    let text = '';
+    try { text = await navigator.clipboard.readText(); } catch { /* denied or unsupported */ }
+    if (!text) text = window.prompt('Paste your text here, then press OK') || '';
+    if (!text) return;
+    setInput(prev => (prev ? `${prev}\n${text}` : text));
+  }, []);
 
   const send = useCallback(async () => {
     const text = input.trim();
@@ -1603,16 +1655,16 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
   return (
     <div data-testid="chat-pane" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
-      background: '#0B0D12', color: '#ECEEF3',
+      background: '#09080C', color: '#F2ECEF',
       fontFamily: '"JetBrains Mono",ui-monospace,monospace' }}>
 
       {/* status strip — only when there is something to say */}
       {(error || autoSelectedFiles.length > 0 || contextFiles.size > 0) && (
-      <div style={{ padding: '5px 12px', borderBottom: '1px solid #191D27',
-        background: '#0B0D12', flexShrink: 0, display: 'flex',
+      <div style={{ padding: '5px 12px', borderBottom: '1px solid #18151D',
+        background: '#09080C', flexShrink: 0, display: 'flex',
         alignItems: 'center', gap: 10 }}>
         {(autoSelectedFiles.length > 0 || contextFiles.size > 0) && (
-          <span style={{ fontSize: 14, color: '#656C7E' }}>
+          <span style={{ fontSize: 14, color: '#756B7B' }}>
             reading {Math.max(autoSelectedFiles.length, contextFiles.size)} file
             {Math.max(autoSelectedFiles.length, contextFiles.size) !== 1 ? 's' : ''} for you
           </span>
@@ -1637,22 +1689,22 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 border: '1px dashed rgba(52,211,153,.16)', borderRadius: 6,
                 fontSize: 15, color: '#7FE0B8', whiteSpace: 'pre-wrap',
                 maxHeight: 160, overflowY: 'auto' }}>
-                <span style={{ fontWeight: 700, display: 'block', marginBottom: 3, color: '#FF3D8E' }}>
+                <span style={{ fontWeight: 700, display: 'block', marginBottom: 3, color: '#FF1F5A' }}>
                   ⟳ Auto-retry — test failure injected
                 </span>
                 {msg.content.slice(0, 500)}{msg.content.length > 500 ? '…' : ''}
               </div>
             ) : msg.kind === 'note' ? (
-              <div data-testid="note-msg" style={{ fontSize: 14, color: '#9198AA', fontStyle: 'italic',
+              <div data-testid="note-msg" style={{ fontSize: 14, color: '#A39AA8', fontStyle: 'italic',
                 padding: '2px 4px' }}>
                 {msg.content}
               </div>
             ) : msg.role === 'user' && msg.kind === 'brief' ? (
-              <div data-testid="brief-msg" style={{ background: '#12151D',
-                border: '1px solid #323A50', borderRadius: 6, padding: '6px 10px' }}>
+              <div data-testid="brief-msg" style={{ background: '#100E14',
+                border: '1px solid #3E3048', borderRadius: 6, padding: '6px 10px' }}>
                 <details>
                   <summary style={{ cursor: 'pointer', fontSize: 14, fontWeight: 700,
-                    letterSpacing: '0.08em', textTransform: 'uppercase', color: '#9198AA' }}>
+                    letterSpacing: '0.08em', textTransform: 'uppercase', color: '#A39AA8' }}>
                     Brief → coder
                   </summary>
                   <pre style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
@@ -1665,14 +1717,14 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                   wantCompare: !!msg.wantCompare,
                   onBuild: (req) => buildPending(msg.id, msg.content, req),
                 }) : msg.builtBy ? (
-                  <div style={{ fontSize: 13, color: '#9198AA', marginTop: 4 }}>Built by {msg.builtBy}</div>
+                  <div style={{ fontSize: 13, color: '#A39AA8', marginTop: 4 }}>Built by {msg.builtBy}</div>
                 ) : null}
                 {onCompareBrief && !msg.pending && (
                   <button type="button" data-testid="brief-compare-btn"
                     onClick={() => onCompareBrief(msg.content)}
                     title="Two coders build this brief side by side — pick the one you like"
-                    style={{ marginTop: 6, background: 'transparent', color: '#FF9FC4',
-                      border: '1px solid rgba(255,61,142,.5)', borderRadius: 4, padding: '3px 10px',
+                    style={{ marginTop: 6, background: 'transparent', color: '#FF8FA8',
+                      border: '1px solid rgba(255,31,90,.5)', borderRadius: 4, padding: '3px 10px',
                       cursor: 'pointer', fontFamily: 'inherit', fontSize: 14 }}>
                     ⇄ Build two versions
                   </button>
@@ -1695,7 +1747,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                   fontWeight: 700,
                   letterSpacing: '0.08em',
                   textTransform: 'uppercase',
-                  color: '#FF3D8E',
+                  color: '#FF1F5A',
                   marginBottom: 4,
                 }}>
                   You asked
@@ -1720,10 +1772,10 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
             ) : msg.speaker === 'persona' || (persona && msg.kind === 'imported') ? (
               <div data-testid="persona-msg">
                 <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: '0.08em',
-                  textTransform: 'uppercase', color: '#FF9FC4', marginBottom: 4 }}>
+                  textTransform: 'uppercase', color: '#FF8FA8', marginBottom: 4 }}>
                   {persona?.name || 'Persona'}
                 </div>
-                <p style={{ margin: '4px 0', fontSize: 18, lineHeight: 1.6, color: '#ECEEF3',
+                <p style={{ margin: '4px 0', fontSize: 18, lineHeight: 1.6, color: '#F2ECEF',
                   whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                   {(() => {
                     const { say, brief } = splitPersonaReply(msg.content);
@@ -1746,25 +1798,52 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 <AssistantBody msg={msg} appliedPaths={appliedPaths} onRunCode={onRunCode} />
               </div>
             )}
+            {msg.role === 'user' && (!msg.kind || msg.kind === 'user') && msg.content && (
+              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 4 }}>
+                <button type="button" data-testid="copy-user-message"
+                  onClick={() => { void copyText(msg.content); }}
+                  style={{ background: 'transparent', color: '#756B7B', border: '1px solid #2A2030',
+                    borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13 }}>
+                  Copy
+                </button>
+                <button type="button" data-testid="reuse-user-message" title="Put this message back in the box to edit and resend"
+                  onClick={() => { setInput(msg.content); }}
+                  style={{ background: 'transparent', color: '#756B7B', border: '1px solid #2A2030',
+                    borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13 }}>
+                  Reuse
+                </button>
+              </div>
+            )}
+            {msg.role === 'assistant' && msg.kind !== 'welcome' && msg.content && !msg.content.startsWith('⏸') && (
+              <button type="button" data-testid="copy-message"
+                onClick={() => {
+                  const t = msg.speaker === 'persona' ? (splitPersonaReply(msg.content).say || msg.content) : msg.content;
+                  void copyText(t);
+                }}
+                style={{ marginTop: 4, background: 'transparent', color: '#756B7B', border: '1px solid #2A2030',
+                  borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13 }}>
+                Copy
+              </button>
+            )}
           </div>
         ))}
         {loading && (
           <div data-testid="thinking" style={{ alignSelf: 'flex-start', maxWidth: '92%', width: '100%' }}>
             <div style={{
               display: 'flex', alignItems: 'center', gap: 8,
-              background: 'rgba(255,61,142,.08)', border: '1px solid rgba(255,61,142,.3)',
+              background: 'rgba(255,31,90,.08)', border: '1px solid rgba(255,31,90,.3)',
               borderRadius: 6, padding: '8px 12px', marginBottom: liveThoughts ? 6 : 0,
             }}>
               <span aria-hidden="true" style={{
-                width: 9, height: 9, borderRadius: '50%', background: '#FF3D8E', flexShrink: 0,
+                width: 9, height: 9, borderRadius: '50%', background: '#FF1F5A', flexShrink: 0,
                 animation: 'agent-pulse 1.1s ease-in-out infinite',
               }} />
-              <span style={{ fontSize: 18, fontWeight: 600, color: '#FF9FC4', flex: 1 }}>
+              <span style={{ fontSize: 18, fontWeight: 600, color: '#FF8FA8', flex: 1 }}>
                 {liveStatus || 'Working…'} · {elapsedSecs}s
               </span>
               <button type="button" data-testid="cancel-send" onClick={cancelSend}
                 title="Stop waiting and pick a different model"
-                style={{ background: 'transparent', color: '#FF9FC4', border: '1px solid rgba(255,61,142,.5)',
+                style={{ background: 'transparent', color: '#FF8FA8', border: '1px solid rgba(255,31,90,.5)',
                   borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
                   fontSize: 14, fontWeight: 600, flexShrink: 0 }}>
                 Cancel
@@ -1779,9 +1858,9 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
                 wordBreak: 'break-word',
                 fontSize: 15,
                 lineHeight: 1.45,
-                color: '#9198AA',
-                background: '#0B0D12',
-                border: '1px solid #191D27',
+                color: '#A39AA8',
+                background: '#09080C',
+                border: '1px solid #18151D',
                 borderRadius: 4,
                 padding: '8px 10px',
                 fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
@@ -1793,16 +1872,16 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       </div>
 
       {uploads.length > 0 && (
-        <div style={{ padding: '6px 12px', borderTop: '1px solid #191D27',
-          display: 'flex', flexWrap: 'wrap', gap: 6, background: '#0B0D12' }}>
+        <div style={{ padding: '6px 12px', borderTop: '1px solid #18151D',
+          display: 'flex', flexWrap: 'wrap', gap: 6, background: '#09080C' }}>
           {uploads.map((u, i) => (
             <span key={`${u.name}-${i}`} style={{
-              fontSize: 14, color: '#9198AA', background: '#171B26', border: '1px solid #232838',
+              fontSize: 14, color: '#A39AA8', background: '#16131B', border: '1px solid #2A2030',
               borderRadius: 4, padding: '2px 8px', display: 'inline-flex', gap: 6, alignItems: 'center',
             }}>
               {u.kind === 'image' ? '🖼' : '📄'} {u.name}
               <button type="button" onClick={() => setUploads(list => list.filter((_, j) => j !== i))}
-                style={{ background: 'transparent', border: 'none', color: '#656C7E', cursor: 'pointer', padding: 0 }}>×</button>
+                style={{ background: 'transparent', border: 'none', color: '#756B7B', cursor: 'pointer', padding: 0 }}>×</button>
             </span>
           ))}
         </div>
@@ -1810,33 +1889,38 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
 
       {/* input */}
       <form data-testid="chat-form" onSubmit={e => { e.preventDefault(); void send(); }}
-        style={{ borderTop: '1px solid #191D27', padding: '10px 12px',
+        style={{ borderTop: '1px solid #18151D', padding: '10px 12px',
           display: 'flex', gap: 8, flexShrink: 0, alignItems: 'flex-end',
-          background: '#0B0D12' }}>
+          background: '#09080C' }}>
         <input ref={fileInputRef} type="file" multiple accept="image/*,.txt,.md,.json,.js,.ts,.tsx,.jsx,.py,.css,.html,.yml,.yaml,.toml,.env,.csv"
           style={{ display: 'none' }}
           onChange={e => { void handleFiles(e.target.files); }} />
         <button type="button" title="Upload photo or file"
           onClick={() => fileInputRef.current?.click()}
           disabled={loading}
-          style={{ background: '#171B26', color: '#9198AA', border: '1px solid #232838',
+          style={{ background: '#16131B', color: '#A39AA8', border: '1px solid #2A2030',
             borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
             fontFamily: 'inherit', fontSize: 16, alignSelf: 'flex-end' }}>📎</button>
+        <button type="button" data-testid="workspace-paste" title="Paste from clipboard into the box"
+          onClick={() => { void pasteIntoInput(); }}
+          style={{ background: '#16131B', color: '#A39AA8', border: '1px solid #2A2030',
+            borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
+            fontFamily: 'inherit', fontSize: 16, alignSelf: 'flex-end' }}>📋</button>
         <button type="button" data-testid="workspace-mic" title={listening ? 'Stop listening' : (speakOn ? 'Voice chat — tap to talk' : 'Dictate into the box')}
           onClick={toggleMic}
           disabled={loading}
-          style={{ background: listening ? '#3a1a1a' : '#171B26',
-            color: listening ? '#ff8a8a' : '#9198AA',
-            border: `1px solid ${listening ? '#6a2a2a' : '#232838'}`,
+          style={{ background: listening ? '#3a1a1a' : '#16131B',
+            color: listening ? '#ff8a8a' : '#A39AA8',
+            border: `1px solid ${listening ? '#6a2a2a' : '#2A2030'}`,
             borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
             fontFamily: 'inherit', fontSize: 16, alignSelf: 'flex-end' }}>
           {listening ? '●' : '🎙'}
         </button>
         <button type="button" data-testid="workspace-speak" title={speakOn ? 'Voice replies on — tap to mute' : 'Voice replies off — tap to speak answers'}
           onClick={toggleSpeak}
-          style={{ background: speakOn ? 'rgba(52,211,153,.16)' : '#171B26',
-            color: speakOn ? '#FF3D8E' : '#9198AA',
-            border: `1px solid ${speakOn ? 'rgba(52,211,153,.16)' : '#232838'}`,
+          style={{ background: speakOn ? 'rgba(52,211,153,.16)' : '#16131B',
+            color: speakOn ? '#FF1F5A' : '#A39AA8',
+            border: `1px solid ${speakOn ? 'rgba(52,211,153,.16)' : '#2A2030'}`,
             borderRadius: 4, padding: '8px 10px', cursor: 'pointer',
             fontFamily: 'inherit', fontSize: 16, alignSelf: 'flex-end' }}>
           {speakOn ? '🔊' : '🔇'}
@@ -1847,19 +1931,24 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           value={input}
           rows={2}
           onChange={e => setInput(e.target.value)}
-          placeholder={loading ? 'Waiting for reply…'
+          onKeyDown={e => {
+            // Same as the main chat: Enter is a new line; Ctrl+Enter / Cmd+Enter sends (the Send button too).
+            if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || e.nativeEvent.isComposing) return;
+            e.preventDefault();
+            if (!loading && input.trim()) void send();
+          }}
+          placeholder={loading ? 'Working… you can keep typing or paste your next message'
             : listening ? (speakOn ? 'Listening — will send…' : 'Listening…')
             : persona ? `Talk to ${persona.name}…` : 'What should change?'}
-          disabled={loading}
-          style={{ flex: 1, background: '#12151D', color: '#ECEEF3',
-            border: '1px solid #232838', borderRadius: 4,
+          style={{ flex: 1, background: '#100E14', color: '#F2ECEF',
+            border: '1px solid #2A2030', borderRadius: 4,
             padding: '7px 10px', fontFamily: 'inherit', fontSize: 22,
-            outline: 'none', resize: 'vertical', minHeight: 48, maxHeight: 120,
-            WebkitTextFillColor: '#ECEEF3',
+            outline: 'none', resize: 'vertical', minHeight: 48, maxHeight: '40vh',
+            WebkitTextFillColor: '#F2ECEF',
             opacity: 1 }} />
         <button type="submit" data-testid="chat-send" disabled={(!input.trim() && uploads.length === 0) || loading}
-          style={{ background: (input.trim() || uploads.length) && !loading ? '#FF3D8E' : '#191D27',
-            color: (input.trim() || uploads.length) && !loading ? '#0B0D12' : '#9198AA',
+          style={{ background: (input.trim() || uploads.length) && !loading ? '#FF1F5A' : '#18151D',
+            color: (input.trim() || uploads.length) && !loading ? '#09080C' : '#A39AA8',
             border: 'none', borderRadius: 4, padding: '8px 16px',
             cursor: (input.trim() || uploads.length) && !loading ? 'pointer' : 'default',
             fontFamily: 'inherit', fontSize: 16, fontWeight: 700,

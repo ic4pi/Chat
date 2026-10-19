@@ -54,6 +54,11 @@ interface Props {
   onClose: () => void;
   sandboxId: string | null;
   onUseBuild: (build: BuildChoice) => void | Promise<void>;
+  /** You sent a prompt with no sandbox open — open a project, then run it. */
+  onNeedSandbox?: (text: string) => void;
+  /** Open a blank project / clone a GitHub repo right from here. */
+  onStartBlank?: () => void | Promise<unknown>;
+  onOpenRepo?: (url: string) => void | Promise<unknown>;
 }
 
 interface SideState {
@@ -71,15 +76,15 @@ interface SideState {
 }
 
 const selectStyle: React.CSSProperties = {
-  background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+  background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
   borderRadius: 4, padding: '5px 8px', fontFamily: 'inherit', fontSize: 15,
   minWidth: 0, cursor: 'pointer',
 };
 
 const smallBtn = (enabled: boolean, accent = false): React.CSSProperties => ({
-  background: enabled && accent ? '#FF3D8E' : 'transparent',
-  color: !enabled ? '#4A5168' : accent ? '#0B0D12' : '#C9CEDA',
-  border: `1px solid ${enabled ? (accent ? '#FF3D8E' : '#323A50') : '#232838'}`,
+  background: enabled && accent ? '#FF1F5A' : 'transparent',
+  color: !enabled ? '#4A5168' : accent ? '#09080C' : '#C9CEDA',
+  border: `1px solid ${enabled ? (accent ? '#FF1F5A' : '#3E3048') : '#2A2030'}`,
   borderRadius: 4, padding: '4px 10px', fontFamily: 'inherit', fontSize: 14,
   fontWeight: accent ? 700 : 500, cursor: enabled ? 'pointer' : 'default', whiteSpace: 'nowrap',
 });
@@ -110,7 +115,7 @@ function ModelPicker({
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minWidth: 0, flex: 1 }}>
-      <span style={{ fontSize: 13, fontWeight: 700, color: '#FF3D8E', letterSpacing: '0.04em' }}>{label}</span>
+      <span style={{ fontSize: 13, fontWeight: 700, color: '#FF1F5A', letterSpacing: '0.04em' }}>{label}</span>
       <select value={provider} onChange={e => onProvider(e.target.value)} style={{ ...selectStyle, flex: '0 0 auto' }}>
         {PROVIDER_LIST.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
       </select>
@@ -285,7 +290,7 @@ function treeOf(files: Record<string, string>): FileNode[] {
 }
 
 export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePanel(
-  { open, onClose, sandboxId, onUseBuild }, handleRef,
+  { open, onClose, sandboxId, onUseBuild, onNeedSandbox, onStartBlank, onOpenRepo }, handleRef,
 ) {
   const a = useSide('a');
   const b = useSide('b');
@@ -293,6 +298,9 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
   const [builds, setBuilds] = useState<SavedBuild[]>([]);
   const [showSaved, setShowSaved] = useState(false);
   const [storageError, setStorageError] = useState<string | null>(null);
+  const [repoUrl, setRepoUrl] = useState('');
+  const [opening, setOpening] = useState(false);
+  useEffect(() => { if (sandboxId) setOpening(false); }, [sandboxId]);
   const sending = a.state.busy || b.state.busy;
 
   const refreshBuilds = useCallback(() => {
@@ -319,10 +327,11 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
 
   const sendToBoth = useCallback(async (text: string) => {
     const t = text.trim();
-    if (!t || sending || !sandboxId) return;
+    if (!t || sending) return;
     setPrompt('');
+    if (!sandboxId) { onNeedSandbox?.(t); return; }
     await Promise.all([a.send(t), b.send(t)]);
-  }, [sending, sandboxId, a, b]);
+  }, [sending, sandboxId, a, b, onNeedSandbox]);
 
   useImperativeHandle(handleRef, () => ({
     runBrief: (brief, picks) => {
@@ -359,7 +368,7 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
     const hasFiles = Object.keys(s.state.files).length > 0;
     return (
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
-        <div style={{ padding: '8px 10px', borderBottom: '1px solid #191D27', flexShrink: 0,
+        <div style={{ padding: '8px 10px', borderBottom: '1px solid #18151D', flexShrink: 0,
           display: 'flex', flexDirection: 'column', gap: 6 }}>
           <ModelPicker
             label={label}
@@ -382,7 +391,7 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
               disabled={!hasFiles || s.state.busy}
               title="Copy this version into your project and keep building it with your persona"
               style={smallBtn(hasFiles && !s.state.busy, true)}>✓ Use this one</button>
-            <span style={{ fontSize: 13, color: '#9198AA' }}>
+            <span style={{ fontSize: 13, color: '#A39AA8' }}>
               {s.state.note || (hasFiles ? `${Object.keys(s.state.files).length} file${Object.keys(s.state.files).length === 1 ? '' : 's'}` : '')}
             </span>
           </div>
@@ -409,7 +418,7 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
             onFileChanges={(changes) => s.onFileChanges(changes, sandboxId)}
           />
         </div>
-        <div style={{ flex: '1 1 55%', minHeight: 0, borderTop: '1px solid #191D27', overflow: 'hidden', display: 'flex' }}>
+        <div style={{ flex: '1 1 55%', minHeight: 0, borderTop: '1px solid #18151D', overflow: 'hidden', display: 'flex' }}>
           <PreviewPanel key={s.dir} sandboxId={sandboxId} detectedPort={null} defaultPort={port}
             dir={s.dir} autoStartKey={s.state.previewKick} />
         </div>
@@ -419,18 +428,39 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
 
   return (
     <div style={{
-      position: 'fixed', inset: 0, zIndex: 50, background: '#0B0D12',
+      position: 'fixed', inset: 0, zIndex: 50, background: '#09080C',
       display: open ? 'flex' : 'none', flexDirection: 'column',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
-        borderBottom: '1px solid #191D27', flexShrink: 0, flexWrap: 'wrap' }}>
-        <strong style={{ color: '#FF3D8E', fontSize: 15, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+        borderBottom: '1px solid #18151D', flexShrink: 0, flexWrap: 'wrap' }}>
+        <strong style={{ color: '#FF1F5A', fontSize: 15, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
           Compare
         </strong>
         {!sandboxId && (
-          <span style={{ fontSize: 14, color: '#ffcc66' }}>
-            Open a blank project or GitHub repo first — Compare needs a sandbox to run both previews.
-          </span>
+          <div data-testid="compare-open-project" style={{ flexBasis: '100%', display: 'flex', gap: 8, flexWrap: 'wrap',
+            alignItems: 'center' }}>
+            <span style={{ fontSize: 14, color: '#ffcc66' }}>
+              No project open yet — start a blank one, clone a repo, or just send a prompt.
+            </span>
+            {onStartBlank && (
+              <button type="button" onClick={() => { setOpening(true); void Promise.resolve(onStartBlank()).finally(() => setOpening(false)); }} disabled={opening}
+                style={smallBtn(!opening, true)}>
+                {opening ? 'Opening…' : 'Start blank project'}
+              </button>
+            )}
+            {onOpenRepo && (
+              <form onSubmit={e => { e.preventDefault(); if (repoUrl.trim()) { setOpening(true); void Promise.resolve(onOpenRepo(repoUrl.trim())).finally(() => setOpening(false)); } }}
+                style={{ display: 'flex', gap: 6, flex: '1 1 260px', minWidth: 0 }}>
+                <input value={repoUrl} onChange={e => setRepoUrl(e.target.value)}
+                  placeholder="github.com/owner/repo"
+                  style={{ flex: 1, minWidth: 0, background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
+                    borderRadius: 4, padding: '6px 10px', fontFamily: 'inherit', fontSize: 15 }} />
+                <button type="submit" disabled={opening || !repoUrl.trim()} style={smallBtn(!opening && !!repoUrl.trim())}>
+                  Clone
+                </button>
+              </form>
+            )}
+          </div>
         )}
         <div style={{ flex: 1, display: 'flex', gap: 8, minWidth: 240 }}>
           <input
@@ -438,38 +468,37 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
             onChange={e => setPrompt(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void sendToBoth(prompt); } }}
             placeholder="Describe what to build — or send a brief from your persona with ⇄"
-            disabled={sending || !sandboxId}
-            style={{ flex: 1, background: '#12151D', color: '#ECEEF3', border: '1px solid #232838',
+            style={{ flex: 1, background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
               borderRadius: 4, padding: '7px 10px', fontFamily: 'inherit', fontSize: 15, minWidth: 0 }}
           />
-          <button type="button" onClick={() => void sendToBoth(prompt)} disabled={sending || !prompt.trim() || !sandboxId}
-            style={smallBtn(!sending && !!prompt.trim() && !!sandboxId, true)}>
+          <button type="button" onClick={() => void sendToBoth(prompt)} disabled={sending || !prompt.trim()}
+            style={smallBtn(!sending && !!prompt.trim(), true)}>
             {sending ? 'Building…' : 'Send to both'}
           </button>
         </div>
         <button type="button" data-testid="compare-saved-toggle" onClick={() => { refreshBuilds(); setShowSaved(v => !v); }}
           style={smallBtn(true)}>★ Saved ({builds.length})</button>
         <button type="button" onClick={onClose} title="Close Compare"
-          style={{ background: 'transparent', color: '#9198AA', border: '1px solid #232838',
+          style={{ background: 'transparent', color: '#A39AA8', border: '1px solid #2A2030',
             borderRadius: 4, width: 28, height: 28, cursor: 'pointer', fontSize: 16, flexShrink: 0 }}>
           ×
         </button>
       </div>
       {showSaved && (
-        <div data-testid="compare-saved-list" style={{ borderBottom: '1px solid #191D27', padding: '8px 14px',
+        <div data-testid="compare-saved-list" style={{ borderBottom: '1px solid #18151D', padding: '8px 14px',
           maxHeight: 240, overflowY: 'auto', flexShrink: 0, background: '#0F1218' }}>
           {storageError && <div style={{ color: '#ff8a8a', fontSize: 14 }}>{storageError}</div>}
           {!builds.length && !storageError && (
-            <div style={{ color: '#9198AA', fontSize: 14 }}>
+            <div style={{ color: '#A39AA8', fontSize: 14 }}>
               Nothing saved yet. ★ Save a version you like and it stays here, even after re-runs or a new sandbox.
             </div>
           )}
           {builds.map(build => (
             <div key={build.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '5px 0',
-              borderBottom: '1px solid #171B26', flexWrap: 'wrap' }}>
-              <span style={{ flex: 1, minWidth: 200, fontSize: 14, color: '#ECEEF3' }}>
+              borderBottom: '1px solid #16131B', flexWrap: 'wrap' }}>
+              <span style={{ flex: 1, minWidth: 200, fontSize: 14, color: '#F2ECEF' }}>
                 ★ {build.title}
-                <span style={{ color: '#656C7E' }}> · {build.model} · {Object.keys(build.files).length} files · {new Date(build.createdAt).toLocaleString()}</span>
+                <span style={{ color: '#756B7B' }}> · {build.model} · {Object.keys(build.files).length} files · {new Date(build.createdAt).toLocaleString()}</span>
               </span>
               <button type="button" style={smallBtn(true, true)}
                 onClick={() => void onUseBuild({ title: build.title, provider: build.provider, model: build.model, files: build.files })}>
@@ -486,7 +515,7 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
         </div>
       )}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
-        <div style={{ flex: 1, minWidth: 0, borderRight: '1px solid #191D27', display: 'flex' }}>
+        <div style={{ flex: 1, minWidth: 0, borderRight: '1px solid #18151D', display: 'flex' }}>
           {side(a, 'A', 3000)}
         </div>
         <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>

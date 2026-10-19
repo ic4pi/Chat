@@ -205,9 +205,24 @@ export function looksLikeLegacyWelcome(text: string): boolean {
  * User wants ideas / review / recommendations — NOT automatic code writes.
  * "suggest additions and fixes" must stay here.
  */
+/**
+ * The ask names something to be produced — "a full HTML file", "build a page",
+ * "code only". Long content briefs say "review", "ideas" or "how would" in
+ * passing; that must not turn a build order into advice-only.
+ */
+export function hasExplicitBuildIntent(text: string): boolean {
+  const t = text.toLowerCase();
+  // Said outright that nothing should be written.
+  if (/\b(just|only) (suggest|advise|review|audit|discuss)|\b(don'?t|do not) (write|change|modify|build|create|apply)|\bwithout (changing|writing|editing|building)|\b(review|audit|suggest)[- ]only\b/.test(t)) return false;
+  if (/\b(code only|only (the )?code|just (the )?code|only code output|output only (the )?code|no explanation)\b/.test(t)) return true;
+  if (/\b(full|complete|entire|whole|single)\b[^.\n]{0,30}\b(html|file|page|webpage|app|site|script|component|document)\b/.test(t)) return true;
+  return /\b(build|create|generate|make|write|produce|give me|code up)\b[^.\n]{0,60}\b(html|webpage|web page|landing page|page|app|website|site|game|tool|component|script|file)\b/.test(t);
+}
+
 export function looksLikeSuggestRequest(text: string): boolean {
   const t = text.toLowerCase();
   if (t.length < 4) return false;
+  if (hasExplicitBuildIntent(t)) return false;
   return /\b(suggest|suggestion|recommend|recommendation|advice|advise|ideas?|feedback|audit|review|assess(?:ment)?|analy[sz]e|inspect|improvements?|additions?|what should|how (can|should|would)|tell me what|look at (the )?repo|read (the )?repo|what('?s| is) wrong)\b/.test(t);
 }
 
@@ -219,6 +234,7 @@ export function looksLikeApplyRequest(text: string): boolean {
   if (looksLikeSuggestRequest(t)) {
     return /\b(apply (it|them|this|the changes)|implement (it|them|this|now)|go ahead and (fix|change|write)|do it now|write the (fix|code|files)|save (it|them|the fix))\b/.test(t);
   }
+  if (hasExplicitBuildIntent(t)) return true;
   return /\b(apply|implement|write the|do it|go ahead|ship it|save (it|the)|patch it|fix (it|this|my|the)|build|create|add|update|refactor|rewrite|replace|delete|remove|rename|make the)\b/.test(t);
 }
 
@@ -300,4 +316,91 @@ export function nudgeAfterRejects(rejected: RejectedFileChange[]): string {
     '<complete file>\n' +
     '```'
   );
+}
+
+
+// ── long single-file replies (e.g. a whole HTML page) ────────────────────
+
+/** The continuation markers the server appends; never part of the content. */
+export function stripContinueMarkers(text: string): string {
+  return text.replace(/\s*⟦\s*(?:MORE|DONE)\s*⟧\s*/gi, '\n').replace(/[ \t]+$/gm, '').trimEnd();
+}
+
+/**
+ * Join a continuation onto a cut-off reply. Models often repeat the last lines,
+ * reopen the fence or File: header, or start the whole file over; none of that
+ * may end up inside the saved file.
+ */
+export function mergeContinuation(prevRaw: string, nextRaw: string): string {
+  const prev = stripContinueMarkers(prevRaw);
+  let next = stripContinueMarkers(nextRaw);
+  const open = (prev.match(/```/g) || []).length % 2 === 1;
+
+  if (!open) return `${prev}\n${next.replace(/^\s+/, '')}`;
+
+  // Inside a code block: the model picks up right after the last character, so
+  // join with nothing in between (a cut can land mid-token).
+  // Reopened File: header and/or fence: keep the body only.
+  next = next.replace(/^\s*File:[^\n]*\n/i, '').replace(/^\s*```[\w+\-.]*\n/, '');
+  // Started the file over: resume after the point we already reached.
+  const head = /^\s*(<!DOCTYPE[^\n]*|<html[^\n]*)/i.exec(next);
+  if (head && prev.includes(head[1]!.trim())) {
+    const probe = prev.slice(-80);
+    const at = next.indexOf(probe);
+    next = at >= 0 ? next.slice(at + probe.length) : '';
+  }
+  // Repeated tail: drop the overlap.
+  for (let len = Math.min(prev.length, next.length, 1500); len >= 30; len--) {
+    if (next.startsWith(prev.slice(-len))) { next = next.slice(len); break; }
+  }
+  return next.trim() ? prev + next : prev;
+}
+
+/** What to tell the model when its reply was cut off mid-output. */
+export function continuationPrompt(partial: string): string {
+  const tail = stripContinueMarkers(partial).slice(-600);
+  return 'Your previous reply was cut off mid-output. It ended exactly with:\n<<<TAIL\n' + tail + '\nTAIL>>>\n'
+    + 'Continue IMMEDIATELY after that last character. Do not repeat any earlier text, do not restart the file, '
+    + 'do not write a new File: header, <!DOCTYPE or opening fence. If you were inside a fenced block, keep writing '
+    + 'the code and close the fence only when the file is complete. No apology, no commentary.';
+}
+
+/**
+ * A complete HTML document in the reply with no File: header would never be
+ * saved or previewed. Give it a header (named from its <title>) so it lands
+ * in the project like any other file.
+ */
+export function adoptBareHtmlDocument(reply: string): string {
+  if (/^\s*(?:\*\*)?(?:File|Edit):\s*\S+/im.test(reply)) return reply;
+  const fenced = /```(?:html|htm)?[ \t]*\n(\s*<!DOCTYPE html[\s\S]*?<\/html>\s*)```/i.exec(reply);
+  let doc: string | null = null;
+  let before = '';
+  let after = '';
+  if (fenced) {
+    doc = fenced[1]!;
+    before = reply.slice(0, fenced.index);
+    after = reply.slice(fenced.index + fenced[0].length);
+  } else {
+    const bare = /(<!DOCTYPE html[\s\S]*?<\/html>)/i.exec(reply);
+    if (bare) { doc = bare[1]!; before = reply.slice(0, bare.index); after = reply.slice(bare.index + bare[0].length); }
+  }
+  if (!doc) return reply;
+  const title = /<title[^>]*>([^<]{1,80})<\/title>/i.exec(doc)?.[1] ?? '';
+  const slug = title.toLowerCase().replace(/&amp;/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'index';
+  return `${before}File: ${slug}.html\n\`\`\`html\n${doc.trim()}\n\`\`\`${after}`;
+}
+
+/**
+ * Some coder models act like they have file tools: they answer with lines such as
+ * `**Read:** /workspace/x/.gitignore`, then a ⟦MORE⟧ marker and nothing else.
+ * No file ever gets written. True for that reply (or an empty one), so the turn
+ * can be retried with a plain "write the file now" instruction.
+ */
+export function looksLikeToolMimic(reply: string): boolean {
+  const t = String(reply || '').replace(/⟦\s*(?:MORE|DONE)\s*⟧|\[\s*MORE\s*\]/gi, '').trim();
+  if (!t || t === '(empty response)') return true;
+  if (/```|(?:^|\n)\s*(?:File|Edit):\s*\S/.test(t)) return false;
+  const lines = t.split('\n').map((l) => l.trim()).filter(Boolean);
+  const toolish = lines.filter((l) => /^\*{0,2}(?:Read|List|Open|Search|Run|cat|ls)\*{0,2}:?\*{0,2}\s*\/?[\w./-]+/i.test(l) && /^\*{0,2}(?:Read|List|Open|Search|Run|cat|ls)\b/i.test(l));
+  return toolish.length > 0 && toolish.length >= lines.length - 1;
 }

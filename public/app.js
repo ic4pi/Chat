@@ -3643,9 +3643,13 @@ async function sendMessage(text) {
   // and if it doesn't, we still do, because the user said so.
   // The orchestrator is the one who takes the chat over. The user asking is only the backup, for when
   // it does not act or hangs: then the move happens anyway.
-  const userWantsMove = chat.kind === 'chat' && (userSaysReadyToBuild(text) || userAsksForCodeSpace(text));
   const hasSubstance = () => chat.messages.filter((m) => m.role === 'user' && !m.autoContinue).length > 1;
-  let moveFallbackTimer = null;
+  // Code Space opens only on the user's own action: its button, or this typed request. Never a timer or the persona.
+  if (chat.kind === 'chat' && (userSaysReadyToBuild(text) || userAsksForCodeSpace(text))) {
+    saveState();
+    openInWorkspace({ autoBrief: hasSubstance() });
+    return;
+  }
 
   // Answer to "marketing meeting first?" — only the very next message counts;
   // anything that isn't a yes/no is a normal message (they moved on).
@@ -3703,15 +3707,6 @@ async function sendMessage(text) {
   let autoRound = 0;
   let emptyTimeoutRetries = 0;
   let firstAssistantTs = null;
-  if (userWantsMove) {
-    moveFallbackTimer = setTimeout(() => {
-      moveFallbackTimer = null;
-      if (activeChat()?.id !== chat.id || !chatBusy) return;
-      noteCodeSpaceMove(chat);
-      goToCodeSpaceSoon(chat, { autoBrief: hasSubstance(), delayMs: 300 });
-    }, CODE_SPACE_HANG_MS);
-  }
-
   try {
     while (true) {
       const apiMessages = chat.messages
@@ -3806,7 +3801,7 @@ async function sendMessage(text) {
             }
           }
         },
-        { codeSpaceHandoff: true },
+        {},
       );
       let usedFallback = null;
 
@@ -3836,7 +3831,7 @@ async function sendMessage(text) {
                 speakNewSentences();
               }
             },
-            { codeSpaceHandoff: true },
+            {},
           );
           if (retry.ok) {
             attempt = retry;
@@ -4031,12 +4026,6 @@ async function sendMessage(text) {
     if (personaSaidGo) lastMsg.content = stripCodeSpaceMarker(lastMsg.content).trim();
     saveState();
     void triggerSmartReplies(chat);
-    if (!activeChatUserStopped && chat.kind === 'chat'
-      && ((personaSaidGo && lastMsg?.role === 'assistant') || (userWantsMove && !personaSaidGo))) {
-      // The orchestrator said it in its own words; only add a line when it did not.
-      if (!personaSaidGo) noteCodeSpaceMove(chat);
-      goToCodeSpaceSoon(chat, { autoBrief: userWantsMove ? hasSubstance() : true });
-    }
   } catch (err) {
     const idx = chat.messages.findIndex((m) => m.role === 'assistant' && m.streaming);
     if (idx !== -1) {
@@ -4059,12 +4048,7 @@ async function sendMessage(text) {
     }
     saveState();
     renderMessages({ scroll: 'bottom' });
-    if (userWantsMove && !activeChatUserStopped) {
-      noteCodeSpaceMove(chat);
-      goToCodeSpaceSoon(chat, { autoBrief: hasSubstance() });
-    }
   } finally {
-    if (moveFallbackTimer) { clearTimeout(moveFallbackTimer); moveFallbackTimer = null; }
     if (tickTimer) clearInterval(tickTimer);
     setGeneratingUi(false);
     activeChatUserStopped = false;
@@ -5175,7 +5159,11 @@ els.input.addEventListener('keydown', (e) => {
       setTypingActive(true, 'Stopping…');
     }
   }
-  // Enter is just a newline now — there's already a Send button for sending.
+  // Enter is a newline; Ctrl+Enter (Cmd+Enter on a Mac) sends, same as the Send button.
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+    e.preventDefault();
+    if (!chatBusy && els.input.value.trim()) document.getElementById('inputForm')?.requestSubmit();
+  }
 });
 
 function handleNewChat() {
@@ -6464,37 +6452,6 @@ function userSaysReadyToBuild(text) {
 function userAsksForCodeSpace(text) {
   const t = String(text || '').trim();
   return t.length > 0 && t.length <= 120 && (ASK_FOR_CODE_SPACE_RE.test(t) || /^\W*(code|work)\s?space\W*$/i.test(t));
-}
-
-// How long the orchestrator gets to answer before a user's ask for the Code Space is honoured anyway.
-const CODE_SPACE_HANG_MS = 25_000;
-
-let codeSpaceTimer = null;
-
-function cancelCodeSpaceHandoff() {
-  if (codeSpaceTimer) { clearTimeout(codeSpaceTimer); codeSpaceTimer = null; }
-}
-
-/**
- * Seamless, not abrupt, and with nothing new on screen: the persona's own sentence says it is
- * going, a couple of seconds let it be read, then the Code Space opens. Typing in the composer
- * means the user is not done talking, so it quietly stands down.
- */
-function goToCodeSpaceSoon(chat, opts = {}) {
-  cancelCodeSpaceHandoff();
-  els.input?.addEventListener('input', cancelCodeSpaceHandoff, { once: true });
-  codeSpaceTimer = setTimeout(() => {
-    codeSpaceTimer = null;
-    if (activeChat()?.id !== chat.id) return;
-    openInWorkspace({ autoBrief: opts.autoBrief === true });
-  }, opts.delayMs ?? 2500);
-}
-
-/** A plain line in the transcript (same style as "Stopped.") when the persona did not say it itself. */
-function noteCodeSpaceMove(chat) {
-  chat.messages.push({ role: 'info', content: 'Taking this to the Code Space.', ts: Date.now() });
-  saveState();
-  renderMessages({ scroll: 'bottom' });
 }
 
 function openInWorkspace(opts = {}) {
