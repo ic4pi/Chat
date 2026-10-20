@@ -33,20 +33,31 @@
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/styles.css" />
 <style>
-#splash{position:fixed;inset:0;z-index:99999;background:#09080C;display:flex;align-items:center;justify-content:center;transition:opacity .5s ease,visibility .5s}
+#splash{position:fixed;inset:0;z-index:99999;background:#000;display:flex;align-items:center;justify-content:center;transition:opacity .45s ease,visibility .45s;cursor:pointer}
 #splash.done{opacity:0;visibility:hidden;pointer-events:none}
-#splash img{height:min(62vh,520px);width:auto;opacity:0;filter:drop-shadow(0 0 14px rgba(255,31,90,.7)) drop-shadow(0 0 40px rgba(255,31,90,.45));animation:neonOn 1.5s steps(1,end) .15s forwards,neonPulse 2.4s ease-in-out 1.7s infinite}
-@keyframes neonOn{0%{opacity:0}8%{opacity:.9}12%{opacity:.1}20%{opacity:.8}26%{opacity:.2}38%{opacity:1}44%{opacity:.35}56%,100%{opacity:1}}
-@keyframes neonPulse{0%,100%{filter:drop-shadow(0 0 14px rgba(255,31,90,.7)) drop-shadow(0 0 40px rgba(255,31,90,.45))}50%{filter:drop-shadow(0 0 22px rgba(255,31,90,.95)) drop-shadow(0 0 64px rgba(255,31,90,.7))}}
-@media (prefers-reduced-motion:reduce){#splash img{animation:none;opacity:1}}
+#splash .lk{position:relative;width:min(92vw,calc(72vh*.7243),560px);aspect-ratio:775/1070;animation:lkOut .5s ease-in 3.1s forwards}
+#splash .lk img{position:absolute;display:block;mix-blend-mode:screen;opacity:0;height:auto}
+#splash .bk{position:absolute;left:0;top:34%;width:100%;height:60%;background:radial-gradient(closest-side,#000 62%,rgba(0,0,0,0) 100%);opacity:0;animation:bkIn .5s ease-out 1.2s forwards}
+@keyframes bkIn{to{opacity:1}}
+#splash .cat{left:0;top:0;width:100%;animation:neonOn 1.1s steps(1,end) .1s forwards,catPulse 2.2s ease-in-out 1.3s infinite}
+#splash .pl{left:4.77%;top:37.2%;width:32.5%;animation:fromL .55s cubic-bezier(.2,.9,.2,1) 1.25s forwards}
+#splash .pj{left:37.3%;top:37.2%;width:28%;animation:drop .6s cubic-bezier(.2,.9,.2,1) 1.45s forwards}
+#splash .pr{left:65.3%;top:37.2%;width:29.9%;animation:fromR .55s cubic-bezier(.2,.9,.2,1) 1.25s forwards}
+@keyframes neonOn{0%{opacity:0}10%{opacity:.85}16%{opacity:.08}28%{opacity:.8}34%{opacity:.15}50%{opacity:1}58%{opacity:.4}70%,100%{opacity:1}}
+@keyframes catPulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.35) saturate(1.2)}}
+@keyframes fromL{from{opacity:0;transform:translateX(-70%) scale(1.4);filter:blur(10px) brightness(1)}60%{filter:blur(0) brightness(2.6)}to{opacity:1;transform:none;filter:brightness(1)}}
+@keyframes fromR{from{opacity:0;transform:translateX(70%) scale(1.4);filter:blur(10px)}60%{filter:blur(0) brightness(2.6)}to{opacity:1;transform:none;filter:brightness(1)}}
+@keyframes drop{from{opacity:0;transform:translateY(-90%) scale(1.6);filter:blur(12px)}60%{filter:blur(0) brightness(2.6)}to{opacity:1;transform:none;filter:brightness(1)}}
+@keyframes lkOut{to{opacity:0;transform:scale(1.08)}}
+@media (prefers-reduced-motion:reduce){#splash .lk,#splash .lk img{animation:none!important;opacity:1;transform:none;filter:none}}
 </style>
 </head>
 <body>
-<div id="splash" aria-hidden="true"><img src="/splash-cat.png" alt="" /></div>
+<div id="splash" aria-hidden="true"><div class="lk"><img class="cat" src="/intro-cat.jpg" alt="" /><div class="bk"></div><img class="pl" src="/intro-l.jpg" alt="" /><img class="pj" src="/intro-j.jpg" alt="" /><img class="pr" src="/intro-r.jpg" alt="" /></div></div>
 <script>
 (function(){var t0=Date.now(),sp=document.getElementById("splash");function hide(){if(sp)sp.classList.add("done");setTimeout(function(){sp&&sp.remove()},700)}
-function go(){setTimeout(hide,Math.max(0,1900-(Date.now()-t0)))}
-if(document.readyState==="complete")go();else addEventListener("load",go);setTimeout(hide,6000)})();
+function go(){setTimeout(hide,Math.max(0,3400-(Date.now()-t0)))}
+if(document.readyState==="complete")go();else addEventListener("load",go);setTimeout(hide,6500);if(sp)sp.addEventListener("click",hide)})();
 </script>
 
 <!-- Both sidebar columns start collapsed (0-width) by default — see the
