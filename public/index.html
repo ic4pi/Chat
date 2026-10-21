@@ -70,7 +70,7 @@
 (function(){var sp=document.getElementById("splash");if(!sp)return;
 var same=false;try{same=!!document.referrer&&new URL(document.referrer).origin===location.origin}catch(e){}
 var seen=false;try{seen=!!sessionStorage.getItem("jive_intro")}catch(e){}
-if(same||seen){sp.remove();return}
+if((same||seen)&&!/[?&]intro\b/.test(location.search)){sp.remove();return}
 try{sessionStorage.setItem("jive_intro","1")}catch(e){}
 var hidden=false;function hide(){if(hidden)return;hidden=true;sp.classList.add("done");setTimeout(function(){sp.remove()},700)}
 sp.addEventListener("click",hide);setTimeout(hide,7500);
