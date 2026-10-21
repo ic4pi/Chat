@@ -58,13 +58,12 @@
 <body>
 <div id="splash" aria-hidden="true"><div class="lk"><img class="cat" src="/intro-cat.jpg?v=5" alt="" /><img class="eyes" src="/intro-cat.jpg?v=5" alt="" /><img class="bk" src="/intro-bk.png?v=5" alt="" /><img class="pl" src="/intro-l.jpg?v=5" alt="" /><img class="pj" src="/intro-j.jpg?v=5" alt="" /><img class="pr" src="/intro-r.jpg?v=5" alt="" /></div><div class="bar"><i></i></div></div>
 <script>
-// The intro plays only when someone arrives from another site (or opens the app cold), once per
-// browser session. Moving between chat and Code Space is same-origin, so it never replays.
+// The intro plays every time someone arrives from another page or site (or opens the app fresh).
+// A refresh, back/forward, or a same-site move (chat <-> Code Space) skips it.
 (function(){var sp=document.getElementById("splash");if(!sp)return;
 var same=false;try{same=!!document.referrer&&new URL(document.referrer).origin===location.origin}catch(e){}
-var seen=false;try{seen=!!sessionStorage.getItem("jive_intro2")}catch(e){}
-if((same||seen)&&!/[?&]intro\b/.test(location.search)){sp.remove();return}
-try{sessionStorage.setItem("jive_intro2","1")}catch(e){}
+var nav="navigate";try{var e=performance.getEntriesByType("navigation")[0];if(e&&e.type)nav=e.type}catch(e){}
+if((same||nav!=="navigate")&&!/[?&]intro\b/.test(location.search)){sp.remove();return}
 var hidden=false;function hide(){if(hidden)return;hidden=true;sp.classList.add("done");setTimeout(function(){sp.remove()},700)}
 sp.addEventListener("click",hide);setTimeout(hide,9000);
 var imgs=[].slice.call(sp.querySelectorAll("img")),n=imgs.length,started=false;
