@@ -69,9 +69,9 @@
 // browser session. Moving between chat and Code Space is same-origin, so it never replays.
 (function(){var sp=document.getElementById("splash");if(!sp)return;
 var same=false;try{same=!!document.referrer&&new URL(document.referrer).origin===location.origin}catch(e){}
-var seen=false;try{seen=!!sessionStorage.getItem("jive_intro")}catch(e){}
+var seen=false;try{seen=!!sessionStorage.getItem("jive_intro2")}catch(e){}
 if((same||seen)&&!/[?&]intro\b/.test(location.search)){sp.remove();return}
-try{sessionStorage.setItem("jive_intro","1")}catch(e){}
+try{sessionStorage.setItem("jive_intro2","1")}catch(e){}
 var hidden=false;function hide(){if(hidden)return;hidden=true;sp.classList.add("done");setTimeout(function(){sp.remove()},700)}
 sp.addEventListener("click",hide);setTimeout(hide,7500);
 var imgs=[].slice.call(sp.querySelectorAll("img")),n=imgs.length,started=false;
