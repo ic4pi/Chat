@@ -1274,4 +1274,4 @@ button:hover:not(:disabled) { text-shadow: 0 0 8px rgba(255,46,99,.5); }
 .brand-logo{height:58px;width:auto;flex:0 0 auto;filter:drop-shadow(0 0 8px rgba(255,46,99,.5))}
 .brand-wordmark{height:44px;width:auto;flex:0 0 auto;filter:drop-shadow(0 0 8px rgba(255,46,99,.45))}
 .topbar-wordmark{height:26px;width:auto;flex:0 0 auto;margin-right:6px;filter:drop-shadow(0 0 6px rgba(255,46,99,.45))}
-.topbar-logo{height:30px;width:auto;flex:0 0 auto;margin-right:2px;filter:drop-shadow(0 0 6px rgba(255,46,99,.5))}
+.topbar-logo{height:40px;width:auto;flex:0 0 auto;margin-right:2px;filter:drop-shadow(0 0 6px rgba(255,46,99,.5))}
