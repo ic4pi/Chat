@@ -1275,3 +1275,6 @@ button:hover:not(:disabled) { text-shadow: 0 0 8px rgba(255,46,99,.5); }
 .brand-wordmark{height:44px;width:auto;flex:0 0 auto;filter:drop-shadow(0 0 8px rgba(255,46,99,.45))}
 .topbar-wordmark{height:26px;width:auto;flex:0 0 auto;margin-right:6px;filter:drop-shadow(0 0 6px rgba(255,46,99,.45))}
 .topbar-logo{height:40px;width:auto;flex:0 0 auto;margin-right:2px;filter:drop-shadow(0 0 6px rgba(255,46,99,.5))}
+
+/* The sidebar carries its own logo and wordmark; while it is open, the top bar's copy stays out of the way. */
+#app.chats-open .topbar-logo, #app.chats-open .topbar-wordmark { display: none; }
