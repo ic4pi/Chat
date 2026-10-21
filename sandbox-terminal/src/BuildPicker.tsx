@@ -124,7 +124,7 @@ export function BuildPicker({ seats, teamOptions, teamStars = {}, lockedNote, pr
 
   return (
     <div data-testid="build-picker" style={{ marginTop: 8, padding: '10px 12px', borderRadius: 6,
-      border: '1px solid rgba(255,31,90,.45)', background: 'rgba(255,31,90,.05)', display: 'flex',
+      border: '1px solid rgba(255,46,99,.45)', background: 'rgba(255,46,99,.05)', display: 'flex',
       flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <strong style={{ fontSize: 13, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#FF8FA8' }}>
@@ -173,7 +173,7 @@ export function BuildPicker({ seats, teamOptions, teamStars = {}, lockedNote, pr
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <button type="button" data-testid="build-go"
           onClick={() => onBuild({ builder, fixer, second: compare ? second : null })}
-          style={{ background: '#FF1F5A', color: '#09080C', border: 'none', borderRadius: 4, padding: '6px 16px',
+          style={{ background: '#FF2E63', color: '#09080C', border: 'none', borderRadius: 4, padding: '6px 16px',
             fontFamily: 'inherit', fontSize: 15, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
           {compare ? 'Build both' : 'Build it'}
         </button>
@@ -185,7 +185,7 @@ export function BuildPicker({ seats, teamOptions, teamStars = {}, lockedNote, pr
               const name = window.prompt('Name this team', current)?.trim();
               if (name) onSaveTeam(name, { ...seats, build: builder, fix: fixer });
             }}
-            style={{ background: 'transparent', color: '#FF8FA8', border: '1px solid rgba(255,31,90,.45)', borderRadius: 4,
+            style={{ background: 'transparent', color: '#FF8FA8', border: '1px solid rgba(255,46,99,.45)', borderRadius: 4,
               padding: '5px 10px', fontFamily: 'inherit', fontSize: 14, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
             ★ Save team
           </button>

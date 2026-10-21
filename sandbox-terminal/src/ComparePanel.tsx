@@ -82,9 +82,9 @@ const selectStyle: React.CSSProperties = {
 };
 
 const smallBtn = (enabled: boolean, accent = false): React.CSSProperties => ({
-  background: enabled && accent ? '#FF1F5A' : 'transparent',
+  background: enabled && accent ? '#FF2E63' : 'transparent',
   color: !enabled ? '#4A5168' : accent ? '#09080C' : '#C9CEDA',
-  border: `1px solid ${enabled ? (accent ? '#FF1F5A' : '#3E3048') : '#2A2030'}`,
+  border: `1px solid ${enabled ? (accent ? '#FF2E63' : '#3E3048') : '#2A2030'}`,
   borderRadius: 4, padding: '4px 10px', fontFamily: 'inherit', fontSize: 14,
   fontWeight: accent ? 700 : 500, cursor: enabled ? 'pointer' : 'default', whiteSpace: 'nowrap',
 });
@@ -115,7 +115,7 @@ function ModelPicker({
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minWidth: 0, flex: 1 }}>
-      <span style={{ fontSize: 13, fontWeight: 700, color: '#FF1F5A', letterSpacing: '0.04em' }}>{label}</span>
+      <span style={{ fontSize: 13, fontWeight: 700, color: '#FF2E63', letterSpacing: '0.04em' }}>{label}</span>
       <select value={provider} onChange={e => onProvider(e.target.value)} style={{ ...selectStyle, flex: '0 0 auto' }}>
         {PROVIDER_LIST.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
       </select>
@@ -433,7 +433,7 @@ export const ComparePanel = forwardRef<CompareHandle, Props>(function ComparePan
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
         borderBottom: '1px solid #18151D', flexShrink: 0, flexWrap: 'wrap' }}>
-        <strong style={{ color: '#FF1F5A', fontSize: 15, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+        <strong style={{ color: '#FF2E63', fontSize: 15, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
           Compare
         </strong>
         {!sandboxId && (

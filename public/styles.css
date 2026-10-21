@@ -23,9 +23,10 @@
 
   /* Brand accent — the pink half of the gradient mark, used as the solid
      "accent" color anywhere a single tone (not a gradient) is needed. */
-  --brass:      #FF1F5A;
+  --brass:      #FF2E63;
   --brass-lt:   #FF5C84;
-  --brass-dk:   #C8123F;
+  --grad:       linear-gradient(135deg,#FF2D87 0%,#FF3F5E 50%,#FF6A2B 100%);
+  --brass-dk:   #D81E4E;
   --copper:     #34D399;
   --brass-ink:  #FFFFFF;
 
@@ -707,9 +708,9 @@ body::before {
 #sendBtn {
   width: 37px; height: 37px; flex: 0 0 auto;
   display: grid; place-items: center; border-radius: 50%;
-  background: linear-gradient(180deg, var(--brass-lt), var(--brass-dk));
+  background: var(--grad);
   color: var(--brass-ink);
-  border: 1px solid var(--brass-dk);
+  border: 1px solid transparent;
   font-size: 0;
   box-shadow: var(--shadow-sm);
   transition: transform .15s var(--ease);
@@ -1254,22 +1255,22 @@ body.kb-open .context-row { padding: 0; }
    Neon pass — glow on the accent, same palette. Appended last so it wins.
    ============================================================================= */
 :root {
-  --neon-glow:   0 0 10px rgba(255,31,90,.55), 0 0 28px rgba(255,31,90,.28);
-  --neon-glow-s: 0 0 0 1px rgba(255,31,90,.55), 0 0 14px rgba(255,31,90,.35);
+  --neon-glow:   0 0 10px rgba(255,46,99,.55), 0 0 28px rgba(255,46,99,.28);
+  --neon-glow-s: 0 0 0 1px rgba(255,46,99,.55), 0 0 14px rgba(255,46,99,.35);
 }
-body { background: radial-gradient(ellipse at 50% -10%, rgba(255,31,90,.07), transparent 55%), var(--bg); background-attachment: fixed; }
-.brand-mark { filter: drop-shadow(0 0 6px rgba(255,31,90,.65)); }
-.brand-word { text-shadow: 0 0 12px rgba(255,31,90,.55); }
+body { background: radial-gradient(ellipse at 50% -10%, rgba(255,46,99,.07), transparent 55%), var(--bg); background-attachment: fixed; }
+.brand-mark { filter: drop-shadow(0 0 6px rgba(255,46,99,.65)); }
+.brand-word { text-shadow: 0 0 12px rgba(255,46,99,.55); }
 :focus-visible { box-shadow: var(--neon-glow-s); }
 .input-row:focus-within { border-color: var(--brass); box-shadow: var(--neon-glow-s); }
 select:focus, input:focus, textarea:focus { border-color: var(--brass); box-shadow: var(--neon-glow-s); }
-button:hover:not(:disabled) { text-shadow: 0 0 8px rgba(255,31,90,.5); }
-::selection { background: rgba(255,31,90,.35); color: #fff; }
+button:hover:not(:disabled) { text-shadow: 0 0 8px rgba(255,46,99,.5); }
+::selection { background: rgba(255,46,99,.35); color: #fff; }
 ::-webkit-scrollbar-thumb { background: #3E3048; }
 ::-webkit-scrollbar-thumb:hover { background: var(--brass-dk); }
 #sendBtn:not(:disabled) { box-shadow: var(--neon-glow); }
 
 /* Brand lockup: cat mark + wordmark replace the star and text */
-.brand-logo{height:44px;width:auto;flex:0 0 auto;filter:drop-shadow(0 0 8px rgba(255,31,90,.5))}
-.brand-wordmark{height:20px;width:auto;flex:0 0 auto;filter:drop-shadow(0 0 8px rgba(255,31,90,.45))}
-.topbar-logo{height:30px;width:auto;flex:0 0 auto;margin-right:2px;filter:drop-shadow(0 0 6px rgba(255,31,90,.5))}
+.brand-logo{height:44px;width:auto;flex:0 0 auto;filter:drop-shadow(0 0 8px rgba(255,46,99,.5))}
+.brand-wordmark{height:20px;width:auto;flex:0 0 auto;filter:drop-shadow(0 0 8px rgba(255,46,99,.45))}
+.topbar-logo{height:30px;width:auto;flex:0 0 auto;margin-right:2px;filter:drop-shadow(0 0 6px rgba(255,46,99,.5))}

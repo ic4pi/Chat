@@ -223,7 +223,7 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
   const running = verifyState === 'running' || verifyState === 'detecting'
     || String(verifyState).startsWith('retry');
   const color = passed ? '#09080C' : failed ? '#fff' : '#09080C';
-  const bg = passed ? '#34D399' : failed ? '#8a1f1f' : '#FF1F5A';
+  const bg = passed ? '#34D399' : failed ? '#8a1f1f' : '#FF2E63';
   const shortCmd = testCommand
     ? (testCommand.length > 64 ? `${testCommand.slice(0, 64)}…` : testCommand)
     : '…';
@@ -245,7 +245,7 @@ function VerifyBanner({ verifyState, attempt, testCommand, askCommand, onRun, on
           style={{ flex: 1, background: '#16131B', color: '#F2ECEF', border: '1px solid #2A2030',
             borderRadius: 4, padding: '4px 8px', fontFamily: 'inherit', fontSize: 16, outline: 'none' }} />
         <button onClick={() => cmd.trim() && onSetCommand(cmd.trim())}
-          style={{ background: '#FF1F5A', color: '#09080C', border: 'none', borderRadius: 4,
+          style={{ background: '#FF2E63', color: '#09080C', border: 'none', borderRadius: 4,
             padding: '4px 12px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 15, fontWeight: 700 }}>
           Set & Run</button>
         <button onClick={onDismiss}
@@ -1571,26 +1571,26 @@ export function App() {
       borderBottom: '1px solid #18151D', background: '#09080C' }}>
       <div className="ws-topbar-row" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
         padding: '6px 12px' }}>
-        <a href="/" style={{ color: '#FF1F5A', fontSize: 16, textDecoration: 'none',
+        <a href="/" style={{ color: '#FF2E63', fontSize: 16, textDecoration: 'none',
           whiteSpace: 'nowrap', padding: '2px 0', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-          <img src="/logo-mark.png" alt="Jive" style={{ height: 30, width: 'auto', filter: 'drop-shadow(0 0 6px rgba(255,31,90,.5))' }} />
+          <img src="/logo-mark.png" alt="Jive" style={{ height: 30, width: 'auto', filter: 'drop-shadow(0 0 6px rgba(255,46,99,.5))' }} />
           ← Chat
         </a>
         <button type="button" onClick={() => { setHomeList(listSessions()); setShowHome(true); }}
           title="Browse saved code space conversations"
           style={{ background: showHome ? 'rgba(212,255,63,0.16)' : 'transparent',
-            color: '#FF1F5A', border: '1px solid #C8123F', borderRadius: 4,
+            color: '#FF2E63', border: '1px solid #D81E4E', borderRadius: 4,
             padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 14,
             fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
           Home
         </button>
-        <span style={{ color: '#FF1F5A', fontSize: 15, whiteSpace: 'nowrap',
+        <span style={{ color: '#FF2E63', fontSize: 15, whiteSpace: 'nowrap',
           overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 180 }}
           title={sessionTitle}>
           {sessionTitle}
         </span>
         {fromChat && (
-          <span style={{ fontSize: 14, color: '#C8123F', whiteSpace: 'nowrap' }}>
+          <span style={{ fontSize: 14, color: '#D81E4E', whiteSpace: 'nowrap' }}>
             from chat
           </span>
         )}
@@ -1638,8 +1638,8 @@ export function App() {
           title={orchPersona
             ? `You talk to ${orchPersona.name} (on ${orchPersona.model}); it briefs the coder below`
             : 'Off — your messages go straight to the coder'}
-          style={{ background: orchPersona ? 'rgba(255,31,90,.12)' : '#100E14', color: '#F2ECEF',
-            border: `1px solid ${orchPersona ? '#C8123F' : '#2A2030'}`,
+          style={{ background: orchPersona ? 'rgba(255,46,99,.12)' : '#100E14', color: '#F2ECEF',
+            border: `1px solid ${orchPersona ? '#D81E4E' : '#2A2030'}`,
             borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontSize: 15, cursor: 'pointer' }}>
           {(personaList.length ? personaList : orchPrefs.personaId
             ? [{ id: orchPrefs.personaId, name: orchPrefs.personaId }] : []
@@ -2079,12 +2079,12 @@ export function App() {
           <div role="dialog" aria-label="Code Space home"
             onClick={e => e.stopPropagation()}
             style={{ width: 'min(520px, 100%)', maxHeight: 'min(80dvh, 640px)', overflow: 'auto',
-              background: '#100E14', border: '1px solid #FF1F5A', borderRadius: 8, padding: 14 }}>
+              background: '#100E14', border: '1px solid #FF2E63', borderRadius: 8, padding: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
               <h2 style={{ margin: 0, flex: 1, fontSize: 18, letterSpacing: '0.08em',
-                textTransform: 'uppercase', color: '#FF1F5A' }}>Home · Code Spaces</h2>
+                textTransform: 'uppercase', color: '#FF2E63' }}>Home · Code Spaces</h2>
               <button type="button" onClick={startFreshHome}
-                style={{ background: 'rgba(212,255,63,0.12)', color: '#FF1F5A', border: '1px solid #C8123F',
+                style={{ background: 'rgba(212,255,63,0.12)', color: '#FF2E63', border: '1px solid #D81E4E',
                   borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
                   fontSize: 15, fontWeight: 700 }}>New</button>
               <button type="button" onClick={() => setShowHome(false)}
@@ -2094,7 +2094,7 @@ export function App() {
             </div>
             <p style={{ margin: '0 0 12px', fontSize: 16, color: '#A39AA8', lineHeight: 1.4 }}>
               Open a saved code space conversation, or start a fresh Home code space.
-              Opening <b style={{ color: '#FF1F5A' }}>Code Space</b> from Chat always loads that chat here.
+              Opening <b style={{ color: '#FF2E63' }}>Code Space</b> from Chat always loads that chat here.
             </p>
             {homeList.length === 0 ? (
               <p style={{ color: '#756B7B', fontSize: 16 }}>No saved code spaces yet.</p>
@@ -2104,9 +2104,9 @@ export function App() {
                   <li key={s.id}>
                     <button type="button" onClick={() => openStoredSession(s)}
                       style={{ width: '100%', textAlign: 'left', background: s.id === sessionId ? 'rgba(212,255,63,0.1)' : '#09080C',
-                        border: `1px solid ${s.id === sessionId ? '#FF1F5A' : '#2A2030'}`, borderRadius: 6,
+                        border: `1px solid ${s.id === sessionId ? '#FF2E63' : '#2A2030'}`, borderRadius: 6,
                         padding: '10px 12px', cursor: 'pointer', fontFamily: 'inherit' }}>
-                      <div style={{ color: '#FF1F5A', fontSize: 18, fontWeight: 700,
+                      <div style={{ color: '#FF2E63', fontSize: 18, fontWeight: 700,
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {s.title || 'Code Space'}
                       </div>
@@ -2148,8 +2148,8 @@ export function App() {
               {(['terminal', 'preview'] as const).map(t => (
                 <button key={t} type="button" onClick={() => setDesktopRightTab(t)}
                   style={{ flex: 1, padding: '8px 0', background: desktopRightTab === t ? '#100E14' : 'transparent',
-                    color: desktopRightTab === t ? '#FF1F5A' : '#A39AA8', border: 'none',
-                    borderBottom: desktopRightTab === t ? '2px solid #FF1F5A' : '2px solid transparent',
+                    color: desktopRightTab === t ? '#FF2E63' : '#A39AA8', border: 'none',
+                    borderBottom: desktopRightTab === t ? '2px solid #FF2E63' : '2px solid transparent',
                     fontFamily: 'inherit', fontSize: 15, fontWeight: desktopRightTab === t ? 700 : 500,
                     cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                   {t === 'terminal' ? 'Terminal' : 'Preview'}
@@ -2204,8 +2204,8 @@ export function App() {
                 aria-current={mobileTab === t.id ? 'page' : undefined}
                 style={{ flex: 1, padding: '14px 0', minHeight: 48,
                   background: mobileTab === t.id ? '#100E14' : 'transparent',
-                  color: mobileTab === t.id ? '#FF1F5A' : '#A39AA8', border: 'none',
-                  borderTop: mobileTab === t.id ? '2px solid #FF1F5A' : '2px solid transparent',
+                  color: mobileTab === t.id ? '#FF2E63' : '#A39AA8', border: 'none',
+                  borderTop: mobileTab === t.id ? '2px solid #FF2E63' : '2px solid transparent',
                   fontFamily: 'inherit', fontSize: 16, fontWeight: mobileTab === t.id ? 700 : 500,
                   cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.08em',
                   WebkitTapHighlightColor: 'transparent' }}>

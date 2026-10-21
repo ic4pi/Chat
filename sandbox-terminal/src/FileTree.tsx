@@ -41,7 +41,7 @@ function useStagedLabel(active: boolean, idleLabel: string) {
 }
 
 const EXT_COLOR: Record<string, string> = {
-  '.ts': '#5b8dee', '.tsx': '#5b8dee', '.js': '#FF1F5A', '.jsx': '#FF1F5A',
+  '.ts': '#5b8dee', '.tsx': '#5b8dee', '.js': '#FF2E63', '.jsx': '#FF2E63',
   '.py': '#89ddff', '.rb': '#ff6a6a', '.go': '#89ddff', '.rs': '#ff9b9b',
   '.json': '#c792ea', '.yaml': '#c792ea', '.yml': '#c792ea', '.toml': '#c792ea',
   '.md': '#34D399', '.sh': '#34D399', '.bash': '#34D399',
@@ -95,7 +95,7 @@ function TreeNode({ node, depth, contextPaths, onClickFile }: {
         padding: '2px 4px 2px 0', paddingLeft: 8 + depth * 14,
         cursor: 'pointer', fontSize: 16, borderRadius: 3,
         background: inCtx ? 'rgba(212,255,63,.08)' : 'transparent',
-        borderLeft: inCtx ? '2px solid #FF1F5A' : '2px solid transparent',
+        borderLeft: inCtx ? '2px solid #FF2E63' : '2px solid transparent',
       }}
       onMouseEnter={e => (e.currentTarget.style.background = inCtx ? 'rgba(212,255,63,.12)' : '#18151D')}
       onMouseLeave={e => (e.currentTarget.style.background = inCtx ? 'rgba(212,255,63,.08)' : '')}
@@ -108,7 +108,7 @@ function TreeNode({ node, depth, contextPaths, onClickFile }: {
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {node.name}
       </span>
-      {inCtx && <span style={{ fontSize: 12, color: '#FF1F5A', opacity: .7 }}>●</span>}
+      {inCtx && <span style={{ fontSize: 12, color: '#FF2E63', opacity: .7 }}>●</span>}
     </div>
   );
 }
@@ -209,7 +209,7 @@ export function FileTree({
               border: '1px solid #2A2030', borderRadius: 4, padding: '4px 8px',
               fontFamily: 'inherit', fontSize: 15, outline: 'none' }} />
           <button onClick={handleOpen} disabled={loading || !inputPath.trim()}
-            style={{ background: inputPath.trim() ? '#FF1F5A' : '#18151D',
+            style={{ background: inputPath.trim() ? '#FF2E63' : '#18151D',
               color: inputPath.trim() ? '#09080C' : '#3E3048',
               border: 'none', borderRadius: 4, padding: '4px 10px',
               cursor: inputPath.trim() ? 'pointer' : 'default',
@@ -224,7 +224,7 @@ export function FileTree({
             disabled={loading}
             style={{
               marginTop: 8, width: '100%',
-              background: '#18151D', color: '#FF1F5A',
+              background: '#18151D', color: '#FF2E63',
               border: '1px solid rgba(52,211,153,.16)', borderRadius: 4,
               padding: '6px 10px', cursor: loading ? 'default' : 'pointer',
               fontFamily: 'inherit', fontSize: 15, fontWeight: 700,
@@ -284,7 +284,7 @@ export function FileTree({
         <div style={{ borderTop: '1px solid #18151D', padding: '8px 10px', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center',
             justifyContent: 'space-between', marginBottom: 5 }}>
-            <span style={{ fontSize: 14, color: '#FF1F5A', letterSpacing: '0.08em',
+            <span style={{ fontSize: 14, color: '#FF2E63', letterSpacing: '0.08em',
               textTransform: 'uppercase' }}>
               Pinned ({contextFiles.size})
             </span>

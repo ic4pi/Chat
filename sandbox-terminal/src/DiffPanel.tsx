@@ -71,7 +71,7 @@ function FileDiff({ change, onDismiss }: {
           title={change.path}>
           {change.path}
         </span>
-        {isNew && <span style={{ fontSize: 14, color: '#FF1F5A', border: '1px solid #FF1F5A',
+        {isNew && <span style={{ fontSize: 14, color: '#FF2E63', border: '1px solid #FF2E63',
           borderRadius: 3, padding: '1px 5px' }}>new</span>}
         <span style={{ fontSize: 14, color: '#756B7B' }}>{lines} lines</span>
         <span style={{ fontSize: 14, color: '#34D399' }}>+{added}</span>
@@ -88,7 +88,7 @@ function FileDiff({ change, onDismiss }: {
             const ok = await copyText(change.content);
             if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
           }}
-          style={{ background: 'transparent', color: copied ? '#FF1F5A' : '#A39AA8',
+          style={{ background: 'transparent', color: copied ? '#FF2E63' : '#A39AA8',
             border: '1px solid #2A2030', borderRadius: 4, padding: '2px 8px',
             cursor: 'pointer', fontFamily: 'inherit', fontSize: 14 }}>
           {copied ? 'Copied' : 'Copy'}
@@ -197,7 +197,7 @@ export function DiffPanel({
             data-testid="diff-expand-btn"
             title={expanded ? 'Collapse changes panel' : 'Expand to review diffs'}
             style={{ ...btnBase, background: expanded ? 'rgba(212,255,63,0.12)' : 'transparent',
-              color: '#FF1F5A', borderColor: 'rgba(52,211,153,.16)', fontWeight: 700, padding: '4px 8px' }}>
+              color: '#FF2E63', borderColor: 'rgba(52,211,153,.16)', fontWeight: 700, padding: '4px 8px' }}>
             {expanded ? '▾' : '▸'} {changes.length} file{changes.length !== 1 ? 's' : ''}
           </button>
           <span style={{ fontSize: 14, color: '#756B7B', flex: 1, minWidth: 0,
@@ -229,7 +229,7 @@ export function DiffPanel({
           {canPush ? (
             <button type="button" onClick={() => { setShowPush(s => !s); setExpanded(true); }}
               data-testid="push-toggle-btn"
-              style={{ ...btnBase, background: '#FF1F5A', color: '#09080C',
+              style={{ ...btnBase, background: '#FF2E63', color: '#09080C',
                 border: 'none', fontWeight: 700, padding: '4px 12px' }}>
               {showPush ? 'Hide push' : 'Push'}
             </button>
@@ -237,7 +237,7 @@ export function DiffPanel({
             <>
               {onRunTest && pushBlockedReason && !/still verifying/.test(pushBlockedReason) && (
                 <button type="button" onClick={onRunTest} data-testid="run-autotest-btn"
-                  style={{ ...btnBase, background: '#FF1F5A', color: '#09080C', border: 'none',
+                  style={{ ...btnBase, background: '#FF2E63', color: '#09080C', border: 'none',
                     fontWeight: 700, padding: '4px 12px' }}>
                   Run Auto-test
                 </button>
@@ -272,7 +272,7 @@ export function DiffPanel({
             <div style={{ margin: '8px 10px', padding: '8px 10px', background: '#09080C',
               border: '1px solid #2A2030', borderRadius: 6 }}>
               <div style={{ fontSize: 14, color: '#A39AA8', marginBottom: 6, lineHeight: 1.4 }}>
-                GitHub token with <code style={{ color: '#FF1F5A' }}>repo</code> scope.
+                GitHub token with <code style={{ color: '#FF2E63' }}>repo</code> scope.
                 Push re-runs sandbox checks and refuses on failure.
               </div>
               <input
@@ -311,7 +311,7 @@ export function DiffPanel({
                     } catch { /* ignore */ }
                     onPush(token.trim(), commitMsg.trim() || 'Apply agent changes from sandbox');
                   }}
-                  style={{ flex: 1, background: token.trim() && !pushing ? '#FF1F5A' : '#18151D',
+                  style={{ flex: 1, background: token.trim() && !pushing ? '#FF2E63' : '#18151D',
                     color: token.trim() && !pushing ? '#09080C' : '#756B7B',
                     border: 'none', borderRadius: 4, padding: '7px 14px',
                     cursor: token.trim() && !pushing ? 'pointer' : 'default',
