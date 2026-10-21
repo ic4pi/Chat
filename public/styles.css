@@ -25,7 +25,7 @@
      "accent" color anywhere a single tone (not a gradient) is needed. */
   --brass:      #FF2E63;
   --brass-lt:   #FF5C84;
-  --grad:       linear-gradient(135deg,#FF2D87 0%,#FF3F5E 50%,#FF6A2B 100%);
+  --grad:       linear-gradient(135deg,#FF2D87 0%,#FF2D64 55%,#FF4434 100%);
   --brass-dk:   #D81E4E;
   --copper:     #34D399;
   --brass-ink:  #FFFFFF;
