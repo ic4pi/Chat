@@ -571,11 +571,10 @@ export function App() {
           const freeAny = list.find(m => m.free !== false);
           if (freeCoder || freeAny) {
             setModel((freeCoder || freeAny)!.id);
-          } else if (provider !== 'openrouter') {
-            // No free models on this provider — bounce to OpenRouter free coder.
-            setProvider('openrouter');
-            setModel(DEFAULT_MODELS.openrouter || 'qwen/qwen3-coder:free');
           }
+          // No free models on this provider: stay put. Silently moving a Venice pick to
+          // OpenRouter sent every call to a provider with no credit; the server's
+          // "locked — tap Unlock" reply is the honest answer.
         }
       })
       .finally(() => { if (!cancelled) setModelsLoading(false); });
