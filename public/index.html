@@ -33,49 +33,37 @@
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/styles.css" />
 <style>
-#splash{position:fixed;inset:0;z-index:99999;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;transition:opacity .5s ease,visibility .5s;cursor:pointer}
+#splash{position:fixed;inset:0;z-index:99999;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden;transition:opacity .6s ease,visibility .6s;cursor:pointer}
 #splash.done{opacity:0;visibility:hidden;pointer-events:none}
-#splash::after{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(0,0,0,.22) 0 1px,transparent 1px 3px);mix-blend-mode:multiply;opacity:.55}
-#splash canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;mix-blend-mode:screen}
-#splash .fl{position:absolute;inset:0;pointer-events:none;opacity:0;background:radial-gradient(circle at 50% 62%,rgba(255,230,235,.95),rgba(255,31,90,.55) 22%,rgba(255,31,90,0) 55%)}
-#splash .lk{position:relative;width:min(92vw,calc(72vh*.7243),560px);aspect-ratio:775/1070}
+#splash .lk{position:relative;width:min(80vw,calc(62vh*.7243),480px);aspect-ratio:775/1070;opacity:0}
 #splash .lk img{position:absolute;display:block;mix-blend-mode:screen;opacity:0;height:auto}
-#splash .cat{left:0;top:0;width:100%;-webkit-mask-image:linear-gradient(180deg,#000 0,#000 45%,transparent 55%);mask-image:linear-gradient(180deg,#000 0,#000 45%,transparent 55%);-webkit-mask-size:100% 260%;mask-size:100% 260%;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-position:0 100%;mask-position:0 100%}
+#splash .cat{left:0;top:0;width:100%;-webkit-mask-image:linear-gradient(180deg,#000 0,#000 40%,transparent 60%);mask-image:linear-gradient(180deg,#000 0,#000 40%,transparent 60%);-webkit-mask-size:100% 280%;mask-size:100% 280%;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-position:0 100%;mask-position:0 100%}
 #splash .eyes{left:0;top:0;width:100%;clip-path:inset(27% 33% 62.6% 19%)}
-#splash .bk{position:absolute;left:0;top:34%;width:100%;height:60%;background:radial-gradient(closest-side,#000 62%,rgba(0,0,0,0) 100%);opacity:0}
-#splash .pl{left:4.77%;top:37.2%;width:32.5%}
-#splash .pj{left:37.3%;top:37.2%;width:28%}
-#splash .pr{left:65.3%;top:37.2%;width:29.9%}
-#splash .scan{position:absolute;left:-6%;width:112%;height:3px;top:0;opacity:0;background:#ff9bb3;box-shadow:0 0 14px 4px rgba(255,31,90,.9),0 0 40px 12px rgba(255,31,90,.5)}
-#splash .ring{position:absolute;left:51%;top:65%;width:30%;aspect-ratio:1;margin:-15% 0 0 -15%;border-radius:50%;border:3px solid rgba(255,120,150,.95);box-shadow:0 0 30px rgba(255,31,90,.8),inset 0 0 30px rgba(255,31,90,.6);opacity:0;transform:scale(.1)}
-#splash.go .lk{animation:shake .32s linear 1.55s,fly .75s cubic-bezier(.6,0,.9,.4) 3.15s forwards}
-#splash.go .cat{opacity:1;animation:reveal 1.1s cubic-bezier(.4,0,.2,1) .15s forwards,flick .5s steps(1,end) .15s,catPulse 2s ease-in-out 1.9s infinite}
-#splash.go .scan{animation:scan 1.1s cubic-bezier(.4,0,.2,1) .15s}
-#splash.go .eyes{animation:eyes 1s ease-out 1.15s forwards}
-#splash.go .bk{animation:bkIn .3s ease-out 1.45s forwards}
-#splash.go .pl{animation:fromL .5s cubic-bezier(.2,.9,.2,1) 1.2s forwards}
-#splash.go .pj{animation:drop .5s cubic-bezier(.2,.9,.2,1) 1.1s forwards}
-#splash.go .pr{animation:fromR .5s cubic-bezier(.2,.9,.2,1) 1.2s forwards}
-#splash.go .ring{animation:ring .9s cubic-bezier(.1,.7,.2,1) 1.55s}
-#splash.go .fl{animation:flash .7s ease-out 1.55s}
+#splash .lk img.bk{left:0;top:0;width:100%;mix-blend-mode:normal}
+#splash .pl{left:23.7%;top:50.1%;width:18.9%}
+#splash .pj{left:42.6%;top:50.1%;width:16.3%}
+#splash .pr{left:58.8%;top:50.1%;width:17.4%}
+#splash .scan{position:absolute;left:-4%;width:108%;height:1px;top:0;opacity:0;background:rgba(255,140,170,.8);box-shadow:0 0 10px 2px rgba(255,31,90,.55)}
+#splash.go .lk{animation:lkIn .5s ease-out .1s forwards,lkOut .7s cubic-bezier(.4,0,.2,1) 3.1s forwards}
+#splash.go .cat{opacity:1;animation:reveal 1.5s cubic-bezier(.45,0,.2,1) .2s forwards}
+#splash.go .scan{animation:scan 1.5s cubic-bezier(.45,0,.2,1) .2s}
+#splash.go .bk{animation:fade .5s ease-out 1.6s forwards}
+#splash.go .pl{animation:markIn .8s cubic-bezier(.2,.7,.2,1) 1.7s forwards}
+#splash.go .pj{animation:markIn .8s cubic-bezier(.2,.7,.2,1) 1.85s forwards}
+#splash.go .pr{animation:markIn .8s cubic-bezier(.2,.7,.2,1) 2s forwards}
+#splash.go .eyes{animation:eyes 1.1s ease-in-out 2.3s}
+@keyframes lkIn{to{opacity:1}}
+@keyframes lkOut{to{opacity:0;transform:scale(1.025)}}
 @keyframes reveal{from{-webkit-mask-position:0 100%;mask-position:0 100%}to{-webkit-mask-position:0 0;mask-position:0 0}}
-@keyframes scan{0%{opacity:1;top:0}90%{opacity:1}100%{opacity:0;top:100%}}
-@keyframes flick{0%{filter:brightness(1.8)}20%{filter:brightness(.6)}40%{filter:brightness(1.6)}60%{filter:brightness(.8)}100%{filter:brightness(1)}}
-@keyframes catPulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.35) saturate(1.2)}}
-@keyframes eyes{0%{opacity:0;filter:brightness(1)}25%{opacity:1;filter:brightness(2.8)}45%{opacity:.5;filter:brightness(1.6)}65%{opacity:1;filter:brightness(2.4)}100%{opacity:0;filter:brightness(1)}}
-@keyframes bkIn{to{opacity:1}}
-@keyframes fromL{from{opacity:0;transform:translateX(-85%) scale(1.5);filter:blur(10px)}60%{filter:blur(0) brightness(2.8)}to{opacity:1;transform:none;filter:brightness(1)}}
-@keyframes fromR{from{opacity:0;transform:translateX(85%) scale(1.5);filter:blur(10px)}60%{filter:blur(0) brightness(2.8)}to{opacity:1;transform:none;filter:brightness(1)}}
-@keyframes drop{from{opacity:0;transform:translateY(-110%) scale(1.8);filter:blur(12px)}60%{filter:blur(0) brightness(2.8)}to{opacity:1;transform:none;filter:brightness(1)}}
-@keyframes ring{0%{opacity:1;transform:scale(.1)}100%{opacity:0;transform:scale(4)}}
-@keyframes flash{0%{opacity:.95}100%{opacity:0}}
-@keyframes shake{0%,100%{transform:none}20%{transform:translate(-7px,3px)}40%{transform:translate(6px,-4px)}60%{transform:translate(-4px,-2px)}80%{transform:translate(3px,3px)}}
-@keyframes fly{to{transform:scale(7);opacity:0}}
-@media (prefers-reduced-motion:reduce){#splash.go *,#splash.go{animation:none!important}#splash .cat,#splash .pl,#splash .pj,#splash .pr,#splash .bk{opacity:1;-webkit-mask-image:none;mask-image:none}#splash .lk img.eyes,#splash .scan,#splash .ring,#splash .fl,#splash canvas{display:none}}
+@keyframes scan{0%{opacity:.9;top:0}85%{opacity:.9}100%{opacity:0;top:100%}}
+@keyframes fade{to{opacity:1}}
+@keyframes markIn{from{opacity:0;transform:translateY(6px);filter:blur(5px)}to{opacity:1;transform:none;filter:blur(0)}}
+@keyframes eyes{0%,100%{opacity:0;filter:brightness(1)}50%{opacity:.7;filter:brightness(1.8)}}
+@media (prefers-reduced-motion:reduce){#splash.go *,#splash.go{animation:none!important}#splash .lk,#splash .cat,#splash .pl,#splash .pj,#splash .pr,#splash .bk{opacity:1;-webkit-mask-image:none;mask-image:none}#splash .eyes,#splash .scan{display:none}}
 </style>
 </head>
 <body>
-<div id="splash" aria-hidden="true"><div class="lk"><img class="cat" src="/intro-cat.jpg" alt="" /><img class="eyes" src="/intro-cat.jpg" alt="" /><div class="bk"></div><img class="pl" src="/intro-l.jpg" alt="" /><img class="pj" src="/intro-j.jpg" alt="" /><img class="pr" src="/intro-r.jpg" alt="" /><div class="scan"></div><div class="ring"></div></div><div class="fl"></div><canvas></canvas></div>
+<div id="splash" aria-hidden="true"><div class="lk"><img class="cat" src="/intro-cat.jpg" alt="" /><img class="eyes" src="/intro-cat.jpg" alt="" /><img class="bk" src="/intro-bk.png" alt="" /><img class="pl" src="/intro-l.jpg" alt="" /><img class="pj" src="/intro-j.jpg" alt="" /><img class="pr" src="/intro-r.jpg" alt="" /><div class="scan"></div></div></div>
 <script>
 // The intro plays only when someone arrives from another site (or opens the app cold), once per
 // browser session. Moving between chat and Code Space is same-origin, so it never replays.
@@ -86,12 +74,8 @@ if(same||seen){sp.remove();return}
 try{sessionStorage.setItem("jive_intro","1")}catch(e){}
 var hidden=false;function hide(){if(hidden)return;hidden=true;sp.classList.add("done");setTimeout(function(){sp.remove()},700)}
 sp.addEventListener("click",hide);setTimeout(hide,7500);
-function sparks(){var c=sp.querySelector("canvas"),lk=sp.querySelector(".lk"),r=lk.getBoundingClientRect(),dpr=window.devicePixelRatio||1;
-c.width=innerWidth*dpr;c.height=innerHeight*dpr;var x=c.getContext("2d");x.scale(dpr,dpr);
-var cx=r.left+r.width*.51,cy=r.top+r.height*.65,P=[];for(var i=0;i<90;i++){var a=Math.random()*6.283,v=2+Math.random()*9;P.push({x:cx,y:cy,vx:Math.cos(a)*v,vy:Math.sin(a)*v-1.5,l:1,d:.012+Math.random()*.02,s:1+Math.random()*2.4,h:Math.random()<.5?"255,31,90":"255,150,60"})}
-(function f(){x.clearRect(0,0,innerWidth,innerHeight);var live=0;P.forEach(function(p){if(p.l<=0)return;live++;p.x+=p.vx;p.y+=p.vy;p.vy+=.22;p.vx*=.985;p.l-=p.d;x.fillStyle="rgba("+p.h+","+Math.max(p.l,0)+")";x.shadowColor="rgba("+p.h+",1)";x.shadowBlur=10;x.beginPath();x.arc(p.x,p.y,p.s,0,6.283);x.fill()});if(live&&!hidden)requestAnimationFrame(f)})()}
 var imgs=[].slice.call(sp.querySelectorAll("img")),n=imgs.length,started=false;
-function start(){if(started)return;started=true;sp.classList.add("go");setTimeout(sparks,1550);setTimeout(hide,3750)}
+function start(){if(started)return;started=true;sp.classList.add("go");setTimeout(hide,3700)}
 imgs.forEach(function(im){if(im.complete)--n;else{im.addEventListener("load",function(){--n||start()});im.addEventListener("error",function(){--n||start()})}});
 if(!n)start();setTimeout(start,2500)})();
 </script>
