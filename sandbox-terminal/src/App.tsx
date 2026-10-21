@@ -1047,13 +1047,25 @@ export function App() {
     });
   }, []);
 
+  /** Review and Plan still on their untouched OpenRouter-free defaults follow a non-OpenRouter pick,
+   *  so choosing Venice never leaves a seat calling an OpenRouter account with no credit. */
+  const followPick = (prev: typeof roleModels, p: string, m: string) => {
+    const next = { ...prev, [role]: { provider: p, model: m } };
+    if (p !== 'openrouter') {
+      for (const r of ['review', 'plan'] as const) {
+        if (r !== role && next[r].provider === 'openrouter') next[r] = { provider: p, model: m };
+      }
+    }
+    return next;
+  };
+
   const handleProviderChange = (p: string) => {
     markTeamCustom();
     setProvider(p);
     const fallback = DEFAULT_MODELS[p] || FALLBACK_MODELS[p]?.[0]?.id || '';
     setModel(fallback);
     setRoleModels(prev => {
-      const next = { ...prev, [role]: { provider: p, model: fallback } };
+      const next = followPick(prev, p, fallback);
       saveRoleModels(next);
       return next;
     });
@@ -1063,7 +1075,7 @@ export function App() {
     markTeamCustom();
     setModel(m);
     setRoleModels(prev => {
-      const next = { ...prev, [role]: { provider, model: m } };
+      const next = followPick(prev, provider, m);
       saveRoleModels(next);
       return next;
     });
@@ -1077,7 +1089,7 @@ export function App() {
     setProvider(p);
     setModel(id);
     setRoleModels(prev => {
-      const next = { ...prev, [role]: { provider: p, model: id } };
+      const next = followPick(prev, p, id);
       saveRoleModels(next);
       return next;
     });
