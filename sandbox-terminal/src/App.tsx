@@ -401,7 +401,7 @@ export function App() {
   // The Code Space writes code, so it opens on the Coders package rather than a
   // raw provider catalog. 'provider' is the escape hatch to the full list.
   const [modelScope,   setModelScope]   = useState<'coders' | 'provider'>(
-    () => (localStorage.getItem(MODEL_SCOPE_KEY) === 'coders' ? 'coders' : 'provider'),
+    () => (localStorage.getItem(MODEL_SCOPE_KEY) === 'provider' ? 'provider' : 'coders'),
   );
   const [coderBrands,  setCoderBrands]  = useState<ResolvedCoderBrand[]>([]);
   const [keys,         setKeys]         = useState(() => loadProviderKeys());

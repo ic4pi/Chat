@@ -146,21 +146,43 @@ function resolveEntry(
   return null;
 }
 
+/** Providers the picker reads — every one the app can call. */
+const PICKER_PROVIDERS = ['venice', 'openrouter', 'nvidia', 'cerebras', 'groq', 'xai'];
+const PROVIDER_LABEL: Record<string, string> = {
+  venice: 'Venice', openrouter: 'OpenRouter', nvidia: 'NVIDIA', cerebras: 'Cerebras', groq: 'Groq', xai: 'xAI (Grok)',
+};
+
+/** Known-good coding models, best first. A model's rank is its first matching line. */
+const GOOD_CODERS: RegExp[] = [
+  /claude.*(opus|sonnet)/i, /gpt-5/i, /gemini-(2\.5|3).*pro/i,
+  /qwen.*coder/i, /deepseek.*(v4|v3|r1)/i, /kimi-k2/i, /glm-(4\.[5-9]|5)/i,
+  /grok-(4|code)/i, /devstral|codestral/i, /minimax-m/i,
+  /gpt-oss-120b/i, /llama-3\.3-70b|llama-3\.1-405b/i, /gpt-oss-20b/i, /nemotron/i, /gemma-4/i,
+];
+const rankOf = (m: CatalogModel) => {
+  const hay = `${m.id} ${m.name || ''}`;
+  const i = GOOD_CODERS.findIndex((re) => re.test(hay));
+  if (i >= 0) return i;
+  return (m.categories || []).includes('coder') ? GOOD_CODERS.length : -1;
+};
+
 /**
- * Fetch the catalogs the Coders package spans and resolve it into brand
- * groups. Free models come first inside each brand — that is the one a locked
- * Code Space can actually run.
+ * Fetch every provider's catalog and resolve one coding list: the curated
+ * brands first (free option leading), then each provider's other good coders,
+ * ranked, free before paid. Free models come first so a locked Code Space can
+ * still run something.
  */
 export async function loadCoderModels(keys: ProviderKeys = {}): Promise<ResolvedCoderBrand[]> {
   const catalogs = new Map<string, CatalogModel[]>();
   await Promise.all(
-    CODER_PROVIDERS.map(async (pid) => {
+    PICKER_PROVIDERS.map(async (pid) => {
       const key = (keys[pid] || '').trim();
-      catalogs.set(pid, await fetchModels(pid, key || undefined));
+      catalogs.set(pid, await fetchModels(pid, key || undefined).catch(() => []));
     }),
   );
 
   const out: ResolvedCoderBrand[] = [];
+  const seen = new Set<string>();
   for (const brand of CODER_BRANDS) {
     const models: CoderModel[] = [];
     const free = resolveEntry(brand.free, brand, catalogs, true);
@@ -171,13 +193,27 @@ export async function loadCoderModels(keys: ProviderKeys = {}): Promise<Resolved
         models.push(hit);
       }
     }
+    models.forEach((m) => seen.add(coderKey(m.provider, m.id)));
     if (models.length) {
-      out.push({
-        id: brand.id,
-        label: brand.label,
-        models,
-        paidOnly: !models.some((m) => m.free),
+      out.push({ id: brand.id, label: brand.label, models, paidOnly: !models.some((m) => m.free) });
+    }
+  }
+
+  for (const pid of PICKER_PROVIDERS) {
+    const list = (catalogs.get(pid) || [])
+      .map((m) => ({ m, r: rankOf(m) }))
+      .filter((x) => x.r >= 0 && !seen.has(coderKey(pid, x.m.id)))
+      .sort((a, b) => Number(b.m.free !== false) - Number(a.m.free !== false) || a.r - b.r)
+      .slice(0, 14)
+      .map(({ m }): CoderModel => {
+        const free = m.free !== false && !(pid === 'venice');
+        return {
+          ...m, provider: pid, brand: PROVIDER_LABEL[pid] || pid, name: m.name || m.id, blurb: '', free, paid: !free,
+          limit: free && pid === 'openrouter' ? OPENROUTER_FREE_LIMIT_LABEL : '',
+        };
       });
+    if (list.length) {
+      out.push({ id: `more-${pid}`, label: `${PROVIDER_LABEL[pid] || pid} — more coders`, models: list, paidOnly: !list.some((m) => m.free) });
     }
   }
   return out;
