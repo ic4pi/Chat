@@ -1888,7 +1888,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
       )}
 
       {/* input */}
-      <form data-testid="chat-form" onSubmit={e => { e.preventDefault(); void send(); }}
+      <form data-testid="chat-form" className="ws-chat-form" onSubmit={e => { e.preventDefault(); void send(); }}
         style={{ borderTop: '1px solid #18151D', padding: '10px 12px',
           display: 'flex', gap: 8, flexShrink: 0, alignItems: 'flex-end',
           background: '#09080C' }}>
@@ -1927,6 +1927,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
         </button>
         <textarea
           id="chat-input"
+          className="ws-chat-input"
           data-testid="chat-input"
           value={input}
           rows={2}

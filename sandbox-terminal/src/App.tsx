@@ -1558,7 +1558,7 @@ export function App() {
   const topbar = (
     <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0,
       borderBottom: '1px solid #18151D', background: '#09080C' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+      <div className="ws-topbar-row" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
         padding: '6px 12px' }}>
         <a href="/" style={{ color: '#FF1F5A', fontSize: 16, textDecoration: 'none',
           whiteSpace: 'nowrap', padding: '2px 0', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 8 }}>

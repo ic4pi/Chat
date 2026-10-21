@@ -96,7 +96,7 @@ export function PreviewPanel({ sandboxId, detectedPort, autoStartKey = 0, dir, d
           value={command}
           onChange={e => setCommand(e.target.value)}
           placeholder="auto (html → python server, else npm run dev)"
-          style={{ flex: 1, background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
+          style={{ flex: 1, minWidth: 0, background: '#100E14', color: '#F2ECEF', border: '1px solid #2A2030',
             borderRadius: 4, padding: '6px 8px', fontFamily: 'inherit', fontSize: 16 }}
         />
         <input

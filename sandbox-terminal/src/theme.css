@@ -157,3 +157,14 @@ textarea, input, [data-testid="chat-messages"], [data-testid="chat-messages"] * 
   user-select: text;
   -webkit-touch-callout: default;
 }
+
+/* Phones: the top bar is one swipeable row instead of seven wrapped rows, and
+   the message box gets its own full-width line above the icon buttons. */
+@media (max-width: 900px) {
+  .ws-topbar-row { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .ws-topbar-row::-webkit-scrollbar { display: none; }
+  .ws-topbar-row > * { flex-shrink: 0; }
+  .ws-chat-form { flex-wrap: wrap !important; }
+  .ws-chat-input { flex: 1 1 100% !important; order: -1; font-size: 16px !important; }
+  .mobile-tabs button { -webkit-appearance: none; appearance: none; outline: none; box-shadow: none; border-radius: 0; }
+}
