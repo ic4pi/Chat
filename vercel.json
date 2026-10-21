@@ -106,7 +106,7 @@
   ],
   "headers": [
     {
-      "source": "/(.*)\\.(js|css|html)",
+      "source": "/(.*)\\.(js|css|html|png|jpg|svg|ico|webmanifest)",
       "headers": [
         {
           "key": "Cache-Control",
