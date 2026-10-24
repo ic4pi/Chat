@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Rebuild the Jive logo set: pink neon cat + pure-white <j> with an iridescent neon glow (no edge/border).
 
-Source art: public/intro-cat.jpg (cat on black), public/intro-bk.png (dark backing behind the <j>),
+Source art: brand/cat-thin.png (thin solid-pink cat on black), public/intro-bk.png (dark backing behind the <j>),
 brand/j-pieces/intro-{l,j,r}.jpg (white <j> pieces, used only as glyph SHAPES: their pink fringe is thresholded away).
 Run: python3 scripts/logo/build-logo.py   (needs numpy + Pillow)
 """
@@ -64,7 +64,7 @@ white = np.array([1.0, 1.0, 1.0], np.float32)
 mark = np.clip(glow_rgb * (1 - core * 0.9) + white * core, 0, 1)      # white core, coloured halo, no edge
 
 # --- cat ----------------------------------------------------------------------------------------
-cat = load(P('intro-cat.jpg'), 'RGB').resize((W, H), Image.LANCZOS)
+cat = load(os.path.join(ROOT, 'brand', 'cat-thin.png'), 'RGB').resize((W, H), Image.LANCZOS)
 bk = load(P('intro-bk.png'), 'RGBA').resize((W, H), Image.LANCZOS)
 cat_np = np.asarray(cat, np.float32) / 255.0
 bk_a = (np.asarray(bk, np.float32)[..., 3:4] / 255.0)
