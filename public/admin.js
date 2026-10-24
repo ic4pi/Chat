@@ -459,7 +459,7 @@ els.autopostNowBtn?.addEventListener('click', async () => {
     const body = await res.json().catch(() => ({}));
     const r = (body.autopost || [])[0];
     alert(!res.ok ? 'Autopost failed: ' + (body.error || res.status)
-      : r?.ok ? 'Posted ✓' + (r.imageScore ? ' (image scored ' + r.imageScore + '/10)' : '') + '\n\n' + r.text
+      : r?.ok ? 'Posted ✓' + (r.imageScore ? ' (image scored ' + r.imageScore + '/10)' : r.imageSkipped ? ' (text only — no image passed: ' + r.imageSkipped + ')' : '') + '\n\n' + r.text
       : 'Not posted: ' + (r?.error || 'nothing ran'));
   } catch (err) {
     alert('Autopost failed: ' + err.message);
