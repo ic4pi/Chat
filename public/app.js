@@ -1958,8 +1958,12 @@ async function handlePostToSocial(text, triggerBtn, personaName) {
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       savePaidPassword(pw);
       flashButton(triggerBtn, isEmail ? 'Sent ✓' : 'Posted ✓');
-      say(isEmail ? 'Sent ✓' : 'Posted ✓');
-      setTimeout(close, 900);
+      say(isEmail ? 'Sent ✓ — it went through.' : 'Posted ✓ — it is live.');
+      if (!isEmail && data.id && account.platform === 'facebook') {
+        status.append(' ', el('a', { href: `https://www.facebook.com/${data.id}`, target: '_blank', rel: 'noopener', textContent: 'View the post', style: 'color:var(--accent,#ff2e63)' }));
+      }
+      go.style.display = 'none';
+      cancel.textContent = 'Done';
     } catch (err) {
       say((isEmail ? 'Send failed: ' : 'Post failed: ') + (err.message || err), true);
       go.disabled = false;
