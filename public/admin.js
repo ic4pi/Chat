@@ -45,6 +45,7 @@ const els = {
   accountResendApiKeyInput: $('accountResendApiKeyInput'),
   accountFromEmailInput: $('accountFromEmailInput'),
   accountAutopostEvery: $('accountAutopostEvery'),
+  accountAutopostPerDay: $('accountAutopostPerDay'),
   accountAutopostBrief: $('accountAutopostBrief'),
   accountAutopostPersona: $('accountAutopostPersona'),
   accountAutopostImageStyle: $('accountAutopostImageStyle'),
@@ -274,6 +275,7 @@ function selectAccount(id) {
   els.accountResendApiKeyInput.value = a.resendApiKey || '';
   els.accountFromEmailInput.value = a.fromEmail || '';
   els.accountAutopostEvery.value = a.autopostEvery || 'off';
+  els.accountAutopostPerDay.value = String(a.autopostPerDay || ({ facebook: 1, instagram: 1, twitter: 3 }[a.platform] || 1));
   els.accountAutopostBrief.value = a.autopostBrief || '';
   els.accountAutopostPersona.value = a.autopostPersonaId || '';
   els.accountAutopostImageStyle.value = a.autopostImageStyle || '';
@@ -287,7 +289,7 @@ function newAccount() {
     pageId: '', pageToken: '', igUserId: '',
     consumerKey: '', consumerSecret: '', accessToken: '', accessTokenSecret: '',
     resendApiKey: '', fromEmail: '',
-    autopostEvery: 'off', autopostBrief: '', autopostPersonaId: '', autopostImageStyle: '',
+    autopostEvery: 'off', autopostPerDay: 1, autopostBrief: '', autopostPersonaId: '', autopostImageStyle: '',
   };
   data.socialAccounts.push(a);
   selectedAccountId = a.id;
@@ -314,6 +316,7 @@ async function saveAccount() {
   a.resendApiKey = els.accountResendApiKeyInput.value.trim();
   a.fromEmail = els.accountFromEmailInput.value.trim();
   a.autopostEvery = els.accountAutopostEvery.value;
+  a.autopostPerDay = Number(els.accountAutopostPerDay.value) || 1;
   a.autopostBrief = els.accountAutopostBrief.value.trim();
   a.autopostPersonaId = els.accountAutopostPersona.value.trim();
   a.autopostImageStyle = els.accountAutopostImageStyle.value.trim();

@@ -161,12 +161,19 @@ const ADMIN_HTML = `<!DOCTYPE html>
             <select id="accountAutopostEvery">
               <option value="off">Off</option>
               <option value="hourly">Every hour</option>
-              <option value="daily">Every day</option>
+              <option value="daily">Posts per day (set below)</option>
               <option value="weekly">Every week</option>
             </select>
           </label>
           <label class="field">
-            <span>What to post about</span>
+            <span>Posts per day <em>(recommended: Facebook 1, Instagram 1, X 3. More than ~2 a day on Facebook or Instagram usually lowers reach)</em></span>
+            <select id="accountAutopostPerDay">
+              <option value="1">1 a day</option><option value="2">2 a day</option><option value="3">3 a day</option>
+              <option value="4">4 a day</option><option value="5">5 a day</option><option value="6">6 a day</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>What to post about <em>(optional — blank means marketing tips, how-tos and website advice, rotated)</em></span>
             <textarea id="accountAutopostBrief" rows="4" placeholder="e.g. Semantiq is a marketing agency. Post one useful tip for small businesses, friendly, no hashtags spam."></textarea>
           </label>
           <label class="field">
