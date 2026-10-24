@@ -47,6 +47,7 @@ const els = {
   accountAutopostEvery: $('accountAutopostEvery'),
   accountAutopostBrief: $('accountAutopostBrief'),
   accountAutopostPersona: $('accountAutopostPersona'),
+  accountAutopostImageStyle: $('accountAutopostImageStyle'),
   autopostNowBtn: $('autopostNowBtn'),
   saveAccountBtn: $('saveAccountBtn'),
   deleteAccountBtn: $('deleteAccountBtn'),
@@ -275,6 +276,7 @@ function selectAccount(id) {
   els.accountAutopostEvery.value = a.autopostEvery || 'off';
   els.accountAutopostBrief.value = a.autopostBrief || '';
   els.accountAutopostPersona.value = a.autopostPersonaId || '';
+  els.accountAutopostImageStyle.value = a.autopostImageStyle || '';
   syncAccountFieldVisibility();
   renderAccountList();
 }
@@ -285,7 +287,7 @@ function newAccount() {
     pageId: '', pageToken: '', igUserId: '',
     consumerKey: '', consumerSecret: '', accessToken: '', accessTokenSecret: '',
     resendApiKey: '', fromEmail: '',
-    autopostEvery: 'off', autopostBrief: '', autopostPersonaId: '',
+    autopostEvery: 'off', autopostBrief: '', autopostPersonaId: '', autopostImageStyle: '',
   };
   data.socialAccounts.push(a);
   selectedAccountId = a.id;
@@ -314,6 +316,7 @@ async function saveAccount() {
   a.autopostEvery = els.accountAutopostEvery.value;
   a.autopostBrief = els.accountAutopostBrief.value.trim();
   a.autopostPersonaId = els.accountAutopostPersona.value.trim();
+  a.autopostImageStyle = els.accountAutopostImageStyle.value.trim();
   await commit();
   flashButton(els.saveAccountBtn, 'Saved');
 }
@@ -456,7 +459,7 @@ els.autopostNowBtn?.addEventListener('click', async () => {
     const body = await res.json().catch(() => ({}));
     const r = (body.autopost || [])[0];
     alert(!res.ok ? 'Autopost failed: ' + (body.error || res.status)
-      : r?.ok ? 'Posted ✓\n\n' + r.text
+      : r?.ok ? 'Posted ✓' + (r.imageScore ? ' (image scored ' + r.imageScore + '/10)' : '') + '\n\n' + r.text
       : 'Not posted: ' + (r?.error || 'nothing ran'));
   } catch (err) {
     alert('Autopost failed: ' + err.message);

@@ -6,6 +6,12 @@ import { listStandingTasks, saveStandingTasks, isTaskDue } from '../../lib/stand
 import { runStandingTask } from '../../lib/run-standing-task.js';
 import { runAutopost } from '../../lib/autopost.js';
 
+function siteBase(req) {
+  if (process.env.SITE_URL) return process.env.SITE_URL;
+  const host = req.headers['x-forwarded-host'] || req.headers.host || process.env.VERCEL_URL;
+  return host ? `${String(host).startsWith('localhost') ? 'http' : 'https'}://${host}` : '';
+}
+
 export default async function handler(req, res) {
   // Vercel signs real cron invocations with this header; an admin-authed
   // call is allowed too (for testing this without waiting on the schedule).
@@ -20,7 +26,7 @@ export default async function handler(req, res) {
   // Admin test: /api/cron/run-standing-tasks?autopost=<accountId> posts that account once, now.
   if (isAdmin && typeof req.query?.autopost === 'string' && req.query.autopost) {
     try {
-      return res.status(200).json({ autopost: await runAutopost({ only: req.query.autopost }) });
+      return res.status(200).json({ autopost: await runAutopost({ only: req.query.autopost, baseUrl: siteBase(req) }) });
     } catch (err) {
       return res.status(500).json({ error: err.message || 'Autopost failed' });
     }
@@ -43,7 +49,7 @@ export default async function handler(req, res) {
   if (due.length) await saveStandingTasks(tasks);
 
   let autopost = [];
-  try { autopost = await runAutopost(); } catch (err) { autopost = [{ ok: false, error: err.message || String(err) }]; }
+  try { autopost = await runAutopost({ baseUrl: siteBase(req) }); } catch (err) { autopost = [{ ok: false, error: err.message || String(err) }]; }
 
   return res.status(200).json({ checked: tasks.length, ran: due.length, results, autopost });
 }

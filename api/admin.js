@@ -173,6 +173,10 @@ const ADMIN_HTML = `<!DOCTYPE html>
             <span>Persona voice <em>(optional — persona id)</em></span>
             <input id="accountAutopostPersona" type="text" placeholder="e.g. nia" autocomplete="off" />
           </label>
+          <label class="field">
+            <span>Image style <em>(Instagram always gets an image; Facebook gets one when this is filled in)</em></span>
+            <textarea id="accountAutopostImageStyle" rows="3" placeholder="e.g. Dark moody studio look, hot-pink and cyan neon accents, one bold subject, shallow depth of field, cinematic. No text in the image."></textarea>
+          </label>
           <button id="autopostNowBtn" class="text-btn" type="button">Autopost once now</button>
         </div>
         <div class="persona-actions">
