@@ -44,6 +44,10 @@ const els = {
   accountEmailFields: $('accountEmailFields'),
   accountResendApiKeyInput: $('accountResendApiKeyInput'),
   accountFromEmailInput: $('accountFromEmailInput'),
+  accountAutopostEvery: $('accountAutopostEvery'),
+  accountAutopostBrief: $('accountAutopostBrief'),
+  accountAutopostPersona: $('accountAutopostPersona'),
+  autopostNowBtn: $('autopostNowBtn'),
   saveAccountBtn: $('saveAccountBtn'),
   deleteAccountBtn: $('deleteAccountBtn'),
 };
@@ -268,6 +272,9 @@ function selectAccount(id) {
   els.accountAccessTokenSecretInput.value = a.accessTokenSecret || '';
   els.accountResendApiKeyInput.value = a.resendApiKey || '';
   els.accountFromEmailInput.value = a.fromEmail || '';
+  els.accountAutopostEvery.value = a.autopostEvery || 'off';
+  els.accountAutopostBrief.value = a.autopostBrief || '';
+  els.accountAutopostPersona.value = a.autopostPersonaId || '';
   syncAccountFieldVisibility();
   renderAccountList();
 }
@@ -278,6 +285,7 @@ function newAccount() {
     pageId: '', pageToken: '', igUserId: '',
     consumerKey: '', consumerSecret: '', accessToken: '', accessTokenSecret: '',
     resendApiKey: '', fromEmail: '',
+    autopostEvery: 'off', autopostBrief: '', autopostPersonaId: '',
   };
   data.socialAccounts.push(a);
   selectedAccountId = a.id;
@@ -303,6 +311,9 @@ async function saveAccount() {
   a.accessTokenSecret = els.accountAccessTokenSecretInput.value.trim();
   a.resendApiKey = els.accountResendApiKeyInput.value.trim();
   a.fromEmail = els.accountFromEmailInput.value.trim();
+  a.autopostEvery = els.accountAutopostEvery.value;
+  a.autopostBrief = els.accountAutopostBrief.value.trim();
+  a.autopostPersonaId = els.accountAutopostPersona.value.trim();
   await commit();
   flashButton(els.saveAccountBtn, 'Saved');
 }
@@ -436,6 +447,22 @@ els.signOutBtn.addEventListener('click', signOut);
 els.refreshMediaBtn?.addEventListener('click', refreshMedia);
 els.newAccountBtn?.addEventListener('click', newAccount);
 els.saveAccountBtn?.addEventListener('click', saveAccount);
+els.autopostNowBtn?.addEventListener('click', async () => {
+  if (!selectedAccountId) return;
+  await saveAccount();
+  els.autopostNowBtn.textContent = 'Posting…';
+  try {
+    const res = await fetch('/api/cron/run-standing-tasks?autopost=' + encodeURIComponent(selectedAccountId), { credentials: 'same-origin', cache: 'no-store' });
+    const body = await res.json().catch(() => ({}));
+    const r = (body.autopost || [])[0];
+    alert(!res.ok ? 'Autopost failed: ' + (body.error || res.status)
+      : r?.ok ? 'Posted ✓\n\n' + r.text
+      : 'Not posted: ' + (r?.error || 'nothing ran'));
+  } catch (err) {
+    alert('Autopost failed: ' + err.message);
+  }
+  els.autopostNowBtn.textContent = 'Autopost once now';
+});
 els.deleteAccountBtn?.addEventListener('click', deleteAccount);
 els.accountPlatformInput?.addEventListener('change', syncAccountFieldVisibility);
 

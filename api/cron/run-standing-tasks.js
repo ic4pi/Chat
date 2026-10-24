@@ -4,6 +4,7 @@
 import { checkAdminAuth } from '../../lib/auth.js';
 import { listStandingTasks, saveStandingTasks, isTaskDue } from '../../lib/standing-tasks.js';
 import { runStandingTask } from '../../lib/run-standing-task.js';
+import { runAutopost } from '../../lib/autopost.js';
 
 export default async function handler(req, res) {
   // Vercel signs real cron invocations with this header; an admin-authed
@@ -14,6 +15,15 @@ export default async function handler(req, res) {
   const isAdmin = checkAdminAuth(req).ok;
   if (!isVercelCron && !isAdmin) {
     return res.status(403).json({ error: 'This endpoint only runs via Vercel Cron or admin auth.' });
+  }
+
+  // Admin test: /api/cron/run-standing-tasks?autopost=<accountId> posts that account once, now.
+  if (isAdmin && typeof req.query?.autopost === 'string' && req.query.autopost) {
+    try {
+      return res.status(200).json({ autopost: await runAutopost({ only: req.query.autopost }) });
+    } catch (err) {
+      return res.status(500).json({ error: err.message || 'Autopost failed' });
+    }
   }
 
   const tasks = await listStandingTasks();
@@ -32,5 +42,8 @@ export default async function handler(req, res) {
 
   if (due.length) await saveStandingTasks(tasks);
 
-  return res.status(200).json({ checked: tasks.length, ran: due.length, results });
+  let autopost = [];
+  try { autopost = await runAutopost(); } catch (err) { autopost = [{ ok: false, error: err.message || String(err) }]; }
+
+  return res.status(200).json({ checked: tasks.length, ran: due.length, results, autopost });
 }
