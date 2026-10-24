@@ -191,6 +191,24 @@ const ADMIN_HTML = `<!DOCTYPE html>
   </section>
 
   <section class="admin-section">
+    <h2>Business profile</h2>
+    <p class="admin-hint">
+      Everything about the company: what it does, who it serves, services, offers, tone, what never to say.
+      The autoposter and the team read this. Once it's saved the team discusses it on their own every week
+      (or press the button) and keeps their conclusions below as the content strategy.
+    </p>
+    <textarea id="businessProfileInput" rows="12" placeholder="Semantiq is an AI agency: a team of AI personas that hold group discussions…"></textarea>
+    <div class="admin-actions">
+      <button id="saveProfileBtn" class="text-btn primary">Save profile</button>
+      <button id="discussNowBtn" class="text-btn">Have the team discuss it now</button>
+    </div>
+    <label class="field">
+      <span>Team strategy notes <em id="notesAt"></em></span>
+      <textarea id="businessNotesOutput" rows="10" readonly placeholder="Nothing yet — save the profile, then the team writes this."></textarea>
+    </label>
+  </section>
+
+  <section class="admin-section">
     <h2>Recent media</h2>
     <p class="admin-hint">
       Images and videos generated in Media Studio, newest first — pulled

@@ -144,7 +144,10 @@
       "maxDuration": 60
     },
     "api/cron/run-standing-tasks.js": {
-      "maxDuration": 300
+      "maxDuration": 800
+    },
+    "api/admin-standing-tasks.js": {
+      "maxDuration": 800
     },
     "api/hub/[route].js": {
       "maxDuration": 300

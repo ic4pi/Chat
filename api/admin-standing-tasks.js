@@ -7,10 +7,27 @@
 import { requireAdminAuth } from '../lib/auth.js';
 import { listStandingTasks, saveStandingTasks } from '../lib/standing-tasks.js';
 import { runStandingTask } from '../lib/run-standing-task.js';
+import { getBusiness, saveProfile, runTeamDiscussion } from '../lib/business-profile.js';
 
 export default async function handler(req, res) {
   if (!requireAdminAuth(req, res)) return;
   res.setHeader('Cache-Control', 'no-store');
+
+  // Business profile + the team's strategy notes:
+  //   GET  ?what=profile                  -> { profile, notes, notesAt }
+  //   PUT  ?what=profile  { profile }     -> save the profile
+  //   POST ?what=profile&action=discuss   -> the team discusses it now and saves strategy notes
+  if (req.query.what === 'profile') {
+    try {
+      if (req.method === 'GET') return res.status(200).json(await getBusiness());
+      if (req.method === 'PUT') return res.status(200).json(await saveProfile((req.body || {}).profile));
+      if (req.method === 'POST' && req.query.action === 'discuss') return res.status(200).json(await runTeamDiscussion(req));
+    } catch (err) {
+      return res.status(500).json({ error: err.message || 'Business profile request failed' });
+    }
+    res.setHeader('Allow', 'GET, PUT, POST');
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
 
   if (req.method === 'GET') {
     return res.status(200).json({ tasks: await listStandingTasks() });

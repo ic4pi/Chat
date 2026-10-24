@@ -49,6 +49,11 @@ const els = {
   accountAutopostPersona: $('accountAutopostPersona'),
   accountAutopostImageStyle: $('accountAutopostImageStyle'),
   autopostNowBtn: $('autopostNowBtn'),
+  businessProfileInput: $('businessProfileInput'),
+  saveProfileBtn: $('saveProfileBtn'),
+  discussNowBtn: $('discussNowBtn'),
+  businessNotesOutput: $('businessNotesOutput'),
+  notesAt: $('notesAt'),
   saveAccountBtn: $('saveAccountBtn'),
   deleteAccountBtn: $('deleteAccountBtn'),
 };
@@ -450,6 +455,39 @@ els.signOutBtn.addEventListener('click', signOut);
 els.refreshMediaBtn?.addEventListener('click', refreshMedia);
 els.newAccountBtn?.addEventListener('click', newAccount);
 els.saveAccountBtn?.addEventListener('click', saveAccount);
+
+async function bizCall(method, extra = '', body) {
+  const res = await fetch('/api/admin-standing-tasks?what=profile' + extra, {
+    method, credentials: 'same-origin', cache: 'no-store',
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(out.error || 'HTTP ' + res.status);
+  return out;
+}
+function showBiz(b) {
+  if (!els.businessProfileInput) return;
+  els.businessProfileInput.value = b.profile || '';
+  els.businessNotesOutput.value = b.notes || '';
+  els.notesAt.textContent = b.notesAt ? '(updated ' + new Date(b.notesAt).toLocaleString() + ')' : '';
+}
+bizCall('GET').then(showBiz).catch(() => {});
+els.saveProfileBtn?.addEventListener('click', async () => {
+  try { showBiz(await bizCall('PUT', '', { profile: els.businessProfileInput.value })); flashButton(els.saveProfileBtn, 'Saved'); }
+  catch (err) { alert('Save failed: ' + err.message); }
+});
+els.discussNowBtn?.addEventListener('click', async () => {
+  els.discussNowBtn.disabled = true;
+  els.discussNowBtn.textContent = 'The team is discussing… (can take a few minutes)';
+  try {
+    await bizCall('PUT', '', { profile: els.businessProfileInput.value });
+    await bizCall('POST', '&action=discuss');
+    showBiz(await bizCall('GET'));
+  } catch (err) { alert('Discussion failed: ' + err.message); }
+  els.discussNowBtn.disabled = false;
+  els.discussNowBtn.textContent = 'Have the team discuss it now';
+});
 els.autopostNowBtn?.addEventListener('click', async () => {
   if (!selectedAccountId) return;
   await saveAccount();

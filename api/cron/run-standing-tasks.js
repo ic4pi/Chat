@@ -5,6 +5,7 @@ import { checkAdminAuth } from '../../lib/auth.js';
 import { listStandingTasks, saveStandingTasks, isTaskDue } from '../../lib/standing-tasks.js';
 import { runStandingTask } from '../../lib/run-standing-task.js';
 import { runAutopost } from '../../lib/autopost.js';
+import { discussIfStale } from '../../lib/business-profile.js';
 
 function siteBase(req) {
   if (process.env.SITE_URL) return process.env.SITE_URL;
@@ -48,8 +49,11 @@ export default async function handler(req, res) {
 
   if (due.length) await saveStandingTasks(tasks);
 
+  let discussion = null;
+  try { discussion = await discussIfStale(req); } catch (err) { discussion = { error: err.message || String(err) }; }
+
   let autopost = [];
   try { autopost = await runAutopost({ baseUrl: siteBase(req) }); } catch (err) { autopost = [{ ok: false, error: err.message || String(err) }]; }
 
-  return res.status(200).json({ checked: tasks.length, ran: due.length, results, autopost });
+  return res.status(200).json({ checked: tasks.length, ran: due.length, results, discussion, autopost });
 }
