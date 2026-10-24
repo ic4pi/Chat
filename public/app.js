@@ -1871,80 +1871,100 @@ async function fetchPersonas() {
  */
 async function handlePostToSocial(text, triggerBtn, personaName) {
   if (!socialAccounts.length) return;
-  let accountId = socialAccounts[0].id;
-  if (socialAccounts.length > 1) {
-    const labels = socialAccounts.map((a, i) => `${i + 1}. ${a.label} (${a.platform})`).join('\n');
-    const pick = prompt(`Post to which account?\n${labels}\n\nEnter a number:`, '1');
-    if (!pick) return;
-    const idx = parseInt(pick, 10) - 1;
-    if (!Number.isInteger(idx) || !socialAccounts[idx]) {
-      alert('Invalid choice — nothing posted.');
-      return;
-    }
-    accountId = socialAccounts[idx].id;
-  }
-  const account = socialAccounts.find((a) => a.id === accountId);
+  const el = (tag, props = {}, ...kids) => {
+    const n = Object.assign(document.createElement(tag), props);
+    for (const k of kids) n.append(k);
+    return n;
+  };
+  const field = (label, input) => el('label', { style: 'display:block;margin:10px 0 0;font-size:13px;color:var(--muted)' }, label, input);
+  const fieldCss = 'display:block;width:100%;margin-top:4px;padding:8px;box-sizing:border-box;background:var(--panel-2);color:var(--text);border:1px solid var(--border-2);border-radius:8px;font:inherit';
 
-  let to;
-  let subject;
-  let imageUrl;
-  if (account.platform === 'email') {
-    to = (prompt('Send to which email address?') || '').trim();
-    if (!to) return;
-    subject = (prompt('Subject line:', 'Message from ' + (activePersona()?.name || 'the team')) || '').trim();
-    if (!confirm(`Send this email to ${to} now? This sends immediately and can't be undone.`)) return;
-  } else {
-    const wantsImage = confirm(
-      account.platform === 'instagram'
-        ? 'Instagram needs an image. Generate one now with AI?'
-        : 'Generate an AI image to attach to this post?',
-    );
-    if (wantsImage) {
-      const imgPrompt = (prompt('Describe the image:', text.slice(0, 200)) || '').trim();
-      if (imgPrompt) {
-        flashButton(triggerBtn, 'Generating image…');
+  const acct = el('select', { style: fieldCss });
+  socialAccounts.forEach((a) => acct.append(el('option', { value: a.id, textContent: `${a.label} (${a.platform})` })));
+  const to = el('input', { type: 'email', placeholder: 'name@example.com', style: fieldCss });
+  const subject = el('input', { type: 'text', value: 'Message from ' + (activePersona()?.name || 'the team'), style: fieldCss });
+  const imgOn = el('input', { type: 'checkbox' });
+  const imgPrompt = el('input', { type: 'text', value: text.slice(0, 200), style: fieldCss });
+  const pwBox = el('input', { type: 'password', placeholder: 'Unlock password', style: fieldCss });
+  const preview = el('div', { textContent: text, style: 'max-height:140px;overflow:auto;white-space:pre-wrap;padding:8px;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;font-size:13px' });
+  const status = el('div', { style: 'margin-top:12px;font-size:13px;min-height:18px;white-space:pre-wrap' });
+  const go = el('button', { type: 'button', textContent: 'Post now', style: 'padding:8px 16px;border-radius:8px;border:1px solid var(--border-2);background:var(--panel-2);color:var(--text);cursor:pointer;font:inherit' });
+  const cancel = el('button', { type: 'button', textContent: 'Close', style: 'padding:8px 16px;border-radius:8px;border:1px solid var(--border-2);background:var(--panel-2);color:var(--text);cursor:pointer;font:inherit' });
+
+  const emailRows = el('div', {}, field('Send to', to), field('Subject', subject));
+  const imgRow = el('div', {}, el('label', { style: 'display:flex;gap:8px;align-items:center;margin-top:10px;font-size:13px' }, imgOn, 'Attach an AI-generated image'), field('Image description', imgPrompt));
+  const sync = () => {
+    const a = socialAccounts.find((x) => x.id === acct.value);
+    const email = a.platform === 'email';
+    emailRows.style.display = email ? '' : 'none';
+    imgRow.style.display = email ? 'none' : '';
+    imgOn.checked = a.platform === 'instagram';
+    imgPrompt.parentElement.style.display = imgOn.checked ? '' : 'none';
+    go.textContent = email ? 'Send now' : 'Post now';
+  };
+  imgOn.addEventListener('change', () => { imgPrompt.parentElement.style.display = imgOn.checked ? '' : 'none'; });
+  acct.addEventListener('change', sync);
+
+  const box = el('div', { className: 'modal', style: 'padding:16px' },
+    el('h3', { textContent: 'Post this', style: 'margin:0 0 8px' }),
+    preview, field('Account', acct), emailRows, imgRow,
+    loadPaidPassword() ? el('span') : field('Unlock password to publish', pwBox),
+    el('p', { textContent: 'This publishes publicly and can’t be undone from here.', style: 'font-size:12px;color:var(--muted-2);margin:12px 0 0' }),
+    status,
+    el('div', { style: 'display:flex;gap:8px;justify-content:flex-end;margin-top:12px' }, cancel, go));
+  const overlay = el('div', { className: 'modal-overlay' }, box);
+  const close = () => overlay.remove();
+  cancel.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.body.append(overlay);
+  sync();
+
+  const say = (msg, bad) => { status.textContent = msg; status.style.color = bad ? '#FB7185' : 'var(--text)'; };
+  go.addEventListener('click', async () => {
+    const account = socialAccounts.find((x) => x.id === acct.value);
+    const isEmail = account.platform === 'email';
+    if (isEmail && !to.value.trim()) { say('Enter an email address.', true); return; }
+    let pw = loadPaidPassword();
+    if (!pw) {
+      pw = pwBox.value.trim();
+      if (!pw) { say('Enter the unlock password.', true); return; }
+    }
+    go.disabled = true;
+    try {
+      let imageUrl;
+      if (!isEmail && imgOn.checked && imgPrompt.value.trim()) {
+        say('Generating image…');
         try {
-          imageUrl = await generateImageForPost(imgPrompt);
+          imageUrl = await generateImageForPost(imgPrompt.value.trim());
         } catch (err) {
-          const keepGoing = account.platform === 'instagram'
-            ? false
-            : confirm(`Image generation failed: ${err.message || err}\n\nPost text-only instead?`);
-          if (!keepGoing) { flashButton(triggerBtn, 'Post to…'); return; }
+          if (account.platform === 'instagram') throw new Error(`Image generation failed: ${err.message || err}`);
+          say(`Image generation failed (${err.message || err}). Posting text only…`);
         }
       }
+      say(isEmail ? 'Sending…' : 'Posting…');
+      const res = await fetch('/api/social-post', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Paid-Password': pw },
+        body: JSON.stringify({
+          accountId: account.id,
+          message: text,
+          to: isEmail ? to.value.trim() : undefined,
+          subject: isEmail ? subject.value.trim() : undefined,
+          imageUrl,
+          personaName: personaName || activePersona()?.name || undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      savePaidPassword(pw);
+      flashButton(triggerBtn, isEmail ? 'Sent ✓' : 'Posted ✓');
+      say(isEmail ? 'Sent ✓' : 'Posted ✓');
+      setTimeout(close, 900);
+    } catch (err) {
+      say((isEmail ? 'Send failed: ' : 'Post failed: ') + (err.message || err), true);
+      go.disabled = false;
     }
-    if (!confirm(`Post this to "${account.label}" now? This publishes publicly and can't be undone from here.`)) {
-      return;
-    }
-  }
-
-  let pw = loadPaidPassword();
-  if (!pw) {
-    pw = (prompt('Unlock password required to publish:') || '').trim();
-    if (!pw) return;
-    savePaidPassword(pw);
-  }
-
-  flashButton(triggerBtn, account.platform === 'email' ? 'Sending…' : 'Posting…');
-  try {
-    const res = await fetch('/api/social-post', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Paid-Password': pw },
-      body: JSON.stringify({
-        accountId,
-        message: text,
-        to,
-        subject,
-        imageUrl,
-        personaName: personaName || activePersona()?.name || undefined,
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    flashButton(triggerBtn, account.platform === 'email' ? 'Sent ✓' : 'Posted ✓');
-  } catch (err) {
-    alert((account.platform === 'email' ? 'Send failed: ' : 'Post failed: ') + (err.message || err));
-  }
+  });
 }
 
 /** Generate a marketing image via /api/media-generate and return a hosted URL.
