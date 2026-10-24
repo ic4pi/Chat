@@ -46,7 +46,6 @@ const els = {
   accountFromEmailInput: $('accountFromEmailInput'),
   accountAutopostEvery: $('accountAutopostEvery'),
   accountAutopostPerDay: $('accountAutopostPerDay'),
-  accountAutopostBrief: $('accountAutopostBrief'),
   accountAutopostPersona: $('accountAutopostPersona'),
   accountAutopostImageStyle: $('accountAutopostImageStyle'),
   autopostNowBtn: $('autopostNowBtn'),
@@ -276,7 +275,6 @@ function selectAccount(id) {
   els.accountFromEmailInput.value = a.fromEmail || '';
   els.accountAutopostEvery.value = a.autopostEvery || 'off';
   els.accountAutopostPerDay.value = String(a.autopostPerDay || ({ facebook: 1, instagram: 1, twitter: 3 }[a.platform] || 1));
-  els.accountAutopostBrief.value = a.autopostBrief || '';
   els.accountAutopostPersona.value = a.autopostPersonaId || '';
   els.accountAutopostImageStyle.value = a.autopostImageStyle || '';
   syncAccountFieldVisibility();
@@ -317,7 +315,6 @@ async function saveAccount() {
   a.fromEmail = els.accountFromEmailInput.value.trim();
   a.autopostEvery = els.accountAutopostEvery.value;
   a.autopostPerDay = Number(els.accountAutopostPerDay.value) || 1;
-  a.autopostBrief = els.accountAutopostBrief.value.trim();
   a.autopostPersonaId = els.accountAutopostPersona.value.trim();
   a.autopostImageStyle = els.accountAutopostImageStyle.value.trim();
   await commit();

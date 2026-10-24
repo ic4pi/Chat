@@ -173,10 +173,6 @@ const ADMIN_HTML = `<!DOCTYPE html>
             </select>
           </label>
           <label class="field">
-            <span>What to post about <em>(optional — blank means marketing tips, how-tos and website advice, rotated)</em></span>
-            <textarea id="accountAutopostBrief" rows="4" placeholder="e.g. Semantiq is a marketing agency. Post one useful tip for small businesses, friendly, no hashtags spam."></textarea>
-          </label>
-          <label class="field">
             <span>Persona voice <em>(optional — persona id)</em></span>
             <input id="accountAutopostPersona" type="text" placeholder="e.g. nia" autocomplete="off" />
           </label>
