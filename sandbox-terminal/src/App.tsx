@@ -1573,7 +1573,7 @@ export function App() {
         padding: '6px 12px' }}>
         <a href="/" style={{ color: '#FF2E63', fontSize: 16, textDecoration: 'none',
           whiteSpace: 'nowrap', padding: '2px 0', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-          <img src="/logo-mark.png?v=7" alt="Jive" style={{ height: 30, width: 'auto', filter: 'drop-shadow(0 0 6px rgba(255,46,99,.5))' }} />
+          <img src="/logo-mark.png?v=6" alt="Jive" style={{ height: 30, width: 'auto', filter: 'drop-shadow(0 0 6px rgba(255,46,99,.5))' }} />
           ← Chat
         </a>
         <button type="button" onClick={() => { setHomeList(listSessions()); setShowHome(true); }}

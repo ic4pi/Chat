@@ -155,6 +155,30 @@ const ADMIN_HTML = `<!DOCTYPE html>
             <input id="accountFromEmailInput" type="text" placeholder="cole@yourdomain.com" autocomplete="off" />
           </label>
         </div>
+        <div id="accountAutopostFields">
+          <label class="field">
+            <span>Autopost <em>(Facebook / X — writes and posts by itself, no tap)</em></span>
+            <select id="accountAutopostEvery">
+              <option value="off">Off</option>
+              <option value="hourly">Every hour</option>
+              <option value="daily">Every day</option>
+              <option value="weekly">Every week</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>What to post about</span>
+            <textarea id="accountAutopostBrief" rows="4" placeholder="e.g. Semantiq is a marketing agency. Post one useful tip for small businesses, friendly, no hashtags spam."></textarea>
+          </label>
+          <label class="field">
+            <span>Persona voice <em>(optional — persona id)</em></span>
+            <input id="accountAutopostPersona" type="text" placeholder="e.g. nia" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Image style <em>(Instagram always gets an image; Facebook gets one when this is filled in)</em></span>
+            <textarea id="accountAutopostImageStyle" rows="3" placeholder="e.g. Dark moody studio look, hot-pink and cyan neon accents, one bold subject, shallow depth of field, cinematic. No text in the image."></textarea>
+          </label>
+          <button id="autopostNowBtn" class="text-btn" type="button">Autopost once now</button>
+        </div>
         <div class="persona-actions">
           <button id="saveAccountBtn" class="text-btn primary">Save</button>
           <button id="deleteAccountBtn" class="text-btn danger">Delete</button>

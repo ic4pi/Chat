@@ -6,10 +6,10 @@
 <title>Jive — Uncensored No-Code Agent</title>
 <meta name="description" content="Jive — uncensored no-code agent. Chat • Code • Create. Chat room, persona collective, think tank." />
 <meta name="theme-color" content="#09080C" />
-<link rel="icon" href="/favicon.ico?v=5" sizes="any" />
-<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=7" />
-<link rel="icon" type="image/png" href="/favicon.png?v=5" />
-<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=5" />
+<link rel="icon" href="/favicon.ico?v=6" sizes="any" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=6" />
+<link rel="icon" type="image/png" href="/favicon.png?v=6" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=6" />
 <link rel="manifest" href="/manifest.webmanifest?v=3" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -41,9 +41,7 @@
 #splash .lk img.eyes{left:16.8%;top:25.2%;width:52.9%;mix-blend-mode:normal;opacity:0}
 #splash .halo{position:absolute;left:8%;top:18%;width:84%;height:30%;border-radius:50%;background:radial-gradient(closest-side,rgba(255,46,99,.75),rgba(255,46,99,.25) 55%,rgba(255,46,99,0) 100%);opacity:0;transform:scale(.6);pointer-events:none}
 #splash .lk img.bk{left:0;top:0;width:100%;mix-blend-mode:normal}
-#splash .pl{left:13.5%;top:44.1%;width:26.3%}
-#splash .pj{left:39.7%;top:44.1%;width:22.6%}
-#splash .pr{left:62.3%;top:44.1%;width:24.1%}
+#splash .mk{left:0;top:0;width:100%}
 #splash .bar{width:min(46vw,260px);height:2px;background:rgba(255,46,99,.18);border-radius:2px;opacity:0;overflow:hidden}
 #splash .bar i{display:block;height:100%;width:100%;background:#ff3a6e;box-shadow:0 0 8px 1px rgba(255,46,99,.8);transform:scaleX(0);transform-origin:0 50%}
 #splash.go .lk{animation:fadeIn .9s ease-out .1s forwards}
@@ -59,7 +57,7 @@
 </style>
 </head>
 <body>
-<div id="splash" aria-hidden="true"><div class="lk"><img class="cat" src="/intro-cat.jpg?v=6" alt="" /><div class="halo"></div><img class="eyes" src="/intro-eyes.png?v=6" alt="" /><img class="bk" src="/intro-bk.png?v=5" alt="" /><img class="pl" src="/intro-l.jpg?v=5" alt="" /><img class="pj" src="/intro-j.jpg?v=5" alt="" /><img class="pr" src="/intro-r.jpg?v=5" alt="" /></div><div class="bar"><i></i></div></div>
+<div id="splash" aria-hidden="true"><div class="lk"><img class="cat" src="/intro-cat.jpg?v=6" alt="" /><div class="halo"></div><img class="eyes" src="/intro-eyes.png?v=6" alt="" /><img class="bk" src="/intro-bk.png?v=6" alt="" /><img class="mk" src="/intro-mark.jpg?v=6" alt="" /></div><div class="bar"><i></i></div></div>
 <script>
 // The intro plays every time someone arrives from another page or site (or opens the app fresh).
 // A refresh, back/forward, or a same-site move (chat <-> Code Space) skips it.
@@ -88,8 +86,8 @@ if(!n)start();setTimeout(start,2500)})();
        desktop viewports so mobile doesn't flash an overlay before JS runs. -->
   <aside id="chatsSidebar" class="sidebar left collapsed">
     <div class="brand-row">
-      <img class="brand-logo" src="/logo-mark.png?v=7" alt="" />
-      <img class="brand-wordmark" src="/wordmark.png?v=5" alt="jive" />
+      <img class="brand-logo" src="/logo-mark.png?v=6" alt="" />
+      <img class="brand-wordmark" src="/wordmark.png?v=6" alt="jive" />
     </div>
     <div class="side-accordion open" data-accordion="chats">
       <div class="side-accordion-header">
@@ -143,8 +141,8 @@ if(!n)start();setTimeout(start,2500)})();
   <!-- Main chat pane -->
   <main id="main">
     <header id="topbar">
-      <img class="topbar-logo" src="/logo-mark.png?v=7" alt="Jive" />
-      <img class="topbar-wordmark" src="/wordmark.png?v=5" alt="jive" />
+      <img class="topbar-logo" src="/logo-mark.png?v=6" alt="Jive" />
+      <img class="topbar-wordmark" src="/wordmark.png?v=6" alt="jive" />
       <button id="toggleChats" class="icon-btn" title="Chats" aria-label="Chats"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg></button>
 
       <button id="personaChip" class="persona-chip" type="button" aria-haspopup="dialog" aria-expanded="false" title="Switch persona">
