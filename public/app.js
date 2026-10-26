@@ -4506,6 +4506,19 @@ const SEARCH_ASK_RES = [
 ];
 const SEARCH_TRAILING_RE = new RegExp(String.raw`^(.*?)[\s,.;:!?-]*(?:(?:please|pls|and|then|just)\s+)*(?:(?:search|look\s*(?:it|this|that)?\s*up)\s+(?:on\s+)?(?:${SEARCH_WEB})|google\s+(?:it|this|that))\s*[.!?]*$`, 'i');
 
+// Plain-words asks that carry no "web/online/google" qualifier: "search for X",
+// "look up X", "find out X", "can you search the internet" (no subject → previous message).
+const SEARCH_BARE_RES = [
+  /\bsearch\s+(?:for|up)\s+(.+)$/i,
+  /\blook\s*up\s+(.+)$/i,
+  /\b(?:find\s+out|research)\s+(?:about\s+|whether\s+|if\s+)?(.+)$/i,
+  /\bgoogle\s+(?!it\b|this\b|that\b)(.+)$/i,
+  /\b(?:can|could|would|will)\s+you\s+(?:please\s+)?(?:search|browse|google|look)\b(?:\s+(?:the\s+)?(?:web|internet|net|online))?\s*$/i,
+];
+// Questions that are only answerable with live information: search without being asked.
+const SEARCH_FRESH_RE = /\b(?:latest|currently|right now|today(?:'s)?|tonight|this (?:week|month|year)|breaking|news|trending|recent(?:ly)?|new(?:est)?\s+(?:update|release|version|law|rule|feature)s?|price of|weather|score|stock price|who won|202[5-9])\b/i;
+const SEARCH_QUESTION_RE = /^(?:what|who|when|where|which|how much|how many|is|are|did|does|do|has|have|will|can|any)\b/i;
+
 function parseWebSearchRequest(text, previousUserText = '') {
   const raw = String(text || '').trim();
   if (!raw) return null;
@@ -4518,10 +4531,20 @@ function parseWebSearchRequest(text, previousUserText = '') {
       if (m) { query = m[1]; break; }
     }
   }
+  if (query === null) {
+    for (const re of SEARCH_BARE_RES) {
+      const m = raw.match(re);
+      if (m) { query = m[1] || ''; break; }
+    }
+  }
+  // Live-information question with no explicit ask: search the question itself.
+  if (query === null && raw.length <= 300 && SEARCH_FRESH_RE.test(raw) && (raw.endsWith('?') || SEARCH_QUESTION_RE.test(raw))) {
+    query = raw;
+  }
   if (query === null) return null;
   query = query.replace(/^(?:(?:for|about|on|and|to find|whether)\s+)+/i, '').replace(/[\s,;:.?!]+$/, '').trim();
   // "search the web for that" / no subject → search the previous message.
-  if (!query || /^(?:it|this|that|this topic|that topic)$/i.test(query)) {
+  if (!query || /^(?:it|this|that|this topic|that topic)$/i.test(query) || /^(?:(?:can|could|would|will)\s+you(?:\s+please)?|please)$/i.test(query)) {
     query = String(previousUserText || "").trim() || raw;
   }
   return query.slice(0, 400);
