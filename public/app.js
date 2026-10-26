@@ -4517,6 +4517,8 @@ const SEARCH_BARE_RES = [
 ];
 // Questions that are only answerable with live information: search without being asked.
 const SEARCH_FRESH_RE = /\b(?:latest|currently|right now|today(?:'s)?|tonight|this (?:week|month|year)|breaking|news|trending|recent(?:ly)?|new(?:est)?\s+(?:update|release|version|law|rule|feature)s?|price of|weather|score|stock price|who won|202[5-9])\b/i;
+// What is left of a capability question once the search words are cut off ("so you cant", "are you able to"): no subject.
+const SEARCH_FILLER_RE = /^(?:so\s+)?(?:(?:you|u)\s+(?:can(?:'?t|not)?|could(?:n'?t)?|are\s+able\s+to|aren'?t\s+able\s+to)|(?:can|could|would|will)\s+you(?:\s+please)?|are\s+you\s+(?:able|going)\s+to|please)$/i;
 const SEARCH_QUESTION_RE = /^(?:what|who|when|where|which|how much|how many|is|are|did|does|do|has|have|will|can|any)\b/i;
 
 function parseWebSearchRequest(text, previousUserText = '') {
@@ -4544,7 +4546,7 @@ function parseWebSearchRequest(text, previousUserText = '') {
   if (query === null) return null;
   query = query.replace(/^(?:(?:for|about|on|and|to find|whether)\s+)+/i, '').replace(/[\s,;:.?!]+$/, '').trim();
   // "search the web for that" / no subject → search the previous message.
-  if (!query || /^(?:it|this|that|this topic|that topic)$/i.test(query) || /^(?:(?:can|could|would|will)\s+you(?:\s+please)?|please)$/i.test(query)) {
+  if (!query || /^(?:it|this|that|this topic|that topic)$/i.test(query) || SEARCH_FILLER_RE.test(query)) {
     query = String(previousUserText || "").trim() || raw;
   }
   return query.slice(0, 400);
