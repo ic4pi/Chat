@@ -121,6 +121,27 @@ ok('move really moved it', true);
 ok('a command ran in the working folder', r.results[6].output.includes('from-the-shell') && r.results[6].output.includes(fs.realpathSync(WORK)));
 ok('delete really removed it', !fs.existsSync(path.join(WORK, 'notes/b.txt')) && !fs.existsSync(path.join(WORK, 'notes/2026/a.txt')));
 
+{
+  const t = await helperRun(['trash']);
+  ok('a deleted file is kept in the trash, not destroyed', /notes\/b\.txt/.test(t.out) && /node claw\.mjs restore/.test(r.results[7].output));
+  const id = t.out.split('\n').find((l) => /notes\/b\.txt/.test(l)).split(/\s+/)[0];
+  const back = await helperRun(['restore', id]);
+  ok('restore puts it back exactly', back.code === 0 && fs.readFileSync(path.join(WORK, 'notes/b.txt'), 'utf8') === 'hello\nworld\n');
+  const again = await helperRun(['restore', id]);
+  ok('restoring twice is refused', again.code === 1);
+  await job([{ do: 'write', path: 'notes/b.txt', content: 'REPLACED' }]);
+  const t2 = await helperRun(['trash']);
+  const id2 = t2.out.split('\n').find((l) => /overwritten/.test(l)).split(/\s+/)[0];
+  ok('overwriting a file keeps the old copy', fs.readFileSync(path.join(HOME, 'trash', id2, 'item'), 'utf8') === 'hello\nworld\n');
+  await job([{ do: 'delete', path: 'notes/b.txt' }]);
+}
+
+r = await job([{ do: 'write', path: 'creds.env', content: 'STRIPE_SECRET_KEY=sk_live_abcdefghijklmnop1234\nPORT=3000\n' }, { do: 'run', cmd: 'cat creds.env' }, { do: 'read', path: 'creds.env' }]);
+ok('secrets in command output are hidden before they are sent', r.status === 'done' && !JSON.stringify(r.results).includes('abcdefghijklmnop1234') && /STRIPE_SECRET_KEY=\[redacted\]/.test(r.results[1].output) && /PORT=3000/.test(r.results[1].output));
+ok('...and in file reads', !r.results[2].output.includes('abcdefghijklmnop1234'));
+ok('...and the user is told something was hidden', /hidden by the helper/.test(r.results[1].output));
+await job([{ do: 'delete', path: 'creds.env' }]);
+
 r = await job([{ do: 'run', cmd: 'node -e "console.log(JSON.stringify({a:1}))"' }, { do: 'run', cmd: 'ls | head -3' }]);
 ok('node and pipes work', r.status === 'done' && r.results[0].output.trim() === '{"a":1}');
 
