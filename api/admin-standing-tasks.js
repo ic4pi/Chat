@@ -6,6 +6,7 @@
 //   POST   /api/admin-standing-tasks?action=run&id=x  → run one task right now
 import { requireAdminAuth } from '../lib/auth.js';
 import { listStandingTasks, saveStandingTasks } from '../lib/standing-tasks.js';
+import { agency, limits } from '../lib/agency-control.js';
 import { runStandingTask } from '../lib/run-standing-task.js';
 import { getBusiness, saveProfile, runTeamDiscussion } from '../lib/business-profile.js';
 
@@ -29,6 +30,24 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  // Kill switch + today's usage:
+  //   GET  ?what=control                          -> { paused, reason, usage, limits }
+  //   PUT  ?what=control  { paused, reason? }     -> pause/resume everything the agency does on its own
+  if (req.query.what === 'control') {
+    try {
+      if (req.method === 'PUT') {
+        const b = req.body || {};
+        await agency.setPaused(b.paused === true, b.reason);
+      } else if (req.method !== 'GET') {
+        res.setHeader('Allow', 'GET, PUT');
+        return res.status(405).json({ error: 'Method not allowed' });
+      }
+      return res.status(200).json({ ...(await agency.getControl()), usage: await agency.usage(), limits: limits() });
+    } catch (err) {
+      return res.status(500).json({ error: err.message || 'Control request failed' });
+    }
+  }
+
   if (req.method === 'GET') {
     return res.status(200).json({ tasks: await listStandingTasks() });
   }
@@ -46,12 +65,16 @@ export default async function handler(req, res) {
     if (!task) return res.status(404).json({ error: `No standing task with id ${id}` });
     try {
       const result = await runStandingTask(task, req);
-      task.lastRunAt = new Date().toISOString();
-      await saveStandingTasks(tasks);
+      await agency.recordTaskSuccess(task.id);   // a good manual run also lifts a pause
       return res.status(200).json({ ok: true, result });
     } catch (err) {
       return res.status(500).json({ error: err.message || 'Task run failed' });
     }
+  }
+
+  if (req.method === 'POST' && req.query.action === 'resume') {
+    const id = typeof req.query.id === 'string' ? req.query.id : '';
+    return res.status(200).json({ ok: true, state: await agency.resumeTask(id) });
   }
 
   res.setHeader('Allow', 'GET, PUT, POST');

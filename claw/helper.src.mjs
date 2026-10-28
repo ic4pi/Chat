@@ -5,7 +5,7 @@
  *
  *   node claw.mjs pair ABCD-EFGH [--server https://your-site] [--dir ~/Jive-Workspace] [--name "My Mac"] [--allow-outside]
  *   node claw.mjs            (or: node claw.mjs run)   start helping; Ctrl+C to stop
- *   node claw.mjs status | log | unpair
+ *   node claw.mjs status | log | trash | restore ID | unpair
  *
  * What it will and won't do:
  *  - It only ever does jobs YOU approved with one tap on the Run card.
@@ -17,7 +17,10 @@
  *    Code Space kills what is running.
  *  - Everything it does is written to ~/.jive-claw/log.jsonl.
  *  - The OUTPUT of commands is sent back to your Code Space (and so to your AI).
- *    Do not run commands that print secrets.
+ *    Anything that looks like a key, token or password is hidden first, but do not
+ *    rely on that: do not run commands that print secrets.
+ *  - delete, overwrite and move never destroy the old copy: it goes to ~/.jive-claw/trash
+ *    (kept 30 days). `node claw.mjs trash` lists it, `node claw.mjs restore ID` puts it back.
  *
  * `--allow-outside` lets a command start in a folder other than the working folder.
  * Commands themselves can still touch anything your user can; the Run card tells you.
@@ -33,6 +36,8 @@ import { spawn } from 'node:child_process';
 const HOME = process.env.JIVE_CLAW_HOME || path.join(os.homedir(), '.jive-claw');
 const CONFIG = path.join(HOME, 'config.json');
 const LOG = path.join(HOME, 'log.jsonl');
+const TRASH = path.join(HOME, 'trash');
+const TRASH_DAYS = 30;
 const OUTPUT_CAP = 20_000;
 const POLL_IDLE_MS = Number(process.env.JIVE_CLAW_POLL_MS) || 2500;
 
@@ -93,10 +98,63 @@ function confine(root, given) {
   return full;
 }
 
-function capOutput(s) {
+function capOutput(raw) {
+  const red = redactSecrets(raw);
+  const s = red.count ? `${red.text}\n[${red.count} secret-looking value${red.count === 1 ? '' : 's'} hidden by the helper]` : red.text;
   if (s.length <= OUTPUT_CAP) return s;
   const keep = Math.floor(OUTPUT_CAP / 2) - 40;
   return `${s.slice(0, keep)}\n… [${s.length - keep * 2} characters cut] …\n${s.slice(-keep)}`;
+}
+
+// ── the trash: nothing is destroyed, only moved aside ────────────────────
+function stamp() { return new Date().toISOString().replace(/[:.]/g, '-'); }
+
+/** Move `p` (inside `root`) into the trash. Returns the trash id. */
+function toTrash(root, p) {
+  const id = `${stamp()}-${Math.random().toString(36).slice(2, 6)}`;
+  const dest = path.join(TRASH, id);
+  fs.mkdirSync(dest, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(dest, 'meta.json'), JSON.stringify({ original: p, root, at: new Date().toISOString() }));
+  const target = path.join(dest, 'item');
+  try { fs.renameSync(p, target); }
+  catch { fs.cpSync(p, target, { recursive: true, verbatimSymlinks: true }); fs.rmSync(p, { recursive: true, force: true }); }
+  return id;
+}
+
+/** Keep a copy of a file that is about to be overwritten. */
+function backupToTrash(root, p) {
+  const st = fs.lstatSync(p, { throwIfNoEntry: false });
+  if (!st || st.isDirectory()) return null;
+  const id = `${stamp()}-${Math.random().toString(36).slice(2, 6)}`;
+  const dest = path.join(TRASH, id);
+  fs.mkdirSync(dest, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(dest, 'meta.json'), JSON.stringify({ original: p, root, at: new Date().toISOString(), overwritten: true }));
+  fs.cpSync(p, path.join(dest, 'item'), { verbatimSymlinks: true });
+  return id;
+}
+
+function listTrash() {
+  let ids = [];
+  try { ids = fs.readdirSync(TRASH).sort(); } catch { return []; }
+  return ids.map((id) => { try { return { id, ...JSON.parse(fs.readFileSync(path.join(TRASH, id, 'meta.json'), 'utf8')) }; } catch { return null; } }).filter(Boolean);
+}
+
+function pruneTrash() {
+  const cutoff = Date.now() - TRASH_DAYS * 86_400_000;
+  for (const t of listTrash()) if (Date.parse(t.at) < cutoff) { try { fs.rmSync(path.join(TRASH, t.id), { recursive: true, force: true }); } catch { /* next time */ } }
+}
+
+function restore(id) {
+  const t = listTrash().find((x) => x.id === id);
+  if (!t) { say('No such item. See: node claw.mjs trash'); process.exit(1); }
+  const root = realWorkdir(t.root);
+  if (!isInside(root, t.original) && !isInside(t.root, t.original)) { say('Refusing: that item did not come from inside the working folder.'); process.exit(1); }
+  if (fs.existsSync(t.original)) { say(`Not restoring: ${t.original} already exists. Move it away first.`); process.exit(1); }
+  fs.mkdirSync(path.dirname(t.original), { recursive: true });
+  const src = path.join(TRASH, id, 'item');
+  try { fs.renameSync(src, t.original); } catch { fs.cpSync(src, t.original, { recursive: true, verbatimSymlinks: true }); }
+  fs.rmSync(path.join(TRASH, id), { recursive: true, force: true });
+  say(`Restored ${t.original}`);
 }
 
 // ── running one command ──────────────────────────────────────────────────
@@ -159,8 +217,9 @@ async function doAction(a, ctx) {
         const p = confine(root, a.path);
         fs.mkdirSync(path.dirname(p), { recursive: true });
         if (fs.existsSync(p) && fs.statSync(p).isDirectory()) throw new Error('that path is a folder');
+        const kept = a.do === 'write' ? backupToTrash(root, p) : null;
         (a.do === 'write' ? fs.writeFileSync : fs.appendFileSync)(p, a.content);
-        return done(`${a.do === 'write' ? 'wrote' : 'added'} ${a.content.length} characters: ${path.relative(root, p)}`);
+        return done(`${a.do === 'write' ? 'wrote' : 'added'} ${a.content.length} characters: ${path.relative(root, p)}${kept ? `  (old copy kept: restore ${kept})` : ''}`);
       }
       case 'mkdir': {
         const p = confine(root, a.path);
@@ -174,15 +233,16 @@ async function doAction(a, ctx) {
         if (!fs.existsSync(from)) throw new Error(`not found: ${a.from}`);
         if (fs.existsSync(to) && fs.statSync(to).isDirectory() && !fs.statSync(from).isDirectory()) throw new Error('target is a folder');
         fs.mkdirSync(path.dirname(to), { recursive: true });
+        const kept = fs.existsSync(to) ? toTrash(root, to) : null;
         fs.renameSync(from, to);
-        return done(`moved ${path.relative(root, from)} → ${path.relative(root, to)}`);
+        return done(`moved ${path.relative(root, from)} → ${path.relative(root, to)}${kept ? `  (replaced file kept: restore ${kept})` : ''}`);
       }
       case 'delete': {
         const p = confine(root, a.path);
         if (p === root) throw new Error('cannot delete the working folder itself');
         if (!fs.existsSync(p) && !fs.lstatSync(p, { throwIfNoEntry: false })) throw new Error(`not found: ${a.path}`);
-        fs.rmSync(p, { recursive: true });
-        return done(`deleted ${path.relative(root, p)}`);
+        const id = toTrash(root, p);
+        return done(`deleted ${path.relative(root, p)}  (kept in trash for ${TRASH_DAYS} days: node claw.mjs restore ${id})`);
       }
       case 'open': {
         const isUrl = /^https?:\/\//i.test(a.target);
@@ -256,6 +316,7 @@ async function run() {
   const cfg = readConfig();
   if (!cfg?.token) { say('Not paired yet. In the Code Space open the Claw panel, get a code, then run:\n  node claw.mjs pair ABCD-EFGH --server https://your-site'); process.exit(1); }
   const root = realWorkdir(cfg.workdir);
+  pruneTrash();
   const ctx = { root, allowOutside: !!cfg.allowOutside, child: null, cancelled: false };
   say(`Jive Claw helper is running.\n  Working folder: ${root}\n  Server: ${cfg.server}\n  Ctrl+C to stop.\n  Note: command output is sent to your Code Space and its AI.`);
   let lastErr = '';
@@ -296,5 +357,7 @@ if (cmd === 'pair') await pair(rest);
 else if (cmd === 'run') await run();
 else if (cmd === 'status') { const c = readConfig(); say(c ? `Paired with ${c.server}\nWorking folder: ${c.workdir}` : 'Not paired.'); }
 else if (cmd === 'log') { try { say(fs.readFileSync(LOG, 'utf8').split('\n').slice(-60).join('\n')); } catch { say('No log yet.'); } }
+else if (cmd === 'trash') { const t = listTrash(); say(t.length ? t.map((x) => `${x.id}  ${x.original}${x.overwritten ? '  (overwritten file)' : ''}`).join('\n') + '\n\nPut one back:  node claw.mjs restore ID' : 'The trash is empty.'); }
+else if (cmd === 'restore') restore(rest[0]);
 else if (cmd === 'unpair') { try { fs.unlinkSync(CONFIG); say('Unpaired. (Also remove the helper in the Code Space.)'); } catch { say('Not paired.'); } }
-else say('Commands: pair, run, status, log, unpair');
+else say('Commands: pair, run, status, log, trash, restore, unpair');

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vercel dev",
     "check": "node scripts/check-api.mjs",
-    "test": "node scripts/check-api.mjs && node scripts/check-campaign.mjs && node scripts/check-models.mjs && node scripts/check-stack-detect.mjs && node scripts/check-handoff.mjs && node scripts/check-web-search.mjs && npm run check:claw && npm run check:types",
+    "test": "node scripts/check-api.mjs && node scripts/check-campaign.mjs && node scripts/check-models.mjs && node scripts/check-stack-detect.mjs && node scripts/check-handoff.mjs && node scripts/check-web-search.mjs && node scripts/check-agency.mjs && npm run check:claw && npm run check:types",
     "animate": "node scripts/animate-sequence.mjs",
     "test:animate": "node scripts/test-animate-local.mjs",
     "check:packages": "node scripts/check-packages.mjs",
