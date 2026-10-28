@@ -49,6 +49,8 @@ const els = {
   accountAutopostPersona: $('accountAutopostPersona'),
   accountAutopostImageStyle: $('accountAutopostImageStyle'),
   autopostNowBtn: $('autopostNowBtn'),
+  agencyStatus: $('agencyStatus'),
+  agencyToggleBtn: $('agencyToggleBtn'),
   businessProfileInput: $('businessProfileInput'),
   saveProfileBtn: $('saveProfileBtn'),
   discussNowBtn: $('discussNowBtn'),
@@ -503,6 +505,30 @@ els.autopostNowBtn?.addEventListener('click', async () => {
     alert('Autopost failed: ' + err.message);
   }
   els.autopostNowBtn.textContent = 'Autopost once now';
+});
+// Agency autopilot: the kill switch and today's usage.
+let agencyPaused = false;
+async function agencyCall(method, body) {
+  const res = await fetch('/api/admin-standing-tasks?what=control', {
+    method, credentials: 'same-origin', cache: 'no-store',
+    headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined,
+  });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(out.error || 'HTTP ' + res.status);
+  return out;
+}
+function showAgency(c) {
+  agencyPaused = !!c.paused;
+  if (!els.agencyStatus) return;
+  els.agencyStatus.textContent = (c.paused ? 'PAUSED — nothing runs on its own.' : 'Running.')
+    + ' Today: ' + (c.usage?.taskRuns ?? 0) + '/' + (c.limits?.taskRunsPerDay ?? '?') + ' task runs, '
+    + (c.usage?.posts ?? 0) + '/' + (c.limits?.postsPerDay ?? '?') + ' post attempts.';
+  els.agencyToggleBtn.textContent = c.paused ? 'Resume the agency' : 'Pause the agency';
+}
+agencyCall('GET').then(showAgency).catch(() => { if (els.agencyStatus) els.agencyStatus.textContent = 'Could not load status.'; });
+els.agencyToggleBtn?.addEventListener('click', async () => {
+  try { showAgency(await agencyCall('PUT', { paused: !agencyPaused, reason: 'Paused from the admin page' })); }
+  catch (err) { alert('Failed: ' + err.message); }
 });
 els.deleteAccountBtn?.addEventListener('click', deleteAccount);
 els.accountPlatformInput?.addEventListener('change', syncAccountFieldVisibility);
