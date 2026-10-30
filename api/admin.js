@@ -191,6 +191,18 @@ const ADMIN_HTML = `<!DOCTYPE html>
   </section>
 
   <section class="admin-section">
+    <h2>Agency autopilot</h2>
+    <p class="admin-hint">
+      Everything the agency does by itself (autoposting, standing tasks) stops while this is paused.
+      Daily limits protect your spend; a standing task that fails 5 times in a row pauses itself.
+    </p>
+    <p id="agencyStatus" class="admin-hint">Loading…</p>
+    <div class="admin-actions">
+      <button id="agencyToggleBtn" class="text-btn" type="button">…</button>
+    </div>
+  </section>
+
+  <section class="admin-section">
     <h2>Business profile</h2>
     <p class="admin-hint">
       Everything about the company: what it does, who it serves, services, offers, tone, what never to say.
