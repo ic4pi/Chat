@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Jive Claw helper — runs on YOUR computer and does the jobs you approved in the
+ * Dr Claw helper — runs on YOUR computer and does the jobs you approved in the
  * Code Space. Plain Node (18+), no packages, Mac and Linux.
  *
  *   node claw.mjs pair ABCD-EFGH [--server https://your-site] [--dir ~/Jive-Workspace] [--name "My Mac"] [--allow-outside]
@@ -254,10 +254,10 @@ async function runJob(cfg, job, ctx) {
 
 async function run() {
   const cfg = readConfig();
-  if (!cfg?.token) { say('Not paired yet. In the Code Space open the Claw panel, get a code, then run:\n  node claw.mjs pair ABCD-EFGH --server https://your-site'); process.exit(1); }
+  if (!cfg?.token) { say('Not paired yet. In the Code Space open the Dr Claw panel, get a code, then run:\n  node claw.mjs pair ABCD-EFGH --server https://your-site'); process.exit(1); }
   const root = realWorkdir(cfg.workdir);
   const ctx = { root, allowOutside: !!cfg.allowOutside, child: null, cancelled: false };
-  say(`Jive Claw helper is running.\n  Working folder: ${root}\n  Server: ${cfg.server}\n  Ctrl+C to stop.\n  Note: command output is sent to your Code Space and its AI.`);
+  say(`Dr Claw helper is running.\n  Working folder: ${root}\n  Server: ${cfg.server}\n  Ctrl+C to stop.\n  Note: command output is sent to your Code Space and its AI.`);
   let lastErr = '';
   for (;;) {
     try {

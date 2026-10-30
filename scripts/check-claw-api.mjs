@@ -149,6 +149,54 @@ ok("another owner cannot stop someone else's job", await (async () => {
   ok('even a job that bypassed validation is re-checked and not handed out', r.body.job === null && db.tables.claw_jobs.find((j) => j.id === 'poison').status === 'failed');
 }
 
+// ── saved workflows ──────────────────────────────────────────────────────
+{
+  const p2 = await pair('ownerW', 'Workflow Mac');
+  const tokW = p2.body.token;
+  const steps = [{ do: 'list', path: '.' }, { do: 'run', cmd: 'git status', cwd: 'proj' }];
+  const saved = await call('workflow-save', { owner: 'ownerW', body: { name: 'Morning check', actions: steps } });
+  ok('a workflow saves with its steps', saved.status === 200 && saved.body.workflow.name === 'Morning check' && saved.body.workflow.actions.length === 2);
+  ok('it starts with auto-run OFF', saved.body.workflow.autoRun === false);
+  ok('a workflow with a blocked step is refused', (await call('workflow-save', { owner: 'ownerW', body: { name: 'bad', actions: [{ do: 'run', cmd: 'sudo rm -rf /' }] } })).status === 400);
+  ok('a workflow needs a name', (await call('workflow-save', { owner: 'ownerW', body: { name: '  ', actions: steps } })).status === 400);
+  const again = await call('workflow-save', { owner: 'ownerW', body: { name: 'morning CHECK', actions: [{ do: 'list', path: 'x' }] } });
+  ok('saving the same name (any case) updates it instead of duplicating', again.body.updated === true && (await call('workflow-list', { method: 'GET', owner: 'ownerW' })).body.workflows.length === 1);
+  const wid = saved.body.workflow.id;
+  ok("another owner cannot see my workflows", (await call('workflow-list', { method: 'GET', owner: 'ownerB' })).body.workflows.length === 0);
+  ok("another owner cannot run my workflow", (await call('workflow-run', { owner: 'ownerB', body: { id: wid } })).status === 404);
+
+  // I tap Run on it: needs the helper online, then makes a job.
+  ok('running with no helper online says so', (await call('workflow-run', { owner: 'ownerW', body: { id: wid } })).status === 409);
+  await call('poll', { token: tokW });
+  const run1 = await call('workflow-run', { owner: 'ownerW', body: { id: wid } });
+  ok('my own Run tap starts it and bumps the run count', run1.status === 200 && (await call('workflow-list', { method: 'GET', owner: 'ownerW' })).body.workflows[0].runCount === 1);
+  const pickedUp = await call('poll', { token: tokW });
+  ok('the helper gets the saved steps', pickedUp.body.job && pickedUp.body.job.actions[0].do === 'list');
+  await call('report', { token: tokW, body: { id: pickedUp.body.job.id, status: 'done', results: [{ i: 0, do: 'list', ok: true, output: '', error: '', ms: 1 }] } });
+
+  // A persona asks: refused unless auto-run was switched on.
+  const byP = await call('workflow-run', { owner: 'ownerW', body: { id: wid, byPersona: true } });
+  ok('a persona cannot start a workflow I did not allow', byP.status === 403 && /not set to run without asking/.test(byP.body.error));
+  ok('and nothing was queued', !db.tables.claw_jobs.some((j) => j.owner_id === 'ownerW' && j.status === 'approved'));
+  await call('workflow-update', { owner: 'ownerW', body: { id: wid, autoRun: true } });
+  await call('poll', { token: tokW });
+  const byP2 = await call('workflow-run', { owner: 'ownerW', body: { id: wid, byPersona: true } });
+  ok('once I switch auto-run on, a persona can start it', byP2.status === 200);
+  const j2 = await call('poll', { token: tokW });
+  await call('report', { token: tokW, body: { id: j2.body.job.id, status: 'done', results: [] } });
+  ok("another owner cannot flip my auto-run", (await call('workflow-update', { owner: 'ownerB', body: { id: wid, autoRun: false } })).status === 404);
+
+  // A stored workflow that stopped passing the rules is not run.
+  db.tables.claw_workflows.find((w) => w.id === wid).actions = [{ do: 'run', cmd: 'sudo reboot' }];
+  await call('poll', { token: tokW });
+  ok('a stored workflow is re-checked against the safety rules before it runs', (await call('workflow-run', { owner: 'ownerW', body: { id: wid } })).status === 400);
+
+  await call('workflow-delete', { owner: 'ownerB', body: { id: wid } });
+  ok("another owner cannot delete my workflow", (await call('workflow-list', { method: 'GET', owner: 'ownerW' })).body.workflows.length === 1);
+  await call('workflow-delete', { owner: 'ownerW', body: { id: wid } });
+  ok('I can delete it', (await call('workflow-list', { method: 'GET', owner: 'ownerW' })).body.workflows.length === 0);
+}
+
 // ── removing a helper ────────────────────────────────────────────────────
 ok("another owner cannot remove my helper", await (async () => {
   await call('device-remove', { body: { id: p.body.deviceId }, owner: 'ownerB' });

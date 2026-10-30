@@ -1,5 +1,5 @@
 /**
- * Claw panel — the helper on your computer, and the one approval for each batch.
+ * Dr Claw panel — the helper on your computer, and the one approval for each batch.
  *
  * Nothing runs until you tap Run on the card. The card lists every step in plain
  * English with a risk label. One tap covers the whole batch; Stop interrupts it.
@@ -8,10 +8,10 @@
 import { useState } from 'react';
 import {
   classifyAction, describeAction, worstLevel, clawPairStart, clawRemoveDevice,
-  type ClawAction, type ClawJob, type ClawLevel, type ClawStatus,
+  type ClawAction, type ClawJob, type ClawLevel, type ClawStatus, type ClawWorkflow,
 } from './claw.js';
 
-export interface ClawPending { actions: ClawAction[]; errors: string[] }
+export interface ClawPending { actions: ClawAction[]; errors: string[]; workflowId?: string; workflowName?: string; revisionOf?: string }
 export interface ClawRunState { job: ClawJob | null; starting: boolean; error: string }
 
 interface Props {
@@ -26,6 +26,12 @@ interface Props {
   run: ClawRunState | null;
   onStop: () => void;
   onDismissRun: () => void;
+  workflows: ClawWorkflow[];
+  onSaveWorkflow: (name: string, actions: ClawAction[]) => Promise<void>;
+  onRunWorkflow: (id: string) => void;
+  onSetAutoRun: (id: string, autoRun: boolean) => void;
+  onDeleteWorkflow: (id: string) => void;
+  onSuggest: (id: string) => void;
 }
 
 const LEVEL: Record<ClawLevel, { label: string; color: string }> = {
@@ -55,8 +61,31 @@ function Copyable({ text }: { text: string }) {
   );
 }
 
+function SaveWorkflow({ actions, onSave, label, defaultName = '' }: { actions: ClawAction[]; onSave: (name: string, actions: ClawAction[]) => Promise<void>; label: string; defaultName?: string }) {
+  const [name, setName] = useState(defaultName);
+  const [msg, setMsg] = useState('');
+  if (!actions.length) return null;
+  const save = async () => {
+    if (!name.trim()) { setMsg('Give it a name first.'); return; }
+    try { await onSave(name.trim(), actions); setMsg(`Saved as “${name.trim()}”.`); setName(''); }
+    catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
+  };
+  return (
+    <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px dashed var(--border)' }}>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>{label}</div>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <input data-testid="claw-wf-name" value={name} onChange={e => setName(e.target.value)} placeholder="Name, e.g. Morning check" maxLength={60}
+          style={{ flex: 1, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '6px 8px', fontSize: 13, fontFamily: 'inherit' }} />
+        <button type="button" data-testid="claw-wf-save" className="ws-btn" onClick={() => void save()} style={{ ...btn(), padding: '6px 12px', fontSize: 13 }}>Save workflow</button>
+      </div>
+      {msg && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>{msg}</div>}
+    </div>
+  );
+}
+
 export function ClawPanel(p: Props) {
-  const { open, onClose, status, statusError, onRefresh, pending, onRun, onDecline, run, onStop, onDismissRun } = p;
+  const { open, onClose, status, statusError, onRefresh, pending, onRun, onDecline, run, onStop, onDismissRun,
+    workflows, onSaveWorkflow, onRunWorkflow, onSetAutoRun, onDeleteWorkflow, onSuggest } = p;
   const [code, setCode] = useState<{ code: string; expiresAt: string } | null>(null);
   const [codeError, setCodeError] = useState('');
   if (!open) return null;
@@ -76,13 +105,13 @@ export function ClawPanel(p: Props) {
   return (
     <div className="ws-backdrop" onClick={onClose}
       style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', justifyContent: 'flex-end' }}>
-      <div className="ws-panel" role="dialog" aria-modal="true" aria-label="Claw" onClick={e => e.stopPropagation()}
+      <div className="ws-panel" role="dialog" aria-modal="true" aria-label="Dr Claw" onClick={e => e.stopPropagation()}
         style={{ width: 'min(460px, 100vw)', height: '100%', background: 'var(--surface)',
           borderLeft: '1px solid var(--border)', overflowY: 'auto' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px',
           borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1 }}>
-          <strong style={{ fontSize: 16, color: 'var(--text)' }}>Claw · your computer</strong>
-          <button type="button" className="ws-btn" onClick={onClose} aria-label="Close Claw"
+          <strong style={{ fontSize: 16, color: 'var(--text)' }}>Dr Claw · your computer</strong>
+          <button type="button" className="ws-btn" onClick={onClose} aria-label="Close Dr Claw"
             style={{ background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border)',
               borderRadius: 'var(--radius)', width: 28, height: 28, cursor: 'pointer', fontSize: 16, lineHeight: 1 }}>×</button>
         </div>
@@ -132,6 +161,12 @@ export function ClawPanel(p: Props) {
             <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 10 }}>
               One tap runs the whole list. Command output is sent back here and to your orchestrator.
             </div>
+            {pending.workflowId
+              ? <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8 }}>Saved workflow “{pending.workflowName}”.</div>
+              : blockedCount === 0 && (pending.revisionOf
+                ? <SaveWorkflow actions={pending.actions} onSave={onSaveWorkflow} defaultName={pending.revisionOf}
+                    label={`This is the suggested new version of “${pending.revisionOf}”. Run it to test it, then save it under the same name to replace the old steps.`} />
+                : <SaveWorkflow actions={pending.actions} onSave={onSaveWorkflow} label="Run this often? Save it as a workflow to run again with one tap." />)}
           </section>
         )}
 
@@ -158,8 +193,44 @@ export function ClawPanel(p: Props) {
               {running && <button type="button" data-testid="claw-stop" className="ws-btn" onClick={onStop} style={btn()}>Stop</button>}
               {!running && !run.starting && <button type="button" className="ws-btn" onClick={onDismissRun} style={btn()}>Done</button>}
             </div>
+            {!running && !run.starting && run.job && run.job.status === 'done' && (
+              <SaveWorkflow actions={run.job.actions} onSave={onSaveWorkflow} label="That worked. Save these steps as a workflow to run again later." />
+            )}
           </section>
         )}
+
+        <section data-testid="claw-workflows" style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
+          <h3 style={{ margin: '0 0 8px', fontSize: 15, color: 'var(--text)' }}>Saved workflows</h3>
+          {workflows.length === 0 && <div style={{ fontSize: 13, color: 'var(--text-dim)' }}>None yet. After a run, save its steps here to run again with one tap, or let a persona run it for you.</div>}
+          {workflows.map(w => {
+            const worstW = worstLevel(w.actions);
+            return (
+              <div key={w.id} data-testid="claw-wf" style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 10, marginBottom: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <strong style={{ flex: 1, fontSize: 14, color: 'var(--text)', wordBreak: 'break-word' }}>{w.name}</strong>
+                  <span style={{ fontSize: 11, border: `1px solid ${LEVEL[worstW].color}`, color: LEVEL[worstW].color, borderRadius: 3, padding: '0 5px' }}>{LEVEL[worstW].label}</span>
+                  <button type="button" data-testid="claw-wf-run" className="ws-btn" disabled={!online || running || !!pending}
+                    onClick={() => onRunWorkflow(w.id)} style={{ ...btn(true), padding: '4px 12px', fontSize: 13, opacity: !online || running || pending ? 0.45 : 1 }}>Run</button>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-dim)', margin: '4px 0' }}>
+                  {w.actions.length} step{w.actions.length === 1 ? '' : 's'} · run {w.runCount} time{w.runCount === 1 ? '' : 's'}{w.lastRunAt ? ` · last ${new Date(w.lastRunAt).toLocaleDateString()}` : ''}
+                </div>
+                <details style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                  <summary style={{ cursor: 'pointer' }}>See the steps</summary>
+                  <ol style={{ margin: '4px 0', paddingLeft: 18 }}>{w.actions.map((a, i) => <li key={i} style={{ wordBreak: 'break-word' }}>{describeAction(a)}</li>)}</ol>
+                </details>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'flex-start', fontSize: 12, color: 'var(--text-muted)', marginTop: 6, cursor: 'pointer' }}>
+                  <input type="checkbox" data-testid="claw-wf-auto" checked={w.autoRun} onChange={e => onSetAutoRun(w.id, e.target.checked)} style={{ marginTop: 2 }} />
+                  <span>Let my personas run this without asking me each time. <span style={{ color: 'var(--text-dim)' }}>The helper still refuses anything dangerous, and you can Stop any run.</span></span>
+                </label>
+                <button type="button" data-testid="claw-wf-suggest" className="ws-btn" onClick={() => onSuggest(w.id)}
+                  style={{ ...btn(), padding: '2px 10px', fontSize: 12, marginTop: 6, marginRight: 6 }}>Suggest improvements</button>
+                <button type="button" className="ws-btn" onClick={() => { if (window.confirm(`Delete the workflow “${w.name}”?`)) onDeleteWorkflow(w.id); }}
+                  style={{ ...btn(), padding: '2px 10px', fontSize: 12, marginTop: 6 }}>Delete</button>
+              </div>
+            );
+          })}
+        </section>
 
         <section style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
           <details open={!status || status.devices.length === 0}>

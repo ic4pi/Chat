@@ -1,5 +1,5 @@
 /**
- * Claw — the Code Space's side of the helper on your computer.
+ * Dr Claw — the Code Space's side of the helper on your computer.
  *
  * The orchestrator proposes a batch of steps; nothing happens until you tap Run
  * on the card. The server only relays; the helper on your computer does the work
@@ -16,6 +16,7 @@ const API_URL = (import.meta.env['VITE_API_URL'] as string | undefined) ?? 'http
 export interface ClawDevice { id: string; label: string | null; workdir: string | null; online: boolean; lastSeen: string | null }
 export interface ClawStatus { devices: ClawDevice[]; online: boolean; openJob: { id: string; status: string } | null }
 export interface ClawStepResult { i: number; do: string; ok: boolean; output: string; error: string; ms: number }
+export interface ClawWorkflow { id: string; name: string; actions: ClawAction[]; autoRun: boolean; runCount: number; lastRunAt: string | null }
 export interface ClawJob { id: string; status: 'approved' | 'running' | 'done' | 'failed' | 'cancelled'; actions: ClawAction[]; results: ClawStepResult[] | null }
 
 async function call<T>(action: string, opts: { method?: 'GET' | 'POST'; body?: unknown; query?: string } = {}): Promise<T> {
@@ -39,6 +40,16 @@ export const clawPairStart = () => call<{ code: string; expiresAt: string }>('pa
 export const clawCreateJob = (actions: ClawAction[]) => call<{ id: string }>('job-create', { body: { actions } });
 export const clawGetJob = (id: string) => call<{ job: ClawJob }>('job', { method: 'GET', query: `&id=${encodeURIComponent(id)}` });
 export const clawStopJob = (id: string) => call<{ stopped: boolean }>('job-stop', { body: { id } });
+export const clawWorkflows = async (): Promise<ClawWorkflow[]> => {
+  const r = await call<{ workflows?: ClawWorkflow[] }>('workflow-list', { method: 'GET' });
+  return Array.isArray(r?.workflows) ? r.workflows : [];
+};
+export const clawSaveWorkflow = (name: string, actions: ClawAction[], autoRun?: boolean) =>
+  call<{ workflow: ClawWorkflow; updated: boolean }>('workflow-save', { body: { name, actions, ...(autoRun === undefined ? {} : { autoRun }) } });
+export const clawSetWorkflowAutoRun = (id: string, autoRun: boolean) => call<{ workflow: ClawWorkflow }>('workflow-update', { body: { id, autoRun } });
+export const clawDeleteWorkflow = (id: string) => call<{ ok: true }>('workflow-delete', { body: { id } });
+/** byPersona: a persona asked. The server only allows that for workflows you switched auto-run on for. */
+export const clawRunWorkflow = (id: string, byPersona = false) => call<{ id: string; name: string }>('workflow-run', { body: { id, byPersona } });
 export const clawRemoveDevice = (id: string) => call<{ ok: true }>('device-remove', { body: { id } });
 
 const TERMINAL = new Set(['done', 'failed', 'cancelled']);

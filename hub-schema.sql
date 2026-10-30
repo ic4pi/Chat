@@ -465,3 +465,19 @@ create table if not exists claw_jobs (
 create index if not exists claw_jobs_owner_idx on claw_jobs(owner_id, created_at desc);
 create index if not exists claw_jobs_open_idx on claw_jobs(owner_id, status);
 alter table claw_jobs enable row level security;
+
+-- Dr Claw saved workflows: a batch of steps you approved once and named, to run again.
+-- auto_run is YOUR explicit opt-in: only then may a persona start it without a tap.
+-- The helper still applies its own safety rules to every step, whoever started it.
+create table if not exists claw_workflows (
+  id          uuid primary key default gen_random_uuid(),
+  owner_id    uuid not null references owners(id) on delete cascade,
+  name        text not null,
+  actions     jsonb not null,
+  auto_run    boolean not null default false,
+  run_count   int not null default 0,
+  last_run_at timestamptz,
+  created_at  timestamptz not null default now()
+);
+create unique index if not exists claw_workflows_owner_name_idx on claw_workflows(owner_id, lower(name));
+alter table claw_workflows enable row level security;

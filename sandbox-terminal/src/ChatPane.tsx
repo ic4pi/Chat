@@ -795,6 +795,7 @@ interface Props {
   /** The helper on your computer is running (the orchestrator is told, and may propose steps). */
   clawOnline?:       boolean;
   clawWorkdir?:      string;
+  clawWorkflows?:    { name: string; autoRun: boolean }[];
   /** The orchestrator proposed steps for your computer — show the Run card. Nothing runs until you tap Run. */
   onClawPlan?:       (actions: unknown[], errors: string[]) => void;
   /** Hold persona briefs until you pick who builds them. */
@@ -820,7 +821,7 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   repoRoot, repoUrl, sandboxId, provider, model, role, persona = null, apiKey, tree, contextFiles, autoRun, appliedPaths,
   autoSelectedFiles, searchHits, initialMessages, onMessagesChange,
   onRunCode, onFileChanges, onUploadText, onBeforeSend, onModelReplaced, onOpenPush, onCompareBrief,
-  buildPlan = '', onBuildPlan, clawOnline = false, clawWorkdir = '', onClawPlan,
+  buildPlan = '', onBuildPlan, clawOnline = false, clawWorkdir = '', clawWorkflows = [], onClawPlan,
   askBeforeBuild = false, buildPicker, fixer = null,
   pythonReady = null, pythonDetail = null,
   rustReady = null, rustDetail = null,
@@ -870,12 +871,12 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
   const latestRef = useRef({
     repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onOpenPush, onCompareBrief, askBeforeBuild, fixer, buildPlan, onBuildPlan, clawOnline, clawWorkdir, onClawPlan,
+    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onOpenPush, onCompareBrief, askBeforeBuild, fixer, buildPlan, onBuildPlan, clawOnline, clawWorkdir, clawWorkflows, onClawPlan,
   });
   latestRef.current = {
     repoRoot, repoUrl, sandboxId, provider, model, role, persona, apiKey, tree, contextFiles, searchHits,
     autoRun, onRunCode, onFileChanges, onBeforeSend, messages, pythonReady, pythonDetail,
-    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onOpenPush, onCompareBrief, askBeforeBuild, fixer, buildPlan, onBuildPlan, clawOnline, clawWorkdir, onClawPlan,
+    rustReady, rustDetail, goReady, goDetail, onModelReplaced, onOpenPush, onCompareBrief, askBeforeBuild, fixer, buildPlan, onBuildPlan, clawOnline, clawWorkdir, clawWorkflows, onClawPlan,
   };
 
   useEffect(() => {
@@ -1175,8 +1176,11 @@ export const ChatPane = forwardRef<ChatHandle, Props>(function ChatPane({
           role: activeRole,
           plan: latestRef.current.buildPlan,
         }) + (latestRef.current.clawOnline
-          ? `\n\nCLAW HELPER: connected. Working folder on the user's computer: ${latestRef.current.clawWorkdir || '~/Jive-Workspace'}.`
-          : '\n\nCLAW HELPER: not connected (do not propose steps for the user\'s computer).');
+          ? `\n\nDR CLAW HELPER: connected. Working folder on the user's computer: ${latestRef.current.clawWorkdir || '~/Jive-Workspace'}.`
+            + (latestRef.current.clawWorkflows?.length
+              ? `\nSAVED WORKFLOWS you can run by name: ${latestRef.current.clawWorkflows.map(w => `"${w.name}" (${w.autoRun ? 'runs without asking' : 'the user taps Run'})`).join(', ')}.`
+              : '\nSAVED WORKFLOWS: none yet.')
+          : '\n\nDR CLAW HELPER: not connected (do not propose steps for the user\'s computer).');
         const pProv = orchPersona.provider || prov;
         const pMod = orchPersona.model || mod;
         const personaTurns = trimMessageHistory(buildPersonaHistory(withUser));
