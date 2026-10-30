@@ -97,14 +97,37 @@ await check('fetchWithModelFallback: one retry on a same-kind replacement', asyn
   assert.deepEqual(seen, ['deepseek/deepseek-chat-v3.1:free', 'nvidia/nemotron-3-super-120b-a12b:free']);
 });
 
-await check('fetchWithModelFallback: other errors pass through untouched and readable', async () => {
+await check('fetchWithModelFallback: a persistent 429 on a paid model is retried, then passes through readable', async () => {
+  let calls = 0;
   const out = await fetchWithModelFallback({
-    providerId: 'openrouter', model: 'x', kind: 'chat',
-    doFetch: async () => new Response('Rate limit exceeded', { status: 429 }),
+    providerId: 'openrouter', model: 'thedrummer/cydonia-24b-v4.1', kind: 'chat', retryWaitsMs: [1, 1],
+    doFetch: async () => { calls++; return new Response('Rate limit exceeded', { status: 429 }); },
   });
   assert.equal(out.res.status, 429);
   assert.equal(await out.res.text(), 'Rate limit exceeded');
   assert.equal(out.replaced, null);
+  assert.equal(calls, 3, 'tried once, then retried twice on the same model');
+});
+
+await check('fetchWithModelFallback: a 429 that clears on retry answers on the SAME model', async () => {
+  let calls = 0;
+  const out = await fetchWithModelFallback({
+    providerId: 'openrouter', model: 'thedrummer/cydonia-24b-v4.1', kind: 'chat', retryWaitsMs: [1, 1],
+    doFetch: async () => (++calls < 2 ? new Response('Provider returned error', { status: 429 }) : new Response('{}', { status: 200 })),
+  });
+  assert.equal(out.res.status, 200);
+  assert.equal(out.model, 'thedrummer/cydonia-24b-v4.1');
+  assert.equal(out.replaced, null);
+});
+
+await check('fetchWithModelFallback: a non-rate-limit error is not retried', async () => {
+  let calls = 0;
+  const out = await fetchWithModelFallback({
+    providerId: 'openrouter', model: 'x', kind: 'chat', retryWaitsMs: [1, 1],
+    doFetch: async () => { calls++; return new Response('Unauthorized', { status: 401 }); },
+  });
+  assert.equal(out.res.status, 401);
+  assert.equal(calls, 1);
 });
 
 await check('/api/chat answers on a replacement and reports it', async () => {
