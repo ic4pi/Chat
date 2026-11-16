@@ -23,6 +23,7 @@ import { requirePaidAccess } from '../lib/model-meta.js';
 import { searchWeb, formatSearchContext } from '../lib/websearch.js';
 import { resolveOwner } from '../lib/hub.js';
 import { recentTeamActions, formatTeamActions } from '../lib/team-log.js';
+import { getBusiness, businessBlock, TEAM_IDS } from '../lib/business-profile.js';
 
 const UPSTREAM_TIMEOUT_MS = 90_000;
 const MAX_PERSONAS = 12;
@@ -452,6 +453,10 @@ export default async function handler(req, res) {
       console.error('recentTeamActions failed:', err);
     }
 
+    // The business profile, offers and strategy: read once per round, given only to the agency's own team seats.
+    let bizBlock = '';
+    try { bizBlock = businessBlock(await getBusiness()); } catch { /* the round goes on without it */ }
+
     sseWrite(res, {
       type: 'status',
       message: `Updating table context (${mode}) · ${personas.length} personas…`,
@@ -566,7 +571,7 @@ export default async function handler(req, res) {
         }
       }
 
-      const personaPrompt = [master, persona.systemPrompt, modeRules, teamActionsBlock, searchContext]
+      const personaPrompt = [master, persona.systemPrompt, TEAM_IDS.includes(persona.id) ? bizBlock : '', modeRules, teamActionsBlock, searchContext]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n');
 

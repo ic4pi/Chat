@@ -12,6 +12,10 @@
       "destination": "/api/admin"
     },
     {
+      "source": "/team",
+      "destination": "/api/agency?op=page"
+    },
+    {
       "source": "/agent",
       "destination": "/agent/index.html"
     },
@@ -150,6 +154,9 @@
       "maxDuration": 800
     },
     "api/hub/[route].js": {
+      "maxDuration": 300
+    },
+    "api/agency.js": {
       "maxDuration": 300
     }
   },

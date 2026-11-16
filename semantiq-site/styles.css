@@ -114,3 +114,34 @@ h1,h2,h3{font-family:"Sora","Manrope",sans-serif;letter-spacing:-.02em;line-heig
   *{animation:none!important;transition:none!important}
   .js .reveal{opacity:1;transform:none}
 }
+
+.lead-form{display:grid;gap:12px;max-width:560px;margin:28px auto 0;text-align:left}
+.lead-form .lf-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.lead-form input,.lead-form textarea{width:100%;box-sizing:border-box;background:rgba(3,6,23,.7);color:var(--ink);border:1px solid var(--line);padding:14px 16px;font:400 15px "Sora",sans-serif;border-radius:0}
+.lead-form input:focus,.lead-form textarea:focus{outline:none;border-color:#8a4bff}
+.lead-form .btn{justify-self:center;border:0;cursor:pointer;margin-top:6px}
+.lead-form .btn:disabled{opacity:.6;cursor:wait}
+.lf-hp{position:absolute!important;left:-9999px;width:1px;height:1px;opacity:0}
+.lf-status{min-height:1.4em;text-align:center;font-size:14px;margin:0}
+.lf-status.bad{color:#ff9b9b}
+.lf-alt{margin-top:18px;font-size:14px;opacity:.8}
+@media(max-width:560px){.lead-form .lf-row{grid-template-columns:1fr}}
+
+.check-box{text-align:center;padding:clamp(40px,7vw,80px) clamp(20px,5vw,60px);border:1px solid var(--line);background:linear-gradient(160deg,rgba(20,28,80,.5),rgba(7,11,36,.8))}
+.check-box h2{font-size:clamp(26px,4vw,44px);font-weight:700;margin-bottom:12px}
+.check-form{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin:24px auto 0;max-width:620px}
+.check-form input,.check-gate input[type=email]{flex:1 1 260px;box-sizing:border-box;background:rgba(3,6,23,.7);color:var(--ink);border:1px solid var(--line);padding:14px 16px;font:400 15px "Sora",sans-serif;border-radius:0}
+.check-form .btn,.check-gate .btn{border:0;cursor:pointer}.check-form .btn:disabled,.check-gate .btn:disabled{opacity:.6;cursor:wait}
+.check-result{text-align:left;max-width:720px;margin:28px auto 0}
+.check-head{display:flex;gap:20px;align-items:center;flex-wrap:wrap}
+.check-score{display:flex;align-items:baseline;gap:6px;border:1px solid var(--line);padding:14px 22px}
+.check-score b{font-size:54px;line-height:1}.check-score span{opacity:.8;font-size:14px}
+.g-A b,.g-B b{color:#4ade80}.g-C b{color:#facc15}.g-D b,.g-F b{color:#ff8a8a}
+.check-top{padding-left:20px;display:grid;gap:14px}.check-top li strong{display:block}.check-top li span{display:block;opacity:.8;font-size:14px}.check-top li em{display:block;font-style:normal;font-size:14px;margin-top:4px;color:#c7b8ff}
+.check-full{display:grid;gap:6px;margin-top:18px}
+.check-row{display:grid;grid-template-columns:22px 1fr;gap:2px 8px;padding:8px 0;border-bottom:1px solid var(--line)}
+.check-row i{font-style:normal;font-weight:700}.check-row.s-pass i{color:#4ade80}.check-row.s-warn i{color:#facc15}.check-row.s-fail i{color:#ff8a8a}
+.check-row small{grid-column:2;opacity:.75;font-size:13px}
+.check-gate{display:grid;gap:12px;margin-top:22px;padding:20px;border:1px solid var(--line);justify-items:center;text-align:center}
+.check-blocked{color:#ff9b9b}
+.check-box [hidden]{display:none!important}

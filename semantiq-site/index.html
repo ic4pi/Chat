@@ -99,12 +99,38 @@
     </div>
   </section>
 
+  <!-- Free site checker -->
+  <section class="section" id="check">
+    <div class="check-box reveal">
+      <h2>Is your website costing you customers?</h2>
+      <p>Get a free, instant score on the things that decide whether Google finds you and visitors call you.</p>
+      <form id="checkForm" class="check-form" novalidate>
+        <input name="site" type="text" placeholder="yourwebsite.com" autocomplete="url" inputmode="url" maxlength="300" required />
+        <button class="btn" type="submit"><span>Check my site</span></button>
+      </form>
+      <p id="checkStatus" class="lf-status" role="status" aria-live="polite"></p>
+      <div id="checkResult" class="check-result" hidden></div>
+    </div>
+  </section>
+
   <!-- CTA -->
   <section class="section cta" id="contact">
     <div class="cta-box reveal">
       <h2>Ready to build what&rsquo;s next?</h2>
       <p>Tell us about your business and what you want to move. We&rsquo;ll reply with how we&rsquo;d approach it.</p>
-      <a class="btn" id="mailto" href="mailto:hello@thesemantiq.com?subject=New%20project"><span>hello@thesemantiq.com</span></a>
+      <form id="leadForm" class="lead-form" novalidate>
+        <div class="lf-row">
+          <input name="name" type="text" placeholder="Your name" autocomplete="name" maxlength="120" />
+          <input name="email" type="email" placeholder="Email" autocomplete="email" maxlength="200" required />
+        </div>
+        <input name="company" type="text" placeholder="Company (optional)" autocomplete="organization" maxlength="160" />
+        <textarea name="message" rows="4" placeholder="What do you want to move? Goals, timeline, budget if you have one." maxlength="4000" required></textarea>
+        <!-- Honeypot: people never see this; bots fill it and are dropped. -->
+        <input name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true" class="lf-hp" />
+        <button class="btn" type="submit"><span>Start a project</span></button>
+        <p id="leadStatus" class="lf-status" role="status" aria-live="polite"></p>
+      </form>
+      <p class="lf-alt">Prefer email? <a id="mailto" href="mailto:hello@thesemantiq.com?subject=New%20project">hello@thesemantiq.com</a></p>
     </div>
   </section>
 </main>
@@ -114,6 +140,7 @@
   <p>&copy; <span id="yr">2026</span> Semantiq. All rights reserved.</p>
 </footer>
 
+<meta name="leads-url" content="https://deviant-tau.vercel.app/api/agency?op=lead" />
 <script src="/main.js"></script>
 </body>
 </html>

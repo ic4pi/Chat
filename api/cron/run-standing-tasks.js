@@ -9,6 +9,7 @@ import { db, HUB_ENABLED } from '../../lib/hub.js';
 import { runStandingTask } from '../../lib/run-standing-task.js';
 import { runAutopost } from '../../lib/autopost.js';
 import { discussIfStale } from '../../lib/business-profile.js';
+import { draftNewLeads } from '../../lib/lead-ops.js';
 
 function siteBase(req) {
   if (process.env.SITE_URL) return process.env.SITE_URL;
@@ -49,6 +50,10 @@ export default async function handler(req, res) {
   let autopost = [];
   try { autopost = await runAutopost({ baseUrl: siteBase(req) }); } catch (err) { autopost = [{ ok: false, error: err.message || String(err) }]; }
 
+  // New website leads get a reply drafted for the owner to approve (nothing is sent from here).
+  let leadDrafts = [];
+  try { leadDrafts = await draftNewLeads(); } catch (err) { leadDrafts = [{ ok: false, error: err.message || String(err) }]; }
+
   const tasks = await listStandingTasks();
   const due = tasks.filter((t) => isDueWithState(t, t, scheduleMs(t)));
   const results = [];
@@ -74,7 +79,7 @@ export default async function handler(req, res) {
   let discussion = null;
   try { discussion = await discussIfStale(req); } catch (err) { discussion = { error: err.message || String(err) }; }
 
-  return res.status(200).json({ checked: tasks.length, ran: due.length, results, discussion, autopost });
+  return res.status(200).json({ checked: tasks.length, ran: due.length, results, discussion, autopost, leadDrafts });
 }
 
 const TASKS_DEADLINE_MS = 600_000;

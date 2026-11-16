@@ -13,6 +13,7 @@ import { prepareImageMessages, hasImageParts } from '../lib/vision.js';
 import { extractQueryText, searchWeb, formatSearchContext } from '../lib/websearch.js';
 import { fetchWithModelFallback } from '../lib/model-health.js';
 import { codeSpaceHandoffInstruction } from '../lib/code-space-handoff.js';
+import { loadBusinessBlockFor } from '../lib/business-profile.js';
 
 /**
  * Headroom under vercel.json maxDuration 300. Must stay below the platform
@@ -390,6 +391,8 @@ export default async function handler(req, res) {
   const hasPriorTurn = chatMessages.some((m) => m.role === 'assistant');
   const basePrompt = [
     await resolveSystemPrompt(personaId),
+    // The agency's own team knows the business in every chat they speak in; personal personas never do.
+    await loadBusinessBlockFor(personaId),
     hasPriorTurn ? NO_REPEAT_INSTRUCTION : '',
     codeSpaceHandoffInstruction(codeSpaceHandoff),
   ]

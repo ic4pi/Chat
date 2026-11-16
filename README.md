@@ -112,6 +112,34 @@ history; the server holds every prompt and key.
 - Optional prepaid metering for video (`VIDEO_ACCESS_KEYS`); unset means
   unmetered.
 
+### ◈ Team — `/team` (Basic auth, same login as `/admin`)
+
+The agency's control room and its money loop:
+
+- **Leads** — the Semantiq site form posts to `/api/agency?op=lead` (honeypot, 5/hour per sender, duplicate-proof).
+  Each new lead gets a reply drafted by the closer (Marcus) on the hourly cron, using only the offers and prices you
+  wrote. **Nothing is sent to a prospect until you tap Approve & send**; a send can never go out twice.
+  Mark leads Won/Lost with a deal value to see what the agency has earned.
+- **Free site checker** — on the Semantiq site: a visitor enters their URL and gets an instant 0–100 score and top fixes
+  (HTTPS, title, description, headings, mobile, speed, indexability, alt text, content, sitemap, structured data…).
+  The full list unlocks with an email, which becomes a lead with the findings attached, so the reply cites real problems.
+  The fetcher is locked down (public addresses only, checked at connect time, redirects re-validated, size and time capped)
+  and limited to 10 checks/hour per visitor and a daily cap (`AGENCY_MAX_SITE_CHECKS_PER_DAY`, default 500).
+- **Outbound** — on `/team`, “Check a prospect’s site”: scores their real site and drafts a first email that leads with what
+  was found, with an opt-out line. It waits in your approval queue; nothing is sent until you tap.
+- **The business** — profile, offers and prices, and the team's strategy. Every team persona reads them in every chat
+  (personal personas never do), as do autopost and the comment replier.
+- **Send to…** — every chat reply has a button: hand it to the Team (adopt as strategy / profile / offers) or to Code
+  Space (with the reply and who said it), Media or Memory.
+- **Controls** — pause everything automatic, today's usage, what the team did.
+
+| Variable | Purpose |
+|---|---|
+| `LEAD_NOTIFY_EMAIL` | Emailed when a lead arrives (needs an email account in Admin) |
+| `LEADS_EMAIL_ACCOUNT` | Which email account sends replies (default: the first configured) |
+| `LEADS_PROVIDER` / `LEADS_MODEL` | Model that drafts replies (default: the autopost model) |
+| `AGENCY_MAX_LEAD_DRAFTS_PER_DAY` | Daily cap on drafts (default 20) |
+
 ### 🔐 Admin — `/admin`
 
 - Edit personas and the master prompt behind HTTP Basic auth, enforced at the
