@@ -2,6 +2,7 @@
 // due, saves each result as a document, and moves on — this is what lets
 // the agency keep working with nobody watching.
 import { checkAdminAuth } from '../../lib/auth.js';
+import { isVercelCron } from '../../lib/cron-auth.js';
 import { listStandingTasks, scheduleMs } from '../../lib/standing-tasks.js';
 import { agency, isDueWithState, limits } from '../../lib/agency-control.js';
 import { logTeamAction } from '../../lib/team-log.js';
@@ -18,13 +19,13 @@ function siteBase(req) {
 }
 
 export default async function handler(req, res) {
-  // Vercel signs real cron invocations with this header; an admin-authed
-  // call is allowed too (for testing this without waiting on the schedule).
-  // Anything else is rejected — this can't become an unauthenticated way
-  // for a stranger to burn API credits on demand.
-  const isVercelCron = req.headers['x-vercel-cron'] !== undefined;
+  // Vercel sends `Authorization: Bearer CRON_SECRET` on real cron invocations (lib/cron-auth.js); an admin-authed
+  // call is allowed too (for testing this without waiting on the schedule). Anything else is rejected — this
+  // can't become an unauthenticated way for a stranger to burn API credits on demand. (This used to look for an
+  // `x-vercel-cron` header, which Vercel does not document and anyone could forge.)
+  const fromCron = isVercelCron(req);
   const isAdmin = checkAdminAuth(req).ok;
-  if (!isVercelCron && !isAdmin) {
+  if (!fromCron && !isAdmin) {
     return res.status(403).json({ error: 'This endpoint only runs via Vercel Cron or admin auth.' });
   }
 
