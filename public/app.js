@@ -1407,6 +1407,19 @@ function renderMessageInto(container, m, idx) {
       });
       div.appendChild(copyBtn);
 
+      // Where this result goes next: the Team (strategy/offers/profile), Code Space, Media, Memory.
+      const sendBtn = document.createElement('button');
+      sendBtn.type = 'button';
+      sendBtn.className = 'text-btn msg-speak';
+      sendBtn.textContent = 'Send to…';
+      sendBtn.title = 'Turn this into something: the Team’s strategy, a Code Space build, an image, a memory';
+      sendBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openHandoff(stripContinueMarkers(m.content), m.ts, { who: m.personaName || '' });
+      });
+      div.appendChild(sendBtn);
+
       if (socialAccounts.length) {
         const postBtn = document.createElement('button');
         postBtn.type = 'button';
@@ -6371,6 +6384,7 @@ els.interruptBtn?.addEventListener('click', () => {
 });
 
 const WORKSPACE_HANDOFF_KEY = 'chat_to_workspace_v1';
+const TEAM_HANDOFF_KEY = 'chat_to_team_v1';
 
 /** The user telling the persona they are ready for the build: "I'm ready", "build it", "take it to the Code Space". */
 const READY_TO_BUILD_RE = new RegExp([
@@ -6412,7 +6426,12 @@ function openInWorkspace(opts = {}) {
   const chat = ensureActiveChat();
   const messages = (chat.messages || [])
     .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .map((m) => ({ role: m.role, content: m.content }));
+    // At a group table, who said it matters: the builder's persona reads "Dez: …", not an anonymous voice.
+    .map((m) => ({ role: m.role, content: m.role === 'assistant' && m.personaName && chat.kind === 'group' ? `${m.personaName}: ${m.content}` : m.content }));
+  // Sent from one specific reply: that reply is what to build, said plainly as the last thing in the chat.
+  if (opts.focus) {
+    messages.push({ role: 'user', content: `Build this${opts.focusWho ? ` (${opts.focusWho}'s reply)` : ''}:\n\n${String(opts.focus).slice(0, 6000)}` });
+  }
   const payload = {
     v: 1,
     chatId: chat.id,
@@ -7315,9 +7334,9 @@ function closeHandoff() {
 }
 
 /** Opens the handoff sheet for one message. */
-function openHandoff(content, messageId) {
-  if (!hubOn) return;
-  handoffSource = { chat: activeChat(), content, messageId };
+function openHandoff(content, messageId, extra = {}) {
+  // Team and Code Space need no hub; only Media and Memory do (checked when one is tapped).
+  handoffSource = { chat: activeChat(), content, messageId, who: extra.who || '' };
   if (hubUI.handoffPreview) {
     hubUI.handoffPreview.textContent =
       content.length > 220 ? content.slice(0, 220) + '…' : content;
@@ -7357,7 +7376,28 @@ document.querySelectorAll('[data-handoff]').forEach((btn) => {
     if (status) status.textContent = 'Sending…';
 
     try {
-      const { chat, content, messageId } = handoffSource;
+      const { chat, content, messageId, who } = handoffSource;
+
+      // The Team: the page opens with this text ready to adopt as strategy, offers or profile.
+      if (target === 'team') {
+        try {
+          sessionStorage.setItem(TEAM_HANDOFF_KEY, JSON.stringify({
+            content, from: who || chat?.topic || chat?.name || 'your chat', at: Date.now(),
+          }));
+        } catch { if (status) status.textContent = 'Could not carry that over (storage full?).'; return; }
+        window.location.href = '/team';
+        return;
+      }
+      // Code Space: your tap opens it, with this exact reply as what to build and the chat behind it.
+      if (target === 'workspace') {
+        closeHandoff();
+        openInWorkspace({ autoBrief: true, focus: content, focusWho: who });
+        return;
+      }
+      if (!hubOn) {
+        if (status) status.textContent = 'This one needs the memory hub (Supabase) set up.';
+        return;
+      }
 
       if (target === 'note') {
         await window.hub.ensureThread(chat);

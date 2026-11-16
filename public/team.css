@@ -1,0 +1,27 @@
+.team-body .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.team-body .tile { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.team-body .tile b { display: block; font-size: 24px; line-height: 1.1; }
+.team-body .tile span { color: var(--muted); font-size: 12px; }
+.team-body .tile.hot { border-color: var(--brass); }
+.team-body .banner { border: 1px solid var(--danger); background: var(--danger-soft); border-radius: 10px; padding: 10px 14px; font-size: 13px; }
+.team-body .banner.ok { border-color: var(--verdigris); background: var(--verdigris-soft); }
+.team-body .lead { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; display: grid; gap: 10px; }
+.team-body .lead.needs { border-color: var(--brass); }
+.team-body .lead-head { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; justify-content: space-between; }
+.team-body .lead-head strong { font-size: 15px; }
+.team-body .lead-meta { color: var(--muted); font-size: 12px; }
+.team-body .lead-msg { white-space: pre-wrap; background: var(--panel); border-radius: 8px; padding: 10px 12px; font-size: 13px; max-height: 180px; overflow: auto; }
+.team-body .pill { font-size: 11px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--border-2); color: var(--muted); }
+.team-body .pill.new { color: var(--danger); border-color: var(--danger); }
+.team-body .pill.drafted { color: var(--brass-lt); border-color: var(--brass); }
+.team-body .pill.sent, .team-body .pill.won { color: var(--verdigris); border-color: var(--verdigris); }
+.team-body .field { display: grid; gap: 4px; }
+.team-body .field label { font-size: 12px; color: var(--muted); }
+.team-body input[type=text], .team-body input[type=number], .team-body .lead textarea { width: 100%; box-sizing: border-box; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 13px; }
+.team-body .lead textarea { min-height: 150px; resize: vertical; }
+.team-body .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.team-body .err { color: var(--danger); font-size: 12px; }
+.team-body .activity li { font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--border); list-style: none; }
+.team-body .activity { padding: 0; margin: 0; }
+.team-body .activity small { color: var(--muted); display: block; }
+.team-body details > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
