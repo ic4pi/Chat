@@ -1,6 +1,7 @@
 // The agency's control room, one function:
 //
 //   Public  (the website form)   POST /api/agency?op=lead            → saves an inquiry
+//           (the free site checker)      POST /api/agency?op=check  { site } → a scored report (nothing saved)
 //   Admin   (HTTP Basic auth)    GET  /team   (= ?op=page)           → the Team page
 //                                GET  ?op=overview                   → leads, business, activity, controls
 //                                PUT  ?op=business   { profile, offers }
@@ -8,6 +9,7 @@
 //                                POST ?op=draft&id=                  → the closer drafts a reply (sends nothing)
 //                                PUT  ?op=lead&id=   { status, value, notes, draft }
 //                                POST ?op=send&id=                   → sends the APPROVED draft, once
+//                                POST ?op=prospect { site, email, name?, company? } → checks THEIR site, saves an outbound lead
 //                                PUT  ?op=control    { paused, reason }
 //
 // Nothing here sends to a prospect except op=send, and that is a deliberate tap on the Team page.
@@ -15,7 +17,8 @@
 import { requireAdminAuth } from '../lib/auth.js';
 import { getBusiness, saveProfile, saveNotes, runTeamDiscussion } from '../lib/business-profile.js';
 import { agency, limits } from '../lib/agency-control.js';
-import { leads, validateLeadInput } from '../lib/leads.js';
+import { leads, validateLeadInput, withinRate } from '../lib/leads.js';
+import { checkSite, reportText } from '../lib/site-check.js';
 import { draftLead, sendLead, notifyNewLead, emailAccount, teamActivity } from '../lib/lead-ops.js';
 import { KV_ENABLED } from '../lib/kv.js';
 
@@ -74,9 +77,29 @@ async function handleLeadIntake(req, res) {
   }
 }
 
+const CHECKS_PER_HOUR = 10;
+const CHECKS_PER_DAY = Number(process.env.AGENCY_MAX_SITE_CHECKS_PER_DAY) > 0 ? Math.floor(Number(process.env.AGENCY_MAX_SITE_CHECKS_PER_DAY)) : 500;
+
+/** The free checker: public, so limited per sender and per day. It only reads the page the visitor named. */
+async function handleSiteCheck(req, res) {
+  cors(res);
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  if (req.method !== 'POST') { res.setHeader('Allow', 'POST, OPTIONS'); return res.status(405).json({ error: 'POST only' }); }
+  try {
+    if (!(await withinRate('check', clientIp(req), CHECKS_PER_HOUR))) return res.status(429).json({ error: 'You have run a lot of checks — please try again in an hour.' });
+    if (!(await agency.consume('siteChecks', CHECKS_PER_DAY))) return res.status(429).json({ error: 'The checker is very busy today. Please try again tomorrow.' });
+    const report = await checkSite((req.body || {}).site);
+    return res.status(200).json({ report });
+  } catch (err) {
+    // Readable failures (bad address, site down) are the visitor's to fix; show them as-is.
+    return res.status(400).json({ error: err.message || 'Could not check that site.' });
+  }
+}
+
 export default async function handler(req, res) {
   const op = String(req.query?.op || '');
   if (op === 'lead') return handleLeadIntake(req, res);
+  if (op === 'check') return handleSiteCheck(req, res);
 
   if (!requireAdminAuth(req, res)) return;
   res.setHeader('Cache-Control', 'no-store');
@@ -113,6 +136,14 @@ export default async function handler(req, res) {
       return res.status(200).json(await agency.getControl());
     }
 
+    if (op === 'prospect' && req.method === 'POST') {
+      const v = validateLeadInput({ email: body.email, name: body.name, company: body.company, message: 'placeholder' });
+      if (!v.ok) return res.status(400).json({ error: v.error });
+      const report = await checkSite(body.site);
+      const lead = await leads.add({ ...v.lead, message: reportText(report).slice(0, 3900), source: 'outbound', kind: 'outbound' });
+      if (!lead.ok) return res.status(lead.status || 400).json({ error: lead.error });
+      return res.status(200).json({ lead: lead.lead, report });
+    }
     if (op === 'draft' && req.method === 'POST') {
       if (!id) return res.status(400).json({ error: 'id required' });
       return res.status(200).json({ lead: await draftLead(id) });

@@ -69,7 +69,7 @@ function leadCard(lead) {
   return el('div', { class: `lead${needs ? ' needs' : ''}` },
     el('div', { class: 'lead-head' },
       el('strong', { text: lead.name || lead.email }),
-      el('span', { class: `pill ${lead.status}`, text: lead.status === 'drafted' ? 'reply ready — your approval' : lead.status })),
+      el('span', { class: `pill ${lead.status}`, text: (lead.kind === 'outbound' ? 'outbound · ' : '') + (lead.status === 'drafted' ? 'ready — your approval' : lead.status) })),
     el('div', { class: 'lead-meta', text: [lead.email, lead.company, lead.source, when(lead.createdAt), lead.sentAt ? `sent ${when(lead.sentAt)}` : ''].filter(Boolean).join(' · ') }),
     el('div', { class: 'lead-msg', text: lead.message }),
     lead.status === 'sent' || lead.status === 'won' || lead.status === 'lost'
@@ -101,6 +101,27 @@ function businessSection() {
     el('div', { class: 'row' }, save, discuss),
     err,
     b.notes ? el('details', { open: '' }, el('summary', { text: `The team's current strategy${b.notesAt ? ` — ${when(b.notesAt)}` : ''}` }), el('div', { class: 'lead-msg', text: b.notes })) : el('p', { class: 'admin-hint', text: 'No team strategy yet. Save the profile, then have the team discuss it (it also re-discusses weekly on its own).' }));
+}
+
+/** Outbound: check a prospect's own site, save it as a lead, and have the team draft a first email about what we found. You approve every send. */
+function prospectSection() {
+  const err = el('div', { class: 'err' });
+  const site = el('input', { type: 'text', placeholder: 'Their website, e.g. sweetco-bakery.com' });
+  const email = el('input', { type: 'text', placeholder: 'Their email (where the first message goes)' });
+  const name = el('input', { type: 'text', placeholder: 'Contact name (optional)' });
+  const company = el('input', { type: 'text', placeholder: 'Company (optional)' });
+  const out = el('div', { class: 'admin-hint' });
+  const go = btn('Check their site & draft the email', () => act(go, err, async () => {
+    out.textContent = '';
+    const r = await api('prospect', { method: 'POST', body: { site: site.value, email: email.value, name: name.value, company: company.value } });
+    out.textContent = `${r.report.finalUrl}: ${r.report.score}/100 (${r.report.grade}). Drafting the email…`;
+    await api('draft', { method: 'POST', id: r.lead.id });
+  }), 'text-btn primary');
+  return el('section', { class: 'admin-section' },
+    el('h2', { text: 'Check a prospect’s site' }),
+    el('p', { class: 'admin-hint', text: 'Cole-style outreach built on proof: we score their real site, then the closer drafts a first email that leads with what we found. It lands in “Needs your approval” — nothing is sent until you approve it. The draft includes an opt-out line; keep to your local email rules (a real sender address, honor “no thanks”).' }),
+    el('div', { class: 'row' }, site, email), el('div', { class: 'row' }, name, company),
+    el('div', { class: 'row' }, go), out, err);
 }
 
 const HANDOFF_KEY = 'chat_to_team_v1';
@@ -150,6 +171,7 @@ function render() {
     el('section', { class: 'admin-section' },
       el('h2', { text: `Needs your approval (${needs.length})` }),
       needs.length ? needs.map(leadCard) : el('p', { class: 'admin-hint', text: 'Nothing waiting. New inquiries from the website land here with a reply already drafted.' })),
+    prospectSection(),
     businessSection(),
     rest.length ? el('section', { class: 'admin-section' }, el('h2', { text: `Handled (${rest.length})` }), rest.map(leadCard)) : null,
     el('section', { class: 'admin-section' },
