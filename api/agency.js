@@ -10,6 +10,9 @@
 //                                PUT  ?op=lead&id=   { status, value, notes, draft }
 //                                POST ?op=send&id=                   → sends the APPROVED draft, once
 //                                POST ?op=prospect { site, email, name?, company? } → checks THEIR site, saves an outbound lead
+//                                GET  ?op=accounts                   → social/email accounts (no secrets) + autopost status
+//                                PUT  ?op=account  { id, autopostEvery, autopostPerDay }
+//                                POST ?op=email    { fromEmail, resendApiKey, testTo? } → saves the email account (+ optional test)
 //                                PUT  ?op=control    { paused, reason }
 //
 // Nothing here sends to a prospect except op=send, and that is a deliberate tap on the Team page.
@@ -21,6 +24,9 @@ import { leads, validateLeadInput, withinRate } from '../lib/leads.js';
 import { checkSite, reportText } from '../lib/site-check.js';
 import { draftLead, sendLead, notifyNewLead, emailAccount, teamActivity } from '../lib/lead-ops.js';
 import { KV_ENABLED } from '../lib/kv.js';
+import { loadConfig, updateSocialAccounts } from '../lib/config.js';
+import { getAutopostState } from '../lib/autopost.js';
+import { sendEmail } from '../lib/email.js';
 
 const PAGE = `<!DOCTYPE html>
 <html lang="en">
@@ -136,6 +142,48 @@ export default async function handler(req, res) {
       return res.status(200).json(await agency.getControl());
     }
 
+    if (op === 'accounts' && req.method === 'GET') {
+      const [config, state] = await Promise.all([loadConfig(), getAutopostState().catch(() => ({}))]);
+      const accounts = (config.socialAccounts || []).map((a) => ({
+        id: a.id, label: a.label, platform: a.platform,
+        connected: a.platform === 'email' ? !!(a.resendApiKey && a.fromEmail) : a.platform === 'twitter' ? !!(a.consumerKey && a.accessToken) : !!(a.pageId && a.pageToken),
+        fromEmail: a.platform === 'email' ? a.fromEmail : undefined,
+        autopostEvery: a.autopostEvery, autopostPerDay: a.autopostPerDay,
+        lastPostAt: state[a.id]?.lastAt || null, lastError: state[a.id]?.lastError || null, fails: state[a.id]?.fails || 0,
+      }));
+      return res.status(200).json({ accounts });
+    }
+    if (op === 'account' && req.method === 'PUT') {
+      const every = ['off', 'hourly', 'daily', 'weekly'].includes(body.autopostEvery) ? body.autopostEvery : null;
+      if (!id && !body.id) return res.status(400).json({ error: 'id required' });
+      const target = id || String(body.id);
+      let found = false;
+      await updateSocialAccounts((list) => list.map((a) => {
+        if (a.id !== target) return a;
+        found = true;
+        return { ...a, ...(every ? { autopostEvery: every } : {}), ...(body.autopostPerDay ? { autopostPerDay: Number(body.autopostPerDay) } : {}) };
+      }));
+      return found ? res.status(200).json({ ok: true }) : res.status(404).json({ error: 'No such account.' });
+    }
+    if (op === 'email' && req.method === 'POST') {
+      const fromEmail = String(body.fromEmail || '').trim();
+      const key = String(body.resendApiKey || '').trim();
+      if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]{2,}$|^.+<[^\s@<>]+@[^\s@<>]+\.[^\s@<>]{2,}>$/.test(fromEmail)) return res.status(400).json({ error: 'Enter the from-address, e.g. hello@yourdomain.com.' });
+      let saved = null;
+      await updateSocialAccounts((list) => {
+        const cur = list.find((a) => a.platform === 'email');
+        saved = { ...(cur || { id: 'email-main', label: 'Email' }), platform: 'email', fromEmail, resendApiKey: key || cur?.resendApiKey || '' };
+        return cur ? list.map((a) => (a.id === cur.id ? saved : a)) : [...list, saved];
+      });
+      if (!saved.resendApiKey) return res.status(400).json({ error: 'Paste your Resend API key.' });
+      let test = null;
+      const to = String(body.testTo || '').trim();
+      if (to) {
+        try { await sendEmail({ apiKey: saved.resendApiKey, from: fromEmail, to, subject: 'Test from your agency', text: 'This is a test. Your email account works — approved replies will send from this address.' }); test = { ok: true }; }
+        catch (err) { test = { ok: false, error: err.message || String(err) }; }
+      }
+      return res.status(200).json({ ok: true, test });
+    }
     if (op === 'prospect' && req.method === 'POST') {
       const v = validateLeadInput({ email: body.email, name: body.name, company: body.company, message: 'placeholder' });
       if (!v.ok) return res.status(400).json({ error: v.error });

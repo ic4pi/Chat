@@ -79,6 +79,9 @@ export default async function handler(req, res) {
   let discussion = null;
   try { discussion = await discussIfStale(req); } catch (err) { discussion = { error: err.message || String(err) }; }
 
+  // Cron output is otherwise invisible: one line per run (and per failure) so the runtime logs show what happened.
+  console.log('[agency-cron]', JSON.stringify({ autopost: autopost.map((a) => ({ id: a.id, ok: a.ok, error: a.error })), leadDrafts: leadDrafts.length, tasksRan: due.length }));
+  for (const a of autopost) if (a.ok === false) console.error('[agency-cron] autopost failed:', a.label || a.id, a.error);
   return res.status(200).json({ checked: tasks.length, ran: due.length, results, discussion, autopost, leadDrafts });
 }
 
