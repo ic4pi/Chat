@@ -3,6 +3,7 @@
 
 const root = document.getElementById('teamRoot');
 let data = null;
+let accounts = [];
 
 const el = (tag, props = {}, ...kids) => {
   const n = document.createElement(tag);
@@ -124,6 +125,56 @@ function prospectSection() {
     el('div', { class: 'row' }, go), out, err);
 }
 
+/** Connections: the email account (paste your Resend key here — works on a phone) and each social account's autopost. */
+function connectionsSection() {
+  const emailAcct = accounts.find((a) => a.platform === 'email');
+  const err = el('div', { class: 'err' });
+  const ok = el('div', { class: 'admin-hint' });
+  const from = el('input', { type: 'text', placeholder: 'From address, e.g. hello@yourdomain.com', autocomplete: 'off', autocapitalize: 'off' });
+  from.value = emailAcct?.fromEmail || '';
+  const key = el('input', { type: 'password', placeholder: emailAcct?.connected ? 'Key saved — leave blank to keep it' : 'Resend API key (starts with re_)', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
+  const test = el('input', { type: 'text', placeholder: 'Send a test email to (your email — optional)', autocomplete: 'off', autocapitalize: 'off' });
+  const save = btn('Save email account', () => act(save, err, async () => {
+    ok.textContent = '';
+    const r = await api('email', { method: 'POST', body: { fromEmail: from.value, resendApiKey: key.value, testTo: test.value } });
+    ok.textContent = r.test ? (r.test.ok ? 'Saved. Test email sent — check your inbox.' : `Saved, but the test failed: ${r.test.error}`) : 'Saved.';
+  }), 'text-btn primary');
+
+  const cards = accounts.filter((a) => a.platform !== 'email').map((a) => {
+    const e = el('div', { class: 'err' });
+    const out = el('div', { class: 'admin-hint' });
+    const every = el('select', {}, ...['off', 'daily', 'hourly', 'weekly'].map((v) => el('option', { value: v, text: v === 'off' ? 'Autopost off' : `Autopost ${v}` })));
+    every.value = a.autopostEvery || 'off';
+    const per = el('input', { type: 'number', min: '1', max: '6', value: String(a.autopostPerDay || 1), title: 'Posts per day (used with daily)' });
+    per.value = String(a.autopostPerDay || 1);
+    const saveB = btn('Save schedule', () => act(saveB, e, () => api('account', { method: 'PUT', id: a.id, body: { autopostEvery: every.value, autopostPerDay: per.value } })));
+    const now = btn('Post once now', async () => {
+      now.disabled = true; now.textContent = 'Posting…'; e.textContent = ''; out.textContent = '';
+      try {
+        const res = await fetch(`/api/cron/run-standing-tasks?autopost=${encodeURIComponent(a.id)}`, { cache: 'no-store' });
+        const body = await res.json().catch(() => ({}));
+        const r = (body.autopost || [])[0];
+        if (!res.ok || !r) throw new Error(body.error || `HTTP ${res.status}`);
+        if (r.ok) out.textContent = `Posted: ${String(r.text || '').slice(0, 160)}`; else e.textContent = `Not posted: ${r.error}`;
+      } catch (x) { e.textContent = x.message || String(x); }
+      now.disabled = false; now.textContent = 'Post once now';
+    });
+    return el('div', { class: 'lead' },
+      el('div', { class: 'lead-head' }, el('strong', { text: `${a.label} (${a.platform})` }),
+        el('span', { class: `pill ${a.connected ? 'sent' : 'new'}`, text: a.connected ? 'connected' : 'missing token' })),
+      el('div', { class: 'lead-meta', text: a.autopostEvery === 'off' ? 'Autopost is OFF — nothing posts on its own.' : `Autopost: ${a.autopostEvery}${a.autopostEvery === 'daily' ? `, ${a.autopostPerDay}/day` : ''}. Last post: ${a.lastPostAt ? when(a.lastPostAt) : 'never'}.` }),
+      a.lastError ? el('div', { class: 'err', text: `Last error: ${a.lastError}` }) : null,
+      el('div', { class: 'row' }, every, per, saveB, now), out, e);
+  });
+
+  return el('section', { class: 'admin-section' },
+    el('h2', { text: 'Connections' }),
+    el('p', { class: 'admin-hint', text: emailAcct?.connected ? `Email is connected (${emailAcct.fromEmail}). Approved replies send from it.` : 'Email is not connected yet, so approved replies cannot send. Paste your Resend details below.' }),
+    el('div', { class: 'field' }, el('label', { text: 'Email account (Resend)' }), from, key, test),
+    el('div', { class: 'row' }, save), ok, err,
+    cards.length ? cards : el('p', { class: 'admin-hint', text: 'No social accounts yet. Add one in Admin → Social accounts.' }));
+}
+
 const HANDOFF_KEY = 'chat_to_team_v1';
 
 /** Text sent here from a chat reply ("Send to… → Team"): adopt it as strategy, profile or offers, or dismiss it. */
@@ -171,6 +222,7 @@ function render() {
     el('section', { class: 'admin-section' },
       el('h2', { text: `Needs your approval (${needs.length})` }),
       needs.length ? needs.map(leadCard) : el('p', { class: 'admin-hint', text: 'Nothing waiting. New inquiries from the website land here with a reply already drafted.' })),
+    connectionsSection(),
     prospectSection(),
     businessSection(),
     rest.length ? el('section', { class: 'admin-section' }, el('h2', { text: `Handled (${rest.length})` }), rest.map(leadCard)) : null,
@@ -182,7 +234,11 @@ function render() {
 }
 
 async function load() {
-  try { data = await api('overview'); render(); }
+  try {
+    data = await api('overview');
+    accounts = (await api('accounts').catch(() => ({ accounts: [] }))).accounts || [];
+    render();
+  }
   catch (err) { root.replaceChildren(el('div', { class: 'banner', text: `Could not load the Team page: ${err.message}` })); }
 }
 load();
