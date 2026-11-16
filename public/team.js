@@ -33,8 +33,11 @@ async function api(op, { method = 'GET', id, body } = {}) {
 async function act(button, errBox, fn, after = load) {
   const label = button.textContent;
   button.disabled = true; button.textContent = '…'; errBox.textContent = '';
-  try { await fn(); await after(); }
-  catch (err) { errBox.textContent = err.message || String(err); button.disabled = false; button.textContent = label; }
+  try {
+    await fn(); await after();
+    // A reload re-renders the page; anything else leaves this button in place, so give it back.
+    if (after !== load) { button.disabled = false; button.textContent = label; }
+  } catch (err) { errBox.textContent = err.message || String(err); button.disabled = false; button.textContent = label; }
 }
 
 const when = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? '' : d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); };
@@ -159,12 +162,30 @@ function connectionsSection() {
       } catch (x) { e.textContent = x.message || String(x); }
       now.disabled = false; now.textContent = 'Post once now';
     });
+    // Reconnect: paste a fresh token; the server swaps it for the Page's own never-expiring token.
+    const reconnect = (a.platform === 'facebook' || a.platform === 'instagram') ? (() => {
+      const re = el('div', { class: 'err' }); const rok = el('div', { class: 'admin-hint' });
+      const tok = el('input', { type: 'password', placeholder: 'Paste a new Facebook token here', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
+      const go = btn('Reconnect', () => act(go, re, async () => {
+        rok.textContent = '';
+        const r = await api('facebook-token', { method: 'POST', id: a.id, body: { token: tok.value } });
+        rok.textContent = `Reconnected${r.pageName ? ` to ${r.pageName}` : ''}. This token does not expire. Tap “Post once now” to test.`;
+      }, async () => {}), 'text-btn primary');
+      const asIs = btn('Save it as-is', () => act(asIs, re, async () => {
+        await api('facebook-token', { method: 'POST', id: a.id, body: { token: tok.value, asIs: true } });
+        rok.textContent = 'Saved as-is (it may expire). Tap “Post once now” to test.';
+      }, async () => {}));
+      return el('details', { open: a.lastError || !a.connected ? '' : undefined },
+        el('summary', { text: 'Reconnect this page (new token)' }),
+        el('p', { class: 'admin-hint' }, 'Open ', el('a', { href: 'https://developers.facebook.com/tools/explorer/', target: '_blank', rel: 'noopener', text: 'developers.facebook.com/tools/explorer' }), ', pick your app, tap Generate Access Token, tick pages_show_list, pages_manage_posts and pages_read_engagement, approve, copy the token and paste it below. We turn it into a token that does not expire.'),
+        el('div', { class: 'field' }, tok), el('div', { class: 'row' }, go, asIs), rok, re);
+    })() : null;
     return el('div', { class: 'lead' },
       el('div', { class: 'lead-head' }, el('strong', { text: `${a.label} (${a.platform})` }),
         el('span', { class: `pill ${a.connected ? 'sent' : 'new'}`, text: a.connected ? 'connected' : 'missing token' })),
       el('div', { class: 'lead-meta', text: a.autopostEvery === 'off' ? 'Autopost is OFF — nothing posts on its own.' : `Autopost: ${a.autopostEvery}${a.autopostEvery === 'daily' ? `, ${a.autopostPerDay}/day` : ''}. Last post: ${a.lastPostAt ? when(a.lastPostAt) : 'never'}.` }),
       a.lastError ? el('div', { class: 'err', text: `Last error: ${a.lastError}` }) : null,
-      el('div', { class: 'row' }, every, per, saveB, now), out, e);
+      el('div', { class: 'row' }, every, per, saveB, now), out, e, reconnect);
   });
 
   return el('section', { class: 'admin-section' },
