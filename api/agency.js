@@ -12,6 +12,7 @@
 //                                POST ?op=prospect { site, email, name?, company? } → checks THEIR site, saves an outbound lead
 //                                GET  ?op=accounts                   → social/email accounts (no secrets) + autopost status
 //                                PUT  ?op=account  { id, autopostEvery, autopostPerDay }
+//                                POST ?op=facebook-token&id= { token, asIs? } → reconnect a Facebook/Instagram page (never-expiring token)
 //                                POST ?op=email    { fromEmail, resendApiKey, testTo? } → saves the email account (+ optional test)
 //                                PUT  ?op=control    { paused, reason }
 //
@@ -27,6 +28,7 @@ import { KV_ENABLED } from '../lib/kv.js';
 import { loadConfig, updateSocialAccounts } from '../lib/config.js';
 import { getAutopostState } from '../lib/autopost.js';
 import { sendEmail } from '../lib/email.js';
+import { reconnectPage } from '../lib/meta-token.js';
 
 const PAGE = `<!DOCTYPE html>
 <html lang="en">
@@ -164,6 +166,20 @@ export default async function handler(req, res) {
         return { ...a, ...(every ? { autopostEvery: every } : {}), ...(body.autopostPerDay ? { autopostPerDay: Number(body.autopostPerDay) } : {}) };
       }));
       return found ? res.status(200).json({ ok: true }) : res.status(404).json({ error: 'No such account.' });
+    }
+    if (op === 'facebook-token' && req.method === 'POST') {
+      const token = String(body.token || '').trim();
+      if (!id) return res.status(400).json({ error: 'id required' });
+      if (!token) return res.status(400).json({ error: 'Paste the token first.' });
+      const acct = (await loadConfig()).socialAccounts.find((a) => a.id === id);
+      if (!acct || (acct.platform !== 'facebook' && acct.platform !== 'instagram')) return res.status(404).json({ error: 'No such Facebook/Instagram account.' });
+      let pageToken = token; let pageName = ''; let longLived = false;
+      if (body.asIs !== true) {
+        const r = await reconnectPage({ token, pageId: acct.pageId, appSecret: process.env.META_APP_SECRET });
+        pageToken = r.pageToken; pageName = r.pageName; longLived = r.longLived;
+      }
+      await updateSocialAccounts((list) => list.map((a) => (a.id === id ? { ...a, pageToken } : a)));
+      return res.status(200).json({ ok: true, pageName, longLived });
     }
     if (op === 'email' && req.method === 'POST') {
       const fromEmail = String(body.fromEmail || '').trim();
