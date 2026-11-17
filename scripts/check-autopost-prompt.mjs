@@ -1,0 +1,17 @@
+import { buildPostPrompts, SALES_GOAL, FORMATS } from '../lib/autopost.js';
+import { DEFAULT_OFFERS, DEFAULT_PROFILE } from '../lib/business-profile.js';
+let failed = 0; const ok = (n, c) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${n}`); if (!c) failed++; };
+const biz = { profile: DEFAULT_PROFILE, offers: DEFAULT_OFFERS, notes: '' };
+const cfg = { masterPrompt: '', personas: [{ id: 'agency-social', systemPrompt: 'You are Nia.' }] };
+const fb = { label: 'Semantiq', platform: 'facebook', autopostBrief: '' };
+const p = buildPostPrompts(fb, cfg, ['old post about X'], biz);
+ok('the sales goal is in every post prompt', p.system.includes(SALES_GOAL) && /call to action/i.test(p.system));
+ok('it sells websites, SEO and marketing', /websites, SEO and marketing/.test(p.system) && /websites, SEO and marketing/.test(p.user));
+ok('the real offers and prices are given to the writer', p.system.includes('Starter website — $1,200') && p.system.includes('Monthly local SEO — $600/mo'));
+ok('it may not invent prices, clients or results', /never invent[^.]*prices/i.test(p.system));
+ok('sales formats are on the menu', FORMATS.some((f) => /offer spotlight/.test(f)) && FORMATS.some((f) => /free site check/.test(f)));
+ok('recent posts are listed so it does not repeat', p.user.includes('old post about X'));
+const custom = buildPostPrompts({ ...fb, autopostBrief: 'Only talk about wedding cakes' }, cfg, [], biz);
+ok('an account\'s own focus still applies but the sales goal stays', custom.user.includes('wedding cakes') && custom.system.includes(SALES_GOAL));
+ok('Nia\'s persona and the platform limit are used', p.system.includes('You are Nia.') && p.system.includes('1200') && buildPostPrompts({ ...fb, platform: 'twitter' }, cfg, [], biz).system.includes('270'));
+process.exit(failed ? 1 : 0);
