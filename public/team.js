@@ -19,11 +19,18 @@ const el = (tag, props = {}, ...kids) => {
 const btn = (label, onclick, cls = 'text-btn') => el('button', { class: cls, type: 'button', text: label, onclick });
 
 async function api(op, { method = 'GET', id, body } = {}) {
-  const res = await fetch(`/api/agency?op=${op}${id ? `&id=${encodeURIComponent(id)}` : ''}`, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(`/api/agency?op=${op}${id ? `&id=${encodeURIComponent(id)}` : ''}`, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+      // Never spin forever: after a minute say so (the work may still have finished — reload to check).
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch (err) {
+    throw new Error(err?.name === 'TimeoutError' ? 'That took over a minute with no answer. Reload the page and check whether it saved.' : (err?.message || 'Network error'));
+  }
   const out = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
   return out;
@@ -190,7 +197,7 @@ function connectionsSection() {
 
   return el('section', { class: 'admin-section' },
     el('h2', { text: 'Connections' }),
-    el('p', { class: 'admin-hint', text: emailAcct?.connected ? `Email is connected (${emailAcct.fromEmail}). Approved replies send from it.` : 'Email is not connected yet, so approved replies cannot send. Paste your Resend details below.' }),
+    el('p', { class: 'admin-hint', text: emailAcct?.connected ? `Email is connected (${emailAcct.fromEmail}${emailAcct.fromEnv ? ', from your Vercel settings' : ''}). Approved replies send from it.` : 'Email is not connected yet, so approved replies cannot send. Paste your Resend details below.' }),
     el('div', { class: 'field' }, el('label', { text: 'Email account (Resend)' }), from, key, test),
     el('div', { class: 'row' }, save), ok, err,
     cards.length ? cards : el('p', { class: 'admin-hint', text: 'No social accounts yet. Add one in Admin → Social accounts.' }));
