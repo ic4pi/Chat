@@ -23,7 +23,7 @@ import { getBusiness, saveProfile, saveNotes, runTeamDiscussion } from '../lib/b
 import { agency, limits } from '../lib/agency-control.js';
 import { leads, validateLeadInput, withinRate } from '../lib/leads.js';
 import { checkSite, reportText } from '../lib/site-check.js';
-import { draftLead, sendLead, notifyNewLead, emailAccount, teamActivity } from '../lib/lead-ops.js';
+import { draftLead, sendLead, notifyNewLead, emailAccount, envEmailAccount, teamActivity } from '../lib/lead-ops.js';
 import { KV_ENABLED } from '../lib/kv.js';
 import { loadConfig, updateSocialAccounts } from '../lib/config.js';
 import { getAutopostState } from '../lib/autopost.js';
@@ -153,6 +153,11 @@ export default async function handler(req, res) {
         autopostEvery: a.autopostEvery, autopostPerDay: a.autopostPerDay,
         lastPostAt: state[a.id]?.lastAt || null, lastError: state[a.id]?.lastError || null, fails: state[a.id]?.fails || 0,
       }));
+      // The Vercel-settings email account counts as connected when no email account is saved on the page.
+      const envAcct = envEmailAccount();
+      if (envAcct && !accounts.some((a) => a.platform === 'email' && a.connected)) {
+        accounts.push({ id: envAcct.id, label: envAcct.label, platform: 'email', connected: true, fromEmail: envAcct.fromEmail, fromEnv: true, autopostEvery: 'off', autopostPerDay: 1, lastPostAt: null, lastError: null, fails: 0 });
+      }
       return res.status(200).json({ accounts });
     }
     if (op === 'account' && req.method === 'PUT') {
