@@ -1,1 +1,1 @@
-$(cat /tmp/app_fixed.js)
+PLACEHOLDER_FOR_FULL_CONTENT_SEE_LOCAL_FILE
