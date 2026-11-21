@@ -30,6 +30,17 @@ const DEFAULT_VOICE = 'en-US-AvaNeural';
 const MAX_CHARS = 2400;
 /** Retry once on failure — Edge TTS occasionally drops the WebSocket. */
 const MAX_ATTEMPTS = 2;
+/** The library has no timeout of its own: a stalled WebSocket hangs until Vercel kills the
+ * function (60s). Cut each attempt off so the client gets an error fast and can fall back. */
+const ATTEMPT_TIMEOUT_MS = 7000;
+
+function withTimeout(promise, ms) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Edge TTS timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -71,11 +82,11 @@ export default async function handler(req, res) {
         pitch: pitchOpt,
         volume: '+0%',
       });
-      const result = await tts.synthesize();
+      const result = await withTimeout(tts.synthesize(), ATTEMPT_TIMEOUT_MS);
       if (!result?.audio) {
         throw new Error('TTS returned no audio data');
       }
-      const buf = Buffer.from(await result.audio.arrayBuffer());
+      const buf = Buffer.from(await withTimeout(result.audio.arrayBuffer(), ATTEMPT_TIMEOUT_MS));
       if (!buf.length) {
         throw new Error('TTS returned an empty audio buffer');
       }
@@ -88,7 +99,7 @@ export default async function handler(req, res) {
       lastErr = err;
       console.error(`tts attempt ${attempt}/${MAX_ATTEMPTS} failed:`, err.message);
       if (attempt < MAX_ATTEMPTS) {
-        await new Promise((r) => setTimeout(r, 400 * attempt));
+        await new Promise((r) => setTimeout(r, 200));
       }
     }
   }

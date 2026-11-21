@@ -5953,7 +5953,7 @@ function stopNeuralSpeech() {
   try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
 }
 
-async function fetchNeuralAudio(text, voice, timeoutMs = 12000) {
+async function fetchNeuralAudio(text, voice, timeoutMs = 18000) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   let res;
