@@ -1,1 +1,7858 @@
-PLACEHOLDER_FOR_FULL_CONTENT_SEE_LOCAL_FILE
+// ============================================================================
+// Uncensored Chat — frontend logic
+//
+// Responsibilities:
+//   - Persistent chats + personas + artifacts in localStorage.
+//   - Live-fetch Venice model catalog from /api/models?provider=venice.
+//   - Persona manager (hidden screen) opened via ⚙ button or ⌘/Ctrl+K.
+//   - Artifact extraction: any fenced code block > 3 lines in a bot reply is
+//     surfaced in the right sidebar with copy + download.
+//   - No silent model swapping — errors from the selected provider/model are
+//     shown verbatim.
+// ============================================================================
+
+import {
+  MODEL_PACKAGES,
+  DEFAULT_PACKAGE_IDS,
+  DEFAULT_PACKAGE_MODEL,
+  PACKAGE_IDS,
+  resolvePackages,
+  packageModels,
+  rateLimitLabel,
+  OPENROUTER_FREE_LIMITS,
+} from './model-packages.js';
+
+const STORAGE_KEY = 'uncensored_chat_state_v3';
+
+// Personas now live on the server (see /api/public-config). This is only a
+// bootstrap fallback used before the first /api/public-config response
+// arrives, and if the site is loaded while offline. Descriptions are
+// user-facing metadata; system prompts are NEVER sent to the browser.
+const FALLBACK_PERSONAS = [
+  { id: 'nexus', name: 'NEXUS', description: 'An evil-genius coder who writes flawless code with theatrical flair.', builtin: true },
+  { id: 'plain', name: 'Plain assistant', description: 'A neutral, no-nonsense assistant.', builtin: true },
+];
+
+// Fallback only if /api/models is unreachable. Live/public catalogs are preferred.
+const PROVIDER_FALLBACKS = {
+  venice: [
+    { id: 'venice-uncensored-1-2', name: 'Venice Uncensored 1.2' },
+    { id: 'venice-uncensored-role-play', name: 'Venice Role Play Uncensored' },
+    { id: 'olafangensan-glm-4.7-flash-heretic', name: 'GLM 4.7 Flash Heretic' },
+    { id: 'gemma-4-uncensored', name: 'Gemma 4 Uncensored' },
+    { id: 'e2ee-gemma-4-26b-a4b-uncensored-p', name: 'Gemma 4 26B A4B Uncensored' },
+    { id: 'e2ee-qwen3-6-35b-a3b-uncensored-p', name: 'Qwen3.6 35B A3B Uncensored' },
+    { id: 'venice-uncensored', name: 'Dolphin Mistral 24B Venice Edition' },
+  ],
+  openrouter: [
+    { id: 'cognitivecomputations/dolphin-mistral-24b-venice-edition', name: 'Venice Uncensored (Dolphin 24B)' },
+    { id: 'nousresearch/hermes-4-405b', name: 'Hermes 4 405B' },
+    { id: 'nousresearch/hermes-4-70b', name: 'Hermes 4 70B' },
+    { id: 'nousresearch/hermes-3-llama-3.1-405b', name: 'Hermes 3 405B' },
+    { id: 'gryphe/mythomax-l2-13b', name: 'MythoMax 13B' },
+    { id: 'openrouter/free', name: 'Free Models Router' },
+    { id: 'google/gemma-4-31b-it:free', name: 'Gemma 4 31B (free)' },
+    { id: 'google/gemma-4-26b-a4b-it:free', name: 'Gemma 4 26B A4B (free)' },
+    { id: 'openai/gpt-oss-20b:free', name: 'GPT OSS 20B (free)' },
+    { id: 'nvidia/nemotron-3-nano-30b-a3b:free', name: 'Nemotron 3 Nano 30B (free)' },
+    { id: 'qwen/qwen3-coder:free', name: 'Qwen3 Coder (free)' },
+    { id: 'meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 70B Instruct' },
+    { id: 'qwen/qwen3-coder', name: 'Qwen3 Coder' },
+    { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5' },
+    { id: 'openai/gpt-4.1', name: 'GPT-4.1' },
+    { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
+    { id: 'deepseek/deepseek-chat-v3.1', name: 'DeepSeek Chat V3.1' },
+    // Mirrors lib/providers.js — the General package's brands, so the shipped
+    // default still resolves when the live catalog is down.
+    { id: 'deepseek/deepseek-chat-v3.1:free', name: 'DeepSeek Chat V3.1 (free)' },
+    { id: 'moonshotai/kimi-k2:free', name: 'Kimi K2 (free)' },
+    { id: 'moonshotai/kimi-k2', name: 'Kimi K2' },
+    { id: 'anthropic/claude-haiku-4.5', name: 'Claude Haiku 4.5' },
+    { id: 'openai/gpt-4o', name: 'GPT-4o' },
+    { id: 'openai/gpt-4o-mini', name: 'GPT-4o mini' },
+    { id: 'x-ai/grok-4-fast', name: 'Grok 4 Fast' },
+    { id: 'x-ai/grok-4', name: 'Grok 4' },
+  ],
+  cerebras: [
+    { id: 'gpt-oss-120b', name: 'OpenAI GPT OSS 120B' },
+    { id: 'zai-glm-4.7', name: 'Z.ai GLM 4.7' },
+    { id: 'gemma-4-31b', name: 'Gemma 4 31B' },
+    { id: 'llama-3.3-70b', name: 'Llama 3.3 70B' },
+    { id: 'qwen-3-32b', name: 'Qwen 3 32B' },
+    { id: 'llama3.1-8b', name: 'Llama 3.1 8B' },
+  ],
+  groq: [
+    { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B Versatile' },
+    { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B Instant' },
+    { id: 'openai/gpt-oss-120b', name: 'GPT OSS 120B' },
+    { id: 'openai/gpt-oss-20b', name: 'GPT OSS 20B' },
+    { id: 'qwen/qwen3.6-27b', name: 'Qwen3.6 27B' },
+    { id: 'qwen/qwen3-32b', name: 'Qwen3 32B' },
+    { id: 'moonshotai/kimi-k2-instruct', name: 'Kimi K2 Instruct' },
+    { id: 'meta-llama/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout 17B' },
+    { id: 'groq/compound', name: 'Groq Compound' },
+    { id: 'groq/compound-mini', name: 'Groq Compound Mini' },
+    { id: 'minimaxai/minimax-m2.7', name: 'MiniMax M2.7' },
+  ],
+  xai: [
+    { id: 'grok-4', name: 'Grok 4' },
+    { id: 'grok-4-fast-reasoning', name: 'Grok 4 Fast (reasoning)' },
+    { id: 'grok-3', name: 'Grok 3' },
+    { id: 'grok-3-mini', name: 'Grok 3 Mini' },
+    { id: 'grok-code-fast-1', name: 'Grok Code Fast' },
+  ],
+  nvidia: [
+    { id: 'meta/llama-3.3-70b-instruct', name: 'Llama 3.3 70B Instruct' },
+    { id: 'meta/llama-3.1-70b-instruct', name: 'Llama 3.1 70B Instruct' },
+    { id: 'meta/llama-3.1-8b-instruct', name: 'Llama 3.1 8B Instruct' },
+    { id: 'nvidia/llama-3.1-nemotron-70b-instruct', name: 'Nemotron 70B Instruct' },
+    { id: 'nvidia/llama-3.3-nemotron-super-49b-v1.5', name: 'Nemotron Super 49B v1.5' },
+    { id: 'nvidia/nemotron-3-nano-30b-a3b', name: 'Nemotron 3 Nano 30B' },
+    { id: 'nvidia/nemotron-3-super-120b-a12b', name: 'Nemotron 3 Super 120B' },
+    { id: 'deepseek-ai/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+    { id: 'deepseek-ai/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+    { id: 'google/gemma-4-31b-it', name: 'Gemma 4 31B' },
+    { id: 'mistralai/mistral-large-2-instruct', name: 'Mistral Large 2' },
+    { id: 'moonshotai/kimi-k2.6', name: 'Kimi K2.6' },
+    { id: 'z-ai/glm-5.2', name: 'GLM 5.2' },
+    { id: 'openai/gpt-oss-120b', name: 'GPT OSS 120B' },
+  ],
+};
+
+// Hints only. The real default comes from the live catalogs (defaultChatModel)
+// and is never a coder model — chat and the agency teams talk, they don't code.
+const DEFAULT_MODELS = {
+  venice: 'e2ee-gemma-4-26b-a4b-uncensored-p',
+  openrouter: 'nvidia/nemotron-3-super-120b-a12b:free',
+  cerebras: 'gpt-oss-120b',
+  groq: 'llama-3.3-70b-versatile',
+  xai: 'grok-4',
+  nvidia: 'meta/llama-3.3-70b-instruct',
+};
+
+// Group personas always use Venice uncensored — one distinct model each.
+// Ordered cheapest → pricier (Venice list pricing); extras wrap on the cheap end.
+const VENICE_UNCENSORED_CHEAP_FIRST = [
+  'olafangensan-glm-4.7-flash-heretic', // ~$0.07 / $0.40
+  'gemma-4-uncensored',                 // ~$0.16 / $0.50
+  'e2ee-gemma-4-26b-a4b-uncensored-p',  // ~$0.19 / $0.88
+  'venice-uncensored-1-2',              // ~$0.20 / $0.90
+  'venice-uncensored',                  // Dolphin Mistral 24B Venice Edition
+  // e2ee-venice-uncensored-24b-p removed: Venice retired it (Oct 2026).
+  'e2ee-qwen3-6-35b-a3b-uncensored-p',  // ~$0.38 / $1.88
+  'venice-uncensored-role-play',        // ~$0.50 / $2.00
+];
+const VENICE_UNCENSORED_SET = new Set(VENICE_UNCENSORED_CHEAP_FIRST);
+// Venice's live catalog, once /api/models answers. Curated ids missing from
+// it have been retired, so personas never get (or keep) them.
+let liveVeniceModelIds = null;
+const veniceModelIsLive = (id) => !liveVeniceModelIds || liveVeniceModelIds.has(id);
+
+const PROVIDER_IDS = ['venice', 'openrouter', 'cerebras', 'groq', 'xai', 'nvidia'];
+// 'groq' and 'xai' are different companies whose names differ by one letter,
+// so the xAI label spells out Grok — a mis-pasted key is otherwise a baffling
+// 401 from a provider the user thinks they configured.
+const PROVIDER_LABELS = {
+  venice: 'Venice', openrouter: 'OpenRouter', cerebras: 'Cerebras',
+  groq: 'Groq (Llama/Kimi host)', xai: 'xAI (Grok)', nvidia: 'NVIDIA',
+};
+
+const KEYS_STORAGE = 'uncensored_provider_keys_v1';
+const ROLES_STORAGE = 'uncensored_role_models_v1';
+const PAID_PASS_STORAGE = 'uncensored_paid_password_v1';
+const PACKAGES_STORAGE = 'uncensored_model_packages_v1';
+
+const MODEL_CATEGORIES = [
+  { id: 'general', label: 'General' },
+  { id: 'coder', label: 'Coders' },
+  { id: 'creative', label: 'Creative' },
+  { id: 'reasoning', label: 'Reasoning' },
+  { id: 'uncensored', label: 'Uncensored' },
+];
+
+/**
+ * Which model packages this browser has switched on, plus whether it has
+ * opted out of the curated view entirely. A fresh install gets General only —
+ * five brand names, not three hundred slugs.
+ */
+function loadModelPackagePrefs() {
+  const fallback = { packages: DEFAULT_PACKAGE_IDS.slice(), showAll: false };
+  try {
+    const raw = localStorage.getItem(PACKAGES_STORAGE);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) || {};
+    const picked = Array.isArray(parsed.packages)
+      ? parsed.packages.filter((id) => PACKAGE_IDS.includes(id))
+      : [];
+    return {
+      // Never let the list empty out — an empty picker looks broken.
+      packages: picked.length ? picked : DEFAULT_PACKAGE_IDS.slice(),
+      showAll: !!parsed.showAll,
+    };
+  } catch {
+    return fallback;
+  }
+}
+function saveModelPackagePrefs(prefs) {
+  try { localStorage.setItem(PACKAGES_STORAGE, JSON.stringify(prefs)); } catch { /* ignore */ }
+}
+let modelPackagePrefs = loadModelPackagePrefs();
+
+/**
+ * Pinned models — the catalog spans six providers and hundreds of ids with
+ * no way to float the 3-4 you actually use back to the top. Stored as
+ * "provider::id" strings so two providers' colliding ids never collapse.
+ */
+const FAVORITE_MODELS_STORAGE = 'uncensored_favorite_models_v1';
+function favoriteModelKey(provider, id) { return `${provider}::${id}`; }
+function loadFavoriteModelIds() {
+  try {
+    const raw = localStorage.getItem(FAVORITE_MODELS_STORAGE);
+    const arr = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch {
+    return new Set();
+  }
+}
+function saveFavoriteModelIds() {
+  try { localStorage.setItem(FAVORITE_MODELS_STORAGE, JSON.stringify([...favoriteModelIds])); } catch { /* ignore */ }
+}
+let favoriteModelIds = loadFavoriteModelIds();
+function isFavoriteModel(m) { return favoriteModelIds.has(favoriteModelKey(m.provider, m.id)); }
+function toggleFavoriteModel(m) {
+  const key = favoriteModelKey(m.provider, m.id);
+  if (favoriteModelIds.has(key)) favoriteModelIds.delete(key);
+  else favoriteModelIds.add(key);
+  saveFavoriteModelIds();
+}
+
+/**
+ * Persist paid unlock in localStorage (same as BYOK keys) so leaving the page
+ * does not force re-entry. Migrates any leftover sessionStorage value once.
+ */
+function loadPaidPassword() {
+  try {
+    const fromLocal = localStorage.getItem(PAID_PASS_STORAGE);
+    if (fromLocal) return fromLocal;
+    const fromSession = sessionStorage.getItem(PAID_PASS_STORAGE);
+    if (fromSession) {
+      localStorage.setItem(PAID_PASS_STORAGE, fromSession);
+      sessionStorage.removeItem(PAID_PASS_STORAGE);
+      return fromSession;
+    }
+    return '';
+  } catch {
+    return '';
+  }
+}
+function savePaidPassword(pw) {
+  try {
+    if (pw) {
+      localStorage.setItem(PAID_PASS_STORAGE, pw);
+      try { sessionStorage.removeItem(PAID_PASS_STORAGE); } catch { /* ignore */ }
+    } else {
+      localStorage.removeItem(PAID_PASS_STORAGE);
+      try { sessionStorage.removeItem(PAID_PASS_STORAGE); } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+}
+function paidUnlocked() {
+  return !!loadPaidPassword();
+}
+function paidAuthHeaders(extra = {}) {
+  const headers = { ...extra };
+  const pw = loadPaidPassword();
+  if (pw) headers['X-Paid-Password'] = pw;
+  return headers;
+}
+
+/** Client-side free/paid + categories (mirrors lib/model-meta.js for fallbacks). */
+function inferFreeClient(providerId, model = {}) {
+  if (model.free === true) return true;
+  if (model.free === false) return false;
+  const id = String(model.id || '');
+  // Venice burns credits — never treat as free.
+  if (providerId === 'venice') return false;
+  if (providerId === 'openrouter') {
+    if (id === 'openrouter/free' || /:free$/i.test(id)) return true;
+    if (/\(free\)/i.test(String(model.name || ''))) return true;
+    return false;
+  }
+  return false;
+}
+function inferCategoriesClient(providerId, model = {}) {
+  if (Array.isArray(model.categories) && model.categories.length) return model.categories;
+  const hay = `${model.id || ''} ${model.name || ''} ${model.description || ''}`.toLowerCase();
+  const cats = new Set();
+  if (/coder|codestral|starcoder|codellama|deepseek-coder|qwen3?-coder|devstral|programming|\bcode\b/.test(hay)) cats.add('coder');
+  if (/role.?play|mythomax|creative|story|novel|fiction|hermes|mytho/.test(hay)) cats.add('creative');
+  if (/uncensored|dolphin|heretic|abliterated|venice-uncensored/.test(hay)) cats.add('uncensored');
+  if (/reason|thinking|\br1\b|qwq|orchestrat/.test(hay)) cats.add('reasoning');
+  if (cats.size === 0 || /instruct|chat|general|assistant|versatile|turbo|flash|nano|scout/.test(hay)) cats.add('general');
+  return [...cats];
+}
+function enrichModelClient(providerId, model = {}) {
+  const free = inferFreeClient(providerId, model);
+  return {
+    ...model,
+    provider: providerId,
+    free,
+    paid: !free,
+    categories: inferCategoriesClient(providerId, model),
+  };
+}
+
+// Chat roles talk, they don't code — and openrouter/free can route to a coder.
+const DEFAULT_ROLE_MODELS = {
+  write:  { provider: 'openrouter', model: DEFAULT_MODELS.openrouter },
+  review: { provider: 'openrouter', model: DEFAULT_MODELS.openrouter },
+  plan:   { provider: 'openrouter', model: DEFAULT_MODELS.openrouter },
+};
+
+function loadProviderKeys() {
+  try {
+    const raw = localStorage.getItem(KEYS_STORAGE);
+    return raw ? (JSON.parse(raw) || {}) : {};
+  } catch { return {}; }
+}
+function saveProviderKeys(keys) {
+  try { localStorage.setItem(KEYS_STORAGE, JSON.stringify(keys)); } catch { /* ignore */ }
+}
+function loadRoleModels() {
+  try {
+    const raw = localStorage.getItem(ROLES_STORAGE);
+    if (!raw) return { ...DEFAULT_ROLE_MODELS };
+    const parsed = JSON.parse(raw) || {};
+    return {
+      write:  { ...DEFAULT_ROLE_MODELS.write,  ...parsed.write },
+      review: { ...DEFAULT_ROLE_MODELS.review, ...parsed.review },
+      plan:   { ...DEFAULT_ROLE_MODELS.plan,   ...parsed.plan },
+    };
+  } catch {
+    return { ...DEFAULT_ROLE_MODELS };
+  }
+}
+function saveRoleModels(roles) {
+  try { localStorage.setItem(ROLES_STORAGE, JSON.stringify(roles)); } catch { /* ignore */ }
+}
+
+let providerKeys = loadProviderKeys();
+let roleModels = loadRoleModels();
+let pendingUploads = []; // { kind, name, content }
+const modelsCache = {};
+
+// Web search is asked for in plain words ("search the web for X"), not a
+// toggle — see parseWebSearchRequest. Set per send; null = no search this
+// turn. Clear the old toggle's saved state so nobody is stuck searching.
+let turnSearchQuery = null;
+try { localStorage.removeItem('webSearchOn'); } catch { /* ignore */ }
+
+// "Bring in the team" — solo Chat routes through the same Orchestrated
+// group-chat engine instead of a single model, with whichever persona is
+// selected pinned as lead (see api/group-chat.js's forcedLeadId). Off by
+// default so normal Chat behaves exactly as it always has.
+const AGENCY_MODE_PREF_KEY = 'agencyModeOn';
+// The 🏢 toggle is gone: one chat, and a group discussion is asked for in
+// plain words (see parseGroupDiscussionRequest). Clear any saved "on" state
+// so nobody is stuck in a mode with no button to leave it.
+let agencyModeOn = false;
+try { localStorage.removeItem(AGENCY_MODE_PREF_KEY); } catch { /* ignore */ }
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+// Explicit per-model fallback map. Only these very specific (provider, model)
+// pairs get a silent retry, and only to the paired (provider, model). We do
+// NOT fall back to a random OpenRouter free-tier model — that was the
+// original bug that produced censored refusals from models the user never
+// picked. The only fallback we do is same-spirit: the free OpenRouter mirror
+// of Venice's Dolphin-Mistral falls back to Venice's own copy, funded by the
+// user's Venice credits.
+const MODEL_FALLBACKS = {
+  openrouter: {
+    // Legacy :free slug retired by OpenRouter — bounce to Venice’s copy.
+    'cognitivecomputations/dolphin-mistral-24b-venice-edition:free': {
+      provider: 'venice',
+      model: 'venice-uncensored',
+      reason: 'OpenRouter free Dolphin-Venice retired — used your Venice key on venice-uncensored instead.',
+    },
+  },
+};
+
+function freshState() {
+  return {
+    version: 3,
+    chats: [],
+    activeChatId: null,
+    activePersonaId: 'nexus',
+    activeRole: 'plan',
+    // First free model of the shipped General package. Venice and the other
+    // paid catalogs need the paid-models unlock password.
+    activeProvider: DEFAULT_PACKAGE_MODEL.provider,
+    activeModel: DEFAULT_PACKAGE_MODEL.id,
+    chatsCollapsed: false,
+    chatsCollapsedExplicit: false,
+    artifactsCollapsed: true,
+    artifactsActiveTab: 'artifacts',
+    artifactsHalfScreen: false,
+    lastSeenAt: 0,
+    projects: [],
+  };
+}
+
+// Persona list is populated by fetchPersonas() from /api/public-config.
+// Not persisted — always fetched fresh so admin edits show up on next load.
+let personas = FALLBACK_PERSONAS.slice();
+let socialAccounts = []; // { id, label, platform } — from /api/public-config
+
+const MOBILE_QUERY = '(max-width: 900px)';
+function isMobileViewport() {
+  return typeof window !== 'undefined' && window.matchMedia && window.matchMedia(MOBILE_QUERY).matches;
+}
+
+// If the user has never touched the chats-sidebar toggle, its collapsed state
+// is decided by the viewport: collapsed on mobile, open on desktop. Once the
+// user clicks the toggle even once, their choice is remembered.
+function effectiveChatsCollapsed() {
+  return state.chatsCollapsedExplicit ? !!state.chatsCollapsed : isMobileViewport();
+}
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return freshState();
+    const parsed = JSON.parse(raw);
+    return migrate(parsed);
+  } catch (err) {
+    console.warn('Failed to parse stored state, starting fresh:', err);
+    return freshState();
+  }
+}
+
+function migrate(s) {
+  const base = freshState();
+  const merged = { ...base, ...s };
+  // Drop any legacy personas / masterPrompt kept in localStorage from
+  // pre-v3 (they now live server-side in KV, exposed via /api/public-config
+  // and applied by /api/chat).
+  delete merged.personas;
+  delete merged.masterPrompt;
+  merged.version = 3;
+  merged.projects = Array.isArray(s.projects) ? s.projects : [];
+  merged.chats = Array.isArray(s.chats) ? s.chats : [];
+  merged.chats = merged.chats.map((c) => ({
+    id: c.id,
+    name: c.name || 'Untitled',
+    kind: wasSilentlyDowngradedGroup(c) ? 'group' : (c.kind || 'chat'),
+    groupMode: c.groupMode || null,
+    groupDowngraded: c.groupDowngraded === true,
+    topic: c.topic || null,
+    groupSummary: c.groupSummary || '',
+    groupRounds: typeof c.groupRounds === 'number' ? c.groupRounds : 3,
+    personaModels: (c.personaModels && typeof c.personaModels === 'object')
+      ? c.personaModels
+      : {},
+    personaIds: Array.isArray(c.personaIds) ? c.personaIds : null,
+    personaTasks: (c.personaTasks && typeof c.personaTasks === 'object') ? c.personaTasks : {},
+    provider: c.provider || 'venice',
+    model: c.model || 'venice-uncensored',
+    personaId: c.personaId || 'nexus',
+    // An introduction that was still being written when the page closed is not a message.
+    messages: (Array.isArray(c.messages) ? c.messages : []).filter((m) => !(m && m.intro && m.streaming)),
+    artifacts: Array.isArray(c.artifacts) ? c.artifacts : [],
+    createdAt: c.createdAt || Date.now(),
+    updatedAt: c.updatedAt || Date.now(),
+    projectId: c.projectId || null,
+    // Hub sync cursor — must survive reload or every load re-appends the
+    // whole history (register is idempotent server-side, but append has no
+    // dedup, so the client's own cursor is what prevents duplicate inserts).
+    hubThreadId: c.hubThreadId || null,
+    hubSyncedCount: typeof c.hubSyncedCount === 'number' ? c.hubSyncedCount : 0,
+  }));
+  // One-time: older builds marked mobile drawer auto-close as an explicit
+  // preference, which left desktop with chats stuck collapsed (and, before
+  // the grid-column pin, #main at 0 width). Clear that sticky flag once.
+  if (!merged.sidebarDesktopHealV1) {
+    if (merged.chatsCollapsedExplicit && merged.chatsCollapsed) {
+      merged.chatsCollapsedExplicit = false;
+      merged.chatsCollapsed = false;
+    }
+    merged.sidebarDesktopHealV1 = true;
+  }
+  return merged;
+}
+
+function saveState() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (err) {
+    console.warn('Failed to save state (localStorage full?):', err);
+  }
+}
+
+const state = loadState();
+// Snapshot before boot mutates anything (ensureActiveChat() below
+// auto-creates a chat if none exists) — the resume prompt needs to know
+// whether there was really something to resume, not what's true after boot
+// already created a fresh empty chat.
+const bootHadChats = state.chats.length > 0;
+const bootLastSeenAt = state.lastSeenAt || 0;
+
+function uid() {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+}
+
+function activeChat() {
+  return state.chats.find((c) => c.id === state.activeChatId) || null;
+}
+
+function ensureActiveChat() {
+  let chat = activeChat();
+  if (!chat) {
+    chat = createChat();
+  }
+  return chat;
+}
+
+// Group-button chats are named "<Mode label>: <topic>" by createGroupChat().
+// One that reads kind === 'chat' without the explicit groupDowngraded flag was
+// flipped to solo by the old send-time check, not by the user — restore it.
+function wasSilentlyDowngradedGroup(c) {
+  return c.kind === 'chat'
+    && c.groupDowngraded !== true
+    && typeof c.groupMode === 'string'
+    && Array.isArray(c.personaIds) && c.personaIds.length > 0
+    && /^(Boardroom|Brainstorm|Free chat|Orchestrated): /.test(String(c.name || ''));
+}
+
+function createChat(opts = {}) {
+  const chat = {
+    id: uid(),
+    name: opts.name || 'New chat',
+    kind: opts.kind || 'chat',
+    groupMode: opts.groupMode || null,
+    topic: opts.topic || null,
+    groupSummary: opts.groupSummary || '',
+    groupRounds: typeof opts.groupRounds === 'number' ? opts.groupRounds : 3,
+    personaModels: (opts.personaModels && typeof opts.personaModels === 'object')
+      ? opts.personaModels
+      : {},
+    personaIds: Array.isArray(opts.personaIds) ? opts.personaIds : null,
+    personaTasks: (opts.personaTasks && typeof opts.personaTasks === 'object') ? opts.personaTasks : {},
+    provider: state.activeProvider,
+    model: state.activeModel,
+    personaId: state.activePersonaId,
+    messages: opts.messages || [],
+    artifacts: [],
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    projectId: opts.projectId || null,
+    hubThreadId: null,
+    hubSyncedCount: 0,
+  };
+  state.chats.unshift(chat);
+  state.activeChatId = chat.id;
+  saveState();
+  return chat;
+}
+
+const GROUP_MODE_LABELS = {
+  boardroom: 'Boardroom',
+  brainstorm: 'Brainstorm',
+  freechat: 'Free chat',
+  orchestrated: 'Orchestrated',
+};
+
+function createGroupChat(mode, topic, personaModels = {}, rounds = 3, personaIds = null, personaTasks = {}) {
+  const label = GROUP_MODE_LABELS[mode] || 'Group';
+  const chat = createChat({
+    kind: 'group',
+    groupMode: mode,
+    topic,
+    personaModels,
+    personaIds,
+    personaTasks,
+    groupRounds: rounds,
+    name: `${label}: ${topic.slice(0, 36)}`,
+    messages: [],
+  });
+  return chat;
+}
+
+function deleteChat(id) {
+  const idx = state.chats.findIndex((c) => c.id === id);
+  if (idx === -1) return;
+  state.chats.splice(idx, 1);
+  if (state.activeChatId === id) {
+    state.activeChatId = state.chats[0]?.id || null;
+  }
+  saveState();
+}
+
+// ---------------------------------------------------------------------------
+// DOM refs
+// ---------------------------------------------------------------------------
+
+const $ = (id) => document.getElementById(id);
+
+const els = {
+  app: $('app'),
+  chatsSidebar: $('chatsSidebar'),
+  artifactsSidebar: $('artifactsSidebar'),
+  closeChats: $('closeChats'),
+  backdrop: $('backdrop'),
+  chatList: $('chatList'),
+  newChatBtn: $('newChatBtn'),
+  newProjectBtn: $('newProjectBtn'),
+  newChatTopBtn: $('newChatTopBtn'),
+  toggleChats: $('toggleChats'),
+  toggleArtifacts: $('toggleArtifacts'),
+  closeArtifacts: $('closeArtifacts'),
+  chatTitle: $('chatTitle'),
+  providerSelect: $('providerSelect'),
+  modelSelect: $('modelSelect'),
+  modelPickerBtn: $('modelPickerBtn'),
+  modelPickerLabel: $('modelPickerLabel'),
+  modelPickerModal: $('modelPickerModal'),
+  modelPickerTitle: $('modelPickerTitle'),
+  closeModelPicker: $('closeModelPicker'),
+  modelSearchInput: $('modelSearchInput'),
+  modelFilterBtn: $('modelFilterBtn'),
+  modelFilterPanel: $('modelFilterPanel'),
+  modelFilterPackages: $('modelFilterPackages'),
+  modelFilterCategories: $('modelFilterCategories'),
+  modelFilterAccess: $('modelFilterAccess'),
+  modelFilterAccessSection: $('modelFilterAccessSection'),
+  modelShowAllToggle: $('modelShowAllToggle'),
+  modelHideReasoningToggle: $('modelHideReasoningToggle'),
+  modelFilterClear: $('modelFilterClear'),
+  modelFilterDone: $('modelFilterDone'),
+  modelPickerStatus: $('modelPickerStatus'),
+  modelPickerList: $('modelPickerList'),
+  modelUnlockBtn: $('modelUnlockBtn'),
+  unlockPaidBtn: $('unlockPaidBtn'),
+  unlockPaidModal: $('unlockPaidModal'),
+  closeUnlockPaid: $('closeUnlockPaid'),
+  unlockPaidForm: $('unlockPaidForm'),
+  unlockPaidInput: $('unlockPaidInput'),
+  unlockPaidError: $('unlockPaidError'),
+  roleSelect: $('roleSelect'),
+  personaSelect: $('personaSelect'),
+  voiceSelect: $('voiceSelect'),
+  menuBtn: $('menuBtn'),
+  appMenu: null, // replaced by the menu sheet (#appSheet)
+  personaBlurb: $('personaBlurb'),
+  personaBlurbName: $('personaBlurbName'),
+  personaBlurbDesc: $('personaBlurbDesc'),
+  toneBtn: $('toneBtn'),
+  toneModal: $('toneModal'),
+  closeToneModal: $('closeToneModal'),
+  toneRoleSelect: $('toneRoleSelect'),
+  tonePersonaSelect: $('tonePersonaSelect'),
+  tonePersonaDesc: $('tonePersonaDesc'),
+  toneVoiceSelect: $('toneVoiceSelect'),
+  previewVoiceBtn: $('previewVoiceBtn'),
+  saveToneBtn: $('saveToneBtn'),
+  keysBtn: $('keysBtn'),
+  keysModal: $('keysModal'),
+  keysForm: $('keysForm'),
+  closeKeysModal: $('closeKeysModal'),
+  workspaceBtn: $('workspaceBtn'),
+  groupBtn: $('groupBtn'),
+  groupModal: $('groupModal'),
+  closeGroupModal: $('closeGroupModal'),
+  cancelGroupBtn: $('cancelGroupBtn'),
+  groupTopicInput: $('groupTopicInput'),
+  groupPersonaModels: $('groupPersonaModels'),
+  startGroupBtn: $('startGroupBtn'),
+  roundsMinus: $('roundsMinus'),
+  roundsPlus: $('roundsPlus'),
+  roundsDisplay: $('roundsDisplay'),
+  attachBtn: $('attachBtn'),
+  attachInput: $('attachInput'),
+  attachPreview: $('attachPreview'),
+  agencyModeBtn: $('agencyModeBtn'),
+  smartReplyChips: $('smartReplyChips'),
+  micBtn: $('micBtn'),
+  interruptBtn: $('interruptBtn'),
+  speakBtn: $('speakBtn'),
+  sidebarPersonaGrid: $('sidebarPersonaGrid'),
+  sidebarPersonaSummary: $('sidebarPersonaSummary'),
+  sidebarModelList: $('sidebarModelList'),
+  sidebarModelSummary: $('sidebarModelSummary'),
+  sidebarMoreModelsBtn: $('sidebarMoreModelsBtn'),
+  artifactList: $('artifactList'),
+  sidebarTabs: $('sidebarTabs'),
+  artifactsPanel: $('artifactsPanel'),
+  outlinePanel: $('outlinePanel'),
+  outlineList: $('outlineList'),
+  outlineEmpty: $('outlineEmpty'),
+  comparePanel: $('comparePanel'),
+  comparePickList: $('comparePickList'),
+  comparePickBtn: $('comparePickBtn'),
+  compareInput: $('compareInput'),
+  compareSendBtn: $('compareSendBtn'),
+  compareStopBtn: $('compareStopBtn'),
+  comparePanels: $('comparePanels'),
+  compareEmpty: $('compareEmpty'),
+  remindersPanel: $('remindersPanel'),
+  reminderList: $('reminderList'),
+  reminderEmpty: $('reminderEmpty'),
+  remindersTabBadge: $('remindersTabBadge'),
+  summaryPanel: $('summaryPanel'),
+  summaryRefreshBtn: $('summaryRefreshBtn'),
+  summaryBody: $('summaryBody'),
+  summaryTldr: $('summaryTldr'),
+  summaryDecisionsBlock: $('summaryDecisionsBlock'),
+  summaryDecisions: $('summaryDecisions'),
+  summaryQuestionsBlock: $('summaryQuestionsBlock'),
+  summaryQuestions: $('summaryQuestions'),
+  summaryEmpty: $('summaryEmpty'),
+  nudgeBanner: $('nudgeBanner'),
+  nudgeBannerText: $('nudgeBannerText'),
+  nudgeBannerView: $('nudgeBannerView'),
+  nudgeBannerDismiss: $('nudgeBannerDismiss'),
+  resumeModal: $('resumeModal'),
+  resumeModalText: $('resumeModalText'),
+  resumeStartNewBtn: $('resumeStartNewBtn'),
+  resumeContinueBtn: $('resumeContinueBtn'),
+  artifactModal: $('artifactModal'),
+  artifactModalTitle: $('artifactModalTitle'),
+  artifactModalContent: $('artifactModalContent'),
+  artifactPreviewFrame: $('artifactPreviewFrame'),
+  artifactPreviewToggle: $('artifactPreviewToggle'),
+  artifactCopyBtn: $('artifactCopyBtn'),
+  artifactDownloadBtn: $('artifactDownloadBtn'),
+  closeArtifactModal: $('closeArtifactModal'),
+  chat: $('chat'),
+  typing: $('typing'),
+  typingStatus: $('typingStatus'),
+  typingThoughts: $('typingThoughts'),
+  inputForm: $('inputForm'),
+  input: $('input'),
+  sendBtn: $('sendBtn'),
+  stopBtn: $('stopBtn'),
+  exportBtn: $('exportBtn'),
+  importBtn: $('importBtn'),
+  importFile: $('importFile'),
+  clearChatsBtn: $('clearChatsBtn'),
+  clearAllBtn: $('clearAllBtn'),
+};
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+function applySidebarState() {
+  const chatsCollapsed = effectiveChatsCollapsed();
+  const artifactsCollapsed = !!state.artifactsCollapsed;
+  // #app's grid-template-columns rules key off .chats-open/.artifacts-open
+  // (see styles.css) — toggle those, not the -collapsed names, or the
+  // sidebar's CSS column never widens and the panel never visibly opens.
+  els.app.classList.toggle('chats-open', !chatsCollapsed);
+  els.app.classList.toggle('artifacts-open', !artifactsCollapsed);
+  els.chatsSidebar.classList.toggle('collapsed', chatsCollapsed);
+  els.artifactsSidebar.classList.toggle('collapsed', artifactsCollapsed);
+  // Half-screen is a mobile-only third state (closed/half/full) driven by the
+  // click/double-click handler on #toggleArtifacts — meaningless on desktop.
+  const halfScreen = isMobileViewport() && !artifactsCollapsed && !!state.artifactsHalfScreen;
+  els.artifactsSidebar.classList.toggle('half-screen', halfScreen);
+  els.app.classList.toggle('artifacts-half-screen', halfScreen);
+  const anySidebarOpen = !chatsCollapsed || !artifactsCollapsed;
+  // .backdrop starts with the .hidden utility class (display:none !important)
+  // — toggle that directly rather than a separate "visible" class, which had
+  // no matching CSS rule and meant the scrim could never actually show.
+  els.backdrop.classList.toggle('hidden', !(isMobileViewport() && anySidebarOpen));
+}
+
+function closeChatsSidebar() {
+  state.chatsCollapsed = true;
+  state.chatsCollapsedExplicit = true;
+  saveState();
+  applySidebarState();
+}
+function closeArtifactsSidebar() {
+  state.artifactsCollapsed = true;
+  saveState();
+  applySidebarState();
+}
+function closeAllSidebars() {
+  closeChatsSidebar();
+  closeArtifactsSidebar();
+}
+function openArtifactsSidebar() {
+  state.artifactsCollapsed = false;
+  saveState();
+  applySidebarState();
+}
+
+// ---------------------------------------------------------------------------
+// Right sidebar tabs — Artifacts / Outline / Compare / Reminders
+// ---------------------------------------------------------------------------
+
+const SIDEBAR_TABS = ['artifacts', 'outline', 'compare', 'reminders', 'summary'];
+
+function setArtifactsTab(name) {
+  if (!SIDEBAR_TABS.includes(name)) name = 'artifacts';
+  state.artifactsActiveTab = name;
+  saveState();
+
+  els.sidebarTabs?.querySelectorAll('.sidebar-tab').forEach((btn) => {
+    const active = btn.dataset.tab === name;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  const panels = {
+    artifacts: els.artifactsPanel,
+    outline: els.outlinePanel,
+    compare: els.comparePanel,
+    reminders: els.remindersPanel,
+    summary: els.summaryPanel,
+  };
+  for (const [tab, panel] of Object.entries(panels)) {
+    panel?.classList.toggle('hidden', tab !== name);
+  }
+
+  if (name === 'outline') renderOutline();
+  else if (name === 'reminders') refreshReminders();
+  else if (name === 'summary') void renderSummary();
+}
+
+els.sidebarTabs?.addEventListener('click', (e) => {
+  const btn = e.target.closest('.sidebar-tab');
+  if (btn) setArtifactsTab(btn.dataset.tab);
+});
+
+// Swipe left/right across the sidebar to move between tabs — additive to
+// clicking the tab strip, not a replacement. Ignores swipes starting on
+// interactive controls (inputs/buttons/links) so it doesn't fight with them,
+// and only fires on a mostly-horizontal drag so normal vertical scrolling
+// inside a panel is untouched.
+(function attachSidebarSwipe() {
+  const el = els.artifactsSidebar;
+  if (!el) return;
+  let startX = 0, startY = 0, tracking = false;
+
+  el.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('input, textarea, button, a, select')) { tracking = false; return; }
+    startX = e.clientX; startY = e.clientY; tracking = true;
+  });
+  el.addEventListener('pointerup', (e) => {
+    if (!tracking) return;
+    tracking = false;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    const i = SIDEBAR_TABS.indexOf(state.artifactsActiveTab);
+    if (i === -1) return;
+    const next = dx < 0 ? i + 1 : i - 1; // swipe left -> next tab, right -> previous
+    if (next >= 0 && next < SIDEBAR_TABS.length) setArtifactsTab(SIDEBAR_TABS[next]);
+  });
+})();
+
+/** "2m ago" / "3h ago" / falls back to a short date past a day. */
+function formatRelativeTime(ts) {
+  const diff = Date.now() - Number(ts || 0);
+  if (!Number.isFinite(diff) || diff < 0) return '';
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 7) return `${day}d ago`;
+  return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+/** One waypoint per user message — click to jump back to it in #chat. */
+function renderOutline() {
+  if (!els.outlineList) return;
+  els.outlineList.innerHTML = '';
+  const chat = activeChat();
+  const rows = (chat?.messages || [])
+    .map((m, idx) => ({ m, idx }))
+    .filter(({ m }) => m.role === 'user');
+
+  if (els.outlineEmpty) els.outlineEmpty.classList.toggle('hidden', rows.length > 0);
+
+  for (const { m, idx } of rows) {
+    const li = document.createElement('li');
+    li.className = 'outline-row';
+    const text = document.createElement('div');
+    text.className = 'title';
+    const raw = (m.content || '').replace(/\s+/g, ' ').trim();
+    text.textContent = raw.length > 60 ? raw.slice(0, 60) + '…' : (raw || '(empty)');
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = formatRelativeTime(m.ts);
+    li.append(text, meta);
+    li.addEventListener('click', () => {
+      const target = els.chat.querySelector(`.msg[data-idx="${idx}"]`);
+      target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    els.outlineList.appendChild(li);
+  }
+}
+
+let summaryLoading = false;
+
+/** Renders one bullet list ("Decisions" / "Open questions") or hides its block if empty. */
+function fillSummaryList(ul, block, items) {
+  if (!ul || !block) return;
+  ul.innerHTML = '';
+  if (!items || !items.length) { block.classList.add('hidden'); return; }
+  block.classList.remove('hidden');
+  for (const text of items) {
+    const li = document.createElement('li');
+    li.className = 'summary-item';
+    li.textContent = text;
+    ul.appendChild(li);
+  }
+}
+
+function paintSummary(cache, emptyText) {
+  if (!cache) {
+    els.summaryBody?.classList.add('hidden');
+    if (els.summaryEmpty) {
+      els.summaryEmpty.textContent =
+        emptyText || 'A running TL;DR, decisions, and open questions for this chat will show up here.';
+    }
+    els.summaryEmpty?.classList.remove('hidden');
+    return;
+  }
+  els.summaryEmpty?.classList.add('hidden');
+  els.summaryBody?.classList.remove('hidden');
+  if (els.summaryTldr) els.summaryTldr.textContent = cache.tldr || '(nothing to summarize yet)';
+  fillSummaryList(els.summaryDecisions, els.summaryDecisionsBlock, cache.decisions);
+  fillSummaryList(els.summaryQuestions, els.summaryQuestionsBlock, cache.openQuestions);
+}
+
+/** Rolling TL;DR + decisions + open questions for the current chat. Caches
+ * on the chat object, keyed to message count, so opening the tab repeatedly
+ * without new messages doesn't refetch — only Refresh or new activity does. */
+async function renderSummary(force = false) {
+  if (!els.summaryBody) return;
+  const chat = activeChat();
+  if (!chat) { paintSummary(null); return; }
+
+  const msgs = (chat.messages || []).filter((m) => m.role === 'user' || m.role === 'assistant');
+  if (msgs.length < 2) { paintSummary(null); return; }
+
+  if (!force && chat.summaryCache && chat.summaryCache.uptoCount === msgs.length) {
+    paintSummary(chat.summaryCache);
+    return;
+  }
+
+  if (summaryLoading) return;
+  summaryLoading = true;
+  els.summaryEmpty?.classList.add('hidden');
+  els.summaryBody?.classList.remove('hidden');
+  if (els.summaryTldr) els.summaryTldr.textContent = 'Summarizing…';
+  els.summaryDecisionsBlock?.classList.add('hidden');
+  els.summaryQuestionsBlock?.classList.add('hidden');
+  if (els.summaryRefreshBtn) els.summaryRefreshBtn.disabled = true;
+
+  try {
+    const res = await fetch('/api/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'summary',
+        messages: msgs.map((m) => ({
+          role: m.role,
+          content: typeof m.content === 'string' ? m.content : String(m.content ?? ''),
+        })),
+      }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+    const data = await res.json();
+    chat.summaryCache = {
+      tldr: data.tldr || '',
+      decisions: Array.isArray(data.decisions) ? data.decisions : [],
+      openQuestions: Array.isArray(data.openQuestions) ? data.openQuestions : [],
+      uptoCount: msgs.length,
+    };
+    saveState();
+    paintSummary(chat.summaryCache);
+  } catch (err) {
+    paintSummary(null, `Couldn't summarize: ${err.message || 'network error'}.`);
+  } finally {
+    summaryLoading = false;
+    if (els.summaryRefreshBtn) els.summaryRefreshBtn.disabled = false;
+  }
+}
+
+els.summaryRefreshBtn?.addEventListener('click', () => void renderSummary(true));
+
+function buildChatListItem(c) {
+  const li = document.createElement('li');
+  if (c.id === state.activeChatId) li.classList.add('active');
+
+  const nameEl = document.createElement('span');
+  nameEl.className = 'name';
+  nameEl.textContent = c.name || 'Untitled';
+  nameEl.title = c.name || 'Untitled';
+  nameEl.addEventListener('click', () => {
+    abortCompareRun(); // Compare is scratch space scoped to one chat — don't leak into the next
+    state.activeChatId = c.id;
+    state.activeProvider = c.provider;
+    state.activeModel = c.model;
+    state.activePersonaId = c.personaId;
+    // Auto-close the drawer on mobile only — do NOT mark explicit, or a
+    // later desktop session keeps chats collapsed forever via localStorage.
+    if (isMobileViewport()) state.chatsCollapsed = true;
+    saveState();
+    renderAll();
+  });
+
+  if (c.kind === 'group') {
+    const tag = document.createElement('span');
+    tag.className = 'group-tag';
+    tag.textContent = GROUP_MODE_LABELS[c.groupMode] || 'Group';
+    li.appendChild(tag);
+  }
+
+  const save = document.createElement('button');
+  save.className = 'chat-action save-chat';
+  save.textContent = '⤓';
+  save.title = 'Save chat to file (JSON)';
+  save.addEventListener('click', (e) => {
+    e.stopPropagation();
+    downloadChat(c);
+  });
+
+  if (c.kind === 'group') {
+    const mp3 = document.createElement('button');
+    mp3.className = 'chat-action save-mp3';
+    mp3.textContent = '♫';
+    mp3.title = 'Save group session as MP3';
+    mp3.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void downloadGroupSessionMp3(c, mp3, { useKeywords: true });
+    });
+    li.appendChild(mp3);
+  }
+
+  const move = document.createElement('button');
+  move.className = 'chat-action move-chat';
+  move.textContent = '📁';
+  move.title = 'Move to project';
+  move.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openMoveToProjectMenu(c, move);
+  });
+
+  const del = document.createElement('button');
+  del.className = 'chat-action delete-chat';
+  del.textContent = '×';
+  del.title = 'Delete chat';
+  del.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (confirm(`Delete "${c.name}"?`)) {
+      deleteChat(c.id);
+      renderAll();
+    }
+  });
+
+  li.appendChild(nameEl);
+  li.appendChild(move);
+  li.appendChild(save);
+  li.appendChild(del);
+  return li;
+}
+
+/** One collapsible cluster of chats — a real project, or the "Ungrouped" bucket (project === null). */
+function buildProjectGroup(project, chats) {
+  const wrap = document.createElement('li');
+  wrap.className = 'project-group';
+
+  const header = document.createElement('div');
+  header.className = 'project-group-header';
+
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'project-group-toggle';
+  toggle.dataset.projectToggle = project ? project.id : '__ungrouped__';
+  const caret = document.createElement('span');
+  caret.className = 'project-group-caret';
+  caret.textContent = '▾';
+  const title = document.createElement('span');
+  title.className = 'project-group-title';
+  title.textContent = project ? project.name : 'Ungrouped';
+  toggle.append(caret, title);
+  header.appendChild(toggle);
+
+  if (project) {
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'project-group-delete';
+    del.textContent = '×';
+    del.title = 'Delete project (chats stay, just ungrouped)';
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!confirm(`Delete project "${project.name}"? Chats inside it are kept, just ungrouped.`)) return;
+      state.projects = state.projects.filter((x) => x.id !== project.id);
+      for (const c of state.chats) if (c.projectId === project.id) c.projectId = null;
+      saveState();
+      renderChatList();
+    });
+    header.appendChild(del);
+  }
+
+  wrap.appendChild(header);
+
+  const body = document.createElement('ul');
+  body.className = 'project-group-body';
+  for (const c of chats) body.appendChild(buildChatListItem(c));
+  wrap.appendChild(body);
+
+  return wrap;
+}
+
+function renderChatList() {
+  els.chatList.innerHTML = '';
+
+  if (state.projects.length === 0) {
+    // No projects exist yet — identical flat list to before this feature.
+    for (const c of state.chats) els.chatList.appendChild(buildChatListItem(c));
+  } else {
+    for (const p of state.projects) {
+      const chats = state.chats.filter((c) => c.projectId === p.id);
+      els.chatList.appendChild(buildProjectGroup(p, chats));
+    }
+    const ungrouped = state.chats.filter((c) => !c.projectId);
+    if (ungrouped.length) els.chatList.appendChild(buildProjectGroup(null, ungrouped));
+  }
+
+  if (state.chats.length === 0) {
+    const hint = document.createElement('li');
+    hint.className = 'chat-hint';
+    hint.textContent = 'Chats you start will appear here. They\'re saved to this browser automatically.';
+    els.chatList.appendChild(hint);
+  }
+}
+
+function closeProjectPickerMenu() {
+  document.getElementById('projectPickerMenu')?.remove();
+  document.removeEventListener('click', closeProjectPickerMenuOnOutsideClick, true);
+}
+function closeProjectPickerMenuOnOutsideClick(e) {
+  const menu = document.getElementById('projectPickerMenu');
+  if (menu && !menu.contains(e.target)) closeProjectPickerMenu();
+}
+
+function createProject(name) {
+  const project = { id: uid(), name, createdAt: Date.now() };
+  state.projects.push(project);
+  return project;
+}
+
+function openMoveToProjectMenu(chat, anchorBtn) {
+  closeProjectPickerMenu();
+  const menu = document.createElement('div');
+  menu.id = 'projectPickerMenu';
+  menu.className = 'project-picker-menu';
+
+  const addItem = (label, onClick) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'project-picker-item';
+    item.textContent = label;
+    item.addEventListener('click', () => {
+      onClick();
+      saveState();
+      renderChatList();
+      closeProjectPickerMenu();
+    });
+    menu.appendChild(item);
+  };
+
+  for (const p of state.projects) {
+    addItem(p.id === chat.projectId ? `✓ ${p.name}` : p.name, () => { chat.projectId = p.id; });
+  }
+  if (chat.projectId) {
+    addItem('Remove from project', () => { chat.projectId = null; });
+  }
+  addItem('+ New project…', () => {
+    const name = (prompt('New project name:') || '').trim();
+    if (!name) return;
+    chat.projectId = createProject(name).id;
+  });
+
+  document.body.appendChild(menu);
+  const rect = anchorBtn.getBoundingClientRect();
+  menu.style.top = `${rect.bottom + 4}px`;
+  menu.style.left = `${Math.max(8, rect.right - 180)}px`;
+  requestAnimationFrame(() => {
+    const w = menu.offsetWidth || 180;
+    menu.style.left = `${Math.max(8, Math.min(rect.right - w, window.innerWidth - w - 8))}px`;
+  });
+
+  setTimeout(() => document.addEventListener('click', closeProjectPickerMenuOnOutsideClick, true), 0);
+}
+
+function downloadChat(chat) {
+  const blob = new Blob([JSON.stringify(chat, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  const safeName = (chat.name || 'chat').replace(/[^\w\-]+/g, '_').slice(0, 60) || 'chat';
+  link.href = url;
+  link.download = `${safeName}-${new Date(chat.updatedAt || Date.now()).toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+function renderChatTitle() {
+  const chat = activeChat();
+  els.chatTitle.textContent = chat ? chat.name : 'Untitled';
+}
+
+/** True when the chat viewport is near the bottom (follow new messages). */
+let chatStickToBottom = true;
+
+function updateChatStickToBottom() {
+  const el = els.chat;
+  if (!el) return;
+  const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+  chatStickToBottom = dist < 100;
+}
+
+function bindChatScrollGuard() {
+  if (!els.chat || els.chat.dataset.scrollGuard === '1') return;
+  els.chat.dataset.scrollGuard = '1';
+  els.chat.addEventListener('scroll', updateChatStickToBottom, { passive: true });
+}
+
+/** Group chats: never yank the reader back to the first turn. */
+function groupScrollMode(preferred = 'bottom') {
+  if (preferred === 'none') return 'none';
+  return chatStickToBottom ? 'bottom' : 'none';
+}
+
+/** @param {{ scroll?: 'bottom' | 'assistant-start' | 'none', pinMsgTs?: number }} [opts] */
+function renderMessages(opts = {}) {
+  const scroll = opts.scroll || 'bottom';
+  const prevTop = els.chat?.scrollTop || 0;
+  els.chat.innerHTML = '';
+  const chat = activeChat();
+  // The composer cheat sheet is onboarding: keep it while a chat is empty and
+  // there is room for it, drop it once the conversation needs the screen.
+  document.body.classList.toggle('has-messages', (chat?.messages?.length || 0) > 0);
+  if (!chat) return;
+
+  if (chat.kind === 'group') {
+    const banner = document.createElement('div');
+    banner.className = 'group-banner';
+    const modeLabel = GROUP_MODE_LABELS[chat.groupMode] || 'Group';
+    const text = document.createElement('div');
+    text.className = 'group-banner-text';
+    text.innerHTML = `<strong>${modeLabel}</strong> · ${escapeHtml(chat.topic || 'Untitled')} — all personas at the table.`;
+    banner.appendChild(text);
+    const mp3Btn = document.createElement('button');
+    mp3Btn.type = 'button';
+    mp3Btn.className = 'text-btn group-mp3-btn';
+    mp3Btn.textContent = 'Save MP3';
+    mp3Btn.title = 'Download this group session as an MP3';
+    mp3Btn.addEventListener('click', () => void downloadGroupSessionMp3(chat, mp3Btn, { useKeywords: true }));
+    banner.appendChild(mp3Btn);
+    els.chat.appendChild(banner);
+  }
+
+  let pinEl = null;
+  chat.messages.forEach((m, idx) => {
+    const el = renderMessageInto(els.chat, m, idx);
+    if (opts.pinMsgTs && m.ts === opts.pinMsgTs && m.role === 'assistant') {
+      pinEl = el;
+    }
+  });
+  // Default pin: latest assistant message
+  if (scroll === 'assistant-start' && !pinEl) {
+    const bots = els.chat.querySelectorAll('.msg.bot');
+    pinEl = bots.length ? bots[bots.length - 1] : null;
+  }
+  if (scroll === 'none') {
+    // Keep the reader's place after a full re-render (group streaming).
+    els.chat.scrollTop = prevTop;
+  } else if (scroll === 'assistant-start' && pinEl && chat.kind !== 'group') {
+    // Single-chat only — group must not jump to an early turn.
+    requestAnimationFrame(() => {
+      pinEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
+  } else if (scroll === 'bottom' || (scroll === 'assistant-start' && chat.kind === 'group')) {
+    if (chat.kind === 'group' && !chatStickToBottom && scroll !== 'bottom') {
+      els.chat.scrollTop = prevTop;
+    } else {
+      els.chat.scrollTop = els.chat.scrollHeight;
+    }
+  }
+
+  renderOutline();
+}
+
+function escapeHtml(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function renderMessageInto(container, m, idx) {
+  const cls =
+    m.role === 'user' ? 'user' :
+    m.role === 'error' ? 'error' :
+    m.role === 'info' ? 'info' :
+    'bot';
+
+  const div = document.createElement('div');
+  div.className = 'msg ' + cls + (m.streaming ? ' streaming' : '') + (m.personaId ? ' group-turn' : '');
+  if (m.ts) div.dataset.ts = String(m.ts);
+  // Index, not timestamp — two messages can share a millisecond (e.g. an
+  // info+user pair pushed back to back), which would make data-ts an
+  // unreliable scroll-jump target for the Outline tab.
+  if (idx != null) div.dataset.idx = String(idx);
+
+  if (m.autoContinue) div.classList.add('auto-continue');
+
+  const label = document.createElement('span');
+  label.className = 'role';
+  label.textContent =
+    m.role === 'user' ? (m.autoContinue ? 'auto' : 'you') :
+    m.role === 'error' ? 'error' :
+    m.role === 'info' ? 'notice' :
+    m.role === 'assistant'
+      ? (m.personaName
+        ? m.personaName
+        : (m.model ? `model · ${m.model}` : 'model'))
+      : m.role;
+  div.appendChild(label);
+
+  // Moderator turns get a visible star in the live discussion — the same
+  // signal shown in group setup, so who closes the table out is never a
+  // guess mid-conversation.
+  if (m.role === 'assistant' && m.personaId) {
+    const p = personas.find((x) => x.id === m.personaId);
+    if (p && (p.isModerator || p.is_moderator)) {
+      const star = document.createElement('span');
+      star.className = 'mod-badge';
+      star.textContent = '★';
+      star.title = 'Moderator';
+      div.appendChild(star);
+    }
+  }
+
+  const content = document.createElement('div');
+  content.className = 'content';
+
+  if (m.role === 'assistant') {
+    if (m.task) {
+      const taskLine = document.createElement('div');
+      taskLine.className = 'msg-task';
+      taskLine.textContent = `Task: ${m.task}`;
+      content.appendChild(taskLine);
+    }
+    const shown = stripContinueMarkers(m.content || '') || (m.streaming ? '…' : '');
+    if (m.campaign?.posts) renderCampaignInto(content, m.campaign);
+    else renderMarkdownInto(content, shown);
+    if (Array.isArray(m.sources) && m.sources.length && !m.streaming) {
+      const box = document.createElement('div');
+      box.className = 'msg-sources';
+      const label = document.createElement('div');
+      label.className = 'msg-sources-label';
+      label.textContent = 'Sources';
+      box.appendChild(label);
+      const ol = document.createElement('ol');
+      m.sources.forEach((s) => {
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.href = s.url;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.textContent = s.title || s.url;
+        li.appendChild(a);
+        ol.appendChild(li);
+      });
+      box.appendChild(ol);
+      content.appendChild(box);
+    }
+    if (m.content && !m.streaming) {
+      const speak = document.createElement('button');
+      speak.type = 'button';
+      speak.className = 'text-btn msg-speak';
+      speak.textContent = 'Read aloud';
+      speak.title = 'Speak this entire reply (available even when auto-speak is off)';
+      speak.addEventListener('click', (e) => {
+        e.preventDefault();
+        // Unlock audio in the same user gesture (no network), then speak full reply.
+        void unlockTts();
+        void speakReply(stripContinueMarkers(m.content), { force: true, personaId: m.personaId });
+      });
+      div.appendChild(speak);
+
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'text-btn msg-speak';
+      copyBtn.textContent = 'Copy';
+      copyBtn.title = 'Copy this entire reply';
+      copyBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const toCopy = stripContinueMarkers(m.content);
+        void copyTextToClipboard(toCopy).then((ok) =>
+          flashButton(copyBtn, ok ? 'Copied' : 'Copy failed')
+        );
+      });
+      div.appendChild(copyBtn);
+
+      // Where this result goes next: the Team (strategy/offers/profile), Code Space, Media, Memory.
+      const sendBtn = document.createElement('button');
+      sendBtn.type = 'button';
+      sendBtn.className = 'text-btn msg-speak';
+      sendBtn.textContent = 'Send to…';
+      sendBtn.title = 'Turn this into something: the Team’s strategy, a Code Space build, an image, a memory';
+      sendBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openHandoff(stripContinueMarkers(m.content), m.ts, { who: m.personaName || '' });
+      });
+      div.appendChild(sendBtn);
+
+      if (socialAccounts.length) {
+        const postBtn = document.createElement('button');
+        postBtn.type = 'button';
+        postBtn.className = 'text-btn msg-speak';
+        postBtn.textContent = 'Post to…';
+        postBtn.title = 'Publish or send this reply via a connected account (social or email)';
+        postBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          void handlePostToSocial(stripContinueMarkers(m.content), postBtn, m.personaName);
+        });
+        div.appendChild(postBtn);
+      }
+    }
+  } else if (m.autoContinue) {
+    content.textContent = 'continue →';
+  } else {
+    content.textContent = m.content || '';
+  }
+  div.appendChild(content);
+  container.appendChild(div);
+  return div;
+}
+
+// Minimal markdown-esque renderer for the bot output. Handles fenced code
+// blocks (```lang ... ```), paragraphs, bullet/numbered lists, headings, and
+// bold/italic/inline-code — everything is built as DOM nodes with textContent
+// (never innerHTML on model output), so there is no XSS surface. Code blocks
+// become <pre class="code-block"> elements.
+function renderMarkdownInto(container, text) {
+  const parts = splitByCodeFences(text);
+  for (const part of parts) {
+    if (part.type === 'code') {
+      const pre = document.createElement('pre');
+      pre.className = 'code-block';
+      if (part.lang) {
+        const lang = document.createElement('span');
+        lang.className = 'code-lang';
+        lang.textContent = part.lang;
+        pre.appendChild(lang);
+      }
+      const code = document.createElement('code');
+      code.textContent = part.content;
+      pre.appendChild(code);
+      container.appendChild(pre);
+    } else if (part.content.trim().length > 0) {
+      renderTextBlocks(container, part.content);
+    }
+  }
+}
+
+const MD_BULLET_RE = /^\s*[-*•]\s+(.*)$/;
+const MD_ORDERED_RE = /^\s*\d+[.)]\s+(.*)$/;
+const MD_HEADING_RE = /^\s*(#{1,6})\s+(.*)$/;
+
+// Splits raw (non-code-fence) text into paragraph/list/heading blocks so
+// list items land one-per-line with real spacing, instead of the whole
+// reply becoming a single wall-of-text <p>.
+function renderTextBlocks(container, text) {
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  let i = 0;
+  while (i < lines.length) {
+    while (i < lines.length && lines[i].trim() === '') i++;
+    if (i >= lines.length) break;
+
+    const heading = lines[i].match(MD_HEADING_RE);
+    if (heading) {
+      const h = document.createElement('p');
+      h.className = 'md-heading';
+      appendInlineMarkdown(h, heading[2]);
+      container.appendChild(h);
+      i++;
+      continue;
+    }
+
+    const isOrdered = MD_ORDERED_RE.test(lines[i]);
+    const isBullet = MD_BULLET_RE.test(lines[i]);
+    if (isOrdered || isBullet) {
+      const list = document.createElement(isOrdered ? 'ol' : 'ul');
+      while (i < lines.length) {
+        const line = lines[i];
+        if (line.trim() === '') { i++; break; }
+        const m = line.match(isOrdered ? MD_ORDERED_RE : MD_BULLET_RE);
+        if (m) {
+          const li = document.createElement('li');
+          appendInlineMarkdown(li, m[1]);
+          list.appendChild(li);
+          i++;
+        } else if (/^\s{2,}\S/.test(line) && list.lastElementChild) {
+          // Indented continuation of the previous list item.
+          list.lastElementChild.appendChild(document.createElement('br'));
+          appendInlineMarkdown(list.lastElementChild, line.trim());
+          i++;
+        } else {
+          break;
+        }
+      }
+      container.appendChild(list);
+      continue;
+    }
+
+    const paraLines = [];
+    while (
+      i < lines.length &&
+      lines[i].trim() !== '' &&
+      !MD_BULLET_RE.test(lines[i]) &&
+      !MD_ORDERED_RE.test(lines[i]) &&
+      !MD_HEADING_RE.test(lines[i])
+    ) {
+      paraLines.push(lines[i]);
+      i++;
+    }
+    const p = document.createElement('p');
+    paraLines.forEach((ln, idx) => {
+      if (idx > 0) p.appendChild(document.createElement('br'));
+      appendInlineMarkdown(p, ln);
+    });
+    container.appendChild(p);
+  }
+}
+
+// Bold/italic/inline-code within a line, appended as real DOM nodes — text
+// content only ever goes through textContent, never innerHTML.
+const MD_INLINE_RE = /\*\*(.+?)\*\*|__(.+?)__|`([^`]+?)`|\*(.+?)\*|_(.+?)_/g;
+function appendInlineMarkdown(parent, text) {
+  MD_INLINE_RE.lastIndex = 0;
+  let last = 0;
+  let m;
+  while ((m = MD_INLINE_RE.exec(text)) !== null) {
+    if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
+    if (m[1] !== undefined || m[2] !== undefined) {
+      const strong = document.createElement('strong');
+      strong.textContent = m[1] !== undefined ? m[1] : m[2];
+      parent.appendChild(strong);
+    } else if (m[3] !== undefined) {
+      const code = document.createElement('code');
+      code.textContent = m[3];
+      parent.appendChild(code);
+    } else {
+      const em = document.createElement('em');
+      em.textContent = m[4] !== undefined ? m[4] : m[5];
+      parent.appendChild(em);
+    }
+    last = MD_INLINE_RE.lastIndex;
+  }
+  if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+}
+
+// Split "hello ```py\ncode\n``` there" into [{type:text}, {type:code}, {type:text}]
+function splitByCodeFences(text) {
+  const out = [];
+  const re = /```([a-zA-Z0-9_+\-.]*)\s*\n([\s\S]*?)```/g;
+  let last = 0;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) out.push({ type: 'text', content: text.slice(last, m.index) });
+    out.push({ type: 'code', lang: m[1] || '', content: m[2] });
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push({ type: 'text', content: text.slice(last) });
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Artifacts
+// ---------------------------------------------------------------------------
+
+const LANG_EXT = {
+  python: 'py', py: 'py',
+  javascript: 'js', js: 'js',
+  typescript: 'ts', ts: 'ts',
+  jsx: 'jsx', tsx: 'tsx',
+  html: 'html', css: 'css',
+  bash: 'sh', sh: 'sh', shell: 'sh', zsh: 'sh',
+  json: 'json', yaml: 'yml', yml: 'yml',
+  markdown: 'md', md: 'md',
+  rust: 'rs', rs: 'rs',
+  go: 'go',
+  java: 'java', kotlin: 'kt', swift: 'swift',
+  cpp: 'cpp', 'c++': 'cpp',
+  c: 'c', h: 'h',
+  csharp: 'cs', cs: 'cs',
+  ruby: 'rb', rb: 'rb',
+  php: 'php',
+  sql: 'sql',
+  toml: 'toml', ini: 'ini',
+  xml: 'xml', svg: 'svg',
+  dockerfile: 'Dockerfile',
+  lua: 'lua', r: 'r',
+};
+
+function extensionForLang(lang) {
+  if (!lang) return 'txt';
+  const l = lang.toLowerCase();
+  return LANG_EXT[l] || 'txt';
+}
+
+/**
+ * Detect artifacts in a bot response.
+ * - Prefers explicit File: / title= / heading / bold labels as the title.
+ * - Plan/advice replies: only keep blocks that have a real title (no more
+ *   untitled snippet-1.js junk when the model is just illustrating).
+ * - Write role (or explicit File:): keep substantial fences as before.
+ */
+function extractArtifacts(text, { role = 'plan' } = {}) {
+  const artifacts = [];
+  const re = /(?:^|\n)([^\n]*)\n```([a-zA-Z0-9_+\-.]*)(?:[^\n]*)\n([\s\S]*?)```/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const hintLine = (m[1] || '').trim();
+    const fenceOpen = m[0].match(/```([a-zA-Z0-9_+\-.]*)([^\n]*)/);
+    const lang = (m[2] || '').trim();
+    const fenceAttrs = (fenceOpen && fenceOpen[2]) || '';
+    const content = m[3];
+    const lines = content.split('\n').length;
+    if (lines < 3) continue;
+
+    let title = '';
+    const attrTitle = fenceAttrs.match(/(?:title|name|file|filename|path)\s*=\s*[`'"]?([^\s`'"]+)[`'"]?/i);
+    if (attrTitle) title = attrTitle[1];
+
+    const fileMatch = hintLine.match(
+      /(?:^|\b)(?:file|filename|path)\s*[:=]\s*[`'"]?([^\s`'"]+)[`'"]?/i,
+    );
+    if (!title && fileMatch) title = fileMatch[1];
+
+    // Markdown heading or bold label on the line before the fence
+    if (!title) {
+      const heading = hintLine.match(/^(?:#{1,6}\s+|\*\*|__)(.+?)(?:\*\*|__)?\s*$/);
+      if (heading) title = heading[1].replace(/[#*_`]/g, '').trim();
+    }
+    // "Here's auth.ts:" / "### login.py"
+    if (!title) {
+      const named = hintLine.match(
+        /[`'"]?([\w./-]+\.[a-zA-Z0-9]{1,12})[`'"]?\s*:?\s*$/,
+      );
+      if (named) title = named[1];
+    }
+    if (!title) {
+      const firstLine = content.split('\n').find((ln) => ln.trim().length > 0) || '';
+      const commentPath = firstLine.match(
+        /(?:#|\/\/|--)\s*(?:file|filename|path)?\s*[:=]?\s*([\w\-./]+\.[a-zA-Z0-9]+)/,
+      );
+      if (commentPath) title = commentPath[1];
+    }
+
+    const hasExplicitTitle = !!title;
+    // Advice/plan: skip untitled example dumps. Write: keep them, but name better.
+    if (!hasExplicitTitle && role !== 'write') continue;
+
+    if (!title) {
+      const ext = extensionForLang(lang);
+      const idHint = (content.match(
+        /(?:function|class|const|def|export\s+(?:default\s+)?(?:async\s+)?function)\s+([A-Za-z_][\w]*)/,
+      ) || [])[1];
+      title = idHint
+        ? `${idHint}.${ext}`
+        : `${lang || 'code'}-${artifacts.length + 1}.${ext}`;
+    }
+
+    artifacts.push({
+      id: uid(),
+      title: String(title).slice(0, 120),
+      language: lang || 'text',
+      content,
+      createdAt: Date.now(),
+    });
+  }
+  return artifacts;
+}
+
+/** Self-contained HTML pages can be rendered live in a sandboxed iframe. */
+function isHtmlArtifact(a) {
+  if (!a) return false;
+  if ((a.language || '').toLowerCase() === 'html') return true;
+  return /^\s*(<!doctype html|<html[\s>])/i.test(a.content || '');
+}
+
+function renderArtifacts() {
+  els.artifactList.innerHTML = '';
+  const chat = activeChat();
+  if (!chat) return;
+  for (const a of chat.artifacts) {
+    const li = document.createElement('li');
+    li.dataset.id = a.id;
+
+    const title = document.createElement('div');
+    title.className = 'title';
+    title.textContent = a.title;
+    title.title = a.title;
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const langSpan = document.createElement('span');
+    langSpan.textContent = a.language || 'text';
+    const linesSpan = document.createElement('span');
+    linesSpan.textContent = `${a.content.split('\n').length} lines`;
+    meta.appendChild(langSpan);
+    meta.appendChild(linesSpan);
+
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+
+    const viewBtn = document.createElement('button');
+    viewBtn.textContent = 'View';
+    viewBtn.addEventListener('click', (e) => { e.stopPropagation(); openArtifactModal(a); });
+
+    const copyBtn = document.createElement('button');
+    copyBtn.textContent = 'Copy';
+    copyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void copyTextToClipboard(a.content).then((ok) =>
+        flashButton(copyBtn, ok ? 'Copied' : 'Copy failed')
+      );
+    });
+
+    const dlBtn = document.createElement('button');
+    dlBtn.textContent = 'Download';
+    dlBtn.addEventListener('click', (e) => { e.stopPropagation(); downloadArtifact(a); });
+
+    actions.appendChild(viewBtn);
+    if (isHtmlArtifact(a)) {
+      const previewBtn = document.createElement('button');
+      previewBtn.textContent = 'Preview';
+      previewBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openArtifactModal(a, { preview: true });
+      });
+      actions.appendChild(previewBtn);
+    }
+    actions.appendChild(copyBtn);
+    actions.appendChild(dlBtn);
+
+    li.appendChild(title);
+    li.appendChild(meta);
+    li.appendChild(actions);
+    li.addEventListener('click', () => openArtifactModal(a));
+
+    els.artifactList.appendChild(li);
+  }
+}
+
+function flashButton(btn, text) {
+  const original = btn.textContent;
+  btn.textContent = text;
+  setTimeout(() => { btn.textContent = original; }, 1200);
+}
+
+async function copyTextToClipboard(text) {
+  const s = String(text ?? '');
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(s);
+      return true;
+    }
+  } catch {
+    // Fall through to legacy copy.
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = s;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-9999px';
+    ta.style.left = '-9999px';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = typeof document.execCommand === 'function' ? document.execCommand('copy') : false;
+    document.body.removeChild(ta);
+    return Boolean(ok);
+  } catch {
+    return false;
+  }
+}
+
+function downloadArtifact(a) {
+  const blob = new Blob([a.content], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = a.title;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+let currentArtifact = null;
+/** Swaps the modal between raw code (<pre>) and a sandboxed live preview.
+ * allow-scripts only — no allow-same-origin — so anything the model wrote
+ * can't reach the real app's cookies, localStorage, or parent DOM. */
+function setArtifactPreviewMode(on) {
+  if (!els.artifactPreviewFrame || !els.artifactModalContent) return;
+  if (on && currentArtifact) els.artifactPreviewFrame.srcdoc = currentArtifact.content;
+  els.artifactPreviewFrame.classList.toggle('hidden', !on);
+  els.artifactModalContent.classList.toggle('hidden', on);
+  if (els.artifactPreviewToggle) els.artifactPreviewToggle.textContent = on ? 'Code' : 'Preview';
+}
+
+function openArtifactModal(a, { preview = false } = {}) {
+  currentArtifact = a;
+  els.artifactModalTitle.textContent = `${a.title}  ·  ${a.language}`;
+  els.artifactModalContent.textContent = a.content;
+  const canPreview = isHtmlArtifact(a);
+  els.artifactPreviewToggle?.classList.toggle('hidden', !canPreview);
+  setArtifactPreviewMode(canPreview && preview);
+  els.artifactModal.classList.remove('hidden');
+}
+function closeArtifactModal() {
+  currentArtifact = null;
+  if (els.artifactPreviewFrame) els.artifactPreviewFrame.srcdoc = '';
+  els.artifactModal.classList.add('hidden');
+}
+
+els.artifactPreviewToggle?.addEventListener('click', () => {
+  const showingPreview = !els.artifactPreviewFrame?.classList.contains('hidden');
+  setArtifactPreviewMode(!showingPreview);
+});
+
+// ---------------------------------------------------------------------------
+// Personas
+// ---------------------------------------------------------------------------
+
+// Pulls the current persona list from /api/public-config (id, name, description).
+// System prompts and the master prompt stay server-side. Falls back to
+// FALLBACK_PERSONAS on any failure so the UI remains usable offline.
+async function fetchPersonas() {
+  try {
+    const res = await fetch('/api/public-config');
+    if (!res.ok) throw new Error(`public-config HTTP ${res.status}`);
+    const data = await res.json();
+    if (Array.isArray(data.personas) && data.personas.length > 0) {
+      personas = data.personas.map((p) => ({
+        id: p.id,
+        name: p.name,
+        description: p.description || '',
+        builtin: !!p.builtin,
+      }));
+    }
+    if (Array.isArray(data.socialAccounts)) {
+      socialAccounts = data.socialAccounts;
+    }
+  } catch (err) {
+    console.warn('Failed to fetch personas from server:', err);
+  }
+  if (!personas.some((p) => p.id === state.activePersonaId)) {
+    state.activePersonaId = personas[0]?.id || 'nexus';
+    saveState();
+  }
+  ensurePersonaVoices(personas);
+  ensurePersonaModels(personas);
+  renderPersonaSelect();
+  renderPersonaCards();
+}
+
+/**
+ * Publish a persona's drafted text to a real Facebook Page / Instagram
+ * account, via /api/social-post. Gated behind the same unlock password as
+ * paid models — this triggers a real, public, irreversible action.
+ */
+async function handlePostToSocial(text, triggerBtn, personaName) {
+  if (!socialAccounts.length) return;
+  const el = (tag, props = {}, ...kids) => {
+    const n = Object.assign(document.createElement(tag), props);
+    for (const k of kids) n.append(k);
+    return n;
+  };
+  const field = (label, input) => el('label', { style: 'display:block;margin:10px 0 0;font-size:13px;color:var(--muted)' }, label, input);
+  const fieldCss = 'display:block;width:100%;margin-top:4px;padding:8px;box-sizing:border-box;background:var(--panel-2);color:var(--text);border:1px solid var(--border-2);border-radius:8px;font:inherit';
+
+  const acct = el('select', { style: fieldCss });
+  socialAccounts.forEach((a) => acct.append(el('option', { value: a.id, textContent: `${a.label} (${a.platform})` })));
+  const to = el('input', { type: 'email', placeholder: 'name@example.com', style: fieldCss });
+  const subject = el('input', { type: 'text', value: 'Message from ' + (activePersona()?.name || 'the team'), style: fieldCss });
+  const imgOn = el('input', { type: 'checkbox' });
+  const imgPrompt = el('input', { type: 'text', value: text.slice(0, 200), style: fieldCss });
+  const pwBox = el('input', { type: 'password', placeholder: 'Unlock password', style: fieldCss });
+  const preview = el('div', { textContent: text, style: 'max-height:140px;overflow:auto;white-space:pre-wrap;padding:8px;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;font-size:13px' });
+  const status = el('div', { style: 'margin-top:12px;font-size:13px;min-height:18px;white-space:pre-wrap' });
+  const go = el('button', { type: 'button', textContent: 'Post now', style: 'padding:8px 16px;border-radius:8px;border:1px solid var(--border-2);background:var(--panel-2);color:var(--text);cursor:pointer;font:inherit' });
+  const cancel = el('button', { type: 'button', textContent: 'Close', style: 'padding:8px 16px;border-radius:8px;border:1px solid var(--border-2);background:var(--panel-2);color:var(--text);cursor:pointer;font:inherit' });
+
+  const emailRows = el('div', {}, field('Send to', to), field('Subject', subject));
+  const imgRow = el('div', {}, el('label', { style: 'display:flex;gap:8px;align-items:center;margin-top:10px;font-size:13px' }, imgOn, 'Attach an AI-generated image'), field('Image description', imgPrompt));
+  const sync = () => {
+    const a = socialAccounts.find((x) => x.id === acct.value);
+    const email = a.platform === 'email';
+    emailRows.style.display = email ? '' : 'none';
+    imgRow.style.display = email ? 'none' : '';
+    imgOn.checked = a.platform === 'instagram';
+    imgPrompt.parentElement.style.display = imgOn.checked ? '' : 'none';
+    go.textContent = email ? 'Send now' : 'Post now';
+  };
+  imgOn.addEventListener('change', () => { imgPrompt.parentElement.style.display = imgOn.checked ? '' : 'none'; });
+  acct.addEventListener('change', sync);
+
+  const box = el('div', { className: 'modal', style: 'padding:16px' },
+    el('h3', { textContent: 'Post this', style: 'margin:0 0 8px' }),
+    preview, field('Account', acct), emailRows, imgRow,
+    loadPaidPassword() ? el('span') : field('Unlock password to publish', pwBox),
+    el('p', { textContent: 'This publishes publicly and can’t be undone from here.', style: 'font-size:12px;color:var(--muted-2);margin:12px 0 0' }),
+    status,
+    el('div', { style: 'display:flex;gap:8px;justify-content:flex-end;margin-top:12px' }, cancel, go));
+  const overlay = el('div', { className: 'modal-overlay' }, box);
+  const close = () => overlay.remove();
+  cancel.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.body.append(overlay);
+  sync();
+
+  const say = (msg, bad) => { status.textContent = msg; status.style.color = bad ? '#FB7185' : 'var(--text)'; };
+  go.addEventListener('click', async () => {
+    const account = socialAccounts.find((x) => x.id === acct.value);
+    const isEmail = account.platform === 'email';
+    if (isEmail && !to.value.trim()) { say('Enter an email address.', true); return; }
+    let pw = loadPaidPassword();
+    if (!pw) {
+      pw = pwBox.value.trim();
+      if (!pw) { say('Enter the unlock password.', true); return; }
+    }
+    go.disabled = true;
+    try {
+      let imageUrl;
+      if (!isEmail && imgOn.checked && imgPrompt.value.trim()) {
+        say('Generating image…');
+        try {
+          imageUrl = await generateImageForPost(imgPrompt.value.trim());
+        } catch (err) {
+          if (account.platform === 'instagram') throw new Error(`Image generation failed: ${err.message || err}`);
+          say(`Image generation failed (${err.message || err}). Posting text only…`);
+        }
+      }
+      say(isEmail ? 'Sending…' : 'Posting…');
+      const res = await fetch('/api/social-post', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Paid-Password': pw },
+        body: JSON.stringify({
+          accountId: account.id,
+          message: text,
+          to: isEmail ? to.value.trim() : undefined,
+          subject: isEmail ? subject.value.trim() : undefined,
+          imageUrl,
+          personaName: personaName || activePersona()?.name || undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      savePaidPassword(pw);
+      flashButton(triggerBtn, isEmail ? 'Sent ✓' : 'Posted ✓');
+      say(isEmail ? 'Sent ✓ — it went through.' : 'Posted ✓ — it is live.');
+      if (!isEmail && data.id && account.platform === 'facebook') {
+        status.append(' ', el('a', { href: `https://www.facebook.com/${data.id}`, target: '_blank', rel: 'noopener', textContent: 'View the post', style: 'color:var(--accent,#ff2e63)' }));
+      }
+      go.style.display = 'none';
+      cancel.textContent = 'Done';
+    } catch (err) {
+      say((isEmail ? 'Send failed: ' : 'Post failed: ') + (err.message || err), true);
+      go.disabled = false;
+    }
+  });
+}
+
+/** Generate a marketing image via /api/media-generate and return a hosted URL.
+ *  Throws if generation fails or storage isn't configured (no URL comes back —
+ *  Facebook/Instagram need a public URL, not inline bytes). */
+async function generateImageForPost(promptText) {
+  const res = await fetch('/api/media-generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind: 'image', provider: 'venice', prompt: promptText, size: '1024x1024' }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  const img = (data.images || [])[0];
+  if (!img?.url) {
+    throw new Error('Image generated but not hosted (set SUPABASE_SERVICE_ROLE_KEY in Vercel to enable this).');
+  }
+  return img.url;
+}
+
+function activePersona() {
+  return personas.find((p) => p.id === state.activePersonaId) || personas[0] || null;
+}
+
+/** Show the Admin "Description (shown to users)" blurb in the sheet + topbar. */
+function renderPersonaDescription() {
+  const p = activePersona();
+  const name = p?.name || 'Persona';
+  const desc = (p?.description || '').trim();
+
+  if (els.tonePersonaDesc) {
+    if (desc) {
+      els.tonePersonaDesc.textContent = desc;
+      els.tonePersonaDesc.classList.remove('empty');
+    } else {
+      els.tonePersonaDesc.textContent = 'No public description yet — set one in Admin → Personas → Description.';
+      els.tonePersonaDesc.classList.add('empty');
+    }
+  }
+
+  if (els.personaBlurb && els.personaBlurbName && els.personaBlurbDesc) {
+    els.personaBlurb.hidden = false;
+    els.personaBlurbName.textContent = name;
+    els.personaBlurbDesc.textContent = desc || 'No description — open Menu → Persona · Voice, or edit in Admin.';
+  }
+}
+
+function renderPersonaSelect() {
+  const fill = (selectEl) => {
+    if (!selectEl) return;
+    selectEl.innerHTML = '';
+    for (const p of personas) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.name;
+      if (p.description) opt.title = p.description;
+      selectEl.appendChild(opt);
+    }
+    selectEl.value = state.activePersonaId;
+  };
+  fill(els.personaSelect);
+  fill(els.tonePersonaSelect);
+  syncVoiceSelectToPersona();
+  renderPersonaDescription();
+  renderPersonaChip();
+}
+
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+async function loadProviderModels(provider) {
+  const key = (providerKeys[provider] || '').trim();
+  const cacheKey = `prov-v7:${provider}:${key ? 'byok' : 'env'}`;
+  if (modelsCache[cacheKey] && !key) return modelsCache[cacheKey];
+
+  const headers = { Accept: 'application/json' };
+  if (key) headers['X-Provider-Key'] = key;
+
+  try {
+    const res = await fetch(`/api/models?provider=${encodeURIComponent(provider)}`, {
+      headers,
+      cache: 'no-store',
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to load models');
+    const models = Array.isArray(data.models) ? data.models.filter((m) => m && m.id) : [];
+    // Only a live list may retire a saved model; a fallback list is a guess.
+    if (models.length && data.source && data.source !== 'fallback') {
+      liveCatalogIds[provider] = new Set(models.map((m) => m.id));
+    }
+    const raw = models.length ? models : (PROVIDER_FALLBACKS[provider] || []);
+    const list = raw.map((m) => enrichModelClient(provider, m));
+    if (!key) modelsCache[cacheKey] = list;
+    if (provider === 'venice' && models.length) {
+      liveVeniceModelIds = new Set(models.map((m) => m.id));
+      ensurePersonaModels(personas); // reassign any persona on a retired model
+    }
+    return list;
+  } catch (err) {
+    console.warn(`Could not fetch ${provider} model list:`, err);
+    return (PROVIDER_FALLBACKS[provider] || []).map((m) => enrichModelClient(provider, m));
+  }
+}
+
+function sortModelsForProvider(provider, models) {
+  return models.slice().sort((a, b) => {
+    if (!!a.free !== !!b.free) return a.free ? -1 : 1;
+    if (!!a.uncensored !== !!b.uncensored) return a.uncensored ? -1 : 1;
+    return (a.name || a.id).localeCompare(b.name || b.id);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Model health. Providers retire models without notice (OpenRouter's free
+// list changes weekly), and a saved choice that no longer exists breaks that
+// chat. The server swaps a retired model on the fly and reports it; this side
+// re-checks every saved choice against the live lists on load and every few
+// hours, and moves anything retired onto the current default chat model.
+// ---------------------------------------------------------------------------
+const liveCatalogIds = {};   // provider → Set of ids, from live (not fallback) lists
+let liveDefaults = {};       // provider → { chat, coder } from /api/models?op=defaults
+const MODEL_RECHECK_MS = 6 * 60 * 60 * 1000;
+
+async function loadLiveDefaults() {
+  try {
+    const res = await fetch('/api/models?op=defaults');
+    if (res.ok) liveDefaults = (await res.json()).defaults || {};
+  } catch { /* keep the last known defaults */ }
+}
+
+/** Current default chat model for a provider — live pick first, never a coder. */
+function defaultChatModel(provider) {
+  const live = liveDefaults[provider]?.chat;
+  if (live) return live;
+  const list = allModelsCatalog.filter((m) => m.provider === provider);
+  const cats = (m) => m.categories || [];
+  const chatty = (m) => !cats(m).includes('coder') && !/cod(?:e|er|ing)\b/i.test(m.id);
+  const general = (m) => chatty(m) && cats(m).includes('general');
+  const freeOk = (m) => provider !== 'openrouter' || m.free;
+  const hint = list.find((m) => m.id === DEFAULT_MODELS[provider]);
+  const pick = hint || list.find((m) => freeOk(m) && general(m)) || list.find((m) => freeOk(m) && chatty(m));
+  return pick?.id || DEFAULT_MODELS[provider] || '';
+}
+
+function modelIsRetired(provider, model) {
+  const ids = liveCatalogIds[provider];
+  return !!(ids && model && !ids.has(model));
+}
+
+/** Point every saved choice of `from` at `to`. Returns how many changed. */
+function replaceSavedModel(provider, from, to) {
+  let n = 0;
+  if (state.activeProvider === provider && state.activeModel === from) { state.activeModel = to; n++; }
+  for (const chat of state.chats || []) {
+    if ((chat.provider || state.activeProvider) === provider && chat.model === from) { chat.model = to; n++; }
+  }
+  for (const role of Object.keys(roleModels)) {
+    if (roleModels[role]?.provider === provider && roleModels[role]?.model === from) {
+      roleModels[role] = { provider, model: to };
+      n++;
+    }
+  }
+  if (n) { saveState(); saveRoleModels(roleModels); }
+  return n;
+}
+
+function noteModelChange(text) {
+  const chat = activeChat();
+  if (!chat) return;
+  chat.messages.push({ role: 'info', content: text, ts: Date.now() });
+  saveState();
+  renderMessages({ scroll: 'bottom' });
+}
+
+function applyModelReplacement(provider, { from, to }) {
+  if (!from || !to || from === to) return;
+  if (replaceSavedModel(provider, from, to)) {
+    noteModelChange(`${from} is no longer available, so this chat moved to ${to}.`);
+    syncHiddenModelSelects(allModelsCatalog);
+    updateModelPickerLabel();
+  }
+}
+
+async function recheckSavedModels() {
+  await loadAllModelsCatalog({ force: true });
+  const saved = new Map(); // "provider|model" → provider
+  const add = (p, m) => { if (p && m) saved.set(`${p}|${m}`, p); };
+  add(state.activeProvider, state.activeModel);
+  for (const chat of state.chats || []) add(chat.provider || state.activeProvider, chat.model);
+  for (const r of Object.values(roleModels)) add(r?.provider, r?.model);
+  const changes = [];
+  for (const [key, provider] of saved) {
+    const model = key.slice(provider.length + 1);
+    if (!modelIsRetired(provider, model)) continue;
+    const to = defaultChatModel(provider);
+    if (to && to !== model && replaceSavedModel(provider, model, to)) changes.push(`${model} → ${to}`);
+  }
+  if (changes.length) {
+    noteModelChange(`Model check: retired models replaced — ${changes.join('; ')}.`);
+    syncHiddenModelSelects(allModelsCatalog);
+    updateModelPickerLabel();
+  }
+}
+
+// First check shortly after load (once the page has settled), then every few
+// hours for as long as the app stays open.
+setTimeout(() => { void recheckSavedModels(); }, 5000);
+setInterval(() => { void recheckSavedModels(); }, MODEL_RECHECK_MS);
+
+/** Full catalog across providers (one complete list). */
+let allModelsCatalog = [];
+let allModelsLoading = null;
+
+/**
+ * Exclusive filters: null = All. Pick one value → show only that.
+ *
+ * Provider is deliberately not a filter any more: "which of five API vendors
+ * is behind this" is billing trivia to a novice, and the packaged view groups
+ * by brand instead. Access (free/paid) only applies in show-all mode — inside
+ * a package the free/paid split is already the shape of every brand group.
+ */
+const modelPickerFilters = {
+  category: null,   // 'coder' | 'general' | …
+  access: null,     // 'free' | 'paid' — show-all mode only
+};
+
+// Reasoning-tagged models can sit silent for a minute or more generating
+// hidden "thinking" tokens before they produce anything speakable — real
+// upstream generation time, nothing the client can mask. Persisted so it
+// stays off once you turn it off, same pattern as the other model prefs.
+const HIDE_REASONING_KEY = 'uncensored_hide_reasoning_models_v1';
+let hideReasoningModels = false;
+try { hideReasoningModels = localStorage.getItem(HIDE_REASONING_KEY) === '1'; } catch { /* ignore */ }
+function saveHideReasoningModels() {
+  try { localStorage.setItem(HIDE_REASONING_KEY, hideReasoningModels ? '1' : '0'); } catch { /* ignore */ }
+}
+
+async function loadAllModelsCatalog({ force = false } = {}) {
+  if (!force && allModelsCatalog.length) return allModelsCatalog;
+  if (!force && allModelsLoading) return allModelsLoading;
+  allModelsLoading = (async () => {
+    // Defaults arrive with the lists, so a retired model is never swapped for
+    // whatever happens to sort first (which can be a coder).
+    const [lists] = await Promise.all([
+      Promise.all(
+        PROVIDER_IDS.map(async (pid) => {
+          const models = await loadProviderModels(pid);
+          return models.map((m) => enrichModelClient(pid, m));
+        }),
+      ),
+      loadLiveDefaults(),
+    ]);
+    allModelsCatalog = lists.flat();
+    allModelsLoading = null;
+    return allModelsCatalog;
+  })();
+  return allModelsLoading;
+}
+
+/**
+ * Search: typed text must be a PREFIX of the model name or id leaf.
+ * "S" → only names/ids that START with S. Nothing else.
+ */
+function modelSearchPrefixMatch(model, query) {
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return true;
+  const name = String(model.name || '').trim().toLowerCase();
+  const id = String(model.id || '').trim().toLowerCase();
+  const leaf = id.includes('/') ? id.slice(id.lastIndexOf('/') + 1) : id;
+  return name.startsWith(q) || leaf.startsWith(q) || id.startsWith(q);
+}
+
+function filterCatalogModels(models, { query = '', filters = modelPickerFilters } = {}) {
+  const q = String(query || '').trim();
+  return models.filter((m) => {
+    if (!modelSearchPrefixMatch(m, q)) return false;
+    if (filters.access === 'free' && !m.free) return false;
+    if (filters.access === 'paid' && m.free) return false;
+    if (filters.category) {
+      const cats = Array.isArray(m.categories) ? m.categories : [];
+      if (!cats.includes(filters.category)) return false;
+    }
+    if (hideReasoningModels) {
+      const cats = Array.isArray(m.categories) ? m.categories : [];
+      if (cats.includes('reasoning')) return false;
+    }
+    return true;
+  });
+}
+
+function activeFilterCount() {
+  let n = 0;
+  if (modelPickerFilters.category) n += 1;
+  if (modelPickerFilters.access) n += 1;
+  return n;
+}
+
+/** True when the picker is showing raw provider catalogs instead of packages. */
+function showingAllModels() {
+  return !!modelPackagePrefs.showAll;
+}
+
+function syncFilterChipUI() {
+  els.modelFilterPackages?.querySelectorAll('.filter-chip').forEach((btn) => {
+    const id = btn.dataset.package;
+    const on = modelPackagePrefs.packages.includes(id);
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    // Packages do nothing while the raw catalog is on screen.
+    btn.disabled = showingAllModels();
+  });
+  if (els.modelShowAllToggle) els.modelShowAllToggle.checked = showingAllModels();
+  if (els.modelHideReasoningToggle) els.modelHideReasoningToggle.checked = hideReasoningModels;
+  // Access is a raw-catalog tool only — inside a package the free/paid split
+  // is already the group layout, so a second control for it just confuses.
+  els.modelFilterAccessSection?.classList.toggle('hidden', !showingAllModels());
+  els.modelFilterCategories?.querySelectorAll('.filter-chip').forEach((btn) => {
+    const id = btn.dataset.category || null;
+    const isAll = btn.dataset.all === '1';
+    btn.classList.toggle(
+      'active',
+      isAll ? !modelPickerFilters.category : modelPickerFilters.category === id,
+    );
+  });
+  els.modelFilterAccess?.querySelectorAll('.filter-chip').forEach((btn) => {
+    const id = btn.dataset.access || null;
+    const isAll = btn.dataset.all === '1';
+    btn.classList.toggle(
+      'active',
+      isAll ? !modelPickerFilters.access : modelPickerFilters.access === id,
+    );
+  });
+  if (els.modelFilterBtn) {
+    const n = activeFilterCount();
+    els.modelFilterBtn.textContent = n ? `Settings (${n})` : 'Settings';
+  }
+}
+
+function makeFilterChip(label, { active = false, onPick } = {}) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'filter-chip' + (active ? ' active' : '');
+  btn.textContent = label;
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onPick();
+    syncFilterChipUI();
+    renderModelPickerList();
+  });
+  return btn;
+}
+
+/**
+ * Packages are multi-select, unlike every other chip row here — clicking one
+ * toggles it rather than replacing the selection, so `makeFilterChip`'s
+ * exclusive semantics don't fit.
+ */
+function makePackageChip(pkg) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'filter-chip';
+  btn.dataset.package = pkg.id;
+  btn.textContent = pkg.label;
+  btn.title = pkg.blurb;
+  btn.setAttribute('aria-pressed', 'false');
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const on = modelPackagePrefs.packages.includes(pkg.id);
+    // Refuse to switch off the last one — an empty picker reads as broken.
+    if (on && modelPackagePrefs.packages.length === 1) return;
+    modelPackagePrefs.packages = on
+      ? modelPackagePrefs.packages.filter((id) => id !== pkg.id)
+      : [...modelPackagePrefs.packages, pkg.id];
+    saveModelPackagePrefs(modelPackagePrefs);
+    syncFilterChipUI();
+    renderModelPickerList();
+    void renderSidebarModelList();
+  });
+  return btn;
+}
+
+function initModelFilterChips() {
+  if (els.modelFilterPackages && !els.modelFilterPackages.childElementCount) {
+    for (const pkg of MODEL_PACKAGES) els.modelFilterPackages.appendChild(makePackageChip(pkg));
+  }
+  if (els.modelFilterCategories && !els.modelFilterCategories.childElementCount) {
+    const allBtn = makeFilterChip('All', {
+      active: !modelPickerFilters.category,
+      onPick: () => { modelPickerFilters.category = null; },
+    });
+    allBtn.dataset.all = '1';
+    els.modelFilterCategories.appendChild(allBtn);
+    for (const cat of MODEL_CATEGORIES) {
+      const btn = makeFilterChip(cat.label, {
+        onPick: () => { modelPickerFilters.category = cat.id; },
+      });
+      btn.dataset.category = cat.id;
+      els.modelFilterCategories.appendChild(btn);
+    }
+  }
+  if (els.modelFilterAccess && !els.modelFilterAccess.dataset.ready) {
+    els.modelFilterAccess.dataset.ready = '1';
+    els.modelFilterAccess.innerHTML = '';
+    const allBtn = makeFilterChip('All', {
+      active: !modelPickerFilters.access,
+      onPick: () => { modelPickerFilters.access = null; },
+    });
+    allBtn.dataset.all = '1';
+    els.modelFilterAccess.appendChild(allBtn);
+    for (const [id, label] of [['free', 'Free'], ['paid', 'Paid']]) {
+      const btn = makeFilterChip(label, {
+        onPick: () => { modelPickerFilters.access = id; },
+      });
+      btn.dataset.access = id;
+      els.modelFilterAccess.appendChild(btn);
+    }
+  }
+  syncFilterChipUI();
+}
+
+/** Reset means "back to how the app ships": General only, no filters, no raw catalog. */
+function clearModelFilters() {
+  modelPickerFilters.category = null;
+  modelPickerFilters.access = null;
+  modelPackagePrefs = { packages: DEFAULT_PACKAGE_IDS.slice(), showAll: false };
+  saveModelPackagePrefs(modelPackagePrefs);
+  syncFilterChipUI();
+  renderModelPickerList();
+  void renderSidebarModelList();
+}
+
+function syncHiddenModelSelects(catalog) {
+  if (!els.modelSelect || !els.providerSelect) return;
+  const provider = state.activeProvider;
+  const forProvider = sortModelsForProvider(
+    provider,
+    (catalog || []).filter((m) => m.provider === provider),
+  );
+  els.providerSelect.value = provider;
+  els.modelSelect.innerHTML = '';
+  for (const m of forProvider) els.modelSelect.appendChild(makeModelOption(m, { showId: provider === 'openrouter' }));
+  const available = forProvider.map((m) => m.id);
+  if (
+    provider === 'openrouter' &&
+    state.activeModel === 'cognitivecomputations/dolphin-mistral-24b-venice-edition:free' &&
+    available.includes('cognitivecomputations/dolphin-mistral-24b-venice-edition')
+  ) {
+    state.activeModel = 'cognitivecomputations/dolphin-mistral-24b-venice-edition';
+    saveState();
+  }
+  if (!available.includes(state.activeModel)) {
+    // Prefer a free model when current is missing / locked.
+    state.activeModel = defaultChatModel(provider) || state.activeModel;
+    saveState();
+  }
+  // If active is paid and locked, bounce to a free model.
+  const activeMeta = forProvider.find((m) => m.id === state.activeModel);
+  if (activeMeta && !activeMeta.free && !paidUnlocked()) {
+    const free = forProvider.find((m) => m.free);
+    if (free) {
+      state.activeModel = free.id;
+      saveState();
+    }
+  }
+  els.modelSelect.value = state.activeModel;
+}
+
+function updateModelPickerLabel() {
+  if (!els.modelPickerLabel) return;
+  const prov = PROVIDER_LABELS[state.activeProvider] || state.activeProvider;
+  const meta = allModelsCatalog.find(
+    (m) => m.provider === state.activeProvider && m.id === state.activeModel,
+  );
+  const name = meta?.name || state.activeModel || 'Select model';
+  const lock = meta && !meta.free && !paidUnlocked() ? ' · locked' : '';
+  els.modelPickerLabel.textContent = `${prov} · ${name}${lock}`;
+  if (els.unlockPaidBtn) {
+    els.unlockPaidBtn.textContent = paidUnlocked() ? 'Paid ✓' : 'Unlock';
+    els.unlockPaidBtn.title = paidUnlocked()
+      ? 'Paid models unlocked on this device — click to lock'
+      : 'Unlock paid models with password';
+  }
+  if (els.modelUnlockBtn) {
+    els.modelUnlockBtn.textContent = paidUnlocked() ? 'Paid unlocked' : 'Unlock paid';
+  }
+  renderSidebarSummaries();
+}
+
+async function renderModelSelect() {
+  const catalog = await loadAllModelsCatalog();
+  syncHiddenModelSelects(catalog);
+  updateModelPickerLabel();
+  if (els.modelPickerModal && !els.modelPickerModal.classList.contains('hidden')) {
+    renderModelPickerList();
+  }
+}
+
+function makeModelOption(m, { showId = true } = {}) {
+  const opt = document.createElement('option');
+  opt.value = m.id;
+  const tags = [];
+  if (m.free) tags.push('free');
+  else tags.push('paid');
+  if (m.traits && m.traits.length) tags.push(...m.traits);
+  const tagStr = tags.length ? `  [${tags.join(', ')}]` : '';
+  const label = (!showId || !m.name || m.name === m.id)
+    ? (m.name || m.id)
+    : `${m.name} · ${m.id}`;
+  opt.textContent = `${label}${tagStr}`;
+  opt.title = m.description || m.id;
+  const locked = !m.free && !paidUnlocked();
+  if (locked) {
+    opt.disabled = true;
+    opt.textContent = `${label}${tagStr} 🔒`;
+  }
+  return opt;
+}
+
+// ---- Compare mode: a multi-select grafted onto the existing (normally
+// single-select) model picker, rather than a second picker built from
+// scratch — reuses catalog loading/search/filters as-is. ----
+let comparePickerMode = false;
+let compareSelection = []; // [{ provider, id, name }], max 3
+
+/**
+ * One row in the picker. Shared by both modes so a model looks identical
+ * whether it arrived via a package or the raw catalog.
+ */
+function makeModelPickerRow(m, { unlocked, showId = false }) {
+  const locked = !m.free && !unlocked;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  const isActive = comparePickerMode
+    ? compareSelection.some((c) => c.provider === m.provider && c.id === m.id)
+    : (m.provider === state.activeProvider && m.id === state.activeModel);
+  btn.className = 'model-picker-item' + (locked ? ' locked' : '') + (isActive ? ' active' : '');
+  // Not `disabled`: a disabled button swallows its own click, which is why the
+  // old locked rows silently did nothing instead of opening the unlock modal.
+  // aria-disabled tells assistive tech it is unselectable while keeping the
+  // row clickable as a route to the password prompt.
+  btn.setAttribute('aria-disabled', locked ? 'true' : 'false');
+  btn.setAttribute('role', 'option');
+  btn.dataset.provider = m.provider;
+  btn.dataset.model = m.id;
+
+  const name = document.createElement('div');
+  name.className = 'model-picker-item-name';
+  name.textContent = m.name || m.id;
+  if (m.blurb) {
+    const sub = document.createElement('span');
+    sub.className = 'model-picker-item-blurb';
+    sub.textContent = m.blurb;
+    name.appendChild(sub);
+  }
+  btn.appendChild(name);
+
+  const meta = document.createElement('div');
+  meta.className = 'model-picker-item-meta';
+  const tier = document.createElement('span');
+  tier.className = 'model-tag ' + (m.free ? 'free' : 'paid');
+  tier.textContent = m.free ? 'free' : 'paid';
+  meta.appendChild(tier);
+  // Free is not unlimited — say the rate limit up front rather than letting
+  // someone discover it as a 429 halfway through a conversation.
+  const limit = rateLimitLabel(m);
+  if (limit) {
+    const rl = document.createElement('span');
+    rl.className = 'model-tag limit-tag';
+    rl.textContent = limit;
+    rl.title = (m.limits || OPENROUTER_FREE_LIMITS).long;
+    meta.appendChild(rl);
+  }
+  if (locked) {
+    const lock = document.createElement('span');
+    lock.className = 'model-tag locked-tag';
+    lock.textContent = 'locked';
+    meta.appendChild(lock);
+  }
+  if (showId) {
+    const prov = document.createElement('span');
+    prov.textContent = PROVIDER_LABELS[m.provider] || m.provider;
+    meta.appendChild(prov);
+    for (const c of (m.categories || []).slice(0, 3)) {
+      const tag = document.createElement('span');
+      tag.className = 'model-tag';
+      tag.textContent = c;
+      meta.appendChild(tag);
+    }
+    if (m.name && m.name !== m.id) {
+      const idTag = document.createElement('span');
+      idTag.textContent = m.id;
+      meta.appendChild(idTag);
+    }
+  }
+  btn.appendChild(meta);
+
+  btn.addEventListener('click', () => {
+    if (locked) { openUnlockPaidModal(); return; }
+    if (comparePickerMode) toggleCompareModelSelection(m.provider, m.id, m.name || m.id);
+    else selectModelFromPicker(m.provider, m.id);
+  });
+
+  // A <button> can't nest another <button>, so the star sits beside it
+  // inside a plain row wrapper rather than inside btn itself.
+  const row = document.createElement('div');
+  row.className = 'model-picker-row';
+  row.appendChild(btn);
+
+  const fav = isFavoriteModel(m);
+  const star = document.createElement('button');
+  star.type = 'button';
+  star.className = 'model-picker-fav' + (fav ? ' active' : '');
+  star.textContent = fav ? '★' : '☆';
+  star.title = fav ? 'Remove from favorites' : 'Pin to favorites';
+  star.setAttribute('aria-pressed', fav ? 'true' : 'false');
+  star.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleFavoriteModel(m);
+    renderModelPickerList();
+    renderSidebarModelList();
+  });
+  row.appendChild(star);
+
+  return row;
+}
+
+function appendPickerHeading(host, title, className = 'model-picker-group') {
+  const h = document.createElement('div');
+  h.className = className;
+  h.textContent = title;
+  host.appendChild(h);
+  return h;
+}
+
+/**
+ * Packaged view: package → brand group → free model first, then that brand's
+ * paid models. A brand with no free option at all (Claude, Grok) still gets
+ * its heading, greyed, when paid is locked — hiding it would leave a novice
+ * wondering why Claude isn't in a list that claims to have Claude.
+ */
+function renderPackagedPickerList(host, query, unlocked) {
+  // Pinned models first, regardless of which brand/package they belong to.
+  // Rendered separately from `shown` below — a favorite still appears a
+  // second time in its normal brand group, and the status line should count
+  // the catalog once, not twice.
+  const favorites = filterCatalogModels(packageModels(allModelsCatalog, modelPackagePrefs.packages), { query })
+    .filter((m) => isFavoriteModel(m))
+    .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+  if (favorites.length) {
+    appendPickerHeading(host, `★ Favorites · ${favorites.length}`);
+    for (const m of favorites) host.appendChild(makeModelPickerRow(m, { unlocked, showId: true }));
+  }
+
+  const packages = resolvePackages(allModelsCatalog, modelPackagePrefs.packages);
+  let shown = 0;
+  let lockedBrands = 0;
+
+  for (const pkg of packages) {
+    const brands = pkg.brands
+      .map((brand) => ({
+        brand,
+        models: filterCatalogModels(brand.models, { query }),
+      }))
+      .filter((b) => b.models.length);
+    if (!brands.length) continue;
+
+    appendPickerHeading(host, pkg.label);
+    for (const { brand, models } of brands) {
+      const unusable = brand.paidOnly && !unlocked;
+      if (unusable) lockedBrands += 1;
+      const head = appendPickerHeading(
+        host,
+        unusable ? `${brand.label} · unlock to use` : brand.label,
+        'model-picker-brand' + (unusable ? ' paid-only' : ''),
+      );
+      head.title = brand.blurb || '';
+      for (const m of models) {
+        shown += 1;
+        host.appendChild(makeModelPickerRow(m, { unlocked }));
+      }
+    }
+  }
+
+  if (els.modelPickerStatus) {
+    const bits = [`${shown} model${shown === 1 ? '' : 's'}`];
+    bits.push(`${modelPackagePrefs.packages.length} package${modelPackagePrefs.packages.length === 1 ? '' : 's'}`);
+    if (query) bits.push(`starting with “${query.trim()}”`);
+    if (lockedBrands) bits.push(`${lockedBrands} paid-only`);
+    els.modelPickerStatus.textContent = bits.join(' · ');
+  }
+  return shown;
+}
+
+/** Raw catalog view: every model the app can reach, free block then paid block. */
+function renderAllModelsPickerList(host, query, unlocked) {
+  const filtered = filterCatalogModels(allModelsCatalog, { query });
+  const byName = (a, b) => (a.name || a.id).localeCompare(b.name || b.id);
+  const free = filtered.filter((m) => m.free).sort(byName);
+  const paid = filtered.filter((m) => !m.free).sort(byName);
+
+  if (els.modelPickerStatus) {
+    const bits = [`${filtered.length} model${filtered.length === 1 ? '' : 's'}`, 'all catalogs'];
+    if (query) bits.push(`starting with “${query.trim()}”`);
+    const n = activeFilterCount();
+    if (n) bits.push(`${n} filter${n === 1 ? '' : 's'} on`);
+    if (!unlocked) bits.push('paid grayed out');
+    els.modelPickerStatus.textContent = bits.join(' · ');
+  }
+
+  const appendGroup = (title, items) => {
+    if (!items.length) return;
+    appendPickerHeading(host, title);
+    for (const m of items) host.appendChild(makeModelPickerRow(m, { unlocked, showId: true }));
+  };
+  const favorites = filtered.filter((m) => isFavoriteModel(m)).sort(byName);
+  appendGroup(`★ Favorites · ${favorites.length}`, favorites);
+  appendGroup(`Free · ${free.length}`, free);
+  appendGroup(`Paid · ${paid.length}${unlocked ? '' : ' (unlock required)'}`, paid);
+  return filtered.length;
+}
+
+function renderModelPickerList() {
+  const host = els.modelPickerList;
+  if (!host) return;
+  host.innerHTML = '';
+  const query = els.modelSearchInput?.value || '';
+  const unlocked = paidUnlocked();
+
+  const shown = showingAllModels()
+    ? renderAllModelsPickerList(host, query, unlocked)
+    : renderPackagedPickerList(host, query, unlocked);
+
+  if (!shown) {
+    const empty = document.createElement('div');
+    empty.className = 'model-picker-status';
+    empty.style.padding = '16px';
+    empty.textContent = query
+      ? `No models begin with “${query.trim()}”.`
+      : showingAllModels()
+        ? 'No models match these filters.'
+        : 'Nothing in the packages you picked. Add a package in Settings.';
+    host.appendChild(empty);
+  }
+}
+
+function selectModelFromPicker(provider, modelId) {
+  state.activeProvider = provider;
+  state.activeModel = modelId;
+  syncHiddenModelSelects(allModelsCatalog);
+  const chat = activeChat();
+  if (chat) { chat.model = modelId; chat.provider = provider; }
+  if (state.activeRole && roleModels[state.activeRole]) {
+    roleModels[state.activeRole] = { provider, model: modelId };
+    saveRoleModels(roleModels);
+  }
+  saveState();
+  updateModelPickerLabel();
+  closeModelPicker();
+  renderSidebarModelList();
+}
+
+/**
+ * Compact free-model list for the left sidebar's LLM accordion — free only
+ * (paid needs the unlock flow anyway), reusing the same catalog data and
+ * selection logic as the full picker rather than a second implementation.
+ * Lazy: only loads the catalog the first time the accordion is opened.
+ */
+async function renderSidebarModelList() {
+  if (!els.sidebarModelList) return;
+  await loadAllModelsCatalog();
+  // Scoped to the enabled packages so the shortcut list matches the picker —
+  // except in show-all mode, where the whole free catalog is the point.
+  const pool = showingAllModels()
+    ? allModelsCatalog
+    : packageModels(allModelsCatalog, modelPackagePrefs.packages);
+  const free = pool
+    .filter((m) => m.free)
+    .filter((m) => !hideReasoningModels || !(Array.isArray(m.categories) && m.categories.includes('reasoning')))
+    .sort((a, b) => {
+      const favDiff = Number(isFavoriteModel(b)) - Number(isFavoriteModel(a));
+      return favDiff || (a.name || a.id).localeCompare(b.name || b.id);
+    });
+  els.sidebarModelList.innerHTML = '';
+  for (const m of free) {
+    const li = document.createElement('li');
+    li.className = 'model-picker-item' +
+      (m.provider === state.activeProvider && m.id === state.activeModel ? ' active' : '');
+    li.setAttribute('role', 'option');
+    const name = document.createElement('div');
+    name.className = 'model-picker-item-name';
+    name.textContent = (isFavoriteModel(m) ? '★ ' : '') + (m.name || m.id);
+    const meta = document.createElement('div');
+    meta.className = 'model-picker-item-meta';
+    const limit = rateLimitLabel(m);
+    const prov = document.createElement('span');
+    prov.textContent = limit ? `${PROVIDER_LABELS[m.provider] || m.provider} · ${limit}` : (PROVIDER_LABELS[m.provider] || m.provider);
+    meta.appendChild(prov);
+    li.append(name, meta);
+    li.addEventListener('click', () => selectModelFromPicker(m.provider, m.id));
+    els.sidebarModelList.appendChild(li);
+  }
+  renderSidebarSummaries();
+}
+els.sidebarMoreModelsBtn?.addEventListener('click', () => void openModelPicker());
+
+// Left sidebar's Chats/Persona/LLM collapsible sections — plain expand/
+// collapse, not persisted (Chats starts open, the other two closed, on
+// every fresh load, matching their "not needed every turn" role).
+els.chatsSidebar?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-accordion-toggle]');
+  if (!btn) return;
+  const section = btn.closest('.side-accordion');
+  if (!section) return;
+  const opening = !section.classList.contains('open');
+  section.classList.toggle('open', opening);
+  if (opening && section.dataset.accordion === 'llm') void renderSidebarModelList();
+});
+
+// Per-project collapsible clusters inside the Chats list — separate class
+// namespace from .side-accordion (deliberately not reused: a descendant
+// selector like ".side-accordion.open .side-accordion-body" would leak
+// through a closed nested section since it doesn't check for the *nearest*
+// open ancestor), same delegated-click idea though.
+els.chatsSidebar?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-project-toggle]');
+  if (!btn) return;
+  const group = btn.closest('.project-group');
+  if (group) group.classList.toggle('collapsed');
+});
+
+async function openModelPicker() {
+  if (!els.modelPickerModal) return;
+  initModelFilterChips();
+  if (els.modelPickerTitle) els.modelPickerTitle.textContent = comparePickerMode ? 'Pick 2–3 models to compare' : 'Models';
+  els.modelPickerModal.classList.remove('hidden');
+  els.modelPickerBtn?.setAttribute('aria-expanded', 'true');
+  if (els.modelPickerStatus) els.modelPickerStatus.textContent = 'Loading catalogs…';
+  await loadAllModelsCatalog();
+  syncHiddenModelSelects(allModelsCatalog);
+  updateModelPickerLabel();
+  renderModelPickerList();
+  setTimeout(() => els.modelSearchInput?.focus(), 40);
+}
+function closeModelPicker() {
+  els.modelPickerModal?.classList.add('hidden');
+  els.modelFilterPanel?.classList.add('hidden');
+  els.modelPickerList?.classList.remove('hidden');
+  els.modelPickerStatus?.classList.remove('hidden');
+  els.modelPickerBtn?.setAttribute('aria-expanded', 'false');
+  if (comparePickerMode) {
+    comparePickerMode = false;
+    if (els.modelPickerTitle) els.modelPickerTitle.textContent = 'Models';
+    renderComparePickList();
+  }
+}
+
+/** Opens the existing model picker in multi-select mode for Compare. */
+function openComparePicker() {
+  comparePickerMode = true;
+  void openModelPicker();
+}
+
+function toggleCompareModelSelection(provider, id, name) {
+  const i = compareSelection.findIndex((c) => c.provider === provider && c.id === id);
+  if (i >= 0) {
+    compareSelection.splice(i, 1);
+  } else {
+    if (compareSelection.length >= 3) {
+      if (els.modelPickerStatus) els.modelPickerStatus.textContent = 'Up to 3 models for Compare — remove one first.';
+      return;
+    }
+    compareSelection.push({ provider, id, name });
+  }
+  renderModelPickerList();
+}
+
+/** Removable chips showing the current Compare selection, plus gating the Ask-all button. */
+function renderComparePickList() {
+  if (!els.comparePickList) return;
+  els.comparePickList.innerHTML = '';
+  for (const c of compareSelection) {
+    const chip = document.createElement('span');
+    chip.className = 'model-tag compare-chip';
+    chip.textContent = c.name;
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.textContent = '×';
+    x.setAttribute('aria-label', `Remove ${c.name}`);
+    x.addEventListener('click', () => {
+      compareSelection = compareSelection.filter((s) => !(s.provider === c.provider && s.id === c.id));
+      renderComparePickList();
+    });
+    chip.appendChild(x);
+    els.comparePickList.appendChild(chip);
+  }
+  if (els.compareSendBtn) {
+    els.compareSendBtn.disabled = compareSelection.length < 2 || compareSelection.length > 3;
+  }
+}
+els.comparePickBtn?.addEventListener('click', openComparePicker);
+
+// ---------------------------------------------------------------------------
+// Compare — ask 2-3 models the same question, answers stream in side by
+// side. Self-contained scratch space: results render only in the sidebar
+// panels, never appended to chat.messages (keeps the one-reply-per-turn
+// data model, and keeps Outline/Artifacts from tripling up on this output).
+// Not persisted across reloads — cleared on chat switch or page load.
+// ---------------------------------------------------------------------------
+
+let compareRun = { controllers: [] };
+
+function abortCompareRun() {
+  for (const c of compareRun.controllers) { try { c.abort(); } catch { /* ignore */ } }
+  compareRun = { controllers: [] };
+  els.compareStopBtn?.classList.add('hidden');
+}
+
+async function runCompareModel({ provider, id, name }, question, panelBodyEl) {
+  const controller = new AbortController();
+  compareRun.controllers.push(controller);
+  let buf = '';
+  try {
+    const result = await streamChatResponse({
+      provider,
+      model: id,
+      messages: [{ role: 'user', content: question }],
+      personaId: state.activePersonaId,
+      signal: controller.signal,
+      onEvent: (evt) => {
+        if (evt.type === 'token' && typeof evt.text === 'string') {
+          buf += evt.text;
+          panelBodyEl.innerHTML = '';
+          renderMarkdownInto(panelBodyEl, buf || '…');
+        }
+      },
+    });
+    if (!result.ok) {
+      panelBodyEl.innerHTML = '';
+      panelBodyEl.classList.add('compare-error');
+      panelBodyEl.textContent = result.errText || result.data?.error || `${name} failed.`;
+    } else if (!buf) {
+      // Non-streaming fallback path already delivered the full reply.
+      buf = result.data?.reply || '';
+      panelBodyEl.innerHTML = '';
+      renderMarkdownInto(panelBodyEl, buf || '(empty reply)');
+    }
+  } catch (err) {
+    panelBodyEl.innerHTML = '';
+    panelBodyEl.classList.add('compare-error');
+    panelBodyEl.textContent = friendlyNetworkError(err);
+  }
+}
+
+async function runCompare() {
+  const question = (els.compareInput?.value || '').trim();
+  if (!question || compareSelection.length < 2 || compareSelection.length > 3) return;
+
+  abortCompareRun(); // clear any still-running previous round first
+  if (els.comparePanels) els.comparePanels.innerHTML = '';
+  els.compareEmpty?.classList.add('hidden');
+  els.compareStopBtn?.classList.remove('hidden');
+  if (els.compareSendBtn) els.compareSendBtn.disabled = true;
+
+  const picks = compareSelection.slice();
+  const panels = picks.map((c) => {
+    const panel = document.createElement('div');
+    panel.className = 'compare-panel';
+    const head = document.createElement('div');
+    head.className = 'compare-panel-head';
+    head.textContent = c.name;
+    const body = document.createElement('div');
+    body.className = 'compare-panel-body';
+    body.textContent = '…';
+    panel.append(head, body);
+    els.comparePanels?.appendChild(panel);
+    return { c, body };
+  });
+
+  await Promise.allSettled(panels.map(({ c, body }) => runCompareModel(c, question, body)));
+
+  els.compareStopBtn?.classList.add('hidden');
+  if (els.compareSendBtn) els.compareSendBtn.disabled = compareSelection.length < 2 || compareSelection.length > 3;
+}
+
+els.compareSendBtn?.addEventListener('click', () => void runCompare());
+els.compareStopBtn?.addEventListener('click', () => abortCompareRun());
+els.compareInput?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void runCompare(); }
+});
+
+function openUnlockPaidModal() {
+  if (!els.unlockPaidModal) return;
+  els.unlockPaidError?.classList.add('hidden');
+  if (els.unlockPaidInput) els.unlockPaidInput.value = '';
+  els.unlockPaidModal.classList.remove('hidden');
+  setTimeout(() => els.unlockPaidInput?.focus(), 40);
+}
+function closeUnlockPaidModal() {
+  els.unlockPaidModal?.classList.add('hidden');
+}
+
+// ---------------------------------------------------------------------------
+// Sending messages
+// ---------------------------------------------------------------------------
+
+// iOS Safari reports dropped/timed-out fetches as the useless string
+// "Load failed". Map that (and similar) to something the user can act on.
+function friendlyNetworkError(err) {
+  const raw = (err?.message || String(err || 'Network error')).trim();
+  const lower = raw.toLowerCase();
+  if (
+    lower === 'load failed' ||
+    lower === 'failed to fetch' ||
+    lower.includes('networkerror') ||
+    lower.includes('the internet connection appears to be offline')
+  ) {
+    return 'Connection dropped before the model replied (often a timeout or flaky network). Try again, or pick a faster model.';
+  }
+  if (lower.includes('aborted') || lower.includes('timeout')) {
+    return 'Request timed out waiting for the model. Try a faster model or a shorter prompt.';
+  }
+  return raw || 'Network error';
+}
+
+// Client cap sits under the server's 300s maxDuration so we surface a clean
+// error instead of waiting on a dead socket. Free-tier OpenRouter gets a
+// shorter leash so a dead free model doesn't burn minutes before fallback.
+const CHAT_CLIENT_TIMEOUT_MS = 290_000;
+const CHAT_FREE_TIER_TIMEOUT_MS = 45_000;
+
+/** Active chat/group fetch — Stop aborts this. */
+let activeChatAbort = null;
+let activeChatUserStopped = false;
+/** True while a sendMessage / group round is in flight (blocks accidental re-send). */
+let chatBusy = false;
+
+/** Resolved once chatBusy flips back to false — lets other code (voice chat's
+ * hold-and-send) await "the assistant is done generating" without polling. */
+let chatIdleResolvers = [];
+function waitForChatIdle() {
+  if (!chatBusy) return Promise.resolve();
+  return new Promise((resolve) => { chatIdleResolvers.push(resolve); });
+}
+
+function setGeneratingUi(on) {
+  chatBusy = !!on;
+  if (els.sendBtn) els.sendBtn.classList.toggle('hidden', !!on);
+  if (els.stopBtn) els.stopBtn.classList.toggle('hidden', !on);
+  if (els.sendBtn) els.sendBtn.disabled = !!on;
+  if (els.input) {
+    els.input.setAttribute('aria-busy', on ? 'true' : 'false');
+    els.input.title = on
+      ? 'Generating — press Esc or tap Stop'
+      : '';
+  }
+  if (!chatBusy && chatIdleResolvers.length) {
+    const resolvers = chatIdleResolvers;
+    chatIdleResolvers = [];
+    resolvers.forEach((resolve) => resolve());
+  }
+  syncInterruptBtn();
+}
+
+/** Interrupt button is the only way to cut the assistant off now — visible
+ * whenever there's actually something to interrupt (generating and/or
+ * speaking), whether or not that speech is still mid-generation. */
+function syncInterruptBtn() {
+  if (!els.interruptBtn) return;
+  els.interruptBtn.classList.toggle('hidden', !(chatBusy || isSpeaking()));
+}
+
+function stopActiveChat(reason = 'Stopped.') {
+  activeChatUserStopped = true;
+  try { activeChatAbort?.abort(reason); } catch { /* ignore */ }
+  // Always kill spoken audio + mic — "Stop" means stop everything.
+  try { stopNeuralSpeech(); } catch { /* ignore */ }
+  try { stopListening(); } catch { /* ignore */ }
+}
+
+function timeoutFor(provider, model) {
+  if (provider === 'openrouter' && /:free$/i.test(model || '')) return CHAT_FREE_TIER_TIMEOUT_MS;
+  return CHAT_CLIENT_TIMEOUT_MS;
+}
+
+async function callChat(provider, model, messages, personaId) {
+  const controller = new AbortController();
+  activeChatAbort = controller;
+  const timer = setTimeout(() => controller.abort(), timeoutFor(provider, model));
+  const apiKey = (providerKeys[provider] || '').trim();
+  const headers = paidAuthHeaders({ 'Content-Type': 'application/json' });
+  if (apiKey) headers['X-Provider-Key'] = apiKey;
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        messages,
+        model,
+        provider,
+        personaId,
+        role: state.activeRole || 'plan',
+        apiKey: apiKey || undefined,
+        paidPassword: loadPaidPassword() || undefined,
+        stream: false,
+        webSearch: turnSearchQuery ? true : undefined,
+        webSearchQuery: turnSearchQuery || undefined,
+      }),
+      signal: controller.signal,
+    });
+    let data = null;
+    let errText = null;
+    try { data = await res.json(); } catch { errText = 'Non-JSON response'; }
+    return { ok: res.ok, status: res.status, data, errText, stopped: activeChatUserStopped };
+  } catch (err) {
+    if (activeChatUserStopped || err?.name === 'AbortError') {
+      return { ok: false, status: 0, data: null, errText: 'Stopped.', stopped: true };
+    }
+    return { ok: false, status: 0, data: null, errText: friendlyNetworkError(err), stopped: false };
+  } finally {
+    clearTimeout(timer);
+    if (activeChatAbort === controller) activeChatAbort = null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Persona introduction
+//
+// A persona opens a new chat, and takes over a chat mid-conversation, by saying
+// who it is and how it works as the orchestrator: it talks the idea through
+// here, then turns it into a brief for the builder and moves the chat into the
+// Code Space. Written by the persona itself so each one sounds like itself.
+// The message is flagged `intro`: it is never sent back to the model as history,
+// and a chat holding only an introduction still counts as empty.
+// ---------------------------------------------------------------------------
+
+const introInFlight = new Set();
+
+function personaIntroPrompt(mode) {
+  return [
+    mode === 'switch'
+      ? '[INTRODUCE YOURSELF] The user just switched to you in the middle of this conversation.'
+      : '[INTRODUCE YOURSELF] The user just opened a new chat with you.',
+    'Write your opening message, in your own voice, in 3 to 5 short sentences. Make clear what kind of',
+    'orchestrator you are: you talk the idea through with them here, and when it is ready you turn it into a',
+    'precise brief for the builder and move the chat into the Code Space, where the code gets written and tested.',
+    'Say what you are best at and the style you bring. Be specific to who you are, not generic.',
+    mode === 'switch' ? 'Say briefly that you are picking up from here.' : '',
+    'End with one line inviting them to tell you what they want to make.',
+    'Do not write code. Do not write a brief. Do not ask clarifying questions.',
+  ].filter(Boolean).join('\n');
+}
+
+async function introducePersona(chat, mode) {
+  const persona = activePersona();
+  if (!persona || !chat || chat.kind !== 'chat' || chatBusy) return;
+  const flightKey = `${chat.id}:${persona.id}`;
+  if (introInFlight.has(flightKey)) return;
+  introInFlight.add(flightKey);
+
+  // A fresh chat only ever carries the latest persona's introduction.
+  if (mode === 'new') {
+    for (let i = chat.messages.length - 1; i >= 0; i--) if (chat.messages[i]?.intro) chat.messages.splice(i, 1);
+  }
+  const provider = state.activeProvider;
+  const model = state.activeModel;
+  const holder = { role: 'assistant', content: '', ts: Date.now(), streaming: true, intro: true, model, provider };
+  const history = mode === 'switch'
+    ? chat.messages
+        .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.streaming && !m.intro && typeof m.content === 'string')
+        .slice(-6)
+        .map((m) => ({ role: m.role, content: m.content }))
+    : [];
+  chat.messages.push(holder);
+  const showing = () => activeChat()?.id === chat.id;
+  if (showing()) renderMessages({ scroll: 'bottom' });
+  const drop = () => {
+    const i = chat.messages.indexOf(holder);
+    if (i >= 0) chat.messages.splice(i, 1);
+    if (showing()) renderMessages({ scroll: 'none' });
+  };
+
+  try {
+    const apiKey = (providerKeys[provider] || '').trim();
+    const headers = paidAuthHeaders({ 'Content-Type': 'application/json' });
+    if (apiKey) headers['X-Provider-Key'] = apiKey;
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        messages: [...history, { role: 'user', content: personaIntroPrompt(mode) }],
+        model,
+        provider,
+        personaId: persona.id,
+        role: state.activeRole || 'plan',
+        apiKey: apiKey || undefined,
+        paidPassword: loadPaidPassword() || undefined,
+        stream: false,
+      }),
+    });
+    const data = res.ok ? await res.json().catch(() => null) : null;
+    const text = stripContinueMarkers(String(data?.reply || '')).trim();
+    // Gone, or the persona changed again while this was being written: say nothing.
+    if (!text || text === '(empty response)' || chat.personaId !== persona.id || !chat.messages.includes(holder)) {
+      drop();
+      return;
+    }
+    holder.content = text;
+    delete holder.streaming;
+    chat.updatedAt = Date.now();
+    saveState();
+    if (showing()) renderMessages({ scroll: 'bottom' });
+  } catch {
+    drop(); // a greeting is a nicety — never show an error for it
+  } finally {
+    introInFlight.delete(flightKey);
+  }
+}
+
+/** User-picked persona: switch to it, and let it introduce itself if it is a different one. */
+function pickPersona(personaId) {
+  const chat = activeChat();
+  const before = chat?.personaId || state.activePersonaId;
+  applyPersona(personaId);
+  if (chat && chat.kind === 'chat' && chat.personaId !== before) {
+    const talked = chat.messages.some((m) => m && !m.intro && !m.streaming);
+    void introducePersona(chat, talked ? 'switch' : 'new');
+  }
+}
+
+/**
+ * The actual SSE fetch + parse for a chat completion — reentrant and free of
+ * shared module state (no activeChatAbort/chatBusy). Takes its own
+ * AbortSignal so multiple calls can run concurrently without clobbering each
+ * other (this is what Compare mode calls directly, once per model).
+ * onEvent({type, ...}) for status/token/thinking/done/error.
+ * Returns { ok, status, data, errText } shaped like callChat.
+ */
+async function streamChatResponse({ provider, model, messages, personaId, signal, onEvent, wasUserStopped, codeSpaceHandoff }) {
+  const apiKey = (providerKeys[provider] || '').trim();
+  const headers = paidAuthHeaders({ 'Content-Type': 'application/json', Accept: 'text/event-stream' });
+  if (apiKey) headers['X-Provider-Key'] = apiKey;
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        messages,
+        model,
+        provider,
+        personaId,
+        role: state.activeRole || 'plan',
+        apiKey: apiKey || undefined,
+        paidPassword: loadPaidPassword() || undefined,
+        stream: true,
+        webSearch: turnSearchQuery ? true : undefined,
+        webSearchQuery: turnSearchQuery || undefined,
+        codeSpaceHandoff: codeSpaceHandoff ? true : undefined,
+      }),
+      signal,
+    });
+
+    const ctype = (res.headers.get('content-type') || '').toLowerCase();
+    // Non-SSE error JSON from our server
+    if (!res.ok && !ctype.includes('text/event-stream')) {
+      let data = null;
+      let errText = null;
+      try { data = await res.json(); } catch { errText = 'Non-JSON response'; }
+      return { ok: false, status: res.status, data, errText };
+    }
+
+    // Backend returned a normal JSON completion (older deploy / stream ignored).
+    if (ctype.includes('application/json') && !ctype.includes('text/event-stream')) {
+      let data = null;
+      try { data = await res.json(); } catch {
+        return { ok: false, status: res.status, data: null, errText: 'Non-JSON response' };
+      }
+      if (typeof onEvent === 'function' && data?.reply) {
+        if (Array.isArray(data.sources) && data.sources.length) {
+          onEvent({ type: 'sources', sources: data.sources });
+        }
+        onEvent({ type: 'token', text: data.reply });
+        onEvent({ type: 'done', reply: data.reply, provider: data.provider, model: data.model });
+      }
+      return {
+        ok: true,
+        status: res.status,
+        data: {
+          reply: data?.reply || '',
+          reasoning: data?.reasoning,
+          provider: data?.provider,
+          model: data?.model,
+        },
+        errText: null,
+      };
+    }
+
+    if (!res.body) {
+      return { ok: false, status: res.status, data: null, errText: 'No response body' };
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let donePayload = null;
+    let streamError = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n');
+      buffer = parts.pop() || '';
+      for (const line of parts) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+        let evt;
+        try { evt = JSON.parse(payload); } catch { continue; }
+        if (typeof onEvent === 'function') onEvent(evt);
+        if (evt.type === 'done') donePayload = evt;
+        if (evt.type === 'done' && evt.modelReplaced) applyModelReplacement(provider, evt.modelReplaced);
+        if (evt.type === 'error') streamError = evt;
+      }
+    }
+
+    if (streamError) {
+      return {
+        ok: false,
+        status: 502,
+        data: {
+          error: streamError.error,
+          provider: streamError.provider,
+          model: streamError.model,
+          partialReply: streamError.partialReply,
+        },
+        errText: streamError.error,
+      };
+    }
+    if (!donePayload) {
+      // Platform kill / proxy drop mid-thinking often ends the SSE with no
+      // `done` event — treat like a timeout so auto-continue can recover.
+      return {
+        ok: false,
+        status: 504,
+        data: { error: 'Stream ended without a reply', timedOut: true },
+        errText: 'Stream ended without a reply',
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        reply: donePayload.reply || '',
+        reasoning: donePayload.reasoning,
+        provider: donePayload.provider,
+        model: donePayload.model,
+        incomplete: donePayload.incomplete,
+        timedOut: donePayload.timedOut,
+      },
+      errText: null,
+    };
+  } catch (err) {
+    if ((wasUserStopped && wasUserStopped()) || err?.name === 'AbortError') {
+      return { ok: false, status: 0, data: null, errText: 'Stopped.', stopped: true };
+    }
+    return { ok: false, status: 0, data: null, errText: friendlyNetworkError(err), stopped: false };
+  }
+}
+
+/**
+ * Thin wrapper around streamChatResponse() for the main chat path — owns the
+ * shared activeChatAbort/timeout bookkeeping that the Stop button and
+ * Esc/Enter-to-stop key off. Behavior is unchanged from before the
+ * streamChatResponse extraction; only the SSE body itself moved.
+ */
+async function callChatStream(provider, model, messages, personaId, onEvent, opts = {}) {
+  const controller = new AbortController();
+  activeChatAbort = controller;
+  const timer = setTimeout(() => controller.abort(), timeoutFor(provider, model));
+  try {
+    return await streamChatResponse({
+      provider, model, messages, personaId, onEvent,
+      codeSpaceHandoff: opts.codeSpaceHandoff,
+      signal: controller.signal,
+      wasUserStopped: () => activeChatUserStopped,
+    });
+  } finally {
+    clearTimeout(timer);
+    if (activeChatAbort === controller) activeChatAbort = null;
+  }
+}
+
+function setTypingActive(on, statusText) {
+  if (!els.typing) return;
+  if (on) {
+    els.typing.hidden = false;
+    els.typing.dataset.active = '1';
+    els.typing.style.display = 'block';
+    if (els.typingStatus && statusText) els.typingStatus.textContent = statusText;
+  } else {
+    els.typing.dataset.active = '0';
+    els.typing.style.display = 'none';
+    els.typing.hidden = true;
+    if (els.typingThoughts) {
+      els.typingThoughts.textContent = '';
+      els.typingThoughts.classList.add('hidden');
+    }
+  }
+}
+
+function appendTypingThought(text) {
+  if (!els.typingThoughts || !text) return;
+  els.typingThoughts.classList.remove('hidden');
+  els.typingThoughts.textContent += text;
+  els.typingThoughts.scrollTop = els.typingThoughts.scrollHeight;
+}
+
+// Only retry on transient / provider-side failures. Never retry on 400 (bad
+// request), 401 (bad key), 402 (payment/credit), 403 (forbidden) — those are
+// configuration issues the user needs to see.
+function shouldFallback(attempt) {
+  if (attempt.status === 0) return true;
+  if (attempt.status >= 500) return true;
+  if (attempt.status === 408 || attempt.status === 425 || attempt.status === 429) return true;
+  const msg = (attempt.data?.error || attempt.errText || '').toString().toLowerCase();
+  if (/provider returned error|no endpoints|temporarily unavailable|timed out|timeout|rate limit/.test(msg)) return true;
+  return false;
+}
+
+/**
+ * Finds the next complete sentence in `text` starting at `from`, so a long
+ * reply can be spoken sentence-by-sentence as it streams in instead of
+ * waiting for the whole thing to finish generating — that wait, plus a full
+ * network TTS round-trip on top of it, was the actual cause of "the voice
+ * is slow": speech never started until well after the reply was fully done.
+ * Returns null if no sentence boundary has arrived yet.
+ */
+function nextSpeakableSentence(text, from) {
+  const rest = text.slice(from);
+  const m = rest.match(/^[\s\S]*?[.!?](?:["')\]]*)(?:\s|$)/);
+  if (!m) return null;
+  const chunk = stripContinueMarkers(m[0]).trim();
+  const nextFrom = from + m[0].length;
+  if (!chunk) return { chunk: '', nextFrom }; // advance past it even if nothing speakable remains
+  return { chunk, nextFrom };
+}
+
+/** Markers the model uses so the client can auto-continue when a reply was cut short. */
+const CONTINUE_MARKER_RE = /⟦\s*(MORE|DONE)\s*⟧/gi;
+const WANTS_MORE_RE = /⟦\s*MORE\s*⟧/i;
+const AUTO_CONTINUE_MAX = 8;
+const AUTO_CONTINUE_USER_TEXT =
+  'Continue from where you left off. Finish as much as you can in this reply. End with ⟦MORE⟧ only if a large amount still remains; otherwise finish and end with ⟦DONE⟧.';
+const AUTO_CONTINUE_AFTER_TIMEOUT_TEXT =
+  'Continue from where you left off. Finish as much as you can in this reply. End with ⟦MORE⟧ only if a large amount still remains; otherwise finish and end with ⟦DONE⟧.';
+const AUTO_CONTINUE_EMPTY_TIMEOUT_TEXT =
+  'Previous attempt timed out during thinking before the answer text arrived. Restart and answer as fully as you can in one reply — spend less time thinking if needed. End with ⟦MORE⟧ only if the ask is too large to finish; otherwise end with ⟦DONE⟧.';
+
+// The persona ends a reply with this line to move the chat into the Code Space.
+const CODE_SPACE_MARKER = '<<<OPEN_CODE_SPACE>>>';
+const CODE_SPACE_MARKER_RE = /<<<\s*OPEN[_ ]CODE[_ ]SPACE\s*>>>/i;
+
+function stripCodeSpaceMarker(text) {
+  let out = String(text || '').replace(new RegExp(CODE_SPACE_MARKER_RE.source, 'gi'), '');
+  // Mid-stream the marker arrives a few characters at a time: hide the part that has landed.
+  for (let k = CODE_SPACE_MARKER.length - 1; k >= 3; k--) {
+    if (out.endsWith(CODE_SPACE_MARKER.slice(0, k))) { out = out.slice(0, out.length - k); break; }
+  }
+  return out;
+}
+
+function stripContinueMarkers(text) {
+  return stripCodeSpaceMarker(String(text || ''))
+    .replace(CONTINUE_MARKER_RE, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function replyWantsMore(text, meta = {}) {
+  if (meta.incomplete || meta.timedOut) return true;
+  return WANTS_MORE_RE.test(String(text || ''));
+}
+
+function isTimeoutLikeError(msg) {
+  const s = String(msg || '').toLowerCase();
+  return /took too long|timed out|timeout|aborted/.test(s);
+}
+
+// ---------------------------------------------------------------------------
+// Smart Reply chips — short AI-suggested next-things-to-say after a solo-chat
+// reply. Not for group chat (no single "next thing to say") or voice-chat
+// mode (speakReplies on already has its own hands-free flow).
+// ---------------------------------------------------------------------------
+
+let smartRepliesRequestId = 0;
+
+function clearSmartReplyChips() {
+  smartRepliesRequestId += 1; // invalidate any in-flight fetch, too
+  if (els.smartReplyChips) {
+    els.smartReplyChips.innerHTML = '';
+    els.smartReplyChips.classList.add('hidden');
+  }
+}
+
+function renderSmartReplyChips(replies) {
+  if (!els.smartReplyChips) return;
+  els.smartReplyChips.innerHTML = '';
+  if (!replies || !replies.length) { els.smartReplyChips.classList.add('hidden'); return; }
+  for (const text of replies) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'reply-chip';
+    chip.textContent = text;
+    chip.addEventListener('click', () => {
+      clearSmartReplyChips();
+      void sendMessage(text);
+    });
+    els.smartReplyChips.appendChild(chip);
+  }
+  els.smartReplyChips.classList.remove('hidden');
+}
+
+async function triggerSmartReplies(chat) {
+  if (!chat || chat.kind === 'group' || speakReplies) return;
+  const msgs = (chat.messages || []).filter((m) => m.role === 'user' || m.role === 'assistant');
+  if (!msgs.length) return;
+  const requestId = (smartRepliesRequestId += 1);
+  try {
+    const res = await fetch('/api/assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'smart-replies',
+        messages: msgs.slice(-6).map((m) => ({
+          role: m.role,
+          content: typeof m.content === 'string' ? m.content : String(m.content ?? ''),
+        })),
+      }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (requestId !== smartRepliesRequestId) return; // stale — superseded by a newer turn or a clear
+    if (chat.id !== activeChat()?.id) return; // user switched chats while this was in flight
+    renderSmartReplyChips(Array.isArray(data.replies) ? data.replies : []);
+  } catch {
+    // Silent — chips are a nicety, not a load-bearing feature.
+  }
+}
+
+async function sendMessage(text) {
+  // Accidental Enter while a reply is streaming must NOT start another request.
+  if (chatBusy) return;
+  clearSmartReplyChips();
+
+  const chat = ensureActiveChat();
+  // A group chat stays a group chat on send. Only an explicit tap of the 🏢
+  // toggle while viewing it turns it into a solo chat (see the toggle's click
+  // handler). Downgrading here on agencyModeOn === false — the default —
+  // silently turned every Group-button chat into a one-model solo chat on
+  // its first follow-up: one reply, no rounds, the rest of the table silent.
+  if (chat.kind === 'group') {
+    return sendGroupMessage(text);
+  }
+
+  const uploads = pendingUploads.slice();
+  pendingUploads = [];
+  renderAttachPreview();
+
+  let displayText = text;
+  const imageParts = [];
+  for (const u of uploads) {
+    if (u.kind === 'text') {
+      displayText += `\n\n[Uploaded file: ${u.name}]\n\`\`\`\n${u.content.slice(0, 80_000)}\n\`\`\``;
+    } else {
+      displayText += `\n\n[Uploaded image: ${u.name}]`;
+      imageParts.push({ type: 'image_url', image_url: { url: u.content } });
+    }
+  }
+  if (!displayText.trim() && imageParts.length === 0) return;
+
+  chat.messages.push({ role: 'user', content: displayText, ts: Date.now() });
+  if (chat.name === 'New chat' || chat.name === 'Untitled') {
+    chat.name = (text || uploads[0]?.name || 'Untitled').slice(0, 40).trim() || 'Untitled';
+  }
+  chat.provider = state.activeProvider;
+  chat.model = state.activeModel;
+  chat.personaId = state.activePersonaId;
+  chat.updatedAt = Date.now();
+  saveState();
+  renderChatList();
+  renderChatTitle();
+  renderMessages({ scroll: 'bottom' });
+  // "I'm ready — build it": the persona is told in its instructions to take it to the Code Space,
+  // and if it doesn't, we still do, because the user said so.
+  // The orchestrator is the one who takes the chat over. The user asking is only the backup, for when
+  // it does not act or hangs: then the move happens anyway.
+  const hasSubstance = () => chat.messages.filter((m) => m.role === 'user' && !m.autoContinue).length > 1;
+  // Code Space opens only on the user's own action: its button, or this typed request. Never a timer or the persona.
+  if (chat.kind === 'chat' && (userSaysReadyToBuild(text) || userAsksForCodeSpace(text))) {
+    saveState();
+    openInWorkspace({ autoBrief: hasSubstance() });
+    return;
+  }
+
+  // Answer to "marketing meeting first?" — only the very next message counts;
+  // anything that isn't a yes/no is a normal message (they moved on).
+  const pendingCampaign = chat.pendingCampaign;
+  if (pendingCampaign) {
+    delete chat.pendingCampaign;
+    const choice = imageParts.length === 0 ? parseMeetingChoice(text) : null;
+    if (choice === 'meeting') return runMarketingMeetingThenCampaign(chat, pendingCampaign.request, text);
+    if (choice === 'skip') return runInlineCampaign(chat);
+  }
+
+  // "Have a three round group discussion about X" → every persona, N rounds,
+  // right here in this chat; the next message is a normal reply again.
+  const prevUser = [...chat.messages].reverse().filter((m) => m.role === 'user')[1];
+  const groupAsk = imageParts.length === 0 ? parseGroupDiscussionRequest(text, prevUser?.content) : null;
+  // "Search the web for X" → this one reply is grounded in live results.
+  turnSearchQuery = groupAsk ? null : parseWebSearchRequest(text, prevUser?.content);
+  if (groupAsk) {
+    return runInlineGroupDiscussion(chat, groupAsk);
+  }
+  // "Write a campaign for X" → offer a marketing meeting first (unless the
+  // ask already says), then strategist, ruthless editor, every platform.
+  if (imageParts.length === 0 && parseCampaignRequest(text)) {
+    turnSearchQuery = null;
+    if (NO_MEETING_RE.test(text)) return runInlineCampaign(chat);
+    if (MEETING_RE.test(text)) return runMarketingMeetingThenCampaign(chat, text, text);
+    return askMarketingMeeting(chat, text);
+  }
+
+  // Agency mode: route through the Orchestrated group-chat engine instead
+  // of a single model, with the selected persona pinned as lead. Not
+  // supported alongside an image upload this turn — that needs the
+  // vision-prep path solo chat has and group-chat doesn't, so an image
+  // message falls through to the normal single-model flow below instead
+  // of silently dropping the image.
+  if (agencyModeOn && imageParts.length === 0) {
+    return sendAgencyMessage(chat, displayText);
+  }
+
+  setGeneratingUi(true);
+  activeChatUserStopped = false;
+  const startedAt = Date.now();
+  let tickTimer = null;
+  const updateStatusClock = (base) => {
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    setTypingActive(true, `${base} · ${secs}s`);
+  };
+  setTypingActive(true, 'Sending…');
+  tickTimer = setInterval(() => {
+    const cur = els.typingStatus?.textContent || 'Waiting…';
+    const base = cur.replace(/\s·\s\d+s$/, '');
+    updateStatusClock(base);
+  }, 1000);
+
+  let autoRound = 0;
+  let emptyTimeoutRetries = 0;
+  let firstAssistantTs = null;
+  try {
+    while (true) {
+      const apiMessages = chat.messages
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .filter((m) => !m.streaming && !m.intro)
+        .map((m, idx, arr) => {
+          if (
+            imageParts.length
+            && autoRound === 0
+            && idx === arr.length - 1
+            && m.role === 'user'
+            && !m.autoContinue
+          ) {
+            return {
+              role: 'user',
+              content: [
+                { type: 'text', text: m.content },
+                ...imageParts,
+              ],
+            };
+          }
+          return { role: m.role, content: m.content };
+        });
+
+      const assistantTs = Date.now();
+      if (firstAssistantTs == null) firstAssistantTs = assistantTs;
+      let pinnedToStart = false;
+      let streamBuf = '';
+      let spokenUpTo = 0;
+      let turnSources = [];
+      chat.messages.push({
+        role: 'assistant',
+        content: '',
+        ts: assistantTs,
+        streaming: true,
+        model: state.activeModel,
+        provider: state.activeProvider,
+      });
+      renderMessages({
+        scroll: autoRound === 0 ? 'assistant-start' : 'bottom',
+        pinMsgTs: assistantTs,
+      });
+      pinnedToStart = true;
+
+      const refreshStreamingBubble = () => {
+        const msg = chat.messages.find((m) => m.ts === assistantTs && m.role === 'assistant');
+        if (!msg) return;
+        msg.content = streamBuf;
+        const el = els.chat.querySelector(`.msg.bot[data-ts="${assistantTs}"] .content`);
+        if (el) {
+          el.innerHTML = '';
+          renderMarkdownInto(el, stripContinueMarkers(streamBuf) || '…');
+        } else {
+          renderMessages({ scroll: 'none' });
+        }
+      };
+
+      // Speak each sentence as soon as it's complete, instead of waiting for
+      // the whole reply to finish generating before the first TTS call even
+      // starts — that wait was the real source of "the voice is slow."
+      const speakNewSentences = () => {
+        for (;;) {
+          const next = nextSpeakableSentence(streamBuf, spokenUpTo);
+          if (!next) break;
+          spokenUpTo = next.nextFrom;
+          if (next.chunk) void speakReply(next.chunk);
+        }
+      };
+
+      updateStatusClock(autoRound > 0 ? `Continuing (${autoRound + 1})` : 'Waiting for model');
+      let attempt = await callChatStream(
+        state.activeProvider,
+        state.activeModel,
+        apiMessages,
+        state.activePersonaId,
+        (evt) => {
+          if (evt.type === 'sources') {
+            turnSources = Array.isArray(evt.sources) ? evt.sources : [];
+          } else if (evt.type === 'status') {
+            updateStatusClock(evt.message || 'Working…');
+          } else if (evt.type === 'thinking') {
+            appendTypingThought(evt.text || '');
+            updateStatusClock('Thinking');
+          } else if (evt.type === 'token') {
+            streamBuf += evt.text || '';
+            updateStatusClock(autoRound > 0 ? `Writing (${autoRound + 1})` : 'Writing');
+            refreshStreamingBubble();
+            speakNewSentences();
+            if (!pinnedToStart) {
+              renderMessages({ scroll: 'assistant-start', pinMsgTs: assistantTs });
+              pinnedToStart = true;
+            }
+          }
+        },
+        {},
+      );
+      let usedFallback = null;
+
+      if (!attempt.ok && shouldFallback(attempt)) {
+        const fb = MODEL_FALLBACKS?.[state.activeProvider]?.[state.activeModel];
+        if (fb) {
+          updateStatusClock('Retrying on backup model');
+          // Starting over on a different model — anything already spoken
+          // belongs to the discarded attempt, same as the bubble reset below.
+          stopNeuralSpeech();
+          streamBuf = '';
+          spokenUpTo = 0;
+          refreshStreamingBubble();
+          const retry = await callChatStream(
+            fb.provider,
+            fb.model,
+            apiMessages,
+            state.activePersonaId,
+            (evt) => {
+              if (evt.type === 'sources') turnSources = Array.isArray(evt.sources) ? evt.sources : [];
+              else if (evt.type === 'status') updateStatusClock(evt.message || 'Working…');
+              else if (evt.type === 'thinking') appendTypingThought(evt.text || '');
+              else if (evt.type === 'token') {
+                streamBuf += evt.text || '';
+                updateStatusClock('Writing');
+                refreshStreamingBubble();
+                speakNewSentences();
+              }
+            },
+            {},
+          );
+          if (retry.ok) {
+            attempt = retry;
+            usedFallback = fb;
+          }
+        }
+      }
+
+      // Remove streaming placeholder
+      const idx = chat.messages.findIndex((m) => m.ts === assistantTs && m.role === 'assistant');
+      if (idx !== -1) chat.messages.splice(idx, 1);
+
+      const data = attempt.data || {};
+      const rawReply = (attempt.ok ? (data.reply || streamBuf) : (streamBuf || data.partialReply || '')).trim();
+      const timedOut = Boolean(data.timedOut) || (!attempt.ok && isTimeoutLikeError(data.error || attempt.errText));
+      const hadReasoning = Boolean(
+        (typeof data.reasoning === 'string' && data.reasoning.trim())
+        || (els.typingThoughts?.textContent || '').trim(),
+      );
+
+      // Timed out after thinking but before answer text — don't leave an empty
+      // "(empty response)" bubble; keep a short note and auto-continue once.
+      if (!rawReply && timedOut && (attempt.ok || hadReasoning)) {
+        if (emptyTimeoutRetries < 1 && autoRound < AUTO_CONTINUE_MAX) {
+          emptyTimeoutRetries += 1;
+          autoRound += 1;
+          chat.messages.push({
+            role: 'info',
+            content: hadReasoning
+              ? 'Timed out during thinking — retrying with a shorter think…'
+              : 'Timed out with no text — retrying…',
+            ts: Date.now(),
+          });
+          chat.messages.push({
+            role: 'user',
+            content: AUTO_CONTINUE_EMPTY_TIMEOUT_TEXT,
+            ts: Date.now(),
+            autoContinue: true,
+          });
+          renderMessages({ scroll: 'bottom' });
+          saveState();
+          continue;
+        }
+      }
+
+      if (!attempt.ok && !rawReply) {
+        if (attempt.stopped || activeChatUserStopped) {
+          chat.messages.push({ role: 'info', content: 'Stopped.', ts: Date.now() });
+          renderMessages({ scroll: 'bottom' });
+          break;
+        }
+        // Empty timeout: one automatic restart with a continue nudge.
+        if (timedOut && emptyTimeoutRetries < 1 && autoRound < AUTO_CONTINUE_MAX) {
+          emptyTimeoutRetries += 1;
+          autoRound += 1;
+          chat.messages.push({
+            role: 'info',
+            content: 'Timed out with no text — retrying…',
+            ts: Date.now(),
+          });
+          chat.messages.push({
+            role: 'user',
+            content: AUTO_CONTINUE_EMPTY_TIMEOUT_TEXT,
+            ts: Date.now(),
+            autoContinue: true,
+          });
+          renderMessages({ scroll: 'bottom' });
+          saveState();
+          continue;
+        }
+        const where = data.provider ? ` [${data.provider} · ${data.model || state.activeModel}]` : '';
+        const rawErr = data.error || attempt.errText || 'Request failed';
+        const errMsg = friendlyNetworkError({ message: String(rawErr) });
+        chat.messages.push({ role: 'error', content: errMsg + where, ts: Date.now() });
+        renderMessages({ scroll: 'bottom' });
+        break;
+      }
+
+      // Non-timeout failure with partial text: keep the text, surface the error, stop.
+      if (!attempt.ok && rawReply && !timedOut && !data.incomplete) {
+        chat.messages.push({
+          role: 'assistant',
+          content: rawReply,
+          ts: assistantTs,
+          provider: data.provider,
+          model: data.model || state.activeModel,
+          sources: turnSources.length ? turnSources : undefined,
+        });
+        if (attempt.stopped || activeChatUserStopped) {
+          chat.messages.push({ role: 'info', content: 'Stopped.', ts: Date.now() });
+        } else {
+          const where = data.provider ? ` [${data.provider} · ${data.model || state.activeModel}]` : '';
+          const rawErr = data.error || attempt.errText || 'Request failed';
+          chat.messages.push({
+            role: 'error',
+            content: friendlyNetworkError({ message: String(rawErr) }) + where,
+            ts: Date.now(),
+          });
+        }
+        renderMessages({ scroll: 'bottom' });
+        break;
+      }
+
+      if (usedFallback) {
+        chat.messages.push({
+          role: 'info',
+          content: usedFallback.reason,
+          ts: Date.now(),
+        });
+      }
+
+      const wantsMore = replyWantsMore(rawReply, {
+        incomplete: data.incomplete,
+        timedOut,
+      });
+      // Keep markers in stored content for API history; UI strips them on render.
+      const storedReply = rawReply || '(empty response)';
+      const displayReply = stripContinueMarkers(storedReply) || '(empty response)';
+
+      chat.messages.push({
+        role: 'assistant',
+        content: storedReply,
+        ts: assistantTs,
+        provider: data.provider,
+        model: data.model || state.activeModel,
+        chunk: autoRound + 1,
+        sources: turnSources.length ? turnSources : undefined,
+      });
+
+      const newArts = extractArtifacts(displayReply, { role: state.activeRole || 'plan' });
+      if (newArts.length) {
+        chat.artifacts.push(...newArts);
+        if (state.artifactsCollapsed) {
+          state.artifactsCollapsed = false;
+          applySidebarState();
+          setArtifactsTab('artifacts');
+        }
+      }
+      renderMessages({
+        scroll: autoRound === 0 ? 'assistant-start' : 'bottom',
+        pinMsgTs: firstAssistantTs,
+      });
+      renderArtifacts();
+      // Sentences already spoken incrementally while streaming (speakNewSentences
+      // above) shouldn't be spoken again — only the unspoken tail. If nothing
+      // was streamed (e.g. a non-streaming fallback reply with no token
+      // events), spokenUpTo stays 0 and this just speaks the whole reply,
+      // same as before.
+      const unspokenTail = spokenUpTo > 0
+        ? stripContinueMarkers(streamBuf.slice(spokenUpTo)).trim()
+        : displayReply;
+      if (unspokenTail) speakReply(unspokenTail);
+
+      if (wantsMore && autoRound + 1 < AUTO_CONTINUE_MAX) {
+        autoRound += 1;
+        chat.messages.push({
+          role: 'info',
+          content: timedOut && !WANTS_MORE_RE.test(rawReply)
+            ? `Reply cut short — continuing (${autoRound + 1})…`
+            : `Continuing (${autoRound + 1})…`,
+          ts: Date.now(),
+        });
+        chat.messages.push({
+          role: 'user',
+          content: timedOut && !WANTS_MORE_RE.test(rawReply)
+            ? AUTO_CONTINUE_AFTER_TIMEOUT_TEXT
+            : AUTO_CONTINUE_USER_TEXT,
+          ts: Date.now(),
+          autoContinue: true,
+        });
+        chat.updatedAt = Date.now();
+        saveState();
+        renderMessages({ scroll: 'bottom' });
+        continue;
+      }
+
+      if (wantsMore && autoRound + 1 >= AUTO_CONTINUE_MAX) {
+        chat.messages.push({
+          role: 'info',
+          content: 'Stopped continuing after several parts. Say “continue” if you want more.',
+          ts: Date.now(),
+        });
+        renderMessages({ scroll: 'bottom' });
+      }
+      break;
+    }
+
+    chat.updatedAt = Date.now();
+    // The persona's marker never stays in the stored reply (it would be sent back as history).
+    const lastMsg = chat.messages[chat.messages.length - 1];
+    const personaSaidGo = !!lastMsg && lastMsg.role === 'assistant' && CODE_SPACE_MARKER_RE.test(String(lastMsg.content || ''));
+    if (personaSaidGo) lastMsg.content = stripCodeSpaceMarker(lastMsg.content).trim();
+    saveState();
+    void triggerSmartReplies(chat);
+  } catch (err) {
+    const idx = chat.messages.findIndex((m) => m.role === 'assistant' && m.streaming);
+    if (idx !== -1) {
+      const partial = chat.messages[idx];
+      if (activeChatUserStopped && String(partial.content || '').trim()) {
+        partial.streaming = false;
+        chat.messages.push({ role: 'info', content: 'Stopped.', ts: Date.now() });
+      } else {
+        chat.messages.splice(idx, 1);
+        if (activeChatUserStopped) {
+          chat.messages.push({ role: 'info', content: 'Stopped.', ts: Date.now() });
+        } else {
+          chat.messages.push({ role: 'error', content: err.message || 'Network error', ts: Date.now() });
+        }
+      }
+    } else if (activeChatUserStopped) {
+      chat.messages.push({ role: 'info', content: 'Stopped.', ts: Date.now() });
+    } else {
+      chat.messages.push({ role: 'error', content: err.message || 'Network error', ts: Date.now() });
+    }
+    saveState();
+    renderMessages({ scroll: 'bottom' });
+  } finally {
+    if (tickTimer) clearInterval(tickTimer);
+    setGeneratingUi(false);
+    activeChatUserStopped = false;
+    setTypingActive(false);
+    els.input.focus();
+    // Best-effort background sync so the 3-day sweep can see this chat too —
+    // never blocks or errors the UI (syncChat swallows its own failures).
+    void window.hub?.syncChat?.(chat);
+  }
+}
+
+/**
+ * Stream a group round. onEvent for status/speaker/token/turn/summary/done/error.
+ */
+async function callGroupStream(chat, apiMessages, onEvent) {
+  const controller = new AbortController();
+  activeChatAbort = controller;
+  // A round talks to every persona at the table sequentially, not one model
+  // like timeoutFor() assumes — scale the client's patience with the table
+  // size (mirrors the server's own per-persona budget in api/group-chat.js)
+  // so one slow persona can't abort the connection before the round
+  // finishes. That used to kill every remaining round in the session along
+  // with it, since sendGroupMessage stops the whole multi-round loop the
+  // moment one round comes back as a network failure.
+  const tableSize = Array.isArray(chat.personaIds) && chat.personaIds.length
+    ? chat.personaIds.length
+    : personas.length;
+  const roundTimeoutMs = Math.min(
+    Math.max(90_000 * (Math.max(tableSize, 1) + 2), 240_000),
+    780_000,
+  );
+  const timer = setTimeout(() => controller.abort(), roundTimeoutMs);
+  const apiKey = (providerKeys[state.activeProvider] || '').trim();
+  const headers = paidAuthHeaders({ 'Content-Type': 'application/json', Accept: 'text/event-stream' });
+  if (apiKey) headers['X-Provider-Key'] = apiKey;
+  const personaModelMap = {
+    ...personaModels,
+    ...((chat.personaModels && typeof chat.personaModels === 'object') ? chat.personaModels : {}),
+  };
+
+  try {
+    const res = await fetch('/api/group-chat', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        messages: apiMessages,
+        summary: chat.groupSummary || '',
+        topic: chat.topic,
+        mode: chat.groupMode,
+        model: state.activeModel,
+        provider: state.activeProvider,
+        apiKey: apiKey || undefined,
+        paidPassword: loadPaidPassword() || undefined,
+        personaModels: personaModelMap,
+        providerKeys,
+        webSearch: turnSearchQuery ? true : undefined,
+        webSearchQuery: turnSearchQuery || undefined,
+        personaIds: (Array.isArray(chat.personaIds) && chat.personaIds.length) ? chat.personaIds : undefined,
+        personaTasks: (chat.personaTasks && typeof chat.personaTasks === 'object') ? chat.personaTasks : undefined,
+        forcedLeadId: chat.forcedLeadId || undefined,
+      }),
+      signal: controller.signal,
+    });
+
+    const ctype = (res.headers.get('content-type') || '').toLowerCase();
+    if (!res.ok && !ctype.includes('text/event-stream')) {
+      let data = null;
+      let errText = null;
+      try { data = await res.json(); } catch { errText = 'Non-JSON response'; }
+      return { ok: false, status: res.status, data, errText };
+    }
+    if (!res.body) {
+      return { ok: false, status: res.status, data: null, errText: 'No response body' };
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let donePayload = null;
+    let streamError = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n');
+      buffer = parts.pop() || '';
+      for (const line of parts) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+        let evt;
+        try { evt = JSON.parse(payload); } catch { continue; }
+        if (typeof onEvent === 'function') onEvent(evt);
+        if (evt.type === 'done') donePayload = evt;
+        if (evt.type === 'error') streamError = evt;
+      }
+    }
+
+    if (streamError && !donePayload) {
+      return {
+        ok: false,
+        status: 502,
+        data: { error: streamError.error },
+        errText: streamError.error,
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      data: donePayload || {},
+      errText: null,
+    };
+  } catch (err) {
+    if (activeChatUserStopped || err?.name === 'AbortError') {
+      return { ok: false, status: 0, data: null, errText: 'Stopped.', stopped: true };
+    }
+    return { ok: false, status: 0, data: null, errText: friendlyNetworkError(err), stopped: false };
+  } finally {
+    clearTimeout(timer);
+    if (activeChatAbort === controller) activeChatAbort = null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Topic keyword extractor — used for MP3 filename
+// ---------------------------------------------------------------------------
+function topicKeywords(topic) {
+  const stop = new Set([
+    'a','an','the','and','or','but','is','are','was','were','in','on','at','to','for',
+    'of','with','by','from','as','that','this','these','those','i','we','you','they',
+    'it','its','my','your','our','their','be','do','have','has','had','will','would',
+    'can','could','should','about','what','how','why','when','where','who','which',
+  ]);
+  return String(topic || '')
+    .toLowerCase()
+    .replace(/[^\w\s]/g, '')
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !stop.has(w))
+    .slice(0, 5)
+    .join('-') || 'group';
+}
+
+// ---------------------------------------------------------------------------
+// "More rounds?" prompt injected into chat after all rounds finish
+// ---------------------------------------------------------------------------
+function showMoreRoundsPrompt(chat) {
+  // Remove any stale prompt from a previous run
+  els.chat?.querySelector('.rounds-prompt')?.remove();
+
+  const div = document.createElement('div');
+  div.className = 'rounds-prompt';
+
+  const label = document.createElement('span');
+  label.className = 'rounds-prompt-label';
+  label.textContent = 'Done for now. Talk more (+ rounds) or finish and save the MP3.';
+  div.appendChild(label);
+
+  const actions = document.createElement('div');
+  actions.className = 'rounds-prompt-actions';
+
+  [['+1', 1], ['+3', 3], ['+5', 5]].forEach(([lbl, n]) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'text-btn';
+    btn.textContent = lbl;
+    btn.title = `Add ${n} more round${n > 1 ? 's' : ''}`;
+    btn.addEventListener('click', () => {
+      div.remove();
+      void runAdditionalRounds(chat, n);
+    });
+    actions.appendChild(btn);
+  });
+
+  const finishBtn = document.createElement('button');
+  finishBtn.type = 'button';
+  finishBtn.className = 'text-btn primary';
+  finishBtn.textContent = 'Finish & Save MP3';
+  finishBtn.addEventListener('click', () => {
+    div.remove();
+    void downloadGroupSessionMp3(chat, finishBtn, { useKeywords: true });
+  });
+  actions.appendChild(finishBtn);
+  div.appendChild(actions);
+
+  if (els.chat) {
+    els.chat.appendChild(div);
+    // Keep actions clear of the composer so +1/+3/+5 aren't a buried sliver.
+    div.style.marginBottom = '12px';
+    requestAnimationFrame(() => {
+      div.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Execute a single group round (all personas speak once). Returns true on success.
+// ---------------------------------------------------------------------------
+async function runOneRound(chat, updateStatusClock, startedAt, overallFirstPin) {
+  const apiMessages = chat.messages
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({
+      role: m.role,
+      content: m.content,
+      personaId: m.personaId,
+      personaName: m.personaName,
+    }));
+  // An in-chat group discussion: personas answer the topic, not the literal
+  // "have a 3 round group discussion" request that started it.
+  if (chat.groupFocus) apiMessages.push({ role: 'user', content: chat.groupFocus });
+
+  let currentTs        = null;
+  let currentPersonaId = null;
+  let streamBuf        = '';
+  let firstPin         = overallFirstPin[0] || null;
+  const spokenThisRound = [];
+  let roundSources      = [];
+
+  const ensureBubble = (personaId, personaName, meta = {}) => {
+    if (currentTs && currentPersonaId === personaId) return;
+    if (currentTs) {
+      const prev = chat.messages.find((m) => m.ts === currentTs && m.role === 'assistant');
+      if (prev) {
+        prev.streaming = false;
+        if (!prev.content) prev.content = streamBuf || '…';
+      }
+    }
+    streamBuf        = '';
+    currentPersonaId = personaId;
+    currentTs        = Date.now() + Math.random();
+    if (!firstPin) {
+      firstPin = currentTs;
+      overallFirstPin[0] = firstPin;
+    }
+    const assigned = (chat.personaModels && chat.personaModels[personaId])
+      || personaModels[personaId]
+      || {};
+    chat.messages.push({
+      role: 'assistant',
+      content: '',
+      ts: currentTs,
+      streaming: true,
+      personaId,
+      personaName,
+      model:    meta.model    || assigned.model    || state.activeModel,
+      provider: meta.provider || assigned.provider || state.activeProvider,
+    });
+    renderMessages({ scroll: groupScrollMode('bottom') });
+  };
+
+  const refreshBubble = () => {
+    const msg = chat.messages.find((m) => m.ts === currentTs && m.role === 'assistant');
+    if (!msg) return;
+    msg.content = streamBuf;
+    const el = els.chat.querySelector(`.msg.bot[data-ts="${currentTs}"] .content`);
+    if (el) {
+      el.innerHTML = '';
+      renderMarkdownInto(el, streamBuf || '…');
+      if (chatStickToBottom) els.chat.scrollTop = els.chat.scrollHeight;
+    } else {
+      renderMessages({ scroll: groupScrollMode('bottom') });
+    }
+  };
+
+  try {
+    const attempt = await callGroupStream(chat, apiMessages, (evt) => {
+      if (evt.type === 'status') {
+        updateStatusClock(evt.message || 'Working…');
+      } else if (evt.type === 'sources') {
+        roundSources = Array.isArray(evt.sources) ? evt.sources : [];
+      } else if (evt.type === 'error' && evt.personaName) {
+        chat.messages.push({
+          role: 'error',
+          content: `${evt.personaName}: ${evt.error || 'turn failed'}`,
+          ts: Date.now(),
+        });
+        renderMessages({ scroll: groupScrollMode('bottom') });
+      } else if (evt.type === 'summary' && typeof evt.summary === 'string') {
+        chat.groupSummary = evt.summary;
+      } else if (evt.type === 'speaker') {
+        ensureBubble(evt.personaId, evt.personaName, { model: evt.model, provider: evt.provider });
+        updateStatusClock(`${evt.personaName || 'Persona'} speaking`);
+      } else if (evt.type === 'token') {
+        ensureBubble(evt.personaId || currentPersonaId, evt.personaName, {
+          model: evt.model,
+          provider: evt.provider,
+        });
+        streamBuf = evt.text || streamBuf;
+        refreshBubble();
+        updateStatusClock(`${evt.personaName || 'Persona'} speaking`);
+      } else if (evt.type === 'turn') {
+        ensureBubble(evt.personaId, evt.personaName, { model: evt.model, provider: evt.provider });
+        streamBuf = evt.content || streamBuf;
+        const msg = chat.messages.find((m) => m.ts === currentTs && m.role === 'assistant');
+        if (msg) {
+          msg.content   = streamBuf;
+          msg.streaming = false;
+          msg.personaId = evt.personaId;
+          msg.personaName = evt.personaName;
+          if (evt.model)    msg.model    = evt.model;
+          if (evt.provider) msg.provider = evt.provider;
+          const turnSrc = Array.isArray(evt.sources) ? evt.sources : roundSources;
+          if (turnSrc.length) msg.sources = turnSrc;
+          if (evt.task) msg.task = evt.task;
+        }
+        refreshBubble();
+        spokenThisRound.push({ content: streamBuf, personaId: evt.personaId });
+        // Speak this persona's turn now, not after the whole round finishes —
+        // waiting for every remaining persona to also finish generating
+        // before any voice starts was the real source of multi-minute TTS
+        // delays in Agency/Group mode (solo chat already fixed this for
+        // single-persona replies; group mode never got the same treatment).
+        void speakReply(streamBuf, { personaId: evt.personaId });
+        currentTs        = null;
+        currentPersonaId = null;
+        streamBuf        = '';
+      }
+    });
+
+    for (const m of chat.messages) {
+      if (m.streaming) m.streaming = false;
+    }
+
+    if (!attempt.ok) {
+      const rawErr = attempt.data?.error || attempt.errText || 'Group round failed';
+      chat.messages.push({
+        role: 'error',
+        content: friendlyNetworkError({ message: String(rawErr) }),
+        ts: Date.now(),
+      });
+      renderMessages({ scroll: groupScrollMode('bottom') });
+      return false;
+    }
+
+    if (attempt.data?.summary) chat.groupSummary = attempt.data.summary;
+    const expected = attempt.data?.expectedTurns;
+    if (typeof expected === 'number' && spokenThisRound.length < expected) {
+      chat.messages.push({
+        role: 'info',
+        content: `${spokenThisRound.length} of ${expected} personas spoke this round (some turns may have failed).`,
+        ts: Date.now(),
+      });
+    }
+    renderMessages({ scroll: groupScrollMode('bottom') });
+    // Speaking now happens per-turn, as each 'turn' event arrives above —
+    // not batched here after the whole round (and its SSE connection) closes.
+    chat.updatedAt = Date.now();
+    saveState();
+    return true;
+  } catch (err) {
+    chat.messages.push({ role: 'error', content: err.message || 'Network error', ts: Date.now() });
+    saveState();
+    renderMessages({ scroll: groupScrollMode('bottom') });
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Run additional rounds (called from the "more rounds?" prompt buttons)
+// ---------------------------------------------------------------------------
+async function runAdditionalRounds(chat, n) {
+  const startedAt   = Date.now();
+  const firstPin    = [null];
+  setGeneratingUi(true);
+  activeChatUserStopped = false;
+  const updateStatusClock = (base) => {
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    setTypingActive(true, `${base} · ${secs}s`);
+  };
+  setTypingActive(true, `Starting ${n} additional round${n > 1 ? 's' : ''}…`);
+
+  const tickTimer = setInterval(() => {
+    const cur  = els.typingStatus?.textContent || 'Waiting…';
+    const base = cur.replace(/\s·\s\d+s$/, '');
+    updateStatusClock(base);
+  }, 1000);
+
+  try {
+    for (let i = 1; i <= n; i++) {
+      if (n > 1) updateStatusClock(`Additional round ${i}/${n} — gathering personas`);
+      const ok = await runOneRound(chat, updateStatusClock, startedAt, firstPin);
+      // A failed round is already reported in the chat; only a user Stop
+      // ends the remaining rounds. Breaking on any failure is what cut a
+      // multi-round session down to one round.
+      if (!ok && activeChatUserStopped) break;
+      if (i < n) {
+        chat.messages.push({
+          role: 'info',
+          content: `─── Additional round ${i}/${n} complete ───`,
+          ts: Date.now(),
+        });
+        renderMessages({ scroll: groupScrollMode('bottom') });
+      }
+    }
+    showMoreRoundsPrompt(chat);
+  } finally {
+    clearInterval(tickTimer);
+    setGeneratingUi(false);
+    activeChatUserStopped = false;
+    setTypingActive(false);
+    els.input?.focus();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Group message send — runs all scheduled rounds, then prompts for more
+// ---------------------------------------------------------------------------
+async function sendGroupMessage(text) {
+  if (chatBusy) return;
+  const chat = ensureActiveChat();
+  const displayText = (text || '').trim();
+  if (!displayText) return;
+
+  // Remove any pending "more rounds?" prompt
+  els.chat?.querySelector('.rounds-prompt')?.remove();
+
+  const prevGroupUser = [...chat.messages].reverse().find((m) => m.role === 'user');
+  turnSearchQuery = parseWebSearchRequest(displayText, prevGroupUser?.content);
+
+  chat.messages.push({ role: 'user', content: displayText, ts: Date.now() });
+  chat.provider  = state.activeProvider;
+  chat.model     = state.activeModel;
+  chat.updatedAt = Date.now();
+  saveState();
+  renderChatList();
+  renderChatTitle();
+  chatStickToBottom = true;
+  renderMessages({ scroll: 'bottom' });
+
+  const totalRounds = chat.groupRounds || 3;
+  setGeneratingUi(true);
+  activeChatUserStopped = false;
+  const startedAt = Date.now();
+  const overallFirstPin = [null];
+
+  const updateStatusClock = (base) => {
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    setTypingActive(true, `${base} · ${secs}s`);
+  };
+
+  setTypingActive(true, 'Gathering the table…');
+  const tickTimer = setInterval(() => {
+    const cur  = els.typingStatus?.textContent || 'Waiting…';
+    const base = cur.replace(/\s·\s\d+s$/, '');
+    updateStatusClock(base);
+  }, 1000);
+
+  try {
+    for (let round = 1; round <= totalRounds; round++) {
+      if (totalRounds > 1) {
+        updateStatusClock(`Round ${round}/${totalRounds} — gathering personas`);
+      }
+      const ok = await runOneRound(chat, updateStatusClock, startedAt, overallFirstPin);
+      // A failed round is already reported in the chat; only a user Stop
+      // ends the remaining rounds. Breaking on any failure is what cut a
+      // multi-round session down to one round.
+      if (!ok && activeChatUserStopped) break;
+      if (round < totalRounds) {
+        chat.messages.push({
+          role: 'info',
+          content: `─── Round ${round}/${totalRounds} complete ───`,
+          ts: Date.now(),
+        });
+        renderMessages({ scroll: groupScrollMode('bottom') });
+      }
+    }
+    // Offer more rounds after all are done
+    showMoreRoundsPrompt(chat);
+  } finally {
+    clearInterval(tickTimer);
+    setGeneratingUi(false);
+    activeChatUserStopped = false;
+    setTypingActive(false);
+    els.input?.focus();
+    void window.hub?.syncChat?.(chat);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Group discussion on request, inside a normal chat. No separate mode or
+// screen: "have a 3 round group discussion on pricing" runs every persona
+// for 3 rounds here, then the chat goes back to one reply per message.
+// ---------------------------------------------------------------------------
+const ROUND_WORDS = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+};
+// Explicit phrase ("group discussion", "team debate", "roundtable") or a round
+// count plus who + what ("3 rounds, everyone discuss X").
+const GROUP_PHRASE_RE = /\b(?:group|team|panel|round[\s-]?table)\s+(?:discussion|debate|brainstorm(?:ing)?|chat|conversation|talk)\b|\bround[\s-]?table\b/i;
+const GROUP_WHO_RE = /\b(?:group|team|everyone|everybody|all (?:the )?(?:models|personas|of you)|personas|models|table|panel)\b/i;
+const GROUP_WHAT_RE = /\b(?:discuss(?:ion)?|debate|brainstorm|talk|weigh in)\b/i;
+const ROUNDS_RE = /\b(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)[\s-]*rounds?\b|\brounds?\s*[:=]?\s*(\d{1,2})\b/i;
+
+function parseGroupDiscussionRequest(text, previousUserText = '') {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  const m = raw.match(ROUNDS_RE);
+  const asked = GROUP_PHRASE_RE.test(raw) || (m && GROUP_WHO_RE.test(raw) && GROUP_WHAT_RE.test(raw));
+  if (!asked) return null;
+  let rounds = 3;
+  if (m) {
+    const tok = String(m[1] || m[2]).toLowerCase();
+    rounds = /^\d+$/.test(tok) ? parseInt(tok, 10) : (ROUND_WORDS[tok] || 3);
+  }
+  rounds = Math.min(20, Math.max(1, rounds));
+  // Topic = whatever follows "about/on/regarding …". With none ("have a
+  // 3 round group discussion"), the group discusses the previous message.
+  const about = raw.match(/\b(?:about|on|regarding|re:|discuss(?:ing)?|debate|whether)\s+(?!(?:it|this|that)\b)(.+)$/i);
+  const topic = about
+    ? about[1].replace(ROUNDS_RE, '').replace(/[,;:.?!\s]+$/, '').trim()
+    : (String(previousUserText || '').trim() || raw);
+  return { rounds, topic: topic || raw };
+}
+
+// Web search on request, inside any chat. No button or mode: "search the
+// web for X", "look up X online", "google it" searches for X and the reply
+// cites the results. Anything else is a normal reply.
+const SEARCH_WEB = String.raw`(?:the\s+)?(?:web|internet|net)|online|google`;
+const SEARCH_ASK_RES = [
+  // "search the web for X", "search online about X", "web search X"
+  new RegExp(String.raw`\b(?:search|look\s*up|scour)\s+(?:on\s+)?(?:${SEARCH_WEB})\b(?:\s+(?:for|about|on|to\s+find))?\s*(.*)$`, 'i'),
+  /\bweb[\s-]*search\b[\s:]*(?:(?:for|about|on)\s+)?(.*)$/i,
+  // "look up X online", "search for X on the web"
+  new RegExp(String.raw`\b(?:look\s*up|search(?:\s+for)?)\s+(.+?)\s+(?:online|on\s+(?:the\s+)?(?:web|internet|google)|on\s+line)\b`, 'i'),
+];
+const SEARCH_TRAILING_RE = new RegExp(String.raw`^(.*?)[\s,.;:!?-]*(?:(?:please|pls|and|then|just)\s+)*(?:(?:search|look\s*(?:it|this|that)?\s*up)\s+(?:on\s+)?(?:${SEARCH_WEB})|google\s+(?:it|this|that))\s*[.!?]*$`, 'i');
+
+// Plain-words asks that carry no "web/online/google" qualifier: "search for X",
+// "look up X", "find out X", "can you search the internet" (no subject → previous message).
+const SEARCH_BARE_RES = [
+  /\bsearch\s+(?:for|up)\s+(.+)$/i,
+  /\blook\s*up\s+(.+)$/i,
+  /\b(?:find\s+out|research)\s+(?:about\s+|whether\s+|if\s+)?(.+)$/i,
+  /\bgoogle\s+(?!it\b|this\b|that\b)(.+)$/i,
+  /\b(?:can|could|would|will)\s+you\s+(?:please\s+)?(?:search|browse|google|look)\b(?:\s+(?:the\s+)?(?:web|internet|net|online))?\s*$/i,
+];
+// Questions that are only answerable with live information: search without being asked.
+const SEARCH_FRESH_RE = /\b(?:latest|currently|right now|today(?:'s)?|tonight|this (?:week|month|year)|breaking|news|trending|recent(?:ly)?|new(?:est)?\s+(?:update|release|version|law|rule|feature)s?|price of|weather|score|stock price|who won|202[5-9])\b/i;
+// What is left of a capability question once the search words are cut off ("so you cant", "are you able to"): no subject.
+const SEARCH_FILLER_RE = /^(?:so\s+)?(?:(?:you|u)\s+(?:can(?:'?t|not)?|could(?:n'?t)?|are\s+able\s+to|aren'?t\s+able\s+to)|(?:can|could|would|will)\s+you(?:\s+please)?|are\s+you\s+(?:able|going)\s+to|please)$/i;
+const SEARCH_QUESTION_RE = /^(?:what|who|when|where|which|how much|how many|is|are|did|does|do|has|have|will|can|any)\b/i;
+
+function parseWebSearchRequest(text, previousUserText = '') {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  let query = null;
+  const trailing = raw.match(SEARCH_TRAILING_RE);
+  if (trailing) query = trailing[1];
+  else {
+    for (const re of SEARCH_ASK_RES) {
+      const m = raw.match(re);
+      if (m) { query = m[1]; break; }
+    }
+  }
+  if (query === null) {
+    for (const re of SEARCH_BARE_RES) {
+      const m = raw.match(re);
+      if (m) { query = m[1] || ''; break; }
+    }
+  }
+  // Live-information question with no explicit ask: search the question itself.
+  if (query === null && raw.length <= 300 && SEARCH_FRESH_RE.test(raw) && (raw.endsWith('?') || SEARCH_QUESTION_RE.test(raw))) {
+    query = raw;
+  }
+  if (query === null) return null;
+  query = query.replace(/^(?:(?:for|about|on|and|to find|whether)\s+)+/i, '').replace(/[\s,;:.?!]+$/, '').trim();
+  // "search the web for that" / no subject → search the previous message.
+  if (!query || /^(?:it|this|that|this topic|that topic)$/i.test(query) || SEARCH_FILLER_RE.test(query)) {
+    query = String(previousUserText || "").trim() || raw;
+  }
+  return query.slice(0, 400);
+}
+
+async function runInlineGroupDiscussion(chat, { rounds, topic }) {
+  // runOneRound reads these off the chat; set them for this discussion only
+  // and put the chat back exactly as it was afterwards.
+  const saved = {
+    groupMode: chat.groupMode,
+    personaIds: chat.personaIds,
+    forcedLeadId: chat.forcedLeadId,
+    topic: chat.topic,
+    groupFocus: chat.groupFocus,
+  };
+  chat.groupMode = 'brainstorm'; // everyone speaks each round
+  chat.personaIds = null;        // full roster
+  chat.forcedLeadId = undefined;
+  chat.topic = topic;
+  chat.groupFocus = topic;
+
+  // Visible right away: the first speaker can take a while (context summary,
+  // seating order), and an empty screen reads as stuck.
+  chat.messages.push({
+    role: 'info',
+    content: `Group discussion · ${rounds} round${rounds > 1 ? 's' : ''} · everyone at the table — starting…`,
+    ts: Date.now(),
+  });
+  renderMessages({ scroll: 'bottom' });
+
+  setGeneratingUi(true);
+  activeChatUserStopped = false;
+  const startedAt = Date.now();
+  const firstPin = [null];
+  const updateStatusClock = (base) => {
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    setTypingActive(true, `${base} · ${secs}s`);
+  };
+  setTypingActive(true, 'Gathering the group…');
+  const tickTimer = setInterval(() => {
+    const cur = els.typingStatus?.textContent || 'Waiting…';
+    updateStatusClock(cur.replace(/\s·\s\d+s$/, ''));
+  }, 1000);
+
+  let stopped = false;
+  try {
+    for (let round = 1; round <= rounds; round++) {
+      if (rounds > 1) updateStatusClock(`Round ${round}/${rounds} — gathering personas`);
+      const ok = await runOneRound(chat, updateStatusClock, startedAt, firstPin);
+      if (!ok && activeChatUserStopped) {
+        stopped = true;
+        break;
+      }
+      chat.messages.push({
+        role: 'info',
+        content: `─── Round ${round}/${rounds} complete ───`,
+        ts: Date.now(),
+      });
+      renderMessages({ scroll: groupScrollMode('bottom') });
+    }
+  } finally {
+    Object.assign(chat, saved);
+    clearInterval(tickTimer);
+    setGeneratingUi(false);
+    activeChatUserStopped = false;
+    setTypingActive(false);
+    els.input?.focus();
+    chat.updatedAt = Date.now();
+    saveState();
+    void window.hub?.syncChat?.(chat);
+  }
+  return !stopped;
+}
+
+// ---------------------------------------------------------------------------
+// Campaign engine on request, inside a normal chat (api/campaign.js).
+// "Write a campaign for my bookkeeping app" → the brief is read from this
+// conversation, a strategist drafts, an editor sends it back until it scores
+// 8/10, then every platform is written at once. Posts that work can be saved
+// as proven hooks, which later campaigns build on.
+// ---------------------------------------------------------------------------
+const CAMPAIGN_RE = /\b(?:write|make|create|build|draft|run|give me|generate|need|want|plan|do)\b[^.?!\n]{0,40}?\b(?:(?:marketing|ad|ads|advertising|promo(?:tional)?|launch|social(?: media)?)\s+(?:campaign|copy|posts?)|campaign(?!\s+(?:speech|trail|manager|finance|fund|rally|promise|staff|office))|ad copy)\b/i;
+const QUESTION_START_RE = /^\s*(?:how|what|why|when|where|which|who)\b/i;
+
+// A campaign ask that already settles the meeting question.
+const MEETING_RE = /\b(?:marketing|team|strategy|planning)\s+meeting\b|\bmeeting first\b|\b(?:have|hold|run)\s+(?:a|the)\s+meeting\b|\b(?:discuss|talk about|debate) (?:it|this|that) first\b/i;
+const NO_MEETING_RE = /\b(?:no|skip|without)\s+(?:the\s+|a\s+)?meeting\b|\bjust write\b|\bstraight to\b/i;
+// Replies to "meeting first?".
+const MEETING_SKIP_RE = /\b(?:no|nope|nah|skip|just write|write it|straight|no thanks|not now|without)\b/i;
+const MEETING_YES_RE = /\b(?:yes|yeah|yep|yup|sure|ok(?:ay)?|meet(?:ing)?|let'?s|discuss|team|please)\b/i;
+
+function parseMeetingChoice(text) {
+  const t = String(text || '').trim();
+  if (NO_MEETING_RE.test(t) || MEETING_SKIP_RE.test(t)) return 'skip';
+  if (MEETING_YES_RE.test(t)) return 'meeting';
+  return null;
+}
+
+function askMarketingMeeting(chat, request) {
+  chat.pendingCampaign = { request, askedAt: Date.now() };
+  chat.messages.push({
+    role: 'assistant',
+    personaName: 'Campaign',
+    content: 'Want a marketing meeting on this first? Your personas talk it through — who it\u2019s for, the angle, the offer, the proof — and I write the campaign from what they decide. Or I write it now.',
+    ts: Date.now(),
+  });
+  chat.updatedAt = Date.now();
+  saveState();
+  renderMessages({ scroll: 'bottom' });
+  renderSmartReplyChips(['Meeting first', 'Just write it']);
+  els.input?.focus();
+}
+
+async function runMarketingMeetingThenCampaign(chat, request, reply) {
+  const m = String(reply || '').match(ROUNDS_RE);
+  const tok = m ? String(m[1] || m[2]).toLowerCase() : '';
+  const rounds = Math.min(5, Math.max(1, tok ? (/^\d+$/.test(tok) ? parseInt(tok, 10) : (ROUND_WORDS[tok] || 2)) : 2));
+  const topic = `Marketing meeting before we write this campaign: "${request.slice(0, 600)}". `
+    + 'Agree on who it is for, the one angle that will sell it, the offer, and the strongest real proof we have. '
+    + 'Be specific and blunt. Do not invent numbers or results. End with the decisions.';
+  const finished = await runInlineGroupDiscussion(chat, { rounds, topic });
+  if (finished) await runInlineCampaign(chat);
+}
+
+function parseCampaignRequest(text) {
+  const raw = String(text || '').trim();
+  if (!raw || (QUESTION_START_RE.test(raw) && raw.endsWith('?'))) return false;
+  return CAMPAIGN_RE.test(raw);
+}
+
+function campaignMarkdown(result) {
+  if (result.status === 'question') return result.question;
+  const { brief, best, threshold } = result;
+  const head = [];
+  if (result.status === 'rejected') {
+    head.push(`**No draft passed the editor** — best scored ${best.score}/10 (needs ${threshold}) after ${best.attempts} drafts. Nothing was adapted.`);
+    head.push(`**Best draft**\n${best.strategy.masterCopy}\n\n${best.strategy.cta}`);
+    if (best.verdict.fixes.length) head.push(`**What's still wrong**\n${best.verdict.fixes.map((f) => `- ${f}`).join('\n')}`);
+    head.push('Add detail (real numbers, who it’s for, the offer) and ask again.');
+    return head.join('\n\n');
+  }
+  head.push(`**Campaign · ${best.score}/10 from the editor**${best.attempts > 1 ? ` (${best.attempts} drafts)` : ''}`);
+  head.push(`For: ${brief.audience}${brief.audienceAssumed ? ' _(assumed — say who it’s for if that’s wrong)_' : ''}`);
+  head.push(`Core message: ${best.strategy.coreMessage}`);
+  if (result.hooksUsed?.length) head.push(`Built on your proven hooks: ${result.hooksUsed.map((h) => `“${h.text}”`).join(', ')}`);
+  if (!brief.facts.length) head.push('_No numbers or proof in the brief, so the copy makes no claims. Give it real figures for sharper copy._');
+  const posts = result.adaptations.map((a) => `### ${a.label}\n${a.text}${a.hashtags.length ? `\n${a.hashtags.join(' ')}` : ''}`);
+  const fails = result.failures.length
+    ? [`Couldn't write: ${result.failures.map((f) => `${f.label} (${f.error})`).join('; ')}`]
+    : [];
+  return [...head, ...posts, ...fails].join('\n\n');
+}
+
+function campaignSummaryMarkdown(c) {
+  // Everything above the posts — the posts themselves render as cards.
+  const full = c.markdown || '';
+  const cut = full.indexOf('\n### ');
+  return cut === -1 ? full : full.slice(0, cut);
+}
+
+function renderCampaignInto(container, c) {
+  renderMarkdownInto(container, campaignSummaryMarkdown(c));
+  for (const post of c.posts) {
+    const card = document.createElement('div');
+    card.className = 'campaign-post';
+    const headRow = document.createElement('div');
+    headRow.className = 'campaign-post-head';
+    headRow.textContent = `${post.label} · ${post.chars} chars`;
+    const body = document.createElement('div');
+    body.className = 'campaign-post-text';
+    const fullText = post.hashtags.length ? `${post.text}\n${post.hashtags.join(' ')}` : post.text;
+    body.textContent = fullText;
+    const actions = document.createElement('div');
+    actions.className = 'campaign-actions';
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'text-btn msg-speak';
+    copyBtn.textContent = 'Copy';
+    copyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void copyTextToClipboard(fullText).then((ok) => flashButton(copyBtn, ok ? 'Copied' : 'Copy failed'));
+    });
+    actions.appendChild(copyBtn);
+    if (socialAccounts.length) {
+      const postBtn = document.createElement('button');
+      postBtn.type = 'button';
+      postBtn.className = 'text-btn msg-speak';
+      postBtn.textContent = 'Post to…';
+      postBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void handlePostToSocial(fullText, postBtn, 'Campaign');
+      });
+      actions.appendChild(postBtn);
+    }
+    const winBtn = document.createElement('button');
+    winBtn.type = 'button';
+    winBtn.className = 'text-btn msg-speak';
+    winBtn.textContent = '⭐ Worked';
+    winBtn.title = 'Save this post’s opening as a proven hook — future campaigns build on it';
+    winBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void saveCampaignWinner(post, winBtn);
+    });
+    actions.appendChild(winBtn);
+    card.append(headRow, body, actions);
+    container.appendChild(card);
+  }
+  if (c.failures?.length) {
+    const p = document.createElement('p');
+    p.className = 'campaign-failures';
+    p.textContent = `Couldn't write: ${c.failures.map((f) => `${f.label} (${f.error})`).join('; ')}`;
+    container.appendChild(p);
+  }
+}
+
+async function saveCampaignWinner(post, btn) {
+  const raw = prompt(
+    'How did it do? Enter a number, e.g. 3.2 for a 3.2% click rate.\nLeave blank if you just know it worked.',
+    '',
+  );
+  if (raw === null) return;
+  // The hook is the opening: the email subject, or the first line of a post.
+  const lines = post.text.split('\n').map((l) => l.trim()).filter(Boolean);
+  let hook = (lines[0] || '').replace(/^subject:\s*/i, '');
+  if (hook.length < 20 && lines[1]) hook = `${hook} ${lines[1]}`;
+  try {
+    const res = await fetch('/api/campaign?op=hook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: hook, platform: post.platform, performance: raw.trim() }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    flashButton(btn, 'Saved ⭐');
+  } catch (err) {
+    alert(`Could not save it: ${err.message}`);
+  }
+}
+
+async function runInlineCampaign(chat) {
+  const provider = state.activeProvider;
+  const model = state.activeModel;
+  const apiKey = (providerKeys[provider] || '').trim();
+  const headers = paidAuthHeaders({ 'Content-Type': 'application/json', Accept: 'text/event-stream' });
+  if (apiKey) headers['X-Provider-Key'] = apiKey;
+  // Long enough to hold the ask and a whole marketing meeting about it; the
+  // name tells the brief reader which turns were the team talking.
+  const conversation = chat.messages
+    .filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+    .slice(-30)
+    .map((m) => ({ role: m.role, content: m.content, ...(m.personaId && m.personaName ? { name: m.personaName } : {}) }));
+
+  const controller = new AbortController();
+  activeChatAbort = controller;
+  activeChatUserStopped = false;
+  setGeneratingUi(true);
+  const startedAt = Date.now();
+  let status = 'Starting the campaign engine…';
+  const paint = () => setTypingActive(true, `${status} · ${Math.floor((Date.now() - startedAt) / 1000)}s`);
+  paint();
+  const tick = setInterval(paint, 1000);
+
+  const push = (msg) => {
+    chat.messages.push({ ts: Date.now(), ...msg });
+    renderMessages({ scroll: 'bottom' });
+  };
+
+  try {
+    const res = await fetch('/api/campaign', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ messages: conversation, provider, model, apiKey: apiKey || undefined, paidPassword: loadPaidPassword() || undefined }),
+      signal: controller.signal,
+    });
+    if (!res.ok || !res.body) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finished = false;
+    while (!finished) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split('\n\n');
+      buffer = blocks.pop() || '';
+      for (const block of blocks) {
+        const line = block.split('\n').find((l) => l.startsWith('data:'));
+        if (!line) continue;
+        let ev;
+        try { ev = JSON.parse(line.slice(5)); } catch { continue; }
+        if (ev.type === 'status' && ev.message) {
+          status = ev.message;
+          paint();
+        } else if (ev.type === 'error') {
+          throw new Error(ev.error || 'Campaign failed');
+        } else if (ev.type === 'done') {
+          const r = ev.result;
+          const markdown = campaignMarkdown(r);
+          push({
+            role: 'assistant',
+            content: markdown,
+            personaName: 'Campaign',
+            model: ev.model,
+            provider: ev.provider,
+            campaign: r.status === 'approved'
+              ? { markdown, posts: r.adaptations, failures: r.failures }
+              : undefined,
+          });
+          if (r.status === 'approved' && !ev.hookMemory) {
+            push({ role: 'info', content: 'Hook memory is off (hub not configured), so ⭐ Worked can’t save winners yet.' });
+          }
+          finished = true;
+        }
+      }
+    }
+    if (!finished) throw new Error('The campaign engine stopped before finishing. Try again, or pick a faster model.');
+  } catch (err) {
+    if (!activeChatUserStopped) {
+      push({ role: 'error', content: `Campaign failed: ${err.message || err}` });
+    }
+  } finally {
+    clearInterval(tick);
+    activeChatAbort = null;
+    setGeneratingUi(false);
+    activeChatUserStopped = false;
+    setTypingActive(false);
+    els.input?.focus();
+    chat.updatedAt = Date.now();
+    saveState();
+    void window.hub?.syncChat?.(chat);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Agency mode: a normal (solo) chat, routed through the Orchestrated
+// group-chat engine with the selected persona pinned as lead. Reuses
+// runOneRound/callGroupStream exactly as sendGroupMessage does — the only
+// difference is this chat never becomes chat.kind === 'group' and only ever
+// runs one round per message, matching how a normal chat feels (send,
+// get a reply, send again) rather than group chat's multi-round table.
+// ---------------------------------------------------------------------------
+async function sendAgencyMessage(chat, displayText) {
+  chat.groupMode = 'orchestrated';
+  chat.personaIds = personas.map((p) => p.id);
+  chat.forcedLeadId = state.activePersonaId;
+  if (!chat.topic) {
+    chat.topic = (chat.name && chat.name !== 'New chat' && chat.name !== 'Untitled')
+      ? chat.name
+      : displayText.slice(0, 60);
+  }
+
+  setGeneratingUi(true);
+  activeChatUserStopped = false;
+  const startedAt = Date.now();
+  const updateStatusClock = (base) => {
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    setTypingActive(true, `${base} · ${secs}s`);
+  };
+  setTypingActive(true, 'Bringing in the team…');
+  const tickTimer = setInterval(() => {
+    const cur = els.typingStatus?.textContent || 'Waiting…';
+    updateStatusClock(cur.replace(/\s·\s\d+s$/, ''));
+  }, 1000);
+
+  try {
+    await runOneRound(chat, updateStatusClock, startedAt, [null]);
+  } finally {
+    clearInterval(tickTimer);
+    setGeneratingUi(false);
+    activeChatUserStopped = false;
+    setTypingActive(false);
+    els.input?.focus();
+    chat.updatedAt = Date.now();
+    saveState();
+    renderChatList();
+    void window.hub?.syncChat?.(chat);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Export / import / clear
+// ---------------------------------------------------------------------------
+
+/**
+ * Every localStorage key this app writes to, not just chat state — API
+ * keys, role assignments, voice/persona prefs, favorites, the paid unlock
+ * and the group-chat draft. Nothing here lives anywhere but this browser,
+ * so this file is the only backup that exists.
+ */
+function backupStorageKeys() {
+  return [
+    STORAGE_KEY,
+    KEYS_STORAGE,
+    ROLES_STORAGE,
+    PAID_PASS_STORAGE,
+    PACKAGES_STORAGE,
+    FAVORITE_MODELS_STORAGE,
+    AGENCY_MODE_PREF_KEY,
+    SPEAK_PREF_KEY,
+    VOICE_PREF_KEY,
+    PERSONA_VOICES_KEY,
+    PERSONA_MODELS_KEY,
+    GROUP_DRAFT_KEY,
+    // Code Space (/agent): sessions with their files, coding teams, persona.
+    'agent_sessions_v2',
+    'agent_sessions_active_v2',
+    'workspace_coding_team_v1',
+    'workspace_saved_teams_v1',
+    'workspace_orchestrator_v1',
+  ];
+}
+
+function exportData() {
+  const keys = {};
+  for (const key of backupStorageKeys()) {
+    const raw = localStorage.getItem(key);
+    if (raw !== null) keys[key] = raw;
+  }
+  const blob = new Blob(
+    [JSON.stringify({ backupVersion: 2, keys }, null, 2)],
+    { type: 'application/json' },
+  );
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `uncensored-chat-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+async function importData(file) {
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+
+    // Pre-v2 export: the bare `state` object, nothing else. Restore it the
+    // same way it always worked rather than breaking old backup files.
+    if (!parsed || typeof parsed !== 'object' || parsed.backupVersion !== 2 || !parsed.keys) {
+      Object.assign(state, migrate(parsed));
+      saveState();
+      await renderAll();
+      alert('Import complete.');
+      return;
+    }
+
+    if (!confirm(
+      'This will overwrite chats, projects, API keys, role assignments, ' +
+      'voice/favorite prefs and the paid unlock on this browser. Continue?',
+    )) return;
+
+    for (const [key, value] of Object.entries(parsed.keys)) {
+      try { localStorage.setItem(key, value); } catch { /* skip a single bad key */ }
+    }
+
+    // Everything else above is only read back into memory on page load —
+    // a reload is simpler and safer than re-syncing a dozen module-level
+    // variables by hand.
+    alert('Import complete. Reloading to apply it…');
+    location.reload();
+  } catch (err) {
+    alert('Import failed: ' + (err.message || err));
+  }
+}
+
+/** Wipe chat history only. Personas (server-side), provider keys, voice prefs, and UI settings stay. */
+function clearChatsOnly() {
+  const n = state.chats.length;
+  if (!n) {
+    alert('No chats to clear.');
+    return;
+  }
+  if (!confirm(`Delete ${n} chat${n === 1 ? '' : 's'} from this browser?\n\nPersonas, API keys, and settings are kept.`)) {
+    return;
+  }
+  state.chats = [];
+  state.activeChatId = null;
+  saveState();
+  renderAll();
+}
+
+/** Nuclear local reset: chats + sidebar/provider prefs in STORAGE_KEY. Personas stay on the server. */
+function clearAll() {
+  if (!confirm('Reset local chats and settings on this browser?\n\nPersonas stay (they live on the server). API keys & voice prefs in other storage keys are not removed — clear site data for a full wipe.')) {
+    return;
+  }
+  localStorage.removeItem(STORAGE_KEY);
+  Object.assign(state, freshState());
+  renderAll();
+}
+
+// ---------------------------------------------------------------------------
+// Renderers wiring
+// ---------------------------------------------------------------------------
+
+async function renderAll() {
+  ensureActiveChat();
+  bindChatScrollGuard();
+  applySidebarState();
+  renderChatList();
+  renderChatTitle();
+  renderPersonaSelect();
+  if (!state.activeRole) state.activeRole = 'plan';
+  if (els.roleSelect) els.roleSelect.value = state.activeRole;
+  els.providerSelect.value = state.activeProvider;
+  await Promise.all([renderModelSelect(), fetchPersonas()]);
+  renderMessages({ scroll: chatStickToBottom ? 'bottom' : 'none' });
+  renderArtifacts();
+  renderAttachPreview();
+  const chat = activeChat();
+  syncAgencyModeBtn();
+  if (els.input) {
+    els.input.placeholder = chat?.kind === 'group'
+      ? 'Address the table…'
+      : 'Plan or ask… (code builds in Code Space)';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Event wiring
+// ---------------------------------------------------------------------------
+
+els.inputForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = els.input.value.trim();
+  if (chatBusy) {
+    // Typed something while a reply or group discussion is running: keep
+    // the text and keep the run going. Stopping is the Stop / ✋ buttons
+    // or Esc — not a send that happens to land mid-run.
+    if (text) {
+      setTypingActive(true, 'Still working — your message is kept. Tap Stop to cancel.');
+      return;
+    }
+    stopActiveChat('Stopped by user');
+    setTypingActive(true, 'Stopping…');
+    return;
+  }
+  if (!text && pendingUploads.length === 0) return;
+  els.input.value = '';
+  els.input.style.height = 'auto';
+  sendMessage(text);
+});
+
+els.stopBtn?.addEventListener('click', () => {
+  stopActiveChat('Stopped by user');
+  setTypingActive(true, 'Stopping…');
+});
+
+els.input.addEventListener('input', () => {
+  els.input.style.height = 'auto';
+  els.input.style.height = Math.min(els.input.scrollHeight, 200) + 'px';
+  clearSmartReplyChips();
+});
+els.input.addEventListener('keydown', (e) => {
+  // Esc always stops generation + speech.
+  if (e.key === 'Escape') {
+    if (chatBusy || activeAudio) {
+      e.preventDefault();
+      stopActiveChat('Stopped by user');
+      setTypingActive(true, 'Stopping…');
+    }
+  }
+  // Enter is a newline; Ctrl+Enter (Cmd+Enter on a Mac) sends, same as the Send button.
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+    e.preventDefault();
+    if (!chatBusy && els.input.value.trim()) document.getElementById('inputForm')?.requestSubmit();
+  }
+});
+
+function handleNewChat() {
+  abortCompareRun();
+  createChat();
+  if (isMobileViewport()) {
+    state.chatsCollapsed = true;
+    saveState();
+  }
+  renderAll()
+    .then(() => introducePersona(activeChat(), 'new'))
+    .catch((err) => console.error(err));
+  els.input.focus();
+}
+els.newChatBtn.addEventListener('click', handleNewChat);
+els.newChatTopBtn.addEventListener('click', handleNewChat);
+
+els.newProjectBtn?.addEventListener('click', () => {
+  const name = (prompt('New project name:') || '').trim();
+  if (!name) return;
+  createProject(name);
+  saveState();
+  renderChatList();
+});
+
+els.toggleChats.addEventListener('click', () => {
+  state.chatsCollapsed = !effectiveChatsCollapsed();
+  state.chatsCollapsedExplicit = true;
+  saveState();
+  applySidebarState();
+});
+
+if (typeof window !== 'undefined' && window.matchMedia) {
+  const mql = window.matchMedia(MOBILE_QUERY);
+  const onChange = () => {
+    if (!state.chatsCollapsedExplicit) applySidebarState();
+  };
+  if (mql.addEventListener) mql.addEventListener('change', onChange);
+  else if (mql.addListener) mql.addListener(onChange);
+}
+// Mobile: #toggleArtifacts cycles closed/half/full via click vs double-click
+// (desktop keeps the plain toggle — see the isMobileViewport() branch below).
+//   closed  -> single: half   | double: full
+//   half    -> single: closed | double: full
+//   full    -> single: half   | double: closed
+const ARTIFACTS_SINGLE_CLICK_TARGET = { closed: 'half', half: 'closed', full: 'half' };
+const ARTIFACTS_DOUBLE_CLICK_TARGET = { closed: 'full', half: 'full', full: 'closed' };
+const ARTIFACTS_DBLCLICK_MS = 300;
+let artifactsClickTimer = null;
+
+function artifactsMobileState() {
+  if (state.artifactsCollapsed) return 'closed';
+  return state.artifactsHalfScreen ? 'half' : 'full';
+}
+function setArtifactsMobileState(next) {
+  state.artifactsCollapsed = next === 'closed';
+  if (next !== 'closed') state.artifactsHalfScreen = next === 'half';
+  saveState();
+  applySidebarState();
+}
+
+els.toggleArtifacts.addEventListener('click', () => {
+  if (!isMobileViewport()) {
+    state.artifactsCollapsed = !state.artifactsCollapsed;
+    saveState();
+    applySidebarState();
+    return;
+  }
+  if (artifactsClickTimer) {
+    // Second click landed inside the window — treat the pair as a double-click.
+    clearTimeout(artifactsClickTimer);
+    artifactsClickTimer = null;
+    setArtifactsMobileState(ARTIFACTS_DOUBLE_CLICK_TARGET[artifactsMobileState()]);
+    return;
+  }
+  // Wait briefly to see if a second click follows before committing to single-click.
+  artifactsClickTimer = setTimeout(() => {
+    artifactsClickTimer = null;
+    setArtifactsMobileState(ARTIFACTS_SINGLE_CLICK_TARGET[artifactsMobileState()]);
+  }, ARTIFACTS_DBLCLICK_MS);
+});
+els.closeArtifacts.addEventListener('click', closeArtifactsSidebar);
+els.closeChats.addEventListener('click', closeChatsSidebar);
+els.backdrop.addEventListener('click', closeAllSidebars);
+
+els.chatTitle.addEventListener('blur', () => {
+  const chat = activeChat();
+  if (!chat) return;
+  const text = els.chatTitle.textContent.trim() || 'Untitled';
+  chat.name = text;
+  chat.updatedAt = Date.now();
+  saveState();
+  renderChatList();
+});
+els.chatTitle.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); els.chatTitle.blur(); }
+});
+
+els.providerSelect?.addEventListener('change', async () => {
+  state.activeProvider = els.providerSelect.value;
+  state.activeModel = defaultChatModel(state.activeProvider) || state.activeModel;
+  if (state.activeRole && roleModels[state.activeRole]) {
+    roleModels[state.activeRole] = {
+      provider: state.activeProvider,
+      model: state.activeModel,
+    };
+    saveRoleModels(roleModels);
+  }
+  saveState();
+  await renderModelSelect();
+  saveState();
+});
+els.modelSelect?.addEventListener('change', () => {
+  // Prefer picker; keep hidden select as a sync fallback.
+  if (!els.modelSelect.value) return;
+  state.activeModel = els.modelSelect.value;
+  const chat = activeChat();
+  if (chat) { chat.model = state.activeModel; chat.provider = state.activeProvider; }
+  if (state.activeRole && roleModels[state.activeRole]) {
+    roleModels[state.activeRole] = {
+      provider: state.activeProvider,
+      model: state.activeModel,
+    };
+    saveRoleModels(roleModels);
+  }
+  saveState();
+  updateModelPickerLabel();
+});
+
+els.modelPickerBtn?.addEventListener('click', () => {
+  if (els.modelPickerModal?.classList.contains('hidden')) openModelPicker();
+  else closeModelPicker();
+});
+els.closeModelPicker?.addEventListener('click', closeModelPicker);
+els.modelPickerModal?.addEventListener('click', (e) => {
+  if (e.target === els.modelPickerModal) closeModelPicker();
+});
+els.modelSearchInput?.addEventListener('input', () => renderModelPickerList());
+// Settings used to open as an accordion squeezed between the search bar and
+// the model list, inside a sheet that's already height-capped — the more
+// filter sections got added, the less room was left to actually see any
+// models. Settings now takes the full sheet while open (list hidden, not
+// shrunk) instead of fighting the list for space.
+els.modelFilterBtn?.addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  initModelFilterChips();
+  const opening = els.modelFilterPanel?.classList.contains('hidden');
+  els.modelFilterPanel?.classList.toggle('hidden', !opening);
+  els.modelPickerList?.classList.toggle('hidden', opening);
+  els.modelPickerStatus?.classList.toggle('hidden', opening);
+});
+els.modelFilterDone?.addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  els.modelFilterPanel?.classList.add('hidden');
+  els.modelPickerList?.classList.remove('hidden');
+  els.modelPickerStatus?.classList.remove('hidden');
+});
+els.modelFilterClear?.addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  clearModelFilters();
+});
+els.modelShowAllToggle?.addEventListener('change', () => {
+  modelPackagePrefs.showAll = !!els.modelShowAllToggle.checked;
+  // Access only exists in show-all mode, so a leftover selection would keep
+  // filtering the packaged view invisibly.
+  if (!modelPackagePrefs.showAll) modelPickerFilters.access = null;
+  saveModelPackagePrefs(modelPackagePrefs);
+  syncFilterChipUI();
+  renderModelPickerList();
+  void renderSidebarModelList();
+});
+els.modelHideReasoningToggle?.addEventListener('change', () => {
+  hideReasoningModels = !!els.modelHideReasoningToggle.checked;
+  saveHideReasoningModels();
+  renderModelPickerList();
+  void renderSidebarModelList();
+});
+els.modelFilterPanel?.addEventListener('click', (e) => {
+  // Keep clicks inside the filter popup from closing anything else.
+  e.stopPropagation();
+});
+els.modelUnlockBtn?.addEventListener('click', openUnlockPaidModal);
+els.unlockPaidBtn?.addEventListener('click', () => {
+  if (paidUnlocked()) {
+    // Toggle lock off
+    savePaidPassword('');
+    updateModelPickerLabel();
+    renderModelSelect();
+    if (els.modelPickerModal && !els.modelPickerModal.classList.contains('hidden')) {
+      renderModelPickerList();
+    }
+    return;
+  }
+  openUnlockPaidModal();
+});
+els.closeUnlockPaid?.addEventListener('click', closeUnlockPaidModal);
+els.unlockPaidModal?.addEventListener('click', (e) => {
+  if (e.target === els.unlockPaidModal) closeUnlockPaidModal();
+});
+els.unlockPaidForm?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const password = (els.unlockPaidInput?.value || '').trim();
+  if (!password) return;
+  if (els.unlockPaidError) {
+    els.unlockPaidError.classList.add('hidden');
+    els.unlockPaidError.textContent = '';
+  }
+  try {
+    const res = await fetch('/api/unlock-paid', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Paid-Password': password,
+      },
+      body: JSON.stringify({ password, paidPassword: password }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (els.unlockPaidError) {
+        els.unlockPaidError.textContent = data.error || 'Wrong password.';
+        els.unlockPaidError.classList.remove('hidden');
+      }
+      return;
+    }
+    savePaidPassword(password);
+    closeUnlockPaidModal();
+    updateModelPickerLabel();
+    await renderModelSelect();
+    if (els.modelPickerModal && !els.modelPickerModal.classList.contains('hidden')) {
+      renderModelPickerList();
+    }
+  } catch (err) {
+    if (els.unlockPaidError) {
+      els.unlockPaidError.textContent = err.message || 'Network error';
+      els.unlockPaidError.classList.remove('hidden');
+    }
+  }
+});
+els.personaSelect?.addEventListener('change', () => {
+  pickPersona(els.personaSelect.value);
+});
+
+if (els.roleSelect) {
+  els.roleSelect.addEventListener('change', async () => {
+    await applyRole(els.roleSelect.value);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Per-persona neural voices + Persona · Voice sheet
+// ---------------------------------------------------------------------------
+
+const SPEAK_PREF_KEY = 'uncensored_speak_replies_v1';
+const VOICE_PREF_KEY = 'uncensored_tts_voice_v1'; // legacy single-voice fallback
+const PERSONA_VOICES_KEY = 'uncensored_persona_voices_v2';
+const PERSONA_MODELS_KEY = 'uncensored_persona_models_v1';
+const DEFAULT_NEURAL_VOICE = 'en-US-AvaNeural';
+
+const FEMALE_VOICES = [
+  'en-US-AvaNeural',
+  'en-US-EmmaMultilingualNeural',
+  'en-US-JennyNeural',
+  'en-GB-SoniaNeural',
+  'en-AU-NatashaNeural',
+];
+const MALE_VOICES = [
+  'en-US-AndrewNeural',
+  'en-US-BrianMultilingualNeural',
+  'en-US-GuyNeural',
+  'en-GB-RyanNeural',
+  'en-AU-WilliamNeural',
+];
+const FEMALE_VOICE_SET = new Set(FEMALE_VOICES);
+const MALE_VOICE_SET = new Set(MALE_VOICES);
+
+const FEMALE_NAME_RE = /\b(ava|emma|jenny|sonia|natasha|sarah|sara|emily|olivia|sophia|sofia|isabella|mia|charlotte|amelia|harper|evelyn|abigail|elizabeth|ella|scarlett|grace|chloe|victoria|aria|lily|nora|zoe|zoey|penelope|aurora|willow|lucy|anna|anne|mary|jane|kate|katie|laura|lisa|michelle|nicole|rachel|rebecca|samantha|stephanie|susan|tina|wendy|yvonne|amy|bella|carmen|diana|elena|fiona|gina|hanna|helen|iris|julia|kara|lena|luna|maya|nina|rosa|ruby|stella|vera|woman|girl|lady|queen|she|her|hers|femme)\b/i;
+const MALE_NAME_RE = /\b(andrew|brian|guy|ryan|william|will|james|john|michael|david|chris|christopher|daniel|matthew|matt|joseph|joe|thomas|tom|charles|mark|paul|steven|kevin|jason|eric|keith|roger|nexus|robert|bob|richard|alex|samson|marcus|victor|hugo|leo|max|noah|owen|peter|quentin|sean|tyler|vincent|wade|xavier|zane|man|boy|king|lord|dude|he|him|his)\b/i;
+
+const DEFAULT_PERSONA_VOICES = {
+  nexus: 'en-US-AndrewNeural',
+  plain: 'en-US-AvaNeural',
+};
+
+function loadPersonaVoices() {
+  try {
+    const raw = localStorage.getItem(PERSONA_VOICES_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return { ...DEFAULT_PERSONA_VOICES, ...(parsed && typeof parsed === 'object' ? parsed : {}) };
+  } catch {
+    return { ...DEFAULT_PERSONA_VOICES };
+  }
+}
+
+function savePersonaVoices(map) {
+  try { localStorage.setItem(PERSONA_VOICES_KEY, JSON.stringify(map)); } catch { /* ignore */ }
+}
+
+function guessPersonaGender(persona) {
+  const blob = `${persona?.name || ''} ${persona?.description || ''}`;
+  const f = FEMALE_NAME_RE.test(blob);
+  const m = MALE_NAME_RE.test(blob);
+  if (f && !m) return 'f';
+  if (m && !f) return 'm';
+  const first = String(persona?.name || '').trim().split(/\s+/)[0] || '';
+  if (/a$|elle$|ette$|ine$|ynn$/i.test(first) && !/ny$|by$|ty$|nexus$/i.test(first)) return 'f';
+  return 'm';
+}
+
+function pickVoiceForGender(gender, used) {
+  const pool = gender === 'f' ? FEMALE_VOICES : MALE_VOICES;
+  return pool.find((v) => !used.has(v)) || pool[used.size % pool.length] || pool[0];
+}
+
+/** Assign distinct gender-matched voices to every persona that lacks one. */
+function ensurePersonaVoices(list) {
+  const personasList = Array.isArray(list) ? list : personas;
+  if (!personasList.length) return;
+  const used = new Set();
+  let changed = false;
+  // Keep existing correct-gender assignments first.
+  for (const p of personasList) {
+    const current = personaVoices[p.id];
+    const gender = guessPersonaGender(p);
+    const ok = current && (
+      (gender === 'f' && FEMALE_VOICE_SET.has(current)) ||
+      (gender === 'm' && MALE_VOICE_SET.has(current))
+    );
+    if (ok) used.add(current);
+  }
+  for (const p of personasList) {
+    const gender = guessPersonaGender(p);
+    const current = personaVoices[p.id];
+    const ok = current && (
+      (gender === 'f' && FEMALE_VOICE_SET.has(current)) ||
+      (gender === 'm' && MALE_VOICE_SET.has(current))
+    );
+    if (ok) continue;
+    const pick = pickVoiceForGender(gender, used);
+    personaVoices[p.id] = pick;
+    used.add(pick);
+    changed = true;
+  }
+  if (changed) savePersonaVoices(personaVoices);
+}
+
+function loadPersonaModels() {
+  try {
+    const raw = localStorage.getItem(PERSONA_MODELS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePersonaModels(map) {
+  try { localStorage.setItem(PERSONA_MODELS_KEY, JSON.stringify(map)); } catch { /* ignore */ }
+}
+
+let personaVoices = loadPersonaVoices();
+let personaModels = loadPersonaModels();
+
+function isVeniceUncensoredAssignment(assigned) {
+  return (
+    assigned &&
+    assigned.provider === 'venice' &&
+    typeof assigned.model === 'string' &&
+    VENICE_UNCENSORED_SET.has(assigned.model) &&
+    veniceModelIsLive(assigned.model)
+  );
+}
+
+function pickVeniceUncensoredModel(used) {
+  const live = VENICE_UNCENSORED_CHEAP_FIRST.filter(veniceModelIsLive);
+  const pool = live.length ? live : VENICE_UNCENSORED_CHEAP_FIRST;
+  const free = pool.find((id) => !used.has(id));
+  if (free) return free;
+  // More personas than curated models — reuse cheapest first.
+  const i = used.size % pool.length;
+  return pool[i];
+}
+
+/**
+ * Every group persona gets a distinct Venice uncensored model (cheaper ones
+ * first). Rewrites non-Venice / non-uncensored leftovers from when the global
+ * default drifted to OpenRouter free coders.
+ */
+function ensurePersonaModels(list) {
+  const personasList = Array.isArray(list) ? list : personas;
+  if (!personasList.length) return;
+
+  const next = { ...personaModels };
+  const used = new Set();
+  let changed = false;
+
+  // Pass 1: keep existing Venice-uncensored picks that are still unique.
+  for (const p of personasList) {
+    const current = next[p.id];
+    if (isVeniceUncensoredAssignment(current) && !used.has(current.model)) {
+      used.add(current.model);
+    } else if (current) {
+      delete next[p.id];
+      changed = true;
+    }
+  }
+
+  // Pass 2: fill gaps with the next cheapest unused Venice uncensored model.
+  for (const p of personasList) {
+    if (isVeniceUncensoredAssignment(next[p.id])) continue;
+    const pick = pickVeniceUncensoredModel(used);
+    next[p.id] = { provider: 'venice', model: pick };
+    used.add(pick);
+    changed = true;
+  }
+
+  if (changed) {
+    personaModels = next;
+    savePersonaModels(personaModels);
+  }
+}
+
+function voiceForPersona(personaId) {
+  const id = personaId || state.activePersonaId || 'nexus';
+  if (personaVoices[id]) return personaVoices[id];
+  const persona = personas.find((p) => p.id === id) || { id, name: id };
+  const gender = guessPersonaGender(persona);
+  const used = new Set(Object.values(personaVoices));
+  const pick = pickVoiceForGender(gender, used);
+  setVoiceForPersona(id, pick);
+  return pick;
+}
+
+function setVoiceForPersona(personaId, voice) {
+  const id = personaId || state.activePersonaId;
+  if (!id || !voice) return;
+  personaVoices = { ...personaVoices, [id]: voice };
+  savePersonaVoices(personaVoices);
+  try { localStorage.setItem(VOICE_PREF_KEY, voice); } catch { /* ignore */ }
+}
+
+function modelForPersona(personaId) {
+  const id = personaId || state.activePersonaId || 'nexus';
+  const assigned = personaModels[id];
+  if (isVeniceUncensoredAssignment(assigned)) return assigned;
+  // Never fall back to the global OpenRouter free coder — group table stays Venice.
+  const used = new Set(
+    Object.values(personaModels)
+      .filter((a) => isVeniceUncensoredAssignment(a))
+      .map((a) => a.model),
+  );
+  const model = pickVeniceUncensoredModel(used);
+  const next = { provider: 'venice', model };
+  personaModels = { ...personaModels, [id]: next };
+  savePersonaModels(personaModels);
+  return next;
+}
+
+function setModelForPersona(personaId, provider, model) {
+  const id = personaId || state.activePersonaId;
+  if (!id || !provider || !model) return;
+  personaModels = { ...personaModels, [id]: { provider, model } };
+  savePersonaModels(personaModels);
+}
+
+function syncVoiceSelectToPersona() {
+  const v = voiceForPersona(state.activePersonaId);
+  if (els.voiceSelect) els.voiceSelect.value = v;
+  if (els.toneVoiceSelect) els.toneVoiceSelect.value = v;
+}
+
+async function applyRole(roleId) {
+  state.activeRole = roleId || 'plan';
+  if (els.roleSelect) els.roleSelect.value = state.activeRole;
+  if (els.toneRoleSelect) els.toneRoleSelect.value = state.activeRole;
+  const assigned = roleModels[state.activeRole];
+  if (assigned) {
+    state.activeProvider = assigned.provider;
+    state.activeModel = assigned.model;
+    if (els.providerSelect) els.providerSelect.value = state.activeProvider;
+  }
+  saveState();
+  await renderModelSelect();
+}
+
+function applyPersona(personaId) {
+  state.activePersonaId = personaId || personas[0]?.id || 'nexus';
+  if (els.personaSelect) els.personaSelect.value = state.activePersonaId;
+  if (els.tonePersonaSelect) els.tonePersonaSelect.value = state.activePersonaId;
+  const chat = activeChat();
+  if (chat) chat.personaId = state.activePersonaId;
+  syncVoiceSelectToPersona();
+  renderPersonaDescription();
+  renderPersonaChip();
+  saveState();
+}
+
+// ---------------------------------------------------------------------------
+// Menu sheet + persona cards
+//
+// The topbar dropdown became a bottom sheet: on a phone the top-right corner
+// is the hardest place to reach, and personas were buried a modal deep inside
+// it. Persona identity now lives in the topbar permanently, and switching is
+// one tap on a card instead of a <select>.
+// ---------------------------------------------------------------------------
+
+const sheetEls = {
+  sheet: document.getElementById('appSheet'),
+  scrim: document.getElementById('sheetScrim'),
+  grid: document.getElementById('personaGrid'),
+  chip: document.getElementById('personaChip'),
+  chipAvatar: document.getElementById('chipAvatar'),
+  chipName: document.getElementById('chipName'),
+  chipMeta: document.getElementById('chipMeta'),
+  modelSub: document.getElementById('sheetModelSub'),
+};
+
+/** Stable hue per persona id, so a persona keeps its colour across reloads. */
+function personaHue(id) {
+  // Restricted to warm bands (copper through amber through rust) so every
+  // persona reads as brass hardware, not a screen-glow neon.
+  const BANDS = [18, 32, 45, 8, 355, 38, 25];
+  let h = 0;
+  const str = String(id || '');
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 997;
+  return BANDS[h % BANDS.length];
+}
+
+function personaInitials(name) {
+  return (
+    String(name || '')
+      .replace(/[^A-Za-z ]/g, '')
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => w[0])
+      .join('')
+      .toUpperCase() || '?'
+  );
+}
+
+function closeAppMenu() {
+  sheetEls.sheet?.classList.remove('open');
+  sheetEls.scrim?.classList.remove('open');
+  els.menuBtn?.setAttribute('aria-expanded', 'false');
+  sheetEls.chip?.setAttribute('aria-expanded', 'false');
+}
+
+function openAppMenu() {
+  renderPersonaCards();
+  if (sheetEls.modelSub) {
+    sheetEls.modelSub.textContent =
+      `${state.activeProvider || ''} · ${state.activeModel || ''}`.trim();
+  }
+  sheetEls.sheet?.classList.add('open');
+  sheetEls.scrim?.classList.add('open');
+  els.menuBtn?.setAttribute('aria-expanded', 'true');
+}
+
+function toggleAppMenu() {
+  if (sheetEls.sheet?.classList.contains('open')) closeAppMenu();
+  else openAppMenu();
+}
+
+/** Paints the topbar chip and retunes the app's identity hue. */
+function renderPersonaChip() {
+  const p = activePersona();
+  if (!p) return;
+  document.documentElement.style.setProperty('--id-h', String(personaHue(p.id)));
+  if (sheetEls.chipAvatar) sheetEls.chipAvatar.textContent = personaInitials(p.name);
+  if (sheetEls.chipName) sheetEls.chipName.textContent = p.name || 'Persona';
+  if (sheetEls.chipMeta) {
+    sheetEls.chipMeta.textContent =
+      `${state.activeModel || ''} · ${state.activeRole || ''}`.trim();
+  }
+}
+
+/**
+ * Renders persona cards into every grid that shows them — the menu sheet's
+ * grid and the left sidebar's Persona accordion — so there's one source of
+ * truth for the card markup and both stay in sync automatically.
+ */
+function renderPersonaCards() {
+  const grids = [sheetEls.grid, els.sidebarPersonaGrid].filter(Boolean);
+  if (!grids.length) return;
+  for (const grid of grids) {
+    grid.innerHTML = '';
+    for (const p of personas) {
+      const hue = personaHue(p.id);
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'persona-card' + (p.id === state.activePersonaId ? ' active' : '');
+      card.style.setProperty('--pc-h', String(hue));
+      card.style.setProperty('--pc', `hsl(${hue} 78% 68%)`);
+      card.style.setProperty('--pc-soft', `hsl(${hue} 78% 68% / .12)`);
+      card.style.setProperty('--pc-line', `hsl(${hue} 78% 68% / .45)`);
+
+      const av = document.createElement('span');
+      av.className = 'persona-avatar';
+      av.textContent = personaInitials(p.name);
+
+      const nm = document.createElement('span');
+      nm.className = 'pc-name';
+      nm.textContent = p.name;
+      if (p.id === state.activePersonaId) {
+        const dot = document.createElement('span');
+        dot.className = 'pc-dot';
+        dot.textContent = '●';
+        nm.appendChild(dot);
+      }
+
+      const ds = document.createElement('span');
+      ds.className = 'pc-desc';
+      ds.textContent = p.description || 'No description yet.';
+
+      card.append(av, nm, ds);
+      card.addEventListener('click', () => {
+        pickPersona(p.id);
+        renderPersonaChip();
+        renderPersonaCards();
+        setTimeout(closeAppMenu, 160);
+      });
+
+      // Voice picker: sidebar only — this is the Settings surface. The menu
+      // sheet stays a quick persona-switcher, not a place to also configure
+      // things, so it doesn't get this control. A <select> can't be nested
+      // inside the card <button> itself (invalid HTML — buttons can't
+      // contain other interactive controls), so it's a sibling in a wrapper.
+      if (grid === els.sidebarPersonaGrid && els.voiceSelect) {
+        const wrap = document.createElement('div');
+        wrap.className = 'persona-card-wrap';
+        wrap.appendChild(card);
+
+        const voiceSelect = els.voiceSelect.cloneNode(true);
+        voiceSelect.removeAttribute('id');
+        voiceSelect.className = 'pc-voice-select';
+        voiceSelect.removeAttribute('aria-hidden');
+        voiceSelect.removeAttribute('tabindex');
+        voiceSelect.value = voiceForPersona(p.id);
+        voiceSelect.addEventListener('click', (e) => e.stopPropagation());
+        voiceSelect.addEventListener('change', (e) => {
+          e.stopPropagation();
+          setVoiceForPersona(p.id, voiceSelect.value);
+        });
+        wrap.appendChild(voiceSelect);
+
+        grid.appendChild(wrap);
+      } else {
+        grid.appendChild(card);
+      }
+    }
+  }
+  renderSidebarSummaries();
+}
+
+/** Keeps the left sidebar's Persona/LLM accordion headers showing the current pick. */
+function renderSidebarSummaries() {
+  if (els.sidebarPersonaSummary) {
+    const p = activePersona();
+    els.sidebarPersonaSummary.textContent = p?.name || '';
+  }
+  if (els.sidebarModelSummary) {
+    els.sidebarModelSummary.textContent = state.activeModel || '';
+  }
+}
+
+els.menuBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleAppMenu();
+});
+sheetEls.chip?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleAppMenu();
+});
+sheetEls.scrim?.addEventListener('click', closeAppMenu);
+sheetEls.sheet?.addEventListener('click', (e) => {
+  if (e.target.closest('.module-card') || e.target.closest('.sheet-foot')) closeAppMenu();
+});
+
+// Sheet duplicates of controls that also live in the topbar.
+document.getElementById('modelPickerBtn2')?.addEventListener('click', () => {
+  closeAppMenu();
+  els.modelPickerBtn?.click();
+});
+document.getElementById('keysBtn2')?.addEventListener('click', () => {
+  closeAppMenu();
+  els.keysBtn?.click();
+});
+document.getElementById('unlockPaidBtn2')?.addEventListener('click', () => {
+  closeAppMenu();
+  els.unlockPaidBtn?.click();
+});
+
+function openToneModal() {
+  if (!els.toneModal) return;
+  closeAppMenu();
+  if (els.toneRoleSelect) els.toneRoleSelect.value = state.activeRole || 'plan';
+  renderPersonaSelect();
+  syncVoiceSelectToPersona();
+  renderPersonaDescription();
+  els.toneModal.classList.remove('hidden');
+}
+
+function closeToneModal() {
+  els.toneModal?.classList.add('hidden');
+}
+
+els.toneBtn?.addEventListener('click', openToneModal);
+els.closeToneModal?.addEventListener('click', closeToneModal);
+els.saveToneBtn?.addEventListener('click', closeToneModal);
+els.toneModal?.addEventListener('click', (e) => {
+  if (e.target === els.toneModal) closeToneModal();
+});
+
+els.toneRoleSelect?.addEventListener('change', () => {
+  void applyRole(els.toneRoleSelect.value);
+});
+els.tonePersonaSelect?.addEventListener('change', () => {
+  pickPersona(els.tonePersonaSelect.value);
+  renderPersonaDescription();
+});
+els.toneVoiceSelect?.addEventListener('change', () => {
+  setVoiceForPersona(state.activePersonaId, els.toneVoiceSelect.value);
+  syncVoiceSelectToPersona();
+});
+els.voiceSelect?.addEventListener('change', () => {
+  setVoiceForPersona(state.activePersonaId, els.voiceSelect.value);
+  syncVoiceSelectToPersona();
+});
+
+els.previewVoiceBtn?.addEventListener('click', async () => {
+  const voice = els.toneVoiceSelect?.value || voiceForPersona(state.activePersonaId);
+  const personaName = personas.find(p => p.id === state.activePersonaId)?.name || 'this persona';
+  try {
+    const blob = await fetchNeuralAudio(
+      `Hi — I'm ${personaName}. This is how I sound.`,
+      voice,
+    );
+    await playBlob(blob);
+  } catch (err) {
+    alert('Preview failed: ' + (err.message || err));
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Neural spoken replies (Edge TTS via /api/tts) + Code Space handoff
+// ---------------------------------------------------------------------------
+
+let speakReplies = false;
+try { speakReplies = localStorage.getItem(SPEAK_PREF_KEY) === '1'; } catch { /* ignore */ }
+
+let ttsUnlocked = false;
+let activeAudio = null;
+let speakQueue = Promise.resolve();
+let speakGeneration = 0;
+/** Count of speakReply() chunk-loops currently mid-flight — lets other code
+ * (voice chat's hold-and-send) know whether the assistant is still talking. */
+let activeSpeechCount = 0;
+function isSpeaking() { return activeSpeechCount > 0; }
+
+/** Tiny silent MP3 (no network) — unlocks HTMLAudioElement playback in a user gesture. */
+const SILENT_MP3_DATA_URI =
+  'data:audio/mpeg;base64,SUQzBAAAAAABEFRYWFgAAAAtAAADY29tbWVudABCaWdTb3VuZEJhbmsuY29tIC8gTGFTb25vdGhlcXVlLm9yZwBURU5DAAAAHQAAA1N3aXRjaCBQbHVzIMKpIE5DSCBTb2Z0d2FyZQBUSVQyAAAABgAAAzIyMzUAVFNTRQAAAA8AAANMYXZmNTguMTMuMTAwAAAAAAAAAAAAAAD/80DEAAAAA0gAAAAATEFN//8AAAAA//tQxAAACwAAAAAAAAAABAAAAAAAAAD/80DEAAAAA0gAAAAATEFN//8AAAAA//tQxAAACwAAAAAAAAAABAAAAAAAAAA=';
+
+function syncSpeakBtn() {
+  if (!els.speakBtn) return;
+  els.speakBtn.classList.toggle('speak-on', speakReplies);
+  els.speakBtn.setAttribute('aria-pressed', speakReplies ? 'true' : 'false');
+  els.speakBtn.title = speakReplies
+    ? 'Auto-speak on — full replies play automatically. Tap to turn off (Read aloud still works).'
+    : 'Tap to auto-speak full replies. Read aloud still works when this is off.';
+}
+syncSpeakBtn();
+
+function cleanForSpeech(text) {
+  return String(text || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\[Uploaded (file|image):[^\]]*\]/gi, ' ')
+    .replace(/[#*_`>+]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Split text into speakable chunks. The FIRST chunk is kept short (~one or two
+ * sentences) so audio starts in a second or two instead of waiting for the
+ * whole reply to synthesize; later chunks are larger and prefetched while the
+ * previous one plays. No cap — the entire reply is still spoken.
+ */
+function chunkSpeech(text, max = 700, firstMax = 220) {
+  const clean = cleanForSpeech(text);
+  if (!clean) return [];
+  const parts = [];
+  let rest = clean;
+  let limit = Math.min(firstMax, max);
+  while (rest.length > limit) {
+    let cut = Math.max(rest.lastIndexOf('. ', limit), rest.lastIndexOf('? ', limit), rest.lastIndexOf('! ', limit));
+    if (cut < limit * 0.3) cut = rest.lastIndexOf(', ', limit);
+    if (cut < limit * 0.3) cut = rest.lastIndexOf(' ', limit);
+    if (cut < limit * 0.3) cut = limit;
+    parts.push(rest.slice(0, cut + 1).trim());
+    rest = rest.slice(cut + 1).trim();
+    limit = max;
+  }
+  if (rest) parts.push(rest);
+  return parts;
+}
+
+function stopNeuralSpeech() {
+  speakGeneration += 1;
+  try {
+    if (activeAudio) {
+      activeAudio.pause();
+      activeAudio.src = '';
+      activeAudio = null;
+    }
+  } catch { /* ignore */ }
+  try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
+}
+
+async function fetchNeuralAudio(text, voice, timeoutMs = 18000, engine) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice, engine }),
+      signal: ctrl.signal,
+    });
+  } catch (err) {
+    throw new Error(err?.name === 'AbortError' ? 'TTS timed out' : (err?.message || 'TTS network error'));
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) {
+    let msg = `TTS HTTP ${res.status}`;
+    try {
+      const data = await res.json();
+      if (data?.error) msg = data.error;
+    } catch { /* ignore */ }
+    throw new Error(msg);
+  }
+  return res.blob();
+}
+
+function playBlob(blob, { interrupt = true } = {}) {
+  return new Promise((resolve, reject) => {
+    if (interrupt) {
+      try {
+        if (activeAudio) {
+          activeAudio.pause();
+          activeAudio.src = '';
+          activeAudio = null;
+        }
+      } catch { /* ignore */ }
+      try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
+    }
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    activeAudio = audio;
+    audio.onended = () => {
+      URL.revokeObjectURL(url);
+      if (activeAudio === audio) activeAudio = null;
+      resolve();
+    };
+    audio.onerror = () => {
+      URL.revokeObjectURL(url);
+      if (activeAudio === audio) activeAudio = null;
+      reject(new Error('Audio playback failed'));
+    };
+    const p = audio.play();
+    if (p && typeof p.catch === 'function') {
+      p.catch((err) => {
+        URL.revokeObjectURL(url);
+        reject(err);
+      });
+    }
+  });
+}
+
+/** Fallback robotic browser voice — only if neural TTS fails. Speaks full text in chunks. */
+function speakBrowserFallback(text) {
+  if (!window.speechSynthesis) return;
+  try {
+    window.speechSynthesis.cancel();
+    const chunks = chunkSpeech(text, 1100);
+    const voices = window.speechSynthesis.getVoices?.() || [];
+    const en = voices.find(v => /en[-_]/i.test(v.lang) && /enhanced|premium|neural|samantha|google/i.test(v.name))
+      || voices.find(v => /en[-_]/i.test(v.lang));
+    for (const chunk of chunks) {
+      const u = new SpeechSynthesisUtterance(chunk);
+      u.rate = 1.02;
+      if (en) u.voice = en;
+      window.speechSynthesis.speak(u);
+    }
+  } catch (err) {
+    console.warn('browser TTS fallback failed', err);
+  }
+}
+
+/** Latest assistant turn(s) to auto-speak when enabling 🔊. */
+function lastSpeakableTurns() {
+  const chat = activeChat();
+  if (!chat) return [];
+  const msgs = chat.messages || [];
+  if (chat.kind === 'group') {
+    let lastUser = -1;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'user') { lastUser = i; break; }
+    }
+    const slice = lastUser >= 0 ? msgs.slice(lastUser + 1) : msgs;
+    return slice.filter((m) => m.role === 'assistant' && cleanForSpeech(m.content));
+  }
+  const last = [...msgs].reverse().find((m) => m.role === 'assistant' && cleanForSpeech(m.content));
+  return last ? [last] : [];
+}
+
+async function speakReply(text, { force = false, personaId = null } = {}) {
+  if (!force && !speakReplies) return;
+  const chunks = chunkSpeech(text, 190, 140);
+  if (!chunks.length) return;
+
+  const voice = voiceForPersona(personaId || state.activePersonaId);
+
+  if (force) {
+    // Cut any in-progress audio and start this reply immediately.
+    try {
+      if (activeAudio) {
+        activeAudio.pause();
+        activeAudio.src = '';
+        activeAudio = null;
+      }
+    } catch { /* ignore */ }
+    try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
+    speakGeneration += 1;
+    speakQueue = Promise.resolve();
+  }
+
+  const gen = speakGeneration;
+  speakQueue = speakQueue.then(async () => {
+    if (gen !== speakGeneration) return;
+    activeSpeechCount += 1;
+    syncInterruptBtn();
+    let spoken = 0;
+    try {
+      // Kick off the next chunk's synthesis while the current one plays,
+      // instead of fetching them one at a time — dead air between chunks
+      // was otherwise as long as a full TTS network round-trip, every time.
+      let nextBlobPromise = fetchNeuralAudio(chunks[0], voice);
+      for (; spoken < chunks.length; spoken++) {
+        const i = spoken;
+        if (gen !== speakGeneration) return;
+        const blob = await nextBlobPromise;
+        if (gen !== speakGeneration) return;
+        nextBlobPromise = i + 1 < chunks.length ? fetchNeuralAudio(chunks[i + 1], voice) : null;
+        if (nextBlobPromise) nextBlobPromise.catch(() => {}); // surfaced when awaited next loop
+        await playBlob(blob, { interrupt: i === 0 });
+      }
+      ttsUnlocked = true;
+    } catch (err) {
+      console.warn('Neural TTS failed, falling back:', err);
+      // Speak only what hasn't played yet, with the browser voice.
+      if (gen === speakGeneration) speakBrowserFallback(chunks.slice(spoken).join(' '));
+    } finally {
+      activeSpeechCount -= 1;
+      syncInterruptBtn();
+    }
+  }).catch(() => { /* queue continues */ });
+
+  return speakQueue;
+}
+
+/** Must run inside a user gesture on iPhone so later Audio.play() is allowed. */
+async function unlockTts() {
+  ttsUnlocked = true;
+  try {
+    const audio = new Audio(SILENT_MP3_DATA_URI);
+    audio.volume = 0.001;
+    await audio.play().catch(() => {});
+    audio.pause();
+    return true;
+  } catch {
+    try {
+      if (window.speechSynthesis) {
+        const u = new SpeechSynthesisUtterance(' ');
+        u.volume = 0;
+        window.speechSynthesis.speak(u);
+      }
+    } catch { /* ignore */ }
+    return true;
+  }
+}
+
+/**
+ * Build an MP3 of a group session: each persona turn in their voice,
+ * with a short name cue between speakers. MPEG streams are concatenated.
+ */
+async function downloadGroupSessionMp3(chat, btn, opts = {}) {
+  const turns = (chat.messages || []).filter(
+    (m) => m.role === 'assistant' && cleanForSpeech(m.content),
+  );
+  if (!turns.length) {
+    alert('No spoken replies in this group session yet.');
+    return;
+  }
+
+  const originalText = btn?.textContent;
+  const updateBtn = (t) => { if (btn) btn.textContent = t; };
+  if (btn) btn.disabled = true;
+  updateBtn('Building MP3…');
+
+  /** Fetch audio with up to `retries` retries on failure. Returns Blob or null. */
+  async function fetchWithRetry(text, voice, retries = 2) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await fetchNeuralAudio(text, voice, 30000, 'edge');
+      } catch (err) {
+        if (attempt < retries) {
+          // Brief back-off before retry
+          await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+        } else {
+          console.warn(`TTS chunk failed after ${retries + 1} attempts:`, err.message);
+          return null; // Skip this chunk rather than aborting the whole MP3
+        }
+      }
+    }
+    return null;
+  }
+
+  try {
+    const parts = [];
+    let skipped = 0;
+    let totalChunks = 0;
+
+    for (let i = 0; i < turns.length; i++) {
+      const turn = turns[i];
+      const name = turn.personaName || turn.personaId || 'Speaker';
+      const voice = voiceForPersona(turn.personaId);
+      updateBtn(`MP3 ${i + 1}/${turns.length} — ${name}`);
+
+      // Name cue (best-effort; skip silently if it fails)
+      const cueBlob = await fetchWithRetry(`${name}.`, voice, 1);
+      if (cueBlob) parts.push(cueBlob);
+
+      // Content chunks — each is retried and skipped on persistent failure
+      const chunks = chunkSpeech(turn.content);
+      totalChunks += chunks.length;
+      for (const chunk of chunks) {
+        const blob = await fetchWithRetry(chunk, voice, 2);
+        if (blob) {
+          parts.push(blob);
+        } else {
+          skipped++;
+        }
+      }
+    }
+
+    if (!parts.length) {
+      throw new Error(
+        'No audio could be synthesized — the TTS service may be temporarily unavailable. ' +
+        'Try again in a moment, or check that your Vercel deployment has a healthy /api/tts route.',
+      );
+    }
+
+    const combined = new Blob(parts, { type: 'audio/mpeg' });
+    const url = URL.createObjectURL(combined);
+    const link = document.createElement('a');
+    const base = opts.useKeywords
+      ? topicKeywords(chat.topic || chat.name || 'group')
+      : (chat.name || 'group').replace(/[^\w\-]+/g, '_').slice(0, 60) || 'group';
+    link.href = url;
+    link.download = `${base}-${new Date(chat.updatedAt || Date.now()).toISOString().slice(0, 10)}.mp3`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    if (skipped > 0) {
+      console.warn(`MP3 complete — ${skipped}/${totalChunks} chunk(s) skipped due to TTS errors.`);
+    }
+  } catch (err) {
+    alert('Could not save MP3:\n\n' + (err.message || String(err)));
+  } finally {
+    if (btn) btn.disabled = false;
+    updateBtn(originalText || 'Save MP3');
+  }
+}
+
+els.speakBtn?.addEventListener('click', async () => {
+  const turningOn = !speakReplies;
+  speakReplies = turningOn;
+  try { localStorage.setItem(SPEAK_PREF_KEY, speakReplies ? '1' : '0'); } catch { /* ignore */ }
+
+  if (!speakReplies) {
+    handsFree = false;
+    if (listening) stopListening();
+    stopNeuralSpeech();
+    syncSpeakBtn();
+    return;
+  }
+
+  syncSpeakBtn();
+  // Unlock in this tap, then immediately speak the latest full reply/round.
+  await unlockTts();
+  const turns = lastSpeakableTurns();
+  if (turns.length) {
+    for (const t of turns) {
+      void speakReply(t.content, { force: t === turns[0], personaId: t.personaId });
+    }
+    return;
+  }
+  try {
+    const personaName = personas.find(p => p.id === state.activePersonaId)?.name || 'your persona';
+    const blob = await fetchNeuralAudio(
+      `Spoken replies are on. I'll speak full replies as ${personaName}.`,
+      voiceForPersona(state.activePersonaId),
+    );
+    ttsUnlocked = true;
+    await playBlob(blob);
+  } catch (err) {
+    console.warn(err);
+    speakBrowserFallback('Spoken replies are on. Read aloud is always available.');
+  }
+});
+
+els.speakBtn?.addEventListener('dblclick', () => {
+  const turns = lastSpeakableTurns();
+  if (!turns.length) return;
+  void unlockTts();
+  for (const t of turns) {
+    void speakReply(t.content, { force: t === turns[0], personaId: t.personaId });
+  }
+});
+
+let recognition = null;
+let listening = false;
+
+function getSpeechRecognition() {
+  const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
+  return Ctor ? new Ctor() : null;
+}
+
+function stopListening() {
+  listening = false;
+  els.micBtn?.classList.remove('listening');
+  try { recognition?.stop(); } catch { /* ignore */ }
+}
+
+/** Bare acknowledgments/backchannel words ("yeah", "mhm", "ok"...) — heard
+ * while the assistant is mid-reply, these aren't a real response and should
+ * be discarded rather than treated as a barge-in. Matched against the whole
+ * utterance, not as a substring, so "yeah that's right, add a button" still
+ * goes through as substantive. */
+const FILLER_UTTERANCES = new Set([
+  'yeah', 'yep', 'yup', 'ya', 'yes', 'no', 'nope', 'nah',
+  'ok', 'okay', 'k', 'kk', 'sure', 'right', 'mhm', 'mm', 'mmhm', 'mm-hmm',
+  'uh huh', 'uh-huh', 'hmm', 'hm', 'huh', 'got it', 'i see', 'cool', 'nice',
+  'great', 'alright', 'all right', 'thanks', 'thank you', 'fine', 'good',
+]);
+const FILLER_PROFANITY_RE = /^(damn|shit|fuck|jesus|christ|god)$/;
+
+function isFillerUtterance(text) {
+  const t = String(text || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[.!?,]+$/g, '')
+    .replace(/\s+/g, ' ');
+  if (!t) return true;
+  if (FILLER_UTTERANCES.has(t)) return true;
+  if (FILLER_PROFANITY_RE.test(t)) return true;
+  return false;
+}
+
+/** Hands-free voice chat: with 🔊 on, tapping the mic runs listen → send → speak → listen
+ * until the mic is tapped again (or 🔊 is turned off). */
+let handsFree = false;
+
+function rearmMic() {
+  if (!handsFree || !speakReplies || listening) return;
+  setTimeout(() => {
+    if (handsFree && speakReplies && !listening) startListening();
+  }, 400);
+}
+
+els.micBtn?.addEventListener('click', () => {
+  if (listening || handsFree) {
+    handsFree = false;
+    stopListening();
+    setTypingActive(false);
+    return;
+  }
+  handsFree = speakReplies;
+  startListening();
+});
+
+function startListening() {
+  // Pressing mic only starts listening — it must never cut off whatever the
+  // assistant is currently saying or generating. Explicit interruption is
+  // now the dedicated #interruptBtn's job.
+
+  const rec = getSpeechRecognition();
+  if (!rec) {
+    handsFree = false;
+    alert('Voice input needs a browser with Speech Recognition (Chrome or Safari on a real device).');
+    return;
+  }
+  recognition = rec;
+  rec.continuous = false;
+  rec.interimResults = true;
+  rec.lang = navigator.language || 'en-US';
+  let finalText = '';
+  rec.onstart = () => {
+    listening = true;
+    els.micBtn?.classList.add('listening');
+    clearSmartReplyChips();
+  };
+  rec.onerror = (e) => {
+    const code = e?.error;
+    if (code === 'not-allowed' || code === 'service-not-allowed') {
+      handsFree = false;
+      alert('Microphone access is blocked. Allow the mic for this site and try again.');
+    }
+    stopListening();
+    if (code === 'no-speech' || code === 'aborted' || code === 'network') rearmMic();
+  };
+  rec.onend = () => {
+    listening = false;
+    els.micBtn?.classList.remove('listening');
+    const said = finalText.trim();
+    if (!said) { setTypingActive(false); rearmMic(); return; }
+
+    // Dictation mode: 🔊 off → just put the recognized text in the box,
+    // verbatim, same as before.
+    if (!speakReplies) {
+      setTypingActive(false);
+      els.input.value = (els.input.value ? els.input.value + ' ' : '') + said;
+      els.input.dispatchEvent(new Event('input'));
+      els.input.focus();
+      return;
+    }
+
+    // Voice chat mode: a bare acknowledgment isn't a real reply — drop it
+    // silently instead of sending or holding it.
+    if (isFillerUtterance(said)) {
+      setTypingActive(false);
+      rearmMic();
+      return;
+    }
+
+    // Never interrupt by voice — if the assistant is still generating (or
+    // mid multi-round auto-continue) and/or still speaking, hold this
+    // utterance and auto-send it once both are fully done.
+    if (chatBusy || isSpeaking()) {
+      setTypingActive(true, 'Got it — sending once the reply finishes…');
+      waitForChatIdle().then(() => speakQueue).then(async () => {
+        setTypingActive(false);
+        try { await sendMessage(said); } finally { afterVoiceTurn(); }
+      });
+      return;
+    }
+
+    setTypingActive(false);
+    els.input.value = '';
+    els.input.style.height = 'auto';
+    void Promise.resolve(sendMessage(said)).finally(afterVoiceTurn);
+  };
+  rec.onresult = (event) => {
+    let interim = '';
+    finalText = '';
+    for (let i = 0; i < event.results.length; i++) {
+      const r = event.results[i];
+      if (r.isFinal) finalText += r[0].transcript;
+      else interim += r[0].transcript;
+    }
+    if (interim && els.typingStatus) {
+      setTypingActive(true, `Listening… ${interim}`);
+    }
+  };
+  try {
+    setTypingActive(true, speakReplies ? 'Voice chat — listening…' : 'Listening…');
+    rec.start();
+  } catch (err) {
+    handsFree = false;
+    stopListening();
+    setTypingActive(false);
+    alert('Could not start mic: ' + (err.message || err));
+  }
+}
+
+/** Reply finished generating → wait for it to finish speaking → listen again. */
+function afterVoiceTurn() {
+  if (!handsFree) return;
+  Promise.resolve(speakQueue).then(() => waitForChatIdle()).then(() => Promise.resolve(speakQueue)).then(rearmMic);
+}
+
+// The only explicit way to cut the assistant off — stops active generation
+// (if any) and any playing/queued speech, immediately.
+els.interruptBtn?.addEventListener('click', () => {
+  if (chatBusy) stopActiveChat('Stopped by user');
+  try { stopNeuralSpeech(); } catch { /* ignore */ }
+  setTypingActive(false);
+  syncInterruptBtn();
+});
+
+const WORKSPACE_HANDOFF_KEY = 'chat_to_workspace_v1';
+const TEAM_HANDOFF_KEY = 'chat_to_team_v1';
+
+/** The user telling the persona they are ready for the build: "I'm ready", "build it", "take it to the Code Space". */
+const READY_TO_BUILD_RE = new RegExp([
+  // "I'm ready", "ready to build", "ready for the code space" — anywhere in a short message
+  "\\b(i['’]?m|i am|we['’]?re|we are|im)\\s+ready\\b",
+  "\\bready\\s+(to|for)\\s+(build|the\\s+(code|work)\\s?space|(code|work)\\s?space)\\b",
+  // bare commands only: the message must END with them ("build it", "let's build", "go build it")
+  "\\b(let['’]?s|lets|go|time to|please|ok(ay)?|now)[,\\s]+(build|start building)(\\s+(it|this|that))?(\\s+now)?\\s*[.!]*\\s*$",
+  "^\\W*(ok(ay)?[,\\s]+)?(please\\s+)?build\\s+(it|this|that)(\\s+now)?\\s*[.!]*\\s*$",
+].join('|'), 'i');
+
+/**
+ * Asking to go to the Code Space itself ("open the code space", "take me there", "can we go to the
+ * workspace") — the old name still works. Whole short messages only, so "open code space settings" or a
+ * description that happens to mention it does not count.
+ */
+const ASK_FOR_CODE_SPACE_RE = new RegExp([
+  "^\\W*(ok(ay)?[,\\s]+|please[,\\s]+|hey[,\\s]+)*",
+  "((can|could|would|will)\\s+(you|we)\\s+(please\\s+)?)?",
+  "(i\\s+(want|wanna|need|would like|['’]d like)\\s+to\\s+)?",
+  "(let['’]?s\\s+)?",
+  "(open|go\\s+to|goto|take\\s+(me|us)\\s+to|bring\\s+(me|us)\\s+to|get\\s+(me|us)\\s+to|send\\s+(me|us)\\s+to|switch\\s+to|jump\\s+to|head\\s+(over\\s+)?to|move\\s+(over\\s+)?to|use)\\s+",
+  "(the\\s+)?(code|work)\\s?space",
+  "(\\s+(please|now|pls|thanks|thank\\s+you))*\\s*[.!?]*\\s*$",
+].join(''), 'i');
+
+function userSaysReadyToBuild(text) {
+  const t = String(text || '').trim();
+  // A long message is a description, not a go-ahead; only short, direct ones count.
+  return t.length > 0 && t.length <= 200 && READY_TO_BUILD_RE.test(t);
+}
+
+function userAsksForCodeSpace(text) {
+  const t = String(text || '').trim();
+  return t.length > 0 && t.length <= 120 && (ASK_FOR_CODE_SPACE_RE.test(t) || /^\W*(code|work)\s?space\W*$/i.test(t));
+}
+
+function openInWorkspace(opts = {}) {
+  const chat = ensureActiveChat();
+  const messages = (chat.messages || [])
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    // At a group table, who said it matters: the builder's persona reads "Dez: …", not an anonymous voice.
+    .map((m) => ({ role: m.role, content: m.role === 'assistant' && m.personaName && chat.kind === 'group' ? `${m.personaName}: ${m.content}` : m.content }));
+  // Sent from one specific reply: that reply is what to build, said plainly as the last thing in the chat.
+  if (opts.focus) {
+    messages.push({ role: 'user', content: `Build this${opts.focusWho ? ` (${opts.focusWho}'s reply)` : ''}:\n\n${String(opts.focus).slice(0, 6000)}` });
+  }
+  const payload = {
+    v: 1,
+    chatId: chat.id,
+    title: chat.name || 'Untitled',
+    provider: state.activeProvider,
+    model: state.activeModel,
+    role: state.activeRole === 'plan' ? 'write' : state.activeRole,
+    // The persona you were talking to stays your voice in Code Space — it
+    // orchestrates the coder instead of you prompting the coder directly.
+    personaId: state.activePersonaId,
+    messages,
+    // Ready to build: the Code Space's orchestrator starts the brief on arrival.
+    autoBrief: opts.autoBrief === true,
+    createdAt: Date.now(),
+  };
+  try {
+    sessionStorage.setItem(WORKSPACE_HANDOFF_KEY, JSON.stringify(payload));
+  } catch (err) {
+    alert('Could not hand off chat (storage full?). Try a shorter chat.');
+    return;
+  }
+  window.location.href = '/agent';
+}
+
+els.workspaceBtn?.addEventListener('click', () => openInWorkspace());
+
+/** Fill a model <select> with ONLY models for one provider. Never mixes catalogs. */
+async function fillModelSelect(selectEl, provider, selectedModel) {
+  if (!selectEl) return;
+  selectEl.innerHTML = '';
+  selectEl.dataset.provider = provider || '';
+
+  if (!provider) {
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = 'Select a provider first';
+    selectEl.appendChild(empty);
+    selectEl.disabled = true;
+    return;
+  }
+
+  selectEl.disabled = true;
+  const loading = document.createElement('option');
+  loading.value = '';
+  loading.textContent = 'Loading models…';
+  selectEl.appendChild(loading);
+
+  const models = await loadProviderModels(provider);
+  // Guard against a slower request finishing after the user switched providers
+  if (selectEl.dataset.provider !== provider) return;
+
+  selectEl.innerHTML = '';
+  const sorted = sortModelsForProvider(provider, models);
+  if (!sorted.length) {
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = 'No models for this provider';
+    selectEl.appendChild(empty);
+    selectEl.disabled = true;
+    return;
+  }
+
+  const showId = provider === 'openrouter';
+  for (const m of sorted) selectEl.appendChild(makeModelOption(m, { showId }));
+  selectEl.disabled = false;
+  const values = Array.from(selectEl.options).map((o) => o.value);
+  const pick = values.includes(selectedModel)
+    ? selectedModel
+    : (defaultChatModel(provider) || values[0] || '');
+  if (pick) selectEl.value = pick;
+}
+
+// Assigned task per persona for the group chat currently being set up —
+// transient, reset each time the setup screen opens (this creates a new
+// chat; it doesn't edit an existing one's roster).
+let groupPersonaTasks = {};
+
+async function renderGroupPersonaModels() {
+  const host = els.groupPersonaModels;
+  if (!host) return;
+  host.innerHTML = '';
+  groupPersonaTasks = {};
+  if (!personas.length) {
+    host.textContent = 'No personas loaded yet.';
+    return;
+  }
+
+  ensurePersonaModels(personas);
+
+  const list = document.createElement('div');
+  list.className = 'group-persona-scroll';
+  host.appendChild(list);
+
+  for (const p of personas) {
+    const row = document.createElement('div');
+    row.className = 'group-persona-row';
+    row.dataset.personaId = p.id;
+
+    const include = document.createElement('input');
+    include.type = 'checkbox';
+    include.className = 'group-persona-include';
+    include.checked = true;
+    include.title = 'Include this persona in the group';
+    row.appendChild(include);
+
+    const name = document.createElement('div');
+    name.className = 'group-persona-name';
+    name.textContent = p.name;
+    if (p.isModerator || p.is_moderator) {
+      const badge = document.createElement('span');
+      badge.className = 'mod-badge';
+      badge.textContent = '★ Moderator';
+      badge.title = 'Closes the discussion and writes the final decision';
+      name.appendChild(badge);
+    }
+    row.appendChild(name);
+
+    const assigned = modelForPersona(p.id);
+
+    const provLabel = document.createElement('label');
+    provLabel.className = 'group-persona-field';
+    provLabel.textContent = 'Provider';
+    const provSelect = document.createElement('select');
+    provSelect.className = 'group-persona-provider';
+    const provPlaceholder = document.createElement('option');
+    provPlaceholder.value = '';
+    provPlaceholder.textContent = 'Select provider…';
+    provSelect.appendChild(provPlaceholder);
+    for (const id of PROVIDER_IDS) {
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = PROVIDER_LABELS[id] || id;
+      provSelect.appendChild(opt);
+    }
+    const initialProvider = PROVIDER_IDS.includes(assigned.provider)
+      ? assigned.provider
+      : 'venice';
+    provSelect.value = initialProvider;
+    provLabel.appendChild(provSelect);
+    row.appendChild(provLabel);
+
+    const modelLabel = document.createElement('label');
+    modelLabel.className = 'group-persona-field';
+    modelLabel.textContent = 'Model';
+    const modelSelect = document.createElement('select');
+    modelSelect.className = 'group-persona-model';
+    modelLabel.appendChild(modelSelect);
+    row.appendChild(modelLabel);
+
+    const persist = () => {
+      if (provSelect.value && modelSelect.value) {
+        setModelForPersona(p.id, provSelect.value, modelSelect.value);
+      }
+    };
+
+    const syncIncludeState = () => {
+      row.classList.toggle('group-persona-excluded', !include.checked);
+      provSelect.disabled = !include.checked;
+      modelSelect.disabled = !include.checked || !provSelect.value;
+    };
+    include.addEventListener('change', syncIncludeState);
+    syncIncludeState();
+
+    provSelect.addEventListener('change', async () => {
+      modelSelect.innerHTML = '';
+      modelSelect.disabled = true;
+      if (!provSelect.value) {
+        const empty = document.createElement('option');
+        empty.value = '';
+        empty.textContent = 'Select a provider first';
+        modelSelect.appendChild(empty);
+        return;
+      }
+      await fillModelSelect(modelSelect, provSelect.value, DEFAULT_MODELS[provSelect.value] || '');
+      persist();
+    });
+    modelSelect.addEventListener('change', persist);
+
+    list.appendChild(row);
+
+    const taskRow = document.createElement('div');
+    taskRow.className = 'group-persona-task-row';
+    taskRow.dataset.personaId = p.id;
+    const taskInput = document.createElement('input');
+    taskInput.type = 'text';
+    taskInput.className = 'group-persona-task';
+    taskInput.placeholder = 'Assigned task (optional) — e.g. "check current pricing"';
+    taskInput.value = groupPersonaTasks[p.id] || '';
+    taskInput.addEventListener('input', () => {
+      groupPersonaTasks[p.id] = taskInput.value;
+    });
+    taskRow.appendChild(taskInput);
+    list.appendChild(taskRow);
+
+    if (provSelect.value) {
+      await fillModelSelect(modelSelect, provSelect.value, assigned.model || DEFAULT_MODELS[provSelect.value] || '');
+      persist();
+    } else {
+      modelSelect.innerHTML = '';
+      modelSelect.disabled = true;
+      const empty = document.createElement('option');
+      empty.value = '';
+      empty.textContent = 'Select a provider first';
+      modelSelect.appendChild(empty);
+    }
+  }
+}
+
+function collectGroupPersonaModelsFromForm() {
+  const host = els.groupPersonaModels;
+  const out = { ...personaModels };
+  if (!host) return out;
+  host.querySelectorAll('.group-persona-row').forEach((row) => {
+    const id = row.dataset.personaId;
+    const provider = row.querySelector('.group-persona-provider')?.value;
+    const model = row.querySelector('.group-persona-model')?.value;
+    if (id && provider && model) {
+      out[id] = { provider, model };
+      setModelForPersona(id, provider, model);
+    }
+  });
+  return out;
+}
+
+/** Which personas are checked in the group setup screen — the actual roster for this chat. */
+function collectSelectedPersonaIdsFromForm() {
+  const host = els.groupPersonaModels;
+  if (!host) return personas.map((p) => p.id);
+  const ids = [];
+  host.querySelectorAll('.group-persona-row').forEach((row) => {
+    const id = row.dataset.personaId;
+    const checked = row.querySelector('.group-persona-include')?.checked;
+    if (id && checked) ids.push(id);
+  });
+  return ids;
+}
+
+// ---------------------------------------------------------------------------
+// Group setup draft — survive accidental close / miss-taps so a long opening
+// prompt is never wiped just because Start was hard to hit.
+// ---------------------------------------------------------------------------
+const GROUP_DRAFT_KEY = 'uncensored_group_draft_v1';
+function defaultGroupDraft() {
+  return { topic: '', mode: 'brainstorm', rounds: 3 };
+}
+function readGroupDraft() {
+  try {
+    const raw = localStorage.getItem(GROUP_DRAFT_KEY);
+    if (!raw) return defaultGroupDraft();
+    const parsed = JSON.parse(raw);
+    return {
+      topic: typeof parsed.topic === 'string' ? parsed.topic : '',
+      mode: ['boardroom', 'brainstorm', 'freechat', 'orchestrated'].includes(parsed.mode) ? parsed.mode : 'brainstorm',
+      rounds: Math.min(20, Math.max(1, parseInt(parsed.rounds, 10) || 3)),
+    };
+  } catch {
+    return defaultGroupDraft();
+  }
+}
+function writeGroupDraft(draft) {
+  try {
+    localStorage.setItem(GROUP_DRAFT_KEY, JSON.stringify(draft));
+  } catch { /* ignore quota */ }
+}
+function captureGroupDraft() {
+  const modeEl = document.querySelector('input[name="groupMode"]:checked');
+  const draft = {
+    topic: els.groupTopicInput?.value || '',
+    mode: modeEl?.value || 'brainstorm',
+    rounds: parseInt(els.roundsDisplay?.textContent || '3', 10) || 3,
+  };
+  writeGroupDraft(draft);
+  return draft;
+}
+function restoreGroupDraft() {
+  const draft = readGroupDraft();
+  if (els.groupTopicInput) els.groupTopicInput.value = draft.topic;
+  const modeEl = document.querySelector(`input[name="groupMode"][value="${draft.mode}"]`);
+  if (modeEl) modeEl.checked = true;
+  if (els.roundsDisplay) els.roundsDisplay.textContent = String(draft.rounds);
+  if (els.roundsMinus) els.roundsMinus.disabled = draft.rounds <= 1;
+  if (els.roundsPlus) els.roundsPlus.disabled = draft.rounds >= 20;
+}
+function clearGroupDraft() {
+  writeGroupDraft(defaultGroupDraft());
+  if (els.groupTopicInput) els.groupTopicInput.value = '';
+  const brainstorm = document.querySelector('input[name="groupMode"][value="brainstorm"]');
+  if (brainstorm) brainstorm.checked = true;
+  if (els.roundsDisplay) els.roundsDisplay.textContent = '3';
+  if (els.roundsMinus) els.roundsMinus.disabled = false;
+  if (els.roundsPlus) els.roundsPlus.disabled = false;
+}
+
+async function openGroupModal() {
+  if (!els.groupModal) return;
+  els.groupModal.classList.remove('hidden');
+  // Restore draft — never wipe a carefully written opening on reopen.
+  restoreGroupDraft();
+  try {
+    await renderGroupPersonaModels();
+  } catch (err) {
+    console.warn('Could not render persona model assignments:', err);
+  }
+  if (els.groupTopicInput) {
+    setTimeout(() => {
+      els.groupTopicInput.focus();
+      // Put caret at end so returning to a draft feels continuous.
+      const len = els.groupTopicInput.value.length;
+      try { els.groupTopicInput.setSelectionRange(len, len); } catch { /* ignore */ }
+    }, 50);
+  }
+}
+function closeGroupModal() {
+  // Snapshot draft before hiding so accidental dismiss never loses the prompt.
+  captureGroupDraft();
+  els.groupModal?.classList.add('hidden');
+}
+els.groupBtn?.addEventListener('click', () => { void openGroupModal(); });
+els.closeGroupModal?.addEventListener('click', closeGroupModal);
+els.cancelGroupBtn?.addEventListener('click', closeGroupModal);
+// Backdrop taps must NOT dismiss — on mobile the Start control used to sit
+// under the form with only a sliver visible; missing it hit the overlay,
+// closed the modal, wiped the prompt, and dumped you back into normal chat.
+
+// Rounds stepper
+const MIN_ROUNDS = 1;
+const MAX_ROUNDS = 20;
+els.roundsMinus?.addEventListener('click', () => {
+  const cur = parseInt(els.roundsDisplay?.textContent || '3', 10);
+  const next = Math.max(MIN_ROUNDS, cur - 1);
+  if (els.roundsDisplay) els.roundsDisplay.textContent = String(next);
+  if (els.roundsMinus) els.roundsMinus.disabled = next <= MIN_ROUNDS;
+  if (els.roundsPlus)  els.roundsPlus.disabled  = false;
+  captureGroupDraft();
+});
+els.roundsPlus?.addEventListener('click', () => {
+  const cur = parseInt(els.roundsDisplay?.textContent || '3', 10);
+  const next = Math.min(MAX_ROUNDS, cur + 1);
+  if (els.roundsDisplay) els.roundsDisplay.textContent = String(next);
+  if (els.roundsPlus)  els.roundsPlus.disabled  = next >= MAX_ROUNDS;
+  if (els.roundsMinus) els.roundsMinus.disabled = false;
+  captureGroupDraft();
+});
+els.startGroupBtn?.addEventListener('click', async () => {
+  const modeEl = document.querySelector('input[name="groupMode"]:checked');
+  const mode = modeEl?.value || 'brainstorm';
+  const topic = (els.groupTopicInput?.value || '').trim();
+  if (!topic) {
+    alert('Type what you want to say to the table.');
+    els.groupTopicInput?.focus();
+    return;
+  }
+  const rounds = parseInt(els.roundsDisplay?.textContent || '3', 10) || 3;
+  const personaIds = collectSelectedPersonaIdsFromForm();
+  if (personaIds.length < 1) {
+    alert('Check at least one persona for the table.');
+    return;
+  }
+  ensurePersonaVoices(personas);
+  ensurePersonaModels(personas);
+  const assigned = collectGroupPersonaModelsFromForm();
+  const tasks = {};
+  for (const id of personaIds) {
+    const t = (groupPersonaTasks[id] || '').trim();
+    if (t) tasks[id] = t;
+  }
+  createGroupChat(mode, topic, assigned, rounds, personaIds, tasks);
+  // Clear draft and hide without re-capturing the emptied form.
+  clearGroupDraft();
+  els.groupModal?.classList.add('hidden');
+  if (isMobileViewport()) state.chatsCollapsed = true;
+  saveState();
+  await renderAll();
+  if (els.input) els.input.placeholder = 'Address the table…';
+  // Message field IS the start — don't make the user type it twice.
+  chatStickToBottom = true;
+  await sendGroupMessage(topic);
+});
+
+els.groupTopicInput?.addEventListener('input', () => { captureGroupDraft(); });
+els.groupTopicInput?.addEventListener('keydown', (e) => {
+  // Textarea: Ctrl/Cmd+Enter starts. Plain Enter inserts a newline.
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    els.startGroupBtn?.click();
+  }
+});
+document.querySelectorAll('input[name="groupMode"]').forEach((el) => {
+  el.addEventListener('change', () => { captureGroupDraft(); });
+});
+
+function renderAttachPreview() {
+  if (!els.attachPreview) return;
+  if (!pendingUploads.length) {
+    els.attachPreview.classList.add('hidden');
+    els.attachPreview.innerHTML = '';
+    return;
+  }
+  els.attachPreview.classList.remove('hidden');
+  els.attachPreview.innerHTML = '';
+  pendingUploads.forEach((u, i) => {
+    const chip = document.createElement('span');
+    chip.className = 'attach-chip';
+    chip.textContent = `${u.kind === 'image' ? '🖼' : '📄'} ${u.name} `;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = '×';
+    btn.addEventListener('click', () => {
+      pendingUploads.splice(i, 1);
+      renderAttachPreview();
+    });
+    chip.appendChild(btn);
+    els.attachPreview.appendChild(chip);
+  });
+}
+
+/**
+ * Phone screenshots are 3-8MB of PNG, and base64 inflates that by a third —
+ * three of them blow past the serverless body limit and cost a fortune in
+ * image tokens. Shrink to something a vision model reads just as well.
+ */
+const MAX_IMAGE_EDGE = 1568;
+const MAX_IMAGE_BYTES = 1_200_000;
+
+async function downscaleImageFile(file, dataUrl) {
+  // GIFs would lose their animation, and anything already small is fine as-is.
+  if (/gif$/i.test(file.type) || (file.size <= MAX_IMAGE_BYTES && dataUrl.length < 1_600_000)) {
+    return dataUrl;
+  }
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return dataUrl;
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close?.();
+    // 0.9 keeps small UI text readable, which is most of what gets pasted here.
+    const out = canvas.toDataURL('image/jpeg', 0.9);
+    return out.length < dataUrl.length ? out : dataUrl;
+  } catch {
+    return dataUrl;
+  }
+}
+
+// PDF.js and Mammoth load from CDN only when a PDF/docx is actually attached,
+// and only once — the file itself never leaves the browser, only the library.
+let pdfjsModulePromise = null;
+function loadPdfJs() {
+  if (!pdfjsModulePromise) {
+    pdfjsModulePromise = import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/+esm').then((mod) => {
+      mod.GlobalWorkerOptions.workerSrc =
+        'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.worker.min.mjs';
+      return mod;
+    });
+  }
+  return pdfjsModulePromise;
+}
+
+let mammothModulePromise = null;
+function loadMammoth() {
+  if (!mammothModulePromise) {
+    mammothModulePromise = import('https://esm.sh/mammoth@1.8.0');
+  }
+  return mammothModulePromise;
+}
+
+async function extractPdfText(file) {
+  let pdfjs;
+  try {
+    pdfjs = await loadPdfJs();
+  } catch {
+    throw new Error(`Couldn't load the PDF reader (offline or blocked) for ${file.name}`);
+  }
+  const buf = await file.arrayBuffer();
+  const doc = await pdfjs.getDocument({ data: buf }).promise;
+  const maxPages = Math.min(doc.numPages, 200);
+  const pages = [];
+  for (let i = 1; i <= maxPages; i++) {
+    const page = await doc.getPage(i);
+    const content = await page.getTextContent();
+    pages.push(content.items.map((it) => it.str).join(' '));
+  }
+  const text = pages.join('\n\n').trim();
+  if (!text) {
+    throw new Error(`${file.name} has no extractable text — likely a scanned PDF with no text layer`);
+  }
+  return text;
+}
+
+async function extractDocxText(file) {
+  let mammoth;
+  try {
+    mammoth = await loadMammoth();
+  } catch {
+    throw new Error(`Couldn't load the DOCX reader (offline or blocked) for ${file.name}`);
+  }
+  const buf = await file.arrayBuffer();
+  const result = await mammoth.extractRawText({ arrayBuffer: buf });
+  const text = (result?.value || '').trim();
+  if (!text) throw new Error(`${file.name} has no extractable text`);
+  return text;
+}
+
+async function readUploadFile(file) {
+  const isImage = /^image\//.test(file.type) || /\.(png|jpe?g|gif|webp)$/i.test(file.name);
+  if (isImage) {
+    const content = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || ''));
+      r.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+      r.readAsDataURL(file);
+    });
+    return { kind: 'image', name: file.name, content: await downscaleImageFile(file, content) };
+  }
+
+  const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+  if (isPdf) {
+    return { kind: 'text', name: file.name, content: await extractPdfText(file) };
+  }
+
+  const isDocx =
+    file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    /\.docx$/i.test(file.name);
+  if (isDocx) {
+    return { kind: 'text', name: file.name, content: await extractDocxText(file) };
+  }
+
+  // .doc (old binary Word format) has no reliable browser-side text extraction.
+  if (/\.doc$/i.test(file.name)) {
+    throw new Error(`${file.name}: old .doc format isn't supported — save it as .docx or .pdf first`);
+  }
+
+  const content = await new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result || ''));
+    r.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+    r.readAsText(file);
+  });
+  return { kind: 'text', name: file.name, content };
+}
+
+function syncAgencyModeBtn() {
+  if (!els.agencyModeBtn) return;
+  const inGroup = activeChat()?.kind === 'group';
+  const on = agencyModeOn || inGroup;
+  els.agencyModeBtn.classList.toggle('search-on', on);
+  els.agencyModeBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  els.agencyModeBtn.title = inGroup
+    ? 'Group chat — the whole table answers every message. Tap to turn this chat into a solo chat.'
+    : agencyModeOn
+      ? 'Agency mode on — your selected persona leads and can bring in others by name. Tap to turn off.'
+      : 'Bring in the team — route this chat through the full roster, led by your selected persona.';
+}
+syncAgencyModeBtn();
+
+els.agencyModeBtn?.addEventListener('click', () => {
+  const chat = activeChat();
+  if (chat?.kind === 'group') {
+    // Explicit tap while viewing a group chat: make it solo, permanently.
+    // The flag keeps the load-time repair from turning it back into a group.
+    chat.kind = 'chat';
+    chat.groupDowngraded = true;
+    agencyModeOn = false;
+    saveState();
+    renderChatList();
+  } else {
+    agencyModeOn = !agencyModeOn;
+  }
+  try { localStorage.setItem(AGENCY_MODE_PREF_KEY, agencyModeOn ? '1' : '0'); } catch { /* ignore */ }
+  syncAgencyModeBtn();
+});
+
+if (els.attachBtn && els.attachInput) {
+  els.attachBtn.addEventListener('click', () => els.attachInput.click());
+  els.attachInput.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files || []);
+    for (const file of files) {
+      if (file.size > 8_000_000) {
+        alert(`${file.name} is too large (max 8MB)`);
+        continue;
+      }
+      try {
+        pendingUploads.push(await readUploadFile(file));
+      } catch (err) {
+        console.warn(err);
+        alert(err.message || `Couldn't read ${file.name}`);
+      }
+    }
+    renderAttachPreview();
+    e.target.value = '';
+  });
+}
+
+function openKeysModal() {
+  if (!els.keysModal || !els.keysForm) return;
+  els.keysForm.innerHTML = '';
+  for (const id of PROVIDER_IDS) {
+    const label = document.createElement('label');
+    label.textContent = PROVIDER_LABELS[id];
+    const input = document.createElement('input');
+    input.type = 'password';
+    input.autocomplete = 'off';
+    input.placeholder = `${PROVIDER_LABELS[id]} API key`;
+    input.value = providerKeys[id] || '';
+    input.dataset.provider = id;
+    input.addEventListener('change', () => {
+      providerKeys[id] = input.value;
+      saveProviderKeys(providerKeys);
+      // Bust cache so next model fetch uses the new key
+      Object.keys(modelsCache).forEach((k) => {
+        if (k.includes(`:${id}:`)) delete modelsCache[k];
+      });
+      allModelsCatalog = [];
+      allModelsLoading = null;
+    });
+    label.appendChild(input);
+    els.keysForm.appendChild(label);
+  }
+  els.keysModal.classList.remove('hidden');
+}
+function closeKeysModal() {
+  els.keysModal?.classList.add('hidden');
+  // Refresh models in case a key was added
+  renderModelSelect().catch(() => {});
+}
+
+els.keysBtn?.addEventListener('click', openKeysModal);
+els.closeKeysModal?.addEventListener('click', closeKeysModal);
+els.keysModal?.addEventListener('click', (e) => {
+  if (e.target === els.keysModal) closeKeysModal();
+});
+
+els.closeArtifactModal.addEventListener('click', closeArtifactModal);
+els.artifactCopyBtn.addEventListener('click', () => {
+  if (!currentArtifact) return;
+  void copyTextToClipboard(currentArtifact.content).then((ok) =>
+    flashButton(els.artifactCopyBtn, ok ? 'Copied' : 'Copy failed')
+  );
+});
+els.artifactDownloadBtn.addEventListener('click', () => {
+  if (currentArtifact) downloadArtifact(currentArtifact);
+});
+
+els.exportBtn.addEventListener('click', exportData);
+
+// ---- Link a device --------------------------------------------------------
+// Your identity is this browser's owner cookie. A one-time code lets another
+// device become the same owner (its own cookie, same memory, teams and
+// Code Space). Chats are still per device — Export / Import moves those.
+{
+  const $l = (id) => document.getElementById(id);
+  const modal = $l('linkModal');
+  const status = (t) => { $l('linkStatus').textContent = t || ''; };
+  const open = () => { status(''); $l('linkCodeBox').classList.add('hidden'); modal.classList.remove('hidden'); };
+  const close = () => modal.classList.add('hidden');
+  $l('linkDeviceBtn')?.addEventListener('click', open);
+  $l('closeLinkModal')?.addEventListener('click', close);
+  modal?.addEventListener('click', (e) => { if (e.target === modal) close(); });
+
+  $l('linkMakeBtn')?.addEventListener('click', async () => {
+    status('Making a code…');
+    try {
+      const res = await fetch('/api/hub/state?action=link-create', { method: 'POST', credentials: 'include' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.code) throw new Error(data.error || `HTTP ${res.status}`);
+      $l('linkCode').textContent = data.code;
+      $l('linkCodeBox').classList.remove('hidden');
+      status('');
+    } catch (err) {
+      status(`Couldn't make a code: ${err.message || err}`);
+    }
+  });
+
+  $l('linkClaimBtn')?.addEventListener('click', async () => {
+    const code = $l('linkCodeInput').value.trim();
+    if (!code) { status('Enter the code shown on your other device.'); return; }
+    status('Linking…');
+    try {
+      const res = await fetch('/api/hub/state?action=link-claim', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (data.alreadyLinked) { status('This device is already linked to that one.'); return; }
+      // This browser's sync stamps belong to its old identity: start fresh so
+      // the linked device's teams and Code Space come down, and anything only
+      // this browser has goes up to join them.
+      for (const k of ['workspace_settings_sync_v1', 'workspace_sessions_sync_v1']) {
+        try { localStorage.removeItem(k); } catch { /* ignore */ }
+      }
+      status('Linked. Reloading…');
+      setTimeout(() => location.reload(), 600);
+    } catch (err) {
+      status(err.message || String(err));
+    }
+  });
+}
+els.importBtn.addEventListener('click', () => els.importFile.click());
+els.importFile.addEventListener('change', (e) => {
+  const file = e.target.files?.[0];
+  if (file) importData(file);
+  e.target.value = '';
+});
+if (els.clearChatsBtn) els.clearChatsBtn.addEventListener('click', clearChatsOnly);
+els.clearAllBtn.addEventListener('click', clearAll);
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    closeAppMenu();
+    if (!els.artifactModal.classList.contains('hidden')) closeArtifactModal();
+    if (els.unlockPaidModal && !els.unlockPaidModal.classList.contains('hidden')) closeUnlockPaidModal();
+    else if (els.modelPickerModal && !els.modelPickerModal.classList.contains('hidden')) closeModelPicker();
+    if (els.keysModal && !els.keysModal.classList.contains('hidden')) closeKeysModal();
+    if (els.toneModal && !els.toneModal.classList.contains('hidden')) closeToneModal();
+    if (els.groupModal && !els.groupModal.classList.contains('hidden')) closeGroupModal();
+  }
+});
+
+els.personaBlurb?.addEventListener('click', () => {
+  openToneModal();
+});
+
+els.artifactModal.addEventListener('click', (e) => {
+  if (e.target === els.artifactModal) closeArtifactModal();
+});
+
+// Refresh the persona list when this tab regains focus, in case the admin
+// updated it in another tab / on another device.
+window.addEventListener('focus', () => { fetchPersonas(); });
+
+// ---------------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------------
+
+function showBootError(msg) {
+  const el = document.getElementById('bootError');
+  if (!el) return;
+  el.style.display = 'block';
+  el.textContent = 'Boot error: ' + msg + '\n\nTry a hard refresh, or open Chats → Clear chats / Reset settings.';
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard-safe viewport
+// ---------------------------------------------------------------------------
+// iOS Safari does not shrink 100dvh when the on-screen keyboard appears — it
+// scrolls the whole page up to reveal the focused field. That pushed the
+// topbar and the module nav off the top of the screen, so once you tapped the
+// composer the only way to reach Code Space / Group / Media was to dismiss the
+// keyboard first. Sizing #app to visualViewport.height makes the layout
+// shrink instead, so the nav never leaves the screen.
+(function keepViewportSane() {
+  const vv = window.visualViewport;
+  const root = document.documentElement;
+
+  function sync() {
+    const h = vv ? vv.height : window.innerHeight;
+    root.style.setProperty('--app-h', h + 'px');
+    // Undo any scroll Safari applied to the document itself; #app is fixed
+    // height now, so document scroll can only ever be damage.
+    if (window.scrollY !== 0) window.scrollTo(0, 0);
+    document.body.classList.toggle('kb-open', !!vv && vv.height < window.innerHeight - 80);
+  }
+
+  sync();
+  if (vv) {
+    vv.addEventListener('resize', sync);
+    vv.addEventListener('scroll', sync);
+  }
+  window.addEventListener('orientationchange', () => setTimeout(sync, 120));
+  window.addEventListener('resize', sync);
+})();
+
+// "Welcome back" prompt — only when there's something to resume AND it's
+// been a while (2 hours) since this device last had the app open. Not shown
+// on every load; `lastSeenAt` is stamped once the decision is made either way.
+const RESUME_IDLE_MS = 2 * 60 * 60 * 1000;
+
+// Only a chat with real messages in it is worth resuming. An empty "New
+// chat" placeholder was still triggering the prompt, so answering Yes landed
+// you on a blank screen — a dialog that cost a tap and gave nothing back.
+function isResumable(chat) {
+  return !!chat && Array.isArray(chat.messages) && chat.messages.some((m) => m && !m.intro);
+}
+
+function mostRecentChat() {
+  const resumable = state.chats.filter(isResumable);
+  if (!resumable.length) return null;
+  return resumable.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
+}
+
+function maybeShowResumePrompt() {
+  const idleFor = Date.now() - bootLastSeenAt;
+  if (!bootHadChats || idleFor <= RESUME_IDLE_MS) {
+    state.lastSeenAt = Date.now();
+    saveState();
+    return;
+  }
+  const last = mostRecentChat();
+  if (!last) {
+    state.lastSeenAt = Date.now();
+    saveState();
+    return;
+  }
+  // If we're already sitting in the chat we'd be resuming, there is nothing
+  // to ask about — don't spend a tap confirming the status quo.
+  if (state.activeChatId === last.id) {
+    state.lastSeenAt = Date.now();
+    saveState();
+    return;
+  }
+  if (els.resumeModalText) {
+    els.resumeModalText.textContent = `Pick up "${last.name || 'Untitled'}"?`;
+  }
+  els.resumeModal?.classList.remove('hidden');
+}
+
+els.resumeContinueBtn?.addEventListener('click', () => {
+  const last = mostRecentChat();
+  if (last) {
+    state.activeChatId = last.id;
+    // Boot auto-created an empty chat before we got here; leaving it behind
+    // clutters the list and re-arms the same useless prompt next time.
+    state.chats = state.chats.filter(
+      (c) => c.id === last.id || isResumable(c) || c.kind !== 'chat' || c.name !== 'New chat',
+    );
+  }
+  state.lastSeenAt = Date.now();
+  saveState();
+  els.resumeModal?.classList.add('hidden');
+  renderAll().catch((err) => console.error(err));
+});
+
+els.resumeStartNewBtn?.addEventListener('click', () => {
+  state.lastSeenAt = Date.now();
+  saveState();
+  els.resumeModal?.classList.add('hidden');
+  handleNewChat();
+});
+
+// Tapping outside is a third answer nobody should have to look for: it just
+// leaves you where you already were instead of trapping you in the dialog.
+els.resumeModal?.addEventListener('click', (e) => {
+  if (e.target !== els.resumeModal) return;
+  state.lastSeenAt = Date.now();
+  saveState();
+  els.resumeModal.classList.add('hidden');
+});
+
+setArtifactsTab(state.artifactsActiveTab || 'artifacts');
+renderAll().then(() => {
+  const c = activeChat();
+  const promptShowing = els.resumeModal && !els.resumeModal.classList.contains('hidden');
+  if (c && c.kind === 'chat' && c.messages.length === 0 && !promptShowing) return introducePersona(c, 'new');
+}).catch((err) => {
+  console.error('renderAll failed:', err);
+  showBootError(err?.stack || err?.message || String(err));
+});
+maybeShowResumePrompt();
+
+// ===========================================================================
+// Hub wiring — module handoff
+//
+// A thought in a chat can become a code space project, a group discussion, an
+// image prompt, or a filed note. All of it goes through window.hub, which is
+// loaded as an ES module and degrades to nothing when the hub is unconfigured.
+// ===========================================================================
+
+let hubOn = false;
+let handoffSource = null; // { chat, content, messageId }
+
+const hubUI = {
+  handoffSheet: document.getElementById('handoffSheet'),
+  handoffScrim: document.getElementById('handoffScrim'),
+  handoffPreview: document.getElementById('handoffPreview'),
+  handoffStatus: document.getElementById('handoffStatus'),
+  memorySheet: document.getElementById('memorySheet'),
+  memoryScrim: document.getElementById('memoryScrim'),
+  nudgeList: document.getElementById('nudgeList'),
+  topicList: document.getElementById('topicList'),
+};
+
+window.addEventListener('hub-ready', async () => {
+  hubOn = await window.hub.hubReady();
+  document.body.classList.toggle('hub-on', hubOn);
+  if (hubOn) { refreshNudgeBadge(); refreshReminders(); }
+});
+
+function closeHandoff() {
+  hubUI.handoffSheet?.classList.remove('open');
+  hubUI.handoffScrim?.classList.remove('open');
+  if (hubUI.handoffStatus) hubUI.handoffStatus.textContent = '';
+}
+
+/** Opens the handoff sheet for one message. */
+function openHandoff(content, messageId, extra = {}) {
+  // Team and Code Space need no hub; only Media and Memory do (checked when one is tapped).
+  handoffSource = { chat: activeChat(), content, messageId, who: extra.who || '' };
+  if (hubUI.handoffPreview) {
+    hubUI.handoffPreview.textContent =
+      content.length > 220 ? content.slice(0, 220) + '…' : content;
+  }
+  hubUI.handoffSheet?.classList.add('open');
+  hubUI.handoffScrim?.classList.add('open');
+}
+
+hubUI.handoffScrim?.addEventListener('click', closeHandoff);
+hubUI.memoryScrim?.addEventListener('click', () => {
+  hubUI.memorySheet?.classList.remove('open');
+  hubUI.memoryScrim?.classList.remove('open');
+});
+
+/** A small "send this somewhere" control on every assistant message. */
+function attachHandoffButton(msgEl, content, messageId) {
+  if (!hubOn || !msgEl || msgEl.querySelector('.handoff-btn')) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'handoff-btn';
+  btn.title = 'Send this somewhere';
+  btn.setAttribute('aria-label', 'Send this somewhere');
+  btn.textContent = '⤳';
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openHandoff(content, messageId);
+  });
+  msgEl.appendChild(btn);
+}
+window.attachHandoffButton = attachHandoffButton;
+
+document.querySelectorAll('[data-handoff]').forEach((btn) => {
+  btn.addEventListener('click', async () => {
+    if (!handoffSource) return;
+    const target = btn.dataset.handoff;
+    const status = hubUI.handoffStatus;
+    if (status) status.textContent = 'Sending…';
+
+    try {
+      const { chat, content, messageId, who } = handoffSource;
+
+      // The Team: the page opens with this text ready to adopt as strategy, offers or profile.
+      if (target === 'team') {
+        try {
+          sessionStorage.setItem(TEAM_HANDOFF_KEY, JSON.stringify({
+            content, from: who || chat?.topic || chat?.name || 'your chat', at: Date.now(),
+          }));
+        } catch { if (status) status.textContent = 'Could not carry that over (storage full?).'; return; }
+        window.location.href = '/team';
+        return;
+      }
+      // Code Space: your tap opens it, with this exact reply as what to build and the chat behind it.
+      if (target === 'workspace') {
+        closeHandoff();
+        openInWorkspace({ autoBrief: true, focus: content, focusWho: who });
+        return;
+      }
+      if (!hubOn) {
+        if (status) status.textContent = 'This one needs the memory hub (Supabase) set up.';
+        return;
+      }
+
+      if (target === 'note') {
+        await window.hub.ensureThread(chat);
+        if (status) status.textContent = 'Filed. The next sweep will sort it.';
+        setTimeout(closeHandoff, 1200);
+        return;
+      }
+
+      const payload = { seedContent: content, messageId, title: chat?.title || 'Untitled' };
+
+      if (target === 'group') {
+        // Everyone joins by default; deselecting happens in the group screen.
+        payload.personaIds = personas.map((p) => p.id);
+        if (payload.personaIds.length < 2) {
+          if (status) status.textContent = 'Need at least two personas for a group.';
+          return;
+        }
+      }
+
+      const out = await window.hub.promote(chat, target, payload);
+      saveState();
+
+      if (target === 'media' && out.mediaThreadId) {
+        if (status) status.textContent = 'Generating…';
+        const gen = await window.hub.generateMedia(out.mediaThreadId);
+        if (status) status.textContent = gen.url ? `Done — ${gen.provider}.` : 'Sent to Media.';
+      } else if (status) {
+        status.textContent = `Sent to ${target}.`;
+      }
+
+      setTimeout(closeHandoff, 1400);
+    } catch (err) {
+      if (status) status.textContent = `Failed: ${err.message}`;
+    }
+  });
+});
+
+// ---- Memory screen -------------------------------------------------------
+
+/**
+ * Shared row-builder for nudges — used by both the Memory sheet's nudge
+ * list and the Reminders tab, so the two surfaces can't drift apart.
+ * `onDismissed()` fires after a successful server-side dismiss (both
+ * callers use it to refresh their own badge/tab state).
+ */
+/** True when every locally-findable chat named in a group-suggestion nudge
+ *  already shares one project — nothing left to suggest, don't show it. */
+function groupSuggestionAlreadySatisfied(n) {
+  const localIds = n.payload?.localIds || [];
+  if (localIds.length < 2) return false;
+  const chats = localIds.map((id) => state.chats.find((c) => c.id === id)).filter(Boolean);
+  if (chats.length < 2) return false; // can't confirm locally — show it, let the user decide
+  const firstProject = chats[0].projectId;
+  return !!firstProject && chats.every((c) => c.projectId === firstProject);
+}
+
+/** Applies a group-suggestion nudge: create/reuse the project, assign matching chats. */
+function acceptGroupSuggestion(n) {
+  const topicName = n.payload?.topicName || 'Project';
+  const localIds = new Set(n.payload?.localIds || []);
+  if (!localIds.size) return;
+
+  let project = state.projects.find((p) => p.name === topicName);
+  if (!project) project = createProject(topicName);
+
+  let changed = false;
+  for (const c of state.chats) {
+    if (localIds.has(c.id) && c.projectId !== project.id) {
+      c.projectId = project.id;
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveState();
+    renderChatList();
+  }
+}
+
+function renderNudgeRows(container, nudges, onDismissed) {
+  for (const n of nudges) {
+    if (n.nudge_type === 'group_suggestion' && groupSuggestionAlreadySatisfied(n)) {
+      void window.hub.dismissNudge(n.id); // already grouped — nothing left to suggest
+      continue;
+    }
+
+    const row = document.createElement('div');
+    row.className = 'nudge-row';
+    const txt = document.createElement('span');
+    txt.textContent = n.message;
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'nudge-dismiss';
+    x.title = 'Dismiss this reminder';
+    x.textContent = '×';
+    x.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await window.hub.dismissNudge(n.id);
+      row.remove();
+      onDismissed?.();
+    });
+
+    if (n.nudge_type === 'group_suggestion' && n.payload?.localIds?.length) {
+      row.classList.add('nudge-row-actionable');
+      row.title = 'Click to group these chats into a project';
+      row.addEventListener('click', async () => {
+        acceptGroupSuggestion(n);
+        await window.hub.dismissNudge(n.id);
+        row.remove();
+        onDismissed?.();
+      });
+    }
+
+    row.append(txt, x);
+    container.appendChild(row);
+  }
+}
+
+async function openMemory() {
+  closeAppMenu();
+  // The Memory tile is always in the nav, so a bare `return` here made it a
+  // dead button: tap, nothing happens, no reason given. Open the sheet and
+  // say what's actually wrong instead.
+  if (!hubOn) {
+    hubUI.memorySheet?.classList.add('open');
+    hubUI.memoryScrim?.classList.add('open');
+    if (hubUI.nudgeList) {
+      hubUI.nudgeList.innerHTML =
+        '<p class="empty-note">Memory is switched off — the notes database is'
+        + ' unreachable. It needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY set,'
+        + ' and the Supabase project running (a paused project looks exactly like'
+        + ' this). Nothing is lost meanwhile: chats stay on this device and sync'
+        + ' once memory is back.</p>';
+    }
+    if (hubUI.topicList) hubUI.topicList.innerHTML = '';
+    return;
+  }
+  hubUI.memorySheet?.classList.add('open');
+  hubUI.memoryScrim?.classList.add('open');
+
+  try {
+    const [{ nudges }, { topics }] = await Promise.all([
+      window.hub.getNudges(),
+      window.hub.getTopics(),
+    ]);
+
+    if (hubUI.nudgeList) {
+      hubUI.nudgeList.innerHTML = '';
+      if (!nudges.length) {
+        hubUI.nudgeList.innerHTML = '<p class="empty-note">Nothing has gone quiet yet.</p>';
+      }
+      renderNudgeRows(hubUI.nudgeList, nudges, () => { refreshNudgeBadge(); refreshReminders(); });
+    }
+
+    if (hubUI.topicList) {
+      hubUI.topicList.innerHTML = '';
+      if (!topics.length) {
+        hubUI.topicList.innerHTML =
+          '<p class="empty-note">Topics appear after the first sweep runs.</p>';
+      }
+      for (const t of topics) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'topic-chip';
+        chip.dataset.topicId = t.id;
+        chip.innerHTML = `${t.name}<span class="topic-count">${t.note_count}</span>`;
+        chip.addEventListener('click', () => chip.classList.toggle('selected'));
+        hubUI.topicList.appendChild(chip);
+      }
+    }
+  } catch (err) {
+    if (hubUI.nudgeList) hubUI.nudgeList.innerHTML = `<p class="empty-note">${err.message}</p>`;
+  }
+}
+
+// Sweeps the chat you're in right now rather than waiting for the daily cron.
+// Without this, Memory stays empty until tomorrow and looks dead.
+document.getElementById('sweepNowBtn')?.addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  if (!hubOn) return;
+  const chat = activeChat();
+  if (!chat) return;
+
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Reading…';
+  try {
+    // A chat that was never synced has no thread yet, so sweep would find
+    // nothing to read — register and push anything pending first.
+    await window.hub.syncChat(chat);
+    saveState();
+    if (!chat.hubThreadId) throw new Error('this chat has not synced yet');
+
+    const r = await window.hub.sweepThreadNow(chat.hubThreadId);
+    const filed = (r.notesFiled || 0) + (r.jokesFiled || 0);
+    btn.textContent = filed
+      ? `Filed ${filed}`
+      : 'Nothing new to keep';
+    await openMemory(); // re-render with whatever just landed
+  } catch (err) {
+    btn.textContent = err.message || 'Failed';
+  } finally {
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.textContent = label;
+    }, 2600);
+  }
+});
+
+document.getElementById('buildDocBtn')?.addEventListener('click', async () => {
+  const picked = [...document.querySelectorAll('.topic-chip.selected')].map(
+    (c) => c.dataset.topicId
+  );
+  if (!picked.length) return alert('Pick at least one topic first.');
+
+  const type = prompt(
+    'Document type:\nstory_bible, outline, manuscript, memoir, mock_textbook,\nresearch_journal, biography, ad_copy, business_doc, newsletter',
+    'outline'
+  );
+  if (!type) return;
+
+  try {
+    const out = await window.hub.buildDocument(type.trim(), picked);
+    alert(`Built "${out.title}" — ${out.sectionCount} sections.`);
+  } catch (err) {
+    alert(`Failed: ${err.message}`);
+  }
+});
+
+async function refreshNudgeBadge() {
+  try {
+    const { nudges } = await window.hub.getNudges();
+    const badge = document.getElementById('memoryBadge');
+    if (badge) {
+      badge.textContent = nudges.length || '';
+      badge.classList.toggle('hidden', !nudges.length);
+    }
+  } catch {
+    /* badge is cosmetic */
+  }
+}
+
+document.getElementById('memoryBtn')?.addEventListener('click', openMemory);
+
+// ---- Reminders tab + ambient banner ---------------------------------------
+// Same nudges the Memory sheet already shows, surfaced somewhere the user
+// doesn't have to know to go looking for. No-ops entirely when the hub isn't
+// configured (hubOn stays false) — mirrors refreshNudgeBadge's guard.
+
+// Banner "×" only hides it for this tab session — it does not call the
+// server. The row-level "×" in the tab (or the Memory sheet) is the real,
+// persistent dismiss. Tracked here so refreshReminders() doesn't keep
+// re-showing a banner the user just closed.
+const bannerDismissedIds = new Set();
+
+async function refreshReminders() {
+  if (!hubOn) return;
+  try {
+    const { nudges } = await window.hub.getNudges();
+
+    if (els.remindersTabBadge) {
+      els.remindersTabBadge.textContent = nudges.length || '';
+      els.remindersTabBadge.classList.toggle('hidden', !nudges.length);
+    }
+
+    if (els.reminderList) {
+      els.reminderList.innerHTML = '';
+      renderNudgeRows(els.reminderList, nudges, () => refreshReminders());
+    }
+    if (els.reminderEmpty) els.reminderEmpty.classList.toggle('hidden', nudges.length > 0);
+
+    const visible = nudges.filter((n) => !bannerDismissedIds.has(n.id));
+    if (els.nudgeBanner) {
+      if (visible.length) {
+        if (els.nudgeBannerText) {
+          els.nudgeBannerText.textContent = visible.length === 1
+            ? visible[0].message
+            : `${visible.length} topics have gone quiet.`;
+        }
+        els.nudgeBanner.classList.remove('hidden');
+      } else {
+        els.nudgeBanner.classList.add('hidden');
+      }
+    }
+  } catch {
+    /* reminders are ambient, not critical — fail silently */
+  }
+}
+
+els.nudgeBannerView?.addEventListener('click', () => {
+  openArtifactsSidebar();
+  setArtifactsTab('reminders');
+});
+els.nudgeBannerDismiss?.addEventListener('click', async () => {
+  try {
+    const { nudges } = await window.hub.getNudges();
+    for (const n of nudges) bannerDismissedIds.add(n.id);
+  } catch { /* best effort */ }
+  els.nudgeBanner?.classList.add('hidden');
+});
+
+// ---- Status row (compact model/role controls under the topbar) ----------
+document.getElementById('statusModelBtn')?.addEventListener('click', () => {
+  document.getElementById('modelPickerBtn')?.click();
+});
+document.getElementById('statusRoleBtn')?.addEventListener('click', () => {
+  const sel = document.getElementById('roleSelect');
+  if (!sel) return;
+  const opts = [...sel.options].map((o) => o.value);
+  const next = opts[(opts.indexOf(sel.value) + 1) % opts.length];
+  sel.value = next;
+  sel.dispatchEvent(new Event('change', { bubbles: true }));
+});
+function syncStatusRow() {
+  const roleLabel = document.getElementById('statusRoleLabel');
+  const roleSel = document.getElementById('roleSelect');
+  if (roleLabel && roleSel) {
+    roleLabel.textContent = roleSel.options[roleSel.selectedIndex]?.text || roleSel.value;
+  }
+  const modelLabel = document.getElementById('statusModelLabel');
+  const pickerLabel = document.getElementById('modelPickerLabel');
+  if (modelLabel && pickerLabel) {
+    // "Venice · Gemma 4 Uncensored" is two facts, and the provider is the one
+    // you never need mid-conversation — it cost the chat name its space on a
+    // phone. The full label stays on the button's tooltip and in the picker.
+    const full = pickerLabel.textContent || '';
+    modelLabel.textContent = full.split('·').pop().trim() || full;
+    document.getElementById('statusModelBtn')?.setAttribute('title', full ? `Change model — ${full}` : 'Change model');
+  }
+}
+document.getElementById('roleSelect')?.addEventListener('change', syncStatusRow);
+new MutationObserver(syncStatusRow).observe(
+  document.getElementById('modelPickerLabel') || document.body,
+  { childList: true, characterData: true, subtree: true }
+);
+setTimeout(syncStatusRow, 300);
+
+// ---- Persistent module nav -----------------------------------------------
+// Real navigation instead of a button that opens a menu that has to be
+// searched. Every module reachable from every screen, always visible.
+
+// Everything the nav opens is a sheet or a modal, and each one used to need
+// its own close button found and tapped before you could go anywhere else.
+// Closing whatever is open is now part of navigating, so getting out of a
+// module is the same one tap as getting into it.
+function closeEverythingOpen() {
+  document.querySelectorAll('.sheet.open, .sheet-scrim.open')
+    .forEach((el) => el.classList.remove('open'));
+  document.querySelectorAll('.modal-overlay:not(.hidden)')
+    .forEach((el) => el.classList.add('hidden'));
+  document.getElementById('app')?.classList.remove('chats-open', 'artifacts-open');
+}
+
+function setActiveMod(mod) {
+  document.querySelectorAll('#modNav .mod-nav-btn').forEach((btn) => {
+    const on = btn.dataset.mod === mod;
+    btn.classList.toggle('active', on);
+    if (on) btn.setAttribute('aria-current', 'page');
+    else btn.removeAttribute('aria-current');
+  });
+}
+
+// Tapping Chat is the way back to the conversation from anywhere, without
+// hunting for the × on whatever happens to be covering it.
+document.querySelector('#modNav .mod-nav-btn[data-mod="chat"]')
+  ?.addEventListener('click', () => {
+    closeEverythingOpen();
+    setActiveMod('chat');
+    document.getElementById('chat')?.scrollIntoView({ block: 'end' });
+  });
+
+document.getElementById('navWorkspace')?.addEventListener('click', () => {
+  closeEverythingOpen();
+  setActiveMod('workspace');
+  els.workspaceBtn?.click(); // reuses the existing openInWorkspace() handler
+});
+document.getElementById('navGroup')?.addEventListener('click', () => {
+  closeEverythingOpen();
+  setActiveMod('group');
+  els.groupBtn?.click(); // reuses the existing openGroupModal() handler
+});
+document.getElementById('navMemory')?.addEventListener('click', () => {
+  closeEverythingOpen();
+  setActiveMod('memory');
+  document.getElementById('memoryBtn')?.click();
+});
+
+// Any sheet dismissed by its own scrim / × puts us back in Chat, so the nav
+// never claims you're somewhere you aren't.
+document.querySelectorAll('.sheet-scrim').forEach((scrim) => {
+  scrim.addEventListener('click', () => setActiveMod('chat'));
+});
+
+// Keep the nav's memory badge in sync with the sheet's badge.
+(function syncNavMemoryBadge() {
+  const src = document.getElementById('memoryBadge');
+  const dst = document.getElementById('navMemoryBadge');
+  if (!src || !dst) return;
+  new MutationObserver(() => {
+    dst.textContent = src.textContent;
+    dst.classList.toggle('hidden', src.classList.contains('hidden'));
+  }).observe(src, { childList: true, attributes: true, attributeFilter: ['class'] });
+})();
