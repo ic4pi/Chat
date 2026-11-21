@@ -5953,7 +5953,7 @@ function stopNeuralSpeech() {
   try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
 }
 
-async function fetchNeuralAudio(text, voice, timeoutMs = 18000) {
+async function fetchNeuralAudio(text, voice, timeoutMs = 18000, engine) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   let res;
@@ -5961,7 +5961,7 @@ async function fetchNeuralAudio(text, voice, timeoutMs = 18000) {
     res = await fetch('/api/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, voice }),
+      body: JSON.stringify({ text, voice, engine }),
       signal: ctrl.signal,
     });
   } catch (err) {
@@ -6054,7 +6054,7 @@ function lastSpeakableTurns() {
 
 async function speakReply(text, { force = false, personaId = null } = {}) {
   if (!force && !speakReplies) return;
-  const chunks = chunkSpeech(text);
+  const chunks = chunkSpeech(text, 190, 140);
   if (!chunks.length) return;
 
   const voice = voiceForPersona(personaId || state.activePersonaId);
@@ -6150,7 +6150,7 @@ async function downloadGroupSessionMp3(chat, btn, opts = {}) {
   async function fetchWithRetry(text, voice, retries = 2) {
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        return await fetchNeuralAudio(text, voice);
+        return await fetchNeuralAudio(text, voice, 30000, 'edge');
       } catch (err) {
         if (attempt < retries) {
           // Brief back-off before retry
