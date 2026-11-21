@@ -5953,7 +5953,7 @@ function stopNeuralSpeech() {
   try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
 }
 
-async function fetchNeuralAudio(text, voice, timeoutMs = 18000, engine) {
+async function fetchNeuralAudio(text, voice, timeoutMs = 9000, engine) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   let res;
@@ -6015,24 +6015,46 @@ function playBlob(blob, { interrupt = true } = {}) {
   });
 }
 
-/** Fallback robotic browser voice — only if neural TTS fails. Speaks full text in chunks. */
-function speakBrowserFallback(text) {
-  if (!window.speechSynthesis) return;
-  try {
-    window.speechSynthesis.cancel();
-    const chunks = chunkSpeech(text, 1100);
-    const voices = window.speechSynthesis.getVoices?.() || [];
-    const en = voices.find(v => /en[-_]/i.test(v.lang) && /enhanced|premium|neural|samantha|google/i.test(v.name))
-      || voices.find(v => /en[-_]/i.test(v.lang));
-    for (const chunk of chunks) {
-      const u = new SpeechSynthesisUtterance(chunk);
-      u.rate = 1.02;
-      if (en) u.voice = en;
-      window.speechSynthesis.speak(u);
+/** After a neural TTS failure, skip neural for a while so every following sentence goes
+ * straight to the browser voice instead of each one waiting out its own failed request. */
+let neuralDownUntil = 0;
+const NEURAL_RETRY_MS = 120000;
+
+/** Fallback robotic browser voice. Queues behind anything already speaking (never cancels it);
+ * resolves when the last chunk has finished so the speak queue stays in order. */
+function speakBrowserFallback(text, { interrupt = false } = {}) {
+  if (!window.speechSynthesis) return Promise.resolve();
+  return new Promise((resolve) => {
+    try {
+      if (interrupt) window.speechSynthesis.cancel();
+      const chunks = chunkSpeech(text, 1100);
+      if (!chunks.length) { resolve(); return; }
+      const voices = window.speechSynthesis.getVoices?.() || [];
+      const en = voices.find(v => /en[-_]/i.test(v.lang) && /enhanced|premium|neural|samantha|google/i.test(v.name))
+        || voices.find(v => /en[-_]/i.test(v.lang));
+      const gen = speakGeneration;
+      const guard = setTimeout(resolve, 4000 + text.length * 90);
+      chunks.forEach((chunk, i) => {
+        const u = new SpeechSynthesisUtterance(chunk);
+        u.rate = 1.02;
+        if (en) u.voice = en;
+        if (i === chunks.length - 1) {
+          const done = () => { clearTimeout(guard); resolve(); };
+          u.onend = done;
+          u.onerror = done;
+        }
+        window.speechSynthesis.speak(u);
+      });
+      // A newer reply / stop cancels speech; don't leave the queue waiting on this one.
+      const watch = setInterval(() => {
+        if (gen !== speakGeneration) { clearInterval(watch); clearTimeout(guard); resolve(); }
+        else if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) { clearInterval(watch); }
+      }, 500);
+    } catch (err) {
+      console.warn('browser TTS fallback failed', err);
+      resolve();
     }
-  } catch (err) {
-    console.warn('browser TTS fallback failed', err);
-  }
+  });
 }
 
 /** Latest assistant turn(s) to auto-speak when enabling 🔊. */
@@ -6080,6 +6102,10 @@ async function speakReply(text, { force = false, personaId = null } = {}) {
     syncInterruptBtn();
     let spoken = 0;
     try {
+      if (Date.now() < neuralDownUntil) {
+        await speakBrowserFallback(chunks.join(' '));
+        return;
+      }
       // Kick off the next chunk's synthesis while the current one plays,
       // instead of fetching them one at a time — dead air between chunks
       // was otherwise as long as a full TTS network round-trip, every time.
@@ -6096,8 +6122,9 @@ async function speakReply(text, { force = false, personaId = null } = {}) {
       ttsUnlocked = true;
     } catch (err) {
       console.warn('Neural TTS failed, falling back:', err);
+      neuralDownUntil = Date.now() + NEURAL_RETRY_MS;
       // Speak only what hasn't played yet, with the browser voice.
-      if (gen === speakGeneration) speakBrowserFallback(chunks.slice(spoken).join(' '));
+      if (gen === speakGeneration) await speakBrowserFallback(chunks.slice(spoken).join(' '));
     } finally {
       activeSpeechCount -= 1;
       syncInterruptBtn();

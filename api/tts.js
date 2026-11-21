@@ -29,7 +29,7 @@ const DEFAULT_VOICE = 'en-US-AvaNeural';
 /** Soft ceiling per request — client chunks below this so full replies play. */
 const MAX_CHARS = 2400;
 /** Retry once on failure — Edge TTS occasionally drops the WebSocket. */
-const MAX_ATTEMPTS = 2;
+const MAX_ATTEMPTS = 1;
 /** The library has no timeout of its own: a stalled WebSocket hangs until Vercel kills the
  * function (60s). Cut each attempt off so the client gets an error fast and can fall back. */
 const ATTEMPT_TIMEOUT_MS = 7000;
