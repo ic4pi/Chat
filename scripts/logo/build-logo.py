@@ -75,12 +75,19 @@ def place(img, mode, fill):
     c.paste(img.resize((nw, nh), Image.LANCZOS), (ox, oy))
     return c
 
-off = a * (1 - eye_grow[..., None])                                       # the logo with the eyes switched off
-place(Image.fromarray((off * 255).astype(np.uint8)), 'RGB', (0, 0, 0)).save(P('intro-cat.jpg'), quality=93)
+# base layer: the logo exactly as drawn (eyes on, so the intro starts with the eyes showing)
+place(Image.fromarray((a * 255).astype(np.uint8)), 'RGB', (0, 0, 0)).save(P('intro-cat.jpg'), quality=93)
 
-eyes_rgba = np.concatenate([a, eye[..., None]], axis=2)                    # the eyes alone, true colour, soft edge
-eyes_img = Image.fromarray((np.clip(eyes_rgba, 0, 1) * 255).astype(np.uint8), 'RGBA')
-place(eyes_img, 'RGBA', (0, 0, 0, 0)).save(P('intro-eyes.png'))
+# glow layer: the SAME pink as the eyes, only added light (screen-blended over the base, so it can never shift the colour)
+col = (a * eye[..., None]).sum(axis=(0, 1)) / max(eye.sum(), 1e-6)          # mean eye colour
+col = col / max(col.max(), 1e-6)
+def blur(m, r):
+    return np.asarray(Image.fromarray((np.clip(m, 0, 1) * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(r)), np.float32) / 255.0
+r = W / 1408.0
+bloom = np.clip(eye + blur(eye, 5 * r) * 0.9 + blur(eye, 16 * r) * 0.7 + blur(eye, 40 * r) * 0.5, 0, 1)
+glow_rgba = np.concatenate([np.broadcast_to(col, (H, W, 3)), bloom[..., None]], axis=2)
+place(Image.fromarray((np.clip(glow_rgba, 0, 1) * 255).astype(np.uint8), 'RGBA'), 'RGBA', (0, 0, 0, 0)).save(P('intro-eyes.png'))
+print('eye colour', (col * 255).astype(int))
 
 ys, xs = np.where(eye > 0.3)
 ex0, ex1, ey0, ey1 = [(v * scale) for v in (xs.min(), xs.max(), ys.min(), ys.max())]
