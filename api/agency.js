@@ -168,7 +168,7 @@ export default async function handler(req, res) {
       await updateSocialAccounts((list) => list.map((a) => {
         if (a.id !== target) return a;
         found = true;
-        return { ...a, ...(every ? { autopostEvery: every } : {}), ...(body.autopostPerDay ? { autopostPerDay: Number(body.autopostPerDay) } : {}) };
+        return { ...a, autopostChosen: true, ...(every ? { autopostEvery: every } : {}), ...(body.autopostPerDay ? { autopostPerDay: Number(body.autopostPerDay) } : {}) };
       }));
       return found ? res.status(200).json({ ok: true }) : res.status(404).json({ error: 'No such account.' });
     }
