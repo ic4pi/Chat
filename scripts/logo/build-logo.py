@@ -84,7 +84,7 @@ col = col / max(col.max(), 1e-6)
 def blur(m, r):
     return np.asarray(Image.fromarray((np.clip(m, 0, 1) * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(r)), np.float32) / 255.0
 r = W / 1408.0
-bloom = np.clip(eye + blur(eye, 5 * r) * 0.9 + blur(eye, 16 * r) * 0.7 + blur(eye, 40 * r) * 0.5, 0, 1)
+bloom = np.clip(blur(eye, 5 * r) * 0.9 + blur(eye, 16 * r) * 0.7 + blur(eye, 40 * r) * 0.5, 0, 1) * (1 - eye)   # light AROUND the eyes only: the eyes themselves stay exactly as drawn
 glow_rgba = np.concatenate([np.broadcast_to(col, (H, W, 3)), bloom[..., None]], axis=2)
 place(Image.fromarray((np.clip(glow_rgba, 0, 1) * 255).astype(np.uint8), 'RGBA'), 'RGBA', (0, 0, 0, 0)).save(P('intro-eyes.png'))
 print('eye colour', (col * 255).astype(int))
