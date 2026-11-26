@@ -14,6 +14,10 @@
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
+  /* keep the back button clear of the phone's status bar / notch */
+  padding-top: max(10px, env(safe-area-inset-top));
+  padding-left: max(14px, env(safe-area-inset-left));
+  padding-right: max(14px, env(safe-area-inset-right));
   border-bottom: 1px solid var(--border-2);
   position: sticky;
   top: 0;
