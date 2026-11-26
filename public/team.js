@@ -4,6 +4,8 @@
 const root = document.getElementById('teamRoot');
 let data = null;
 let accounts = [];
+let allTasks = [];   // scheduled standing tasks + ad-hoc jobs (one list server-side)
+let personas = [];   // for optional per-person assignments
 // Which brand the profile/offers editor shows (Semantiq, Swear Jar, Capí Capí, Ic4pI). Remembered on this device.
 let brand = 'semantiq';
 try { brand = localStorage.getItem('team_brand') || 'semantiq'; } catch { /* private mode */ }
@@ -51,6 +53,26 @@ async function act(button, errBox, fn, after = load) {
 }
 
 const when = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? '' : d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); };
+
+/** The standing-tasks/jobs API. A run can take several minutes, so POSTs wait. */
+async function tasksFetch(qs = '', { method = 'GET', body } = {}) {
+  let res;
+  try {
+    res = await fetch(`/api/admin-standing-tasks${qs}`, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(method === 'POST' ? 300_000 : 60_000),
+    });
+  } catch (err) {
+    throw new Error(err?.name === 'TimeoutError' ? 'The job is taking a long time — it may still finish. Reload the page in a minute to see the result.' : (err?.message || 'Network error'));
+  }
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
+  return out;
+}
+
+const saveTasks = (tasks) => tasksFetch('', { method: 'PUT', body: { tasks } });
 const money = (n) => `$${Number(n || 0).toLocaleString()}`;
 
 function leadCard(lead) {
@@ -217,6 +239,93 @@ function connectionsSection() {
     cards.length ? cards : el('p', { class: 'admin-hint', text: 'No social accounts yet. Add one in Admin → Social accounts.' }));
 }
 
+function jobCard(task) {
+  const err = el('div', { class: 'err' });
+  const ok = el('div', { class: 'admin-hint' });
+  const paused = task.enabled === false || !!task.pausedReason;
+  const runBtn = btn(task.lastRunAt ? 'Run again' : 'Run now', () =>
+    act(runBtn, err, async () => {
+      ok.textContent = '';
+      const r = await tasksFetch(`?action=run&id=${encodeURIComponent(task.id)}`, { method: 'POST' });
+      const missing = (r.result?.turnTexts || []).join('\n').match(/MISSING TOOL:[^\n]*/g);
+      ok.textContent = `Done — ${r.result?.turns || 0} team members reported. ${(r.result?.toolsUsed || [])[0] || ''}${missing ? ` — heads up: ${missing[0]}` : ''}`;
+    }), 'text-btn primary');
+  const pauseBtn = btn(paused ? 'Resume' : 'Pause', () =>
+    act(pauseBtn, err, async () => {
+      if (task.pausedReason) await tasksFetch(`?action=resume&id=${encodeURIComponent(task.id)}`, { method: 'POST' });
+      await saveTasks(allTasks.map((t) => (t.id === task.id ? { ...t, enabled: paused } : t)));
+    }));
+  const delBtn = btn('Delete', () => {
+    if (!confirm('Delete this job? Its past write-ups stay in your documents.')) return;
+    act(delBtn, err, () => saveTasks(allTasks.filter((t) => t.id !== task.id)));
+  });
+
+  const lr = task.lastResult;
+  return el('div', { class: 'lead' },
+    el('div', { class: 'lead-head' },
+      el('strong', { text: task.name }),
+      el('span', { class: `pill ${paused ? 'new' : 'sent'}`, text: task.pausedReason ? 'paused — needs a look' : paused ? 'paused' : 'ready' })),
+    el('div', { class: 'lead-meta', text: [
+      task.lastRunAt ? `last run ${when(task.lastRunAt)}` : 'never run',
+      task.failCount ? `${task.failCount} failure${task.failCount === 1 ? '' : 's'} in a row` : '',
+    ].filter(Boolean).join(' · ') }),
+    el('div', { class: 'lead-msg', text: task.objective }),
+    task.lastError ? el('div', { class: 'err', text: `Last error: ${task.lastError}` }) : null,
+    task.pausedReason ? el('div', { class: 'err', text: task.pausedReason }) : null,
+    lr ? el('details', {}, el('summary', { text: `Last write-up — ${when(lr.at)}` }),
+      el('div', { class: 'lead-msg', text: lr.summary || '(no summary)' }),
+      (lr.toolsUsed || []).length ? el('div', { class: 'lead-meta', text: lr.toolsUsed.join(' · ') }) : null) : null,
+    el('div', { class: 'row' }, runBtn, pauseBtn, delBtn),
+    ok, err);
+}
+
+/** Give the team a job: one instruction, optionally split per person, run on demand. */
+function jobsSection() {
+  const err = el('div', { class: 'err' });
+  const jobs = allTasks.filter((t) => t.schedule === 'manual');
+  const brief = el('textarea', { rows: '3', placeholder: 'e.g. Plan this week’s posts for Swear Jar · Audit semantiq.com for SEO problems · Check our site’s security headers and tell me what to fix' });
+
+  // Optional: give specific people specific parts. Blank boxes = the team splits it up itself.
+  const assignInputs = {};
+  const assignDetails = personas.length ? el('details', {},
+    el('summary', { text: 'Assign specific people (optional)' }),
+    el('p', { class: 'admin-hint', text: 'Leave a box blank and that person sits this one out unless the team calls them in.' }),
+    personas.map((p) => {
+      const input = el('input', { type: 'text', placeholder: `${p.name} — their part (optional)` });
+      assignInputs[p.id] = input;
+      return el('div', { class: 'field' }, input);
+    })) : null;
+
+  const go = btn('Run it', () => {
+    const objective = brief.value.trim();
+    if (!objective) { err.textContent = 'Tell the team what to do first.'; return; }
+    const assignments = Object.fromEntries(Object.entries(assignInputs).map(([pid, i]) => [pid, i.value]).filter(([, v]) => v.trim()));
+    const task = {
+      id: `job-${Date.now().toString(36)}`,
+      name: objective.length > 70 ? `${objective.slice(0, 70)}…` : objective,
+      objective,
+      schedule: 'manual',
+      enabled: true,
+      assignments,
+      personaIds: Object.keys(assignments),
+      leadPersonaId: '',
+    };
+    act(go, err, async () => {
+      await saveTasks([...allTasks, task]);
+      await tasksFetch(`?action=run&id=${encodeURIComponent(task.id)}`, { method: 'POST' });
+    });
+  }, 'text-btn primary');
+
+  return el('section', { class: 'admin-section' },
+    el('h2', { text: 'Give the team a job' }),
+    el('p', { class: 'admin-hint', text: 'One instruction, the whole team. They do live research, do the work, and save a write-up you can read below. If a step needs a tool that isn’t connected, they say MISSING TOOL instead of pretending it worked. Email and social stay draft-and-approve — a job never sends or posts anything.' }),
+    el('div', { class: 'field' }, brief),
+    assignDetails,
+    el('div', { class: 'row' }, go),
+    err,
+    jobs.length ? jobs.map(jobCard) : el('p', { class: 'admin-hint', text: 'No jobs yet. Your first one is one sentence away.' }));
+}
+
 const HANDOFF_KEY = 'chat_to_team_v1';
 
 /** Text sent here from a chat reply ("Send to… → Team"): adopt it as strategy, profile or offers, or dismiss it. */
@@ -252,6 +361,7 @@ function render() {
     data.control.paused ? el('div', { class: 'banner', text: `The team is paused — no autoposts, lead drafts or standing tasks run. ${data.control.reason || ''}` }) : null,
     !data.emailReady ? el('div', { class: 'banner', text: 'Replies cannot be sent yet: add an email account (Resend key + from-address) in Admin → Social accounts. Drafts still work.' }) : null,
     !data.notifyReady ? el('div', { class: 'banner', text: 'You will not be emailed when a lead arrives. Set LEAD_NOTIFY_EMAIL in Vercel to get a message (this page is the source of truth either way).' }) : null,
+    jobsSection(),
     el('section', { class: 'admin-section' },
       el('h2', { text: 'Money loop' }),
       el('div', { class: 'tiles' },
@@ -279,6 +389,11 @@ async function load() {
   try {
     data = await api('overview');
     accounts = (await api('accounts').catch(() => ({ accounts: [] }))).accounts || [];
+    allTasks = (await tasksFetch('').catch(() => ({ tasks: [] }))).tasks || [];
+    if (!personas.length) {
+      const cfg = await fetch('/api/admin-config').then((r) => (r.ok ? r.json() : { personas: [] })).catch(() => ({ personas: [] }));
+      personas = (cfg.personas || []).map((p) => ({ id: p.id, name: p.name }));
+    }
     render();
   }
   catch (err) { root.replaceChildren(el('div', { class: 'banner', text: `Could not load the Team page: ${err.message}` })); }
