@@ -33,6 +33,8 @@
         -webkit-text-size-adjust: 100%;
         text-size-adjust: 100%;
       }
+      /* Code Space top bar: keep "← Chat" clear of the phone's status bar / notch */
+      div:has(> .ws-topbar-row) { padding-top: env(safe-area-inset-top); }
       @keyframes agent-pulse {
         0%, 100% { opacity: 1; transform: scale(1); }
         50% { opacity: 0.35; transform: scale(0.7); }
