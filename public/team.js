@@ -4,6 +4,9 @@
 const root = document.getElementById('teamRoot');
 let data = null;
 let accounts = [];
+// Which brand the profile/offers editor shows (Semantiq, Swear Jar, Capí Capí, Ic4pI). Remembered on this device.
+let brand = 'semantiq';
+try { brand = localStorage.getItem('team_brand') || 'semantiq'; } catch { /* private mode */ }
 
 const el = (tag, props = {}, ...kids) => {
   const n = document.createElement(tag);
@@ -21,7 +24,7 @@ const btn = (label, onclick, cls = 'text-btn') => el('button', { class: cls, typ
 async function api(op, { method = 'GET', id, body } = {}) {
   let res;
   try {
-    res = await fetch(`/api/agency?op=${op}${id ? `&id=${encodeURIComponent(id)}` : ''}`, {
+    res = await fetch(`/api/agency?op=${op}${id ? `&id=${encodeURIComponent(id)}` : ''}&brand=${encodeURIComponent(brand)}`, {
       method,
       headers: body ? { 'Content-Type': 'application/json' } : undefined,
       body: body ? JSON.stringify(body) : undefined,
@@ -94,24 +97,33 @@ function leadCard(lead) {
 
 function businessSection() {
   const b = data.business;
+  const kind = b.kind || 'agency';
   const err = el('div', { class: 'err' });
-  const profile = el('textarea', { rows: '9', spellcheck: 'false', placeholder: 'Who you are, who you serve, your voice, what you never say…' });
+  const switcher = el('select', { 'aria-label': 'Brand' }, ...(data.brands || []).map((x) => el('option', { value: x.id, text: x.name })));
+  switcher.value = brand;
+  switcher.addEventListener('change', () => { brand = switcher.value; try { localStorage.setItem('team_brand', brand); } catch { /* ignore */ } load(); });
+  const profile = el('textarea', { rows: '9', spellcheck: 'false', placeholder: kind === 'comedy' ? 'Who this is, the voice and humor, what the brand never jokes about…' : 'Who you are, who you serve, your voice, what you never say…' });
   profile.value = b.profile || '';
-  const offers = el('textarea', { rows: '6', spellcheck: 'false', placeholder: 'One offer per line, with the price and what is included. e.g.\nStarter website — $900 — 5 pages, mobile, live in 2 weeks\nMonthly content — $600/mo — 12 posts + 1 campaign\nPayment link: https://…' });
+  const offers = el('textarea', { rows: '6', spellcheck: 'false', placeholder: kind === 'comedy'
+    ? 'One show per line, with the real details. e.g.\nFri Dec 12 — 8pm — The Laugh Room, Austin — tickets: example.com/tix'
+    : 'One offer per line, with the price and what is included. e.g.\nStarter website — $900 — 5 pages, mobile, live in 2 weeks\nMonthly content — $600/mo — 12 posts + 1 email' });
   offers.value = b.offers || '';
   const save = btn('Save', () => act(save, err, () => api('business', { method: 'PUT', body: { profile: profile.value, offers: offers.value } })), 'text-btn primary');
-  const discuss = btn('Have the team discuss it now', () => act(discuss, err, async () => {
+  const discuss = brand === 'semantiq' ? btn('Have the team discuss it now', () => act(discuss, err, async () => {
     await api('business', { method: 'PUT', body: { profile: profile.value, offers: offers.value } });
     await api('discuss', { method: 'POST' });
-  }));
+  })) : null;
   return el('section', { class: 'admin-section' },
-    el('h2', { text: 'The business' }),
-    el('p', { class: 'admin-hint', text: 'Every team persona (Vera, Dez, Nia, Priya, Marcus, Cole…) reads this in every chat, the autoposter reads it for every post, the comment replies read it, and Marcus quotes only the offers and prices below. Personal personas never see it.' }),
-    el('div', { class: 'field' }, el('label', { text: 'About the business' }), profile),
-    el('div', { class: 'field' }, el('label', { text: 'Offers and prices (what we sell)' }), offers),
+    el('h2', { text: `The business — ${b.brandName || 'Semantiq'}` }),
+    el('div', { class: 'field' }, el('label', { text: 'Brand (each has its own profile, offers, accounts and voice)' }), switcher),
+    brand === 'semantiq'
+      ? el('p', { class: 'admin-hint', text: 'Every team persona (Vera, Dez, Nia, Priya, Marcus, Cole…) reads this in every chat, the autoposter reads it for every post, the comment replies read it, and Marcus quotes only the offers and prices below. Edit it and save.' })
+      : el('p', { class: 'admin-hint', text: `Autoposts for accounts set to ${b.brandName} read this${b.parentName ? ` (and ${b.parentName}'s profile)` : ''}. ${kind === 'comedy' ? 'Posts are written to grow the audience and fill seats — add real show dates and ticket links below and they will be promoted; nothing is invented.' : 'Posts are written to win clients for this brand.'}` }),
+    el('div', { class: 'field' }, el('label', { text: 'About the brand' }), profile),
+    el('div', { class: 'field' }, el('label', { text: kind === 'comedy' ? 'Upcoming shows (dates, venues, ticket links)' : 'Offers and prices (what we sell)' }), offers),
     el('div', { class: 'row' }, save, discuss),
     err,
-    b.notes ? el('details', { open: '' }, el('summary', { text: `The team's current strategy${b.notesAt ? ` — ${when(b.notesAt)}` : ''}` }), el('div', { class: 'lead-msg', text: b.notes })) : el('p', { class: 'admin-hint', text: 'No team strategy yet. Save the profile, then have the team discuss it (it also re-discusses weekly on its own).' }));
+    brand !== 'semantiq' ? null : (b.notes ? el('details', { open: '' }, el('summary', { text: `The team's current strategy${b.notesAt ? ` — ${when(b.notesAt)}` : ''}` }), el('div', { class: 'lead-msg', text: b.notes })) : el('p', { class: 'admin-hint', text: 'No team strategy yet — press the button above and the team will write one.' })));
 }
 
 /** Outbound: check a prospect's own site, save it as a lead, and have the team draft a first email about what we found. You approve every send. */
@@ -157,7 +169,9 @@ function connectionsSection() {
     every.value = a.autopostEvery || 'off';
     const per = el('input', { type: 'number', min: '1', max: '6', value: String(a.autopostPerDay || 1), title: 'Posts per day (used with daily)' });
     per.value = String(a.autopostPerDay || 1);
-    const saveB = btn('Save schedule', () => act(saveB, e, () => api('account', { method: 'PUT', id: a.id, body: { autopostEvery: every.value, autopostPerDay: per.value } })));
+    const brandSel = el('select', { title: 'Which brand this account posts for', 'aria-label': 'Brand' }, ...(data.brands || []).map((x) => el('option', { value: x.id, text: x.name })));
+    brandSel.value = a.brandId || 'semantiq';
+    const saveB = btn('Save schedule', () => act(saveB, e, () => api('account', { method: 'PUT', id: a.id, body: { autopostEvery: every.value, autopostPerDay: per.value, brandId: brandSel.value } })));
     const now = btn('Post once now', async () => {
       now.disabled = true; now.textContent = 'Posting…'; e.textContent = ''; out.textContent = '';
       try {
@@ -192,7 +206,7 @@ function connectionsSection() {
         el('span', { class: `pill ${a.connected ? 'sent' : 'new'}`, text: a.connected ? 'connected' : 'missing token' })),
       el('div', { class: 'lead-meta', text: a.autopostEvery === 'off' ? 'Autopost is OFF — nothing posts on its own.' : `Autopost: ${a.autopostEvery}${a.autopostEvery === 'daily' ? `, ${a.autopostPerDay}/day` : ''}. Last post: ${a.lastPostAt ? when(a.lastPostAt) : 'never'}.` }),
       a.lastError ? el('div', { class: 'err', text: `Last error: ${a.lastError}` }) : null,
-      el('div', { class: 'row' }, every, per, saveB, now), out, e, reconnect);
+      el('div', { class: 'row' }, brandSel, every, per, saveB, now), out, e, reconnect);
   });
 
   return el('section', { class: 'admin-section' },

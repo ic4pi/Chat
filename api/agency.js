@@ -4,7 +4,7 @@
 //           (the free site checker)      POST /api/agency?op=check  { site } → a scored report (nothing saved)
 //   Admin   (HTTP Basic auth)    GET  /team   (= ?op=page)           → the Team page
 //                                GET  ?op=overview                   → leads, business, activity, controls
-//                                PUT  ?op=business   { profile, offers }
+//                                PUT  ?op=business[&brand=id] { profile, offers }   (brands: lib/brands.js)
 //                                POST ?op=discuss                    → the team discusses the profile now
 //                                POST ?op=draft&id=                  → the closer drafts a reply (sends nothing)
 //                                PUT  ?op=lead&id=   { status, value, notes, draft }
@@ -20,6 +20,7 @@
 
 import { requireAdminAuth } from '../lib/auth.js';
 import { getBusiness, saveProfile, saveNotes, runTeamDiscussion } from '../lib/business-profile.js';
+import { BRANDS, DEFAULT_BRAND, normalizeBrandId, isBrandId } from '../lib/brands.js';
 import { agency, limits } from '../lib/agency-control.js';
 import { leads, validateLeadInput, withinRate } from '../lib/leads.js';
 import { checkSite, reportText } from '../lib/site-check.js';
@@ -112,6 +113,7 @@ export default async function handler(req, res) {
   if (!requireAdminAuth(req, res)) return;
   res.setHeader('Cache-Control', 'no-store');
   const id = typeof req.query?.id === 'string' ? req.query.id : '';
+  const brand = normalizeBrandId(typeof req.query?.brand === 'string' ? req.query.brand : '');
   const body = req.body && typeof req.body === 'object' ? req.body : {};
 
   try {
@@ -122,21 +124,22 @@ export default async function handler(req, res) {
 
     if (op === 'overview' && req.method === 'GET') {
       const [business, list, summary, control, usage, activity, account] = await Promise.all([
-        getBusiness(), leads.list(), leads.summary(), agency.getControl(), agency.usage(), teamActivity(), emailAccount().catch(() => null),
+        getBusiness(brand), leads.list(), leads.summary(), agency.getControl(), agency.usage(), teamActivity(), emailAccount().catch(() => null),
       ]);
       return res.status(200).json({
         kv: KV_ENABLED,
-        business, leads: list, summary, control, usage, limits: limits(), activity,
+        brands: BRANDS, brand, business, leads: list, summary, control, usage, limits: limits(), activity,
         emailReady: !!account,
         notifyReady: !!(process.env.LEAD_NOTIFY_EMAIL || '').trim(),
       });
     }
 
     if (op === 'business' && req.method === 'PUT') {
-      if (body.notes !== undefined) await saveNotes(body.notes);
-      return res.status(200).json(await saveProfile(body.profile, body.offers));
+      if (body.notes !== undefined) await saveNotes(body.notes, brand);
+      return res.status(200).json(await saveProfile(body.profile, body.offers, brand));
     }
     if (op === 'discuss' && req.method === 'POST') {
+      if (brand !== DEFAULT_BRAND) return res.status(400).json({ error: 'The team discussion is only built for Semantiq so far.' });
       return res.status(200).json(await runTeamDiscussion(req));
     }
     if (op === 'control' && req.method === 'PUT') {
@@ -150,7 +153,7 @@ export default async function handler(req, res) {
         id: a.id, label: a.label, platform: a.platform,
         connected: a.platform === 'email' ? !!(a.resendApiKey && a.fromEmail) : a.platform === 'twitter' ? !!(a.consumerKey && a.accessToken) : !!(a.pageId && a.pageToken),
         fromEmail: a.platform === 'email' ? a.fromEmail : undefined,
-        autopostEvery: a.autopostEvery, autopostPerDay: a.autopostPerDay,
+        autopostEvery: a.autopostEvery, autopostPerDay: a.autopostPerDay, brandId: a.brandId,
         lastPostAt: state[a.id]?.lastAt || null, lastError: state[a.id]?.lastError || null, fails: state[a.id]?.fails || 0,
       }));
       // The Vercel-settings email account counts as connected when no email account is saved on the page.
@@ -168,7 +171,7 @@ export default async function handler(req, res) {
       await updateSocialAccounts((list) => list.map((a) => {
         if (a.id !== target) return a;
         found = true;
-        return { ...a, autopostChosen: true, ...(every ? { autopostEvery: every } : {}), ...(body.autopostPerDay ? { autopostPerDay: Number(body.autopostPerDay) } : {}) };
+        return { ...a, ...(isBrandId(body.brandId) ? { brandId: body.brandId } : {}), autopostChosen: true, ...(every ? { autopostEvery: every } : {}), ...(body.autopostPerDay ? { autopostPerDay: Number(body.autopostPerDay) } : {}) };
       }));
       return found ? res.status(200).json({ ok: true }) : res.status(404).json({ error: 'No such account.' });
     }
