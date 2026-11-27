@@ -1505,7 +1505,7 @@ export default async function handler(req, res) {
   //   POST /api/media-generate?op=credit {key, usd}   -> add (or subtract) credit
   // Basic-auth protected, same ADMIN_USERNAME/ADMIN_PASSWORD as /admin.
   if (String(req.query?.op || '') === 'credit') {
-    if (!(await requireAdminAuth(req, res))) return;
+    if (!requireAdminAuth(req, res)) return;
     if (req.method === 'GET') {
       return res.status(200).json({ people: await listAllBalances() });
     }

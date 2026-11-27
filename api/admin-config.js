@@ -9,7 +9,7 @@ import { loadConfig, saveConfig } from '../lib/config.js';
 import { KV_ENABLED } from '../lib/kv.js';
 
 export default async function handler(req, res) {
-  if (!(await requireAdminAuth(req, res))) return;
+  if (!requireAdminAuth(req, res)) return;
 
   res.setHeader('Cache-Control', 'no-store');
 

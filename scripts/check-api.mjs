@@ -169,7 +169,7 @@ const fakeRes = {
   status(code) { this.statusCode = code; return this; },
   json(obj) { this.body = obj; return this; },
 };
-const allowed = await auth.requireAdminAuth(
+const allowed = auth.requireAdminAuth(
   { headers: { authorization: `Basic ${Buffer.from('smoke-user:smoke-pass').toString('base64')}` } },
   fakeRes,
 );

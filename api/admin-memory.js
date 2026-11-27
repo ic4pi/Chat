@@ -10,7 +10,7 @@ import { requireAdminAuth } from '../lib/auth.js';
 import { db, HUB_ENABLED } from '../lib/hub.js';
 
 export default async function handler(req, res) {
-  if (!(await requireAdminAuth(req, res))) return;
+  if (!requireAdminAuth(req, res)) return;
   res.setHeader('Cache-Control', 'no-store');
 
   if (!HUB_ENABLED) {

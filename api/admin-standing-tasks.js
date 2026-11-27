@@ -11,7 +11,7 @@ import { runStandingTask } from '../lib/run-standing-task.js';
 import { getBusiness, saveProfile, runTeamDiscussion } from '../lib/business-profile.js';
 
 export default async function handler(req, res) {
-  if (!(await requireAdminAuth(req, res))) return;
+  if (!requireAdminAuth(req, res)) return;
   res.setHeader('Cache-Control', 'no-store');
 
   // Business profile + the team's strategy notes:

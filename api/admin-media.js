@@ -12,7 +12,7 @@ const FOLDERS = ['video', 'image'];
 const DEFAULT_LIMIT = 40;
 
 export default async function handler(req, res) {
-  if (!(await requireAdminAuth(req, res))) return;
+  if (!requireAdminAuth(req, res)) return;
 
   res.setHeader('Cache-Control', 'no-store');
 
