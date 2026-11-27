@@ -219,6 +219,11 @@ function connectionsSection() {
     const brandSel = el('select', { title: 'Which brand this account posts for', 'aria-label': 'Brand' }, ...(data.brands || []).map((x) => el('option', { value: x.id, text: x.name })));
     brandSel.value = a.brandId || 'semantiq';
     const saveB = btn('Save schedule', () => act(saveB, e, () => api('account', { method: 'PUT', id: a.id, body: { autopostEvery: every.value, autopostPerDay: per.value, brandId: brandSel.value } })));
+    // One clear switch: ON = posts publish by themselves on the schedule, nothing waits for approval.
+    const isOn = (a.autopostEvery || 'off') !== 'off';
+    const toggle = btn(isOn ? '● Autopost ON — tap to turn off' : '○ Autopost OFF — tap to turn on',
+      () => act(toggle, e, () => api('account', { method: 'PUT', id: a.id, body: { autopostEvery: isOn ? 'off' : (every.value !== 'off' ? every.value : 'daily'), autopostPerDay: per.value, brandId: brandSel.value } })),
+      isOn ? 'text-btn primary' : 'text-btn');
     const now = btn('Post once now', async () => {
       now.disabled = true; now.textContent = 'Posting…'; e.textContent = ''; out.textContent = '';
       try {
@@ -253,6 +258,8 @@ function connectionsSection() {
         el('span', { class: `pill ${a.connected ? 'sent' : 'new'}`, text: a.connected ? 'connected' : 'missing token' })),
       el('div', { class: 'lead-meta', text: a.autopostEvery === 'off' ? 'Autopost is OFF — nothing posts on its own.' : `Autopost: ${a.autopostEvery}${a.autopostEvery === 'daily' ? `, ${a.autopostPerDay}/day` : ''}. Last post: ${a.lastPostAt ? when(a.lastPostAt) : 'never'}.` }),
       a.lastError ? el('div', { class: 'err', text: `Last error: ${a.lastError}` }) : null,
+      el('div', { class: 'row' }, toggle),
+      el('p', { class: 'admin-hint', text: isOn ? 'ON: posts go out by themselves on the schedule below. Nothing waits for your approval. “Pause everything automatic” above stops all of it.' : 'OFF: nothing posts on its own for this account.' }),
       el('div', { class: 'row' }, brandSel, every, per, saveB, now), out, e, reconnect);
   });
 
