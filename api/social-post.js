@@ -1,13 +1,13 @@
 // POST /api/social-post — publish a persona's drafted copy to a real
 // Facebook Page or Instagram Business account.
 //
-// Gated behind the same unlock secret as paid models (PAID_MODELS_PASSWORD
-// or ADMIN_PASSWORD) — this triggers a real, public, irreversible action, so
-// it needs at least the same bar as spending paid-model credits, not the
-// open-by-default bar the rest of chat runs at.
+// Needs the ADMIN password (ADMIN_PASSWORD, or username:password) — NOT the paid-models password, which people may
+// be given to use paid models. This publishes publicly and sends email from the owner's account, so only the owner
+// can do it. Wrong guesses are counted per address and cut off (lib/throttle.js).
 
 import { loadConfig } from '../lib/config.js';
-import { paidPasswordFromRequest, verifyPaidPassword, paidUnlockConfigured } from '../lib/model-meta.js';
+import { paidPasswordFromRequest, verifyAdminPassword, adminPasswordConfigured } from '../lib/model-meta.js';
+import { isBlocked, noteFailure, sendBlocked } from '../lib/throttle.js';
 import { publishToAccount } from '../lib/social.js';
 import { resolveOwner } from '../lib/hub.js';
 import { logTeamAction } from '../lib/team-log.js';
@@ -19,14 +19,16 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  if (!paidUnlockConfigured()) {
+  if (!adminPasswordConfigured()) {
     return res.status(403).json({
-      error: 'Publishing is locked. Set PAID_MODELS_PASSWORD (or ADMIN_PASSWORD) in Vercel, then unlock in the Model picker.',
+      error: 'Publishing is locked. Set ADMIN_PASSWORD in Vercel, then enter it when you publish.',
     });
   }
+  if (await isBlocked(req, 'publish')) return sendBlocked(res);
   const submitted = paidPasswordFromRequest(req);
-  if (!verifyPaidPassword(submitted)) {
-    return res.status(403).json({ error: 'Wrong or missing unlock password.' });
+  if (!verifyAdminPassword(submitted)) {
+    await noteFailure(req, 'publish');
+    return res.status(403).json({ error: 'Publishing needs the admin password (not the paid-models password).' });
   }
 
   const { accountId, message, imageUrl, to, subject, personaName } = req.body || {};
