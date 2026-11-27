@@ -7,6 +7,7 @@
 // rules are ever injected.
 
 import { loadConfig } from '../lib/config.js';
+import { requestContext, visiblePersonas } from '../lib/access.js';
 import { resolveProvider, withProviderChatExtras, formatProviderError } from '../lib/providers.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
 import { prepareImageMessages, hasImageParts } from '../lib/vision.js';
@@ -49,14 +50,16 @@ function sseWrite(res, obj) {
  * no channel rules, role rules, or soft safety hedges on top of uncensored models.
  * Returns '' when neither is set so the request can omit a system message entirely.
  */
-async function resolveSystemPrompt(personaId) {
+async function resolveSystemPrompt(personaId, ctx) {
   try {
     const config = await loadConfig();
+    // Only the personas this caller may use; the owner's master prompt is the owner's alone.
+    const list = visiblePersonas(config, ctx);
     const persona =
-      config.personas.find((p) => p.id === personaId) ||
-      config.personas.find((p) => p.id === 'nexus') ||
-      config.personas[0];
-    const parts = [config.masterPrompt, persona?.systemPrompt].filter(
+      list.find((p) => p.id === personaId) ||
+      list.find((p) => p.id === 'nexus') ||
+      list[0];
+    const parts = [ctx?.isOwner ? config.masterPrompt : '', persona?.systemPrompt].filter(
       (s) => typeof s === 'string' && s.trim().length > 0,
     );
     return parts.join('\n\n');
@@ -389,10 +392,11 @@ export default async function handler(req, res) {
   const sentImages = hasImageParts(chatMessages);
 
   const hasPriorTurn = chatMessages.some((m) => m.role === 'assistant');
+  const ctx = await requestContext(req);
   const basePrompt = [
-    await resolveSystemPrompt(personaId),
-    // The agency's own team knows the business in every chat they speak in; personal personas never do.
-    await loadBusinessBlockFor(personaId),
+    await resolveSystemPrompt(personaId, ctx),
+    // The agency's own team knows the business in every chat they speak in; personal personas never do. Owner only.
+    ctx.isOwner ? await loadBusinessBlockFor(personaId) : '',
     hasPriorTurn ? NO_REPEAT_INSTRUCTION : '',
     codeSpaceHandoffInstruction(codeSpaceHandoff),
   ]

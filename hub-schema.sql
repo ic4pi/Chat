@@ -481,3 +481,39 @@ create table if not exists claw_workflows (
 );
 create unique index if not exists claw_workflows_owner_name_idx on claw_workflows(owner_id, lower(name));
 alter table claw_workflows enable row level security;
+
+-- ---------------------------------------------------------------
+-- ACCOUNTS: real logins (email + password). `owner_id` links an account to the
+-- memory/chat rows above, so a person's history follows them across devices.
+-- RLS on with no policies: only the server's service-role key can touch these.
+-- ---------------------------------------------------------------
+create table if not exists accounts (
+  id            uuid primary key default gen_random_uuid(),
+  email         text not null,
+  email_norm    text not null unique,
+  password_hash text not null,
+  is_owner      boolean not null default false,   -- the app's owner: sees every persona, brand and posting account
+  plan          text not null default 'free' check (plan in ('free','pro')),   -- pro = paid models and higher limits
+  owner_id      uuid references owners(id) on delete set null,
+  created_at    timestamptz not null default now(),
+  last_login_at timestamptz
+);
+alter table accounts enable row level security;
+
+create table if not exists account_sessions (
+  token_hash text primary key,                    -- sha256 of the cookie secret
+  account_id uuid not null references accounts(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null
+);
+create index if not exists account_sessions_account_idx on account_sessions(account_id);
+alter table account_sessions enable row level security;
+
+create table if not exists account_tokens (       -- one-time password-reset links
+  token_hash text primary key,
+  account_id uuid not null references accounts(id) on delete cascade,
+  kind       text not null default 'reset',
+  expires_at timestamptz not null,
+  used_at    timestamptz
+);
+alter table account_tokens enable row level security;

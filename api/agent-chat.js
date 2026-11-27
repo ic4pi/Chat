@@ -19,6 +19,7 @@ import { resolveProvider, withProviderChatExtras, codingReasoningCap, formatProv
 import { prepareImageMessages } from '../lib/vision.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
 import { loadConfig } from '../lib/config.js';
+import { requestContext, visiblePersonas } from '../lib/access.js';
 import { fetchWithModelFallback } from '../lib/model-health.js';
 
 /**
@@ -136,14 +137,15 @@ const ORCHESTRATOR_REMINDER = [
   'paste or copy anything — the coder receives your brief automatically and writes the files.',
 ].join('\n');
 
-async function resolvePersonaPrompt(personaId) {
+async function resolvePersonaPrompt(personaId, ctx) {
   try {
     const config = await loadConfig();
+    const list = visiblePersonas(config, ctx);
     const persona =
-      config.personas.find((p) => p.id === personaId) ||
-      config.personas.find((p) => p.id === 'nexus') ||
-      config.personas[0];
-    return [config.masterPrompt, persona?.systemPrompt]
+      list.find((p) => p.id === personaId) ||
+      list.find((p) => p.id === 'nexus') ||
+      list[0];
+    return [ctx?.isOwner ? config.masterPrompt : '', persona?.systemPrompt]
       .filter((s) => typeof s === 'string' && s.trim())
       .join('\n\n');
   } catch (err) {
@@ -571,7 +573,7 @@ export default async function handler(req, res) {
 
   // Persona first so budget truncation (which keeps the head) never drops it.
   const effectiveSystem = orchestrate && typeof personaId === 'string' && personaId
-    ? [await resolvePersonaPrompt(personaId), ORCHESTRATOR_PROTOCOL, claw === true ? CLAW_PROTOCOL : '', systemPrompt, ORCHESTRATOR_REMINDER]
+    ? [await resolvePersonaPrompt(personaId, await requestContext(req)), ORCHESTRATOR_PROTOCOL, claw === true ? CLAW_PROTOCOL : '', systemPrompt, ORCHESTRATOR_REMINDER]
         .filter((s) => typeof s === 'string' && s.trim())
         .join('\n\n')
     : systemPrompt;

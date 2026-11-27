@@ -17,6 +17,7 @@
  */
 
 import { loadConfig } from '../lib/config.js';
+import { requestContext, visiblePersonas } from '../lib/access.js';
 import { fetchWithModelFallback } from '../lib/model-health.js';
 import { resolveProvider, withProviderChatExtras } from '../lib/providers.js';
 import { requirePaidAccess } from '../lib/model-meta.js';
@@ -416,12 +417,14 @@ export default async function handler(req, res) {
 
   try {
     const config = await loadConfig();
+    const ctx = await requestContext(req);
     // A caller can seat a subset (e.g. "just the marketing personas"); with
-    // no list, every configured persona sits at the table as before.
+    // no list, every persona THIS caller may use sits at the table.
     const wantedIds = Array.isArray(personaIds) ? personaIds.filter((id) => typeof id === 'string') : null;
+    const mayUse = visiblePersonas(config, ctx);
     const roster = wantedIds && wantedIds.length
-      ? (config.personas || []).filter((p) => wantedIds.includes(p.id))
-      : (config.personas || []);
+      ? mayUse.filter((p) => wantedIds.includes(p.id))
+      : mayUse;
     const personas = roster.slice(0, MAX_PERSONAS);
     if (!personas.length) {
       sseWrite(res, { type: 'error', error: 'No personas configured.' });
@@ -455,7 +458,8 @@ export default async function handler(req, res) {
 
     // The business profile, offers and strategy: read once per round, given only to the agency's own team seats.
     let bizBlock = '';
-    try { bizBlock = businessBlock(await getBusiness()); } catch { /* the round goes on without it */ }
+    // The business is the owner's: nobody else's table is told about it.
+    try { if (ctx.isOwner) bizBlock = businessBlock(await getBusiness()); } catch { /* the round goes on without it */ }
 
     sseWrite(res, {
       type: 'status',
@@ -471,7 +475,7 @@ export default async function handler(req, res) {
     sseWrite(res, { type: 'summary', summary: rollingSummary });
 
     const roundSoFar = [];
-    const master = (config.masterPrompt || '').trim();
+    const master = ctx.isOwner ? (config.masterPrompt || '').trim() : '';   // the master prompt is the owner's alone
 
     const speakingOrder = await rankPersonasByRelevance(defaultResolved, defaultModel, {
       topic: topicText,
