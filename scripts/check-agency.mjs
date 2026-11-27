@@ -1,5 +1,6 @@
 // Agency controls: backoff, auto-pause, kill switch, daily caps — against an in-memory store.
 import { createAgencyControl, isDueWithState, backoffMs, MAX_FAILS } from '../lib/agency-control.js';
+import { buildBrandTask, isAutomationDue, AUTO_MAX_FAILS } from '../lib/brand-automation.js';
 
 let failed = 0;
 const ok = (name, cond) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`); if (!cond) failed++; };
@@ -55,6 +56,35 @@ ok('usage reports what was counted', (await a.usage()).posts === 5);
 t += DAY;
 ok('the cap resets the next day', (await a.consume('posts', 3)) === true && (await a.usage()).posts === 1);
 ok('a store without KV never blocks', (await createAgencyControl({ enabled: false }).consume('posts', 0)) === true);
+
+// ── brand automation ───────────────────────────────────────────────────
+ok('off is never due', !isAutomationDue({ every: 'off' }) && !isAutomationDue({}) && !isAutomationDue({ every: 'nonsense' }));
+ok('a brand that never ran is due on the next tick', isAutomationDue({ every: 'daily' }, t));
+ok('daily waits a day, weekly waits a week',
+  !isAutomationDue({ every: 'daily', lastRunAt: new Date(t).toISOString() }, t + HOUR)
+  && isAutomationDue({ every: 'daily', lastRunAt: new Date(t).toISOString() }, t + DAY)
+  && !isAutomationDue({ every: 'weekly', lastRunAt: new Date(t).toISOString() }, t + DAY)
+  && isAutomationDue({ every: 'weekly', lastRunAt: new Date(t).toISOString() }, t + 7 * DAY));
+const brandTask = buildBrandTask(
+  { id: 'swearjar', name: 'Swear Jar' },
+  { brandName: 'Swear Jar', kind: 'comedy', profile: 'A comedy production company.', offers: 'Fri 8pm — The Room — tickets: example.com' },
+  'daily'
+);
+ok('the automated task carries the brand profile and shows into the brief', brandTask.objective.includes('A comedy production company.') && brandTask.objective.includes('Fri 8pm') && brandTask.id === 'auto-swearjar');
+ok('automated runs stay draft-and-approve and out of the cron task list', /drafts only/.test(brandTask.objective) && brandTask.schedule === 'manual');
+let auto = await a.setAutomation('swearjar', 'daily');
+ok('a brand schedule is saved', auto.every === 'daily');
+await a.noteAutomationResult('swearjar', { summary: 'did work', turns: 4, toolsUsed: ['web'], prUrl: 'https://x/pr/1' });
+auto = (await a.getAutomation()).swearjar;
+ok('a good run stores its write-up and resets failures', auto.lastResult?.prUrl === 'https://x/pr/1' && auto.failCount === 0 && auto.lastRunAt === new Date(t).toISOString());
+let af = await a.recordAutomationFailure('swearjar', new Error('boom'), AUTO_MAX_FAILS);
+ok('a failure is counted, schedule kept', af.failCount === 1 && af.every === 'daily' && !af.justTurnedOff);
+for (let i = 1; i < AUTO_MAX_FAILS; i++) af = await a.recordAutomationFailure('swearjar', new Error('boom'), AUTO_MAX_FAILS);
+ok(`${AUTO_MAX_FAILS} failures turn the brand off by itself`, af.every === 'off' && af.justTurnedOff === true);
+ok('...and turning itself off sticks', (await a.getAutomation()).swearjar.every === 'off');
+auto = await a.setAutomation('swearjar', 'weekly');
+ok('re-enabling resets the fail counter but keeps the history', auto.every === 'weekly' && auto.failCount === 0 && auto.lastResult?.prUrl === 'https://x/pr/1');
+ok('one brand’s automation leaves the others alone', ((await a.getAutomation()).capicapi || {}).every === undefined);
 
 if (failed) { console.error(`\n${failed} check(s) failed`); process.exit(1); }
 console.log('\nall agency checks passed');

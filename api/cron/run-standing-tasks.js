@@ -8,6 +8,9 @@ import { agency, isDueWithState, limits } from '../../lib/agency-control.js';
 import { logTeamAction } from '../../lib/team-log.js';
 import { db, HUB_ENABLED } from '../../lib/hub.js';
 import { runStandingTask } from '../../lib/run-standing-task.js';
+import { buildBrandTask, isAutomationDue, AUTO_MAX_FAILS } from '../../lib/brand-automation.js';
+import { BRANDS } from '../../lib/brands.js';
+import { getBusiness } from '../../lib/business-profile.js';
 import { runAutopost } from '../../lib/autopost.js';
 import { discussIfStale } from '../../lib/business-profile.js';
 import { draftNewLeads } from '../../lib/lead-ops.js';
@@ -77,13 +80,38 @@ export default async function handler(req, res) {
     }
   }
 
+  // Brand automation: every brand with a schedule (set on the Team page) runs its own
+  // daily/weekly work session through the same engine and guardrails as a manual job.
+  const automationState = await agency.getAutomation().catch(() => ({}));
+  const automation = [];
+  for (const brand of BRANDS) {
+    const entry = automationState[brand.id];
+    if (!isAutomationDue(entry)) continue;
+    if (Date.now() - started > TASKS_DEADLINE_MS) { automation.push({ brand: brand.id, ok: false, skipped: true, error: 'Skipped: out of time in this run; it goes next hour.' }); continue; }
+    if (!(await agency.consume('taskRuns', caps.taskRunsPerDay))) {
+      automation.push({ brand: brand.id, ok: false, skipped: true, error: `Skipped: daily limit of ${caps.taskRunsPerDay} task runs reached.` });
+      continue;
+    }
+    try {
+      const business = await getBusiness(brand.id);
+      const result = await runStandingTask(buildBrandTask(brand, business, entry.every), req);
+      await agency.noteAutomationResult(brand.id, result);
+      automation.push({ brand: brand.id, ok: true, turns: result.turns, prUrl: result.prUrl || null });
+    } catch (err) {
+      const st = await agency.recordAutomationFailure(brand.id, err, AUTO_MAX_FAILS).catch(() => ({}));
+      automation.push({ brand: brand.id, ok: false, error: err.message || String(err), failCount: st.failCount, turnedOff: !!st.justTurnedOff });
+      if (st.justTurnedOff) await tellOwner(`Automation for ${brand.name} turned itself off`, st.lastError);
+    }
+  }
+
   let discussion = null;
   try { discussion = await discussIfStale(req); } catch (err) { discussion = { error: err.message || String(err) }; }
 
   // Cron output is otherwise invisible: one line per run (and per failure) so the runtime logs show what happened.
-  console.log('[agency-cron]', JSON.stringify({ autopost: autopost.map((a) => ({ id: a.id, ok: a.ok, error: a.error })), leadDrafts: leadDrafts.length, tasksRan: due.length }));
+  console.log('[agency-cron]', JSON.stringify({ autopost: autopost.map((a) => ({ id: a.id, ok: a.ok, error: a.error })), leadDrafts: leadDrafts.length, tasksRan: due.length, automationRan: automation.filter((a) => a.ok).length }));
   for (const a of autopost) if (a.ok === false) console.error('[agency-cron] autopost failed:', a.label || a.id, a.error);
-  return res.status(200).json({ checked: tasks.length, ran: due.length, results, discussion, autopost, leadDrafts });
+  for (const a of automation) if (a.ok === false && !a.skipped) console.error('[agency-cron] automation failed:', a.brand, a.error);
+  return res.status(200).json({ checked: tasks.length, ran: due.length, results, discussion, autopost, leadDrafts, automation });
 }
 
 const TASKS_DEADLINE_MS = 600_000;
