@@ -369,6 +369,43 @@ function jobsSection() {
     jobs.length ? jobs.map(jobCard) : el('p', { class: 'admin-hint', text: 'No jobs yet. Your first one is one sentence away.' }));
 }
 
+/** Automation: one switch per brand. ON = the team runs that brand on a schedule with nobody watching. */
+function automationSection() {
+  const auto = data.automation || {};
+  const rows = (data.brands || []).map((b) => {
+    const st = auto[b.id] || {};
+    const every = ['off', 'daily', 'weekly'].includes(st.every) ? st.every : 'off';
+    const isOn = every !== 'off';
+    const e = el('div', { class: 'err' });
+    const sel = el('select', { 'aria-label': `${b.name} automation schedule` }, ...[['off', 'Off — manual only'], ['daily', 'Every day'], ['weekly', 'Once a week']].map(([v, t]) => el('option', { value: v, text: t })));
+    sel.value = every;
+    const toggle = btn(isOn ? '● Automated — tap to turn off' : '○ Off — tap to automate',
+      () => act(toggle, e, () => api('automation', { method: 'PUT', body: { brandId: b.id, every: isOn ? 'off' : (sel.value !== 'off' ? sel.value : 'daily') } })),
+      isOn ? 'text-btn primary' : 'text-btn');
+    const saveB = btn('Save schedule', () => act(saveB, e, () => api('automation', { method: 'PUT', body: { brandId: b.id, every: sel.value } })));
+    const lr = st.lastResult;
+    return el('div', { class: 'lead' },
+      el('div', { class: 'lead-head' },
+        el('strong', { text: b.name }),
+        el('span', { class: `pill ${isOn ? 'sent' : 'new'}`, text: isOn ? `automated ${every}` : 'manual' })),
+      el('div', { class: 'lead-meta', text: [
+        st.lastRunAt ? `last run ${when(st.lastRunAt)}` : isOn ? 'has not run yet — it goes on the next hourly check' : '',
+        st.failCount ? `${st.failCount} failure${st.failCount === 1 ? '' : 's'} in a row` : '',
+      ].filter(Boolean).join(' · ') }),
+      st.lastError ? el('div', { class: 'err', text: `Last error: ${st.lastError}` }) : null,
+      lr ? el('details', {}, el('summary', { text: `Last write-up — ${when(lr.at)}` }),
+        el('div', { class: 'lead-msg', text: lr.summary || '(no summary)' }),
+        lr.prUrl ? el('div', { class: 'row' }, el('a', { href: lr.prUrl, target: '_blank', rel: 'noopener', class: 'text-btn primary', text: 'Review the pull request →' })) : null,
+        (lr.toolsUsed || []).length ? el('div', { class: 'lead-meta', text: lr.toolsUsed.join(' · ') }) : null) : null,
+      el('div', { class: 'row' }, toggle, sel, saveB),
+      e);
+  });
+  return el('section', { class: 'admin-section' },
+    el('h2', { text: 'Automation' }),
+    el('p', { class: 'admin-hint', text: 'One switch per brand. ON = the team works that brand on the schedule with nobody watching: checks leads and numbers, writes drafts, and saves a write-up you can read here. Automation never sends emails, never posts, and never changes code without a pull request you merge — drafts still wait for your tap. “Pause everything automatic” above stops all of it, and a brand that fails 5 times in a row switches itself off.' }),
+    rows);
+}
+
 const HANDOFF_KEY = 'chat_to_team_v1';
 
 /** Text sent here from a chat reply ("Send to… → Team"): adopt it as strategy, profile or offers, or dismiss it. */
@@ -405,6 +442,7 @@ function render() {
     !data.emailReady ? el('div', { class: 'banner', text: 'Replies cannot be sent yet: add an email account (Resend key + from-address) in Admin → Social accounts. Drafts still work.' }) : null,
     !data.notifyReady ? el('div', { class: 'banner', text: 'You will not be emailed when a lead arrives. Set LEAD_NOTIFY_EMAIL in Vercel to get a message (this page is the source of truth either way).' }) : null,
     jobsSection(),
+    automationSection(),
     el('section', { class: 'admin-section' },
       el('h2', { text: 'Money loop' }),
       el('div', { class: 'tiles' },
