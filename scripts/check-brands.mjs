@@ -1,7 +1,7 @@
 // Brands: each has its own goal/voice; Semantiq (the default) behaves exactly as before.
 import assert from 'node:assert/strict';
 import { normalizeSocialAccount } from '../lib/config.js';
-import { buildPostPrompts, SALES_GOAL } from '../lib/autopost.js';
+import { buildPostPrompts, SALES_GOAL, autopostModels } from '../lib/autopost.js';
 import { businessBlock } from '../lib/business-profile.js';
 import { BRANDS, brandById, normalizeBrandId, brandGoal } from '../lib/brands.js';
 
@@ -46,4 +46,11 @@ assert.ok(blk.includes('UPCOMING SHOWS'));
 assert.ok(blk.includes('THE COMPANY THIS BRAND BELONGS TO (Swear Jar)'));
 assert.ok(blk.includes('Swear Jar produces shows.'));
 assert.ok(businessBlock({ profile: 'x', offers: 'y' }).includes('WHAT WE SELL AND AT WHAT PRICE'));
+
+// autopost never depends on one Venice model: a retired one falls through to the next
+assert.equal(autopostModels('venice', {})[0], 'venice-uncensored-1-2');
+assert.ok(!autopostModels('venice', {}).some((m) => m.startsWith('e2ee-')));
+assert.deepEqual(autopostModels('venice', { AUTOPOST_MODEL: 'custom-x' }).slice(0, 2), ['custom-x', 'venice-uncensored-1-2']);
+assert.equal(new Set(autopostModels('venice', { AUTOPOST_MODEL: 'venice-uncensored-1-2' })).size, autopostModels('venice', { AUTOPOST_MODEL: 'venice-uncensored-1-2' }).length);
+assert.equal(autopostModels('groq', {}).length, 1);
 console.log('brand checks passed');
