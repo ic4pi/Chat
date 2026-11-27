@@ -20,6 +20,7 @@
 
 import { requireAdminAuth } from '../lib/auth.js';
 import { getBusiness, saveProfile, saveNotes, runTeamDiscussion } from '../lib/business-profile.js';
+import { PROVIDER_IDS } from '../lib/providers.js';
 import { BRANDS, DEFAULT_BRAND, normalizeBrandId, isBrandId } from '../lib/brands.js';
 import { agency, limits } from '../lib/agency-control.js';
 import { leads, validateLeadInput, withinRate } from '../lib/leads.js';
@@ -136,7 +137,16 @@ export default async function handler(req, res) {
 
     if (op === 'business' && req.method === 'PUT') {
       if (body.notes !== undefined) await saveNotes(body.notes, brand);
-      return res.status(200).json(await saveProfile(body.profile, body.offers, brand));
+      // The writer model for this brand: a known provider and a plain model id, or both empty for the default.
+      let writer;
+      if (body.writerModel !== undefined || body.writerProvider !== undefined) {
+        const model = String(body.writerModel || '').trim();
+        const provider = String(body.writerProvider || '').trim();
+        if (model && !/^[\w.\/:@+-]{1,120}$/.test(model)) return res.status(400).json({ error: 'That model id has characters a model id never has.' });
+        if (model && !PROVIDER_IDS.includes(provider)) return res.status(400).json({ error: 'Pick the provider that serves that model.' });
+        writer = { provider: model ? provider : '', model };
+      }
+      return res.status(200).json(await saveProfile(body.profile, body.offers, brand, writer));
     }
     if (op === 'discuss' && req.method === 'POST') {
       if (brand !== DEFAULT_BRAND) return res.status(400).json({ error: 'The team discussion is only built for Semantiq so far.' });

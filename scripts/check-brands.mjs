@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { normalizeSocialAccount } from '../lib/config.js';
 import { buildPostPrompts, SALES_GOAL, autopostModels } from '../lib/autopost.js';
 import { businessBlock } from '../lib/business-profile.js';
+import { attemptsFor } from '../lib/safe-complete.js';
 import { BRANDS, brandById, normalizeBrandId, brandGoal } from '../lib/brands.js';
 
 assert.deepEqual(BRANDS.map((b) => b.id), ['semantiq', 'swearjar', 'capicapi', 'ic4pi']);
@@ -79,6 +80,34 @@ console.log('brand checks passed');
     delete process.env.GROQ_API_KEY; calls.length = 0;
     globalThis.fetch = async (url, init) => { calls.push(JSON.parse(init.body).model); return reply(200, { choices: [{ message: { content: 'Only venice.' } }] }); };
     assert.equal(await writePost(acct, config, [], {}), 'Only venice.');
+  } finally { globalThis.fetch = realFetch; }
+}
+
+// per-brand writer: comedy defaults to uncensored, professional brands to a standard model, and a pick on the Team page always goes first
+{
+  const comedyDefault = attemptsFor({ kind: 'comedy' }, {});
+  assert.equal(comedyDefault[0].model, 'venice-uncensored-1-2');
+  assert.ok(comedyDefault.every((e) => /uncensored/.test(e.model)), 'comedy falls back to uncensored models, never to a filtered one');
+  const proDefault = attemptsFor({ kind: 'agency' }, {});
+  assert.equal(proDefault[0].model, 'google-gemma-4-26b-a4b-it');
+  assert.ok(!proDefault.some((e) => /uncensored/.test(e.model)));
+  assert.deepEqual(attemptsFor({ kind: 'agency', writerProvider: 'xai', writerModel: 'grok-4' }, {})[0], { provider: 'xai', model: 'grok-4' });
+  assert.deepEqual(attemptsFor({ kind: 'comedy', writerProvider: 'venice', writerModel: 'my-finetune' }, {})[0], { provider: 'venice', model: 'my-finetune' });
+  // an environment choice applies only when the brand has not picked one
+  assert.equal(attemptsFor({ kind: 'agency' }, { AUTOPOST_MODEL: 'env-model' })[0].model, 'env-model');
+  assert.equal(attemptsFor({ kind: 'agency', writerProvider: 'xai', writerModel: 'grok-4' }, { AUTOPOST_MODEL: 'env-model' })[0].model, 'grok-4');
+  assert.ok(!attemptsFor({ kind: 'agency', writerProvider: 'xai', writerModel: 'grok-4' }, { AUTOPOST_MODEL: 'env-model' }).some((e) => e.model === 'env-model'));
+
+  // end to end: a comedy brand's post is written by its uncensored model; a brand's own pick is the model actually called
+  const { writePost } = await import('../lib/autopost.js');
+  process.env.VENICE_API_KEY = 'v'; process.env.XAI_API_KEY = 'x';
+  const realFetch = globalThis.fetch; const used = [];
+  try {
+    globalThis.fetch = async (url, init) => { used.push(JSON.parse(init.body).model); return new Response(JSON.stringify({ choices: [{ message: { content: 'A bit.' } }] })); };
+    await writePost(acct, config, [], { kind: 'comedy', brandId: 'capicapi' });
+    await writePost(acct, config, [], { kind: 'comedy', brandId: 'capicapi', writerProvider: 'venice', writerModel: 'my-finetune' });
+    await writePost(acct, config, [], { kind: 'agency', writerProvider: 'xai', writerModel: 'grok-4' });
+    assert.deepEqual(used, ['venice-uncensored-1-2', 'my-finetune', 'grok-4']);
   } finally { globalThis.fetch = realFetch; }
 }
 console.log('autopost fallback checks passed');

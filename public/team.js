@@ -21,6 +21,9 @@ const el = (tag, props = {}, ...kids) => {
   for (const kid of kids.flat()) if (kid) n.append(kid);
   return n;
 };
+// Providers the app can talk to (lib/providers.js) — a brand's writer model is picked from one of these.
+const WRITER_PROVIDERS = [['venice', 'Venice'], ['openrouter', 'OpenRouter'], ['xai', 'xAI (Grok)'], ['groq', 'Groq'], ['cerebras', 'Cerebras'], ['nvidia', 'NVIDIA']];
+
 /** root.replaceChildren(null) writes the literal word "null" on the page, so optional sections are filtered out first. */
 const show = (...parts) => root.replaceChildren(...parts.filter(Boolean));
 const btn = (label, onclick, cls = 'text-btn') => el('button', { class: cls, type: 'button', text: label, onclick });
@@ -132,9 +135,24 @@ function businessSection() {
     ? 'One show per line, with the real details. e.g.\nFri Dec 12 — 8pm — The Laugh Room, Austin — tickets: example.com/tix'
     : 'One offer per line, with the price and what is included. e.g.\nStarter website — $900 — 5 pages, mobile, live in 2 weeks\nMonthly content — $600/mo — 12 posts + 1 email' });
   offers.value = b.offers || '';
-  const save = btn('Save', () => act(save, err, () => api('business', { method: 'PUT', body: { profile: profile.value, offers: offers.value } })), 'text-btn primary');
+  // Which model writes for this brand. Blank = the default for its kind. Any model id works, including a fine-tuned one on a listed provider.
+  const wProv = el('select', { 'aria-label': 'Writer provider' }, el('option', { value: '', text: 'Default for this brand' }), ...WRITER_PROVIDERS.map(([v, t]) => el('option', { value: v, text: t })));
+  const wList = el('datalist', { id: 'writerModels' });
+  const wModel = el('input', { type: 'text', list: 'writerModels', placeholder: 'Model id (blank = default)', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', 'aria-label': 'Writer model' });
+  wProv.value = b.writerProvider || ''; wModel.value = b.writerModel || '';
+  const fillModels = async () => {
+    wList.replaceChildren();
+    if (!wProv.value) return;
+    try {
+      const d = await (await fetch(`/api/models?provider=${encodeURIComponent(wProv.value)}`)).json();
+      for (const m of d.models || []) wList.append(el('option', { value: m.id, label: m.name || m.id }));
+    } catch { /* typing the id by hand still works */ }
+  };
+  wProv.addEventListener('change', fillModels); fillModels();
+  const body = () => ({ profile: profile.value, offers: offers.value, writerProvider: wProv.value, writerModel: wProv.value ? wModel.value : '' });
+  const save = btn('Save', () => act(save, err, () => api('business', { method: 'PUT', body: body() })), 'text-btn primary');
   const discuss = brand === 'semantiq' ? btn('Have the team discuss it now', () => act(discuss, err, async () => {
-    await api('business', { method: 'PUT', body: { profile: profile.value, offers: offers.value } });
+    await api('business', { method: 'PUT', body: body() });
     await api('discuss', { method: 'POST' });
   })) : null;
   return el('section', { class: 'admin-section' },
@@ -145,6 +163,11 @@ function businessSection() {
       : el('p', { class: 'admin-hint', text: `Autoposts for accounts set to ${b.brandName} read this${b.parentName ? ` (and ${b.parentName}'s profile)` : ''}. ${kind === 'comedy' ? 'Posts are written to grow the audience and fill seats — add real show dates and ticket links below and they will be promoted; nothing is invented.' : 'Posts are written to win clients for this brand.'}` }),
     el('div', { class: 'field' }, el('label', { text: 'About the brand' }), profile),
     el('div', { class: 'field' }, el('label', { text: kind === 'comedy' ? 'Upcoming shows (dates, venues, ticket links)' : 'Offers and prices (what we sell)' }), offers),
+    el('div', { class: 'field' }, el('label', { text: 'Writer model — what writes this brand\'s posts' }),
+      el('div', { class: 'row' }, wProv, wModel), wList,
+      el('p', { class: 'admin-hint', text: kind === 'comedy'
+        ? 'Default: an uncensored model (Venice Uncensored 1.2). Pick your own — including a fine-tuned model — to override it.'
+        : 'Default: a standard model (Venice Gemma, then Llama on Groq). Pick a stronger writer to override it.' })),
     el('div', { class: 'row' }, save, discuss),
     err,
     brand !== 'semantiq' ? null : (b.notes ? el('details', { open: '' }, el('summary', { text: `The team's current strategy${b.notesAt ? ` — ${when(b.notesAt)}` : ''}` }), el('div', { class: 'lead-msg', text: b.notes })) : el('p', { class: 'admin-hint', text: 'No team strategy yet — press the button above and the team will write one.' })));
