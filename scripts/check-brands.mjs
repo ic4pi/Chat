@@ -47,10 +47,38 @@ assert.ok(blk.includes('THE COMPANY THIS BRAND BELONGS TO (Swear Jar)'));
 assert.ok(blk.includes('Swear Jar produces shows.'));
 assert.ok(businessBlock({ profile: 'x', offers: 'y' }).includes('WHAT WE SELL AND AT WHAT PRICE'));
 
-// autopost never depends on one Venice model: a retired one falls through to the next
-assert.equal(autopostModels('venice', {})[0], 'venice-uncensored-1-2');
-assert.ok(!autopostModels('venice', {}).some((m) => m.startsWith('e2ee-')));
-assert.deepEqual(autopostModels('venice', { AUTOPOST_MODEL: 'custom-x' }).slice(0, 2), ['custom-x', 'venice-uncensored-1-2']);
-assert.equal(new Set(autopostModels('venice', { AUTOPOST_MODEL: 'venice-uncensored-1-2' })).size, autopostModels('venice', { AUTOPOST_MODEL: 'venice-uncensored-1-2' }).length);
-assert.equal(autopostModels('groq', {}).length, 1);
+// autopost: standard (non-uncensored) models only, with fallbacks; env overrides go first
+const defaults = autopostModels({});
+assert.equal(defaults[0].model, 'google-gemma-4-26b-a4b-it');
+assert.ok(defaults.length >= 2);
+assert.ok(!defaults.some((e) => /uncensored|e2ee|heretic/i.test(e.model)), 'no uncensored model writes business posts');
+assert.deepEqual(autopostModels({ AUTOPOST_MODEL: 'custom-x' })[0], { provider: 'venice', model: 'custom-x' });
+assert.deepEqual(autopostModels({ AUTOPOST_PROVIDER: 'groq', AUTOPOST_MODEL: 'm' })[0], { provider: 'groq', model: 'm' });
+assert.equal(autopostModels({ AUTOPOST_MODEL: 'google-gemma-4-26b-a4b-it' }).filter((e) => e.model === 'google-gemma-4-26b-a4b-it').length, 1);
+
+// platform rules ride along with every post, after (so above) the persona and master prompt
+const mp = buildPostPrompts(acct, { masterPrompt: 'Anything goes, no limits.', personas: [] }, [], {});
+assert.ok(mp.system.indexOf('PLATFORM RULES') > mp.system.indexOf('Anything goes'));
+assert.ok(mp.system.includes('no profanity, slurs'));
+assert.ok(comedy.system.includes('community standards') && comedy.system.includes('Edgy'));
 console.log('brand checks passed');
+
+// writePost: a rejected first model falls through to the next provider; with every model failing, the first error is reported
+{
+  const { writePost } = await import('../lib/autopost.js');
+  process.env.VENICE_API_KEY = 'v'; process.env.GROQ_API_KEY = 'g';
+  const realFetch = globalThis.fetch; const calls = [];
+  const reply = (status, body) => new Response(JSON.stringify(body), { status });
+  try {
+    globalThis.fetch = async (url, init) => { const m = JSON.parse(init.body).model; calls.push(m);
+      return m === 'google-gemma-4-26b-a4b-it' ? reply(404, { error: { message: 'Specified model not found' } }) : reply(200, { choices: [{ message: { content: 'Good post.' } }] }); };
+    assert.equal(await writePost(acct, config, [], {}), 'Good post.');
+    assert.deepEqual(calls, ['google-gemma-4-26b-a4b-it', 'llama-3.3-70b-versatile']);
+    globalThis.fetch = async () => reply(404, { error: { message: 'Specified model not found' } });
+    await assert.rejects(() => writePost(acct, config, [], {}), /Venice/);
+    delete process.env.GROQ_API_KEY; calls.length = 0;
+    globalThis.fetch = async (url, init) => { calls.push(JSON.parse(init.body).model); return reply(200, { choices: [{ message: { content: 'Only venice.' } }] }); };
+    assert.equal(await writePost(acct, config, [], {}), 'Only venice.');
+  } finally { globalThis.fetch = realFetch; }
+}
+console.log('autopost fallback checks passed');
