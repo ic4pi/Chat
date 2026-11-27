@@ -125,13 +125,13 @@ export default async function handler(req, res) {
     }
 
     if (op === 'overview' && req.method === 'GET') {
-      const [business, list, summary, control, usage, activity, account] = await Promise.all([
-        getBusiness(brand), leads.list(), leads.summary(), agency.getControl(), agency.usage(), teamActivity(), emailAccount().catch(() => null),
+      const [business, list, summary, control, usage, activity, account, automation] = await Promise.all([
+        getBusiness(brand), leads.list(), leads.summary(), agency.getControl(), agency.usage(), teamActivity(), emailAccount().catch(() => null), agency.getAutomation().catch(() => ({})),
       ]);
       return res.status(200).json({
         kv: KV_ENABLED,
         tools: toolsStatus(),
-        brands: BRANDS, brand, business, leads: list, summary, control, usage, limits: limits(), activity,
+        brands: BRANDS, brand, business, leads: list, summary, control, usage, limits: limits(), activity, automation,
         emailReady: !!account,
         notifyReady: !!(process.env.LEAD_NOTIFY_EMAIL || '').trim(),
       });
@@ -157,6 +157,13 @@ export default async function handler(req, res) {
     if (op === 'control' && req.method === 'PUT') {
       await agency.setPaused(body.paused === true, body.reason);
       return res.status(200).json(await agency.getControl());
+    }
+    if (op === 'automation' && req.method === 'PUT') {
+      const targetBrand = String(body.brandId || '');
+      if (!isBrandId(targetBrand)) return res.status(400).json({ error: 'Unknown brand.' });
+      const every = ['off', 'daily', 'weekly'].includes(body.every) ? body.every : null;
+      if (!every) return res.status(400).json({ error: 'every must be off, daily or weekly.' });
+      return res.status(200).json({ automation: await agency.setAutomation(targetBrand, every) });
     }
 
     if (op === 'accounts' && req.method === 'GET') {
