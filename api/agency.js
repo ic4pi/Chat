@@ -31,6 +31,7 @@ import { loadConfig, updateSocialAccounts } from '../lib/config.js';
 import { getAutopostState } from '../lib/autopost.js';
 import { sendEmail } from '../lib/email.js';
 import { reconnectPage } from '../lib/meta-token.js';
+import { toolsStatus } from '../lib/job-tools.js';
 
 const PAGE = `<!DOCTYPE html>
 <html lang="en">
@@ -129,6 +130,7 @@ export default async function handler(req, res) {
       ]);
       return res.status(200).json({
         kv: KV_ENABLED,
+        tools: toolsStatus(),
         brands: BRANDS, brand, business, leads: list, summary, control, usage, limits: limits(), activity,
         emailReady: !!account,
         notifyReady: !!(process.env.LEAD_NOTIFY_EMAIL || '').trim(),
@@ -181,7 +183,7 @@ export default async function handler(req, res) {
       await updateSocialAccounts((list) => list.map((a) => {
         if (a.id !== target) return a;
         found = true;
-        return { ...a, ...(isBrandId(body.brandId) ? { brandId: body.brandId } : {}), autopostChosen: true, ...(every ? { autopostEvery: every } : {}), ...(body.autopostPerDay ? { autopostPerDay: Number(body.autopostPerDay) } : {}) };
+        return { ...a, ...(isBrandId(body.brandId) ? { brandId: body.brandId } : {}), autopostChosen: true, ...(every ? { autopostEvery: every } : {}), ...(body.autopostPerDay ? { autopostPerDay: Number(body.autopostPerDay) } : {}) });
       }));
       return found ? res.status(200).json({ ok: true }) : res.status(404).json({ error: 'No such account.' });
     }
