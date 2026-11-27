@@ -1,7 +1,7 @@
 // Called by Vercel Cron (see vercel.json). Runs every standing task that's
 // due, saves each result as a document, and moves on — this is what lets
 // the agency keep working with nobody watching.
-import { checkAdminAuth } from '../../lib/auth.js';
+import { checkAdminAuthThrottled } from '../../lib/auth.js';
 import { isVercelCron } from '../../lib/cron-auth.js';
 import { listStandingTasks, scheduleMs } from '../../lib/standing-tasks.js';
 import { agency, isDueWithState, limits } from '../../lib/agency-control.js';
@@ -24,7 +24,7 @@ export default async function handler(req, res) {
   // can't become an unauthenticated way for a stranger to burn API credits on demand. (This used to look for an
   // `x-vercel-cron` header, which Vercel does not document and anyone could forge.)
   const fromCron = isVercelCron(req);
-  const isAdmin = checkAdminAuth(req).ok;
+  const isAdmin = fromCron ? false : (await checkAdminAuthThrottled(req)).ok;
   if (!fromCron && !isAdmin) {
     return res.status(403).json({ error: 'This endpoint only runs via Vercel Cron or admin auth.' });
   }

@@ -1877,8 +1877,8 @@ async function fetchPersonas() {
 
 /**
  * Publish a persona's drafted text to a real Facebook Page / Instagram
- * account, via /api/social-post. Gated behind the same unlock password as
- * paid models — this triggers a real, public, irreversible action.
+ * account, via /api/social-post. Needs the ADMIN password, typed each time and never
+ * stored — this triggers a real, public, irreversible action.
  */
 async function handlePostToSocial(text, triggerBtn, personaName) {
   if (!socialAccounts.length) return;
@@ -1896,7 +1896,7 @@ async function handlePostToSocial(text, triggerBtn, personaName) {
   const subject = el('input', { type: 'text', value: 'Message from ' + (activePersona()?.name || 'the team'), style: fieldCss });
   const imgOn = el('input', { type: 'checkbox' });
   const imgPrompt = el('input', { type: 'text', value: text.slice(0, 200), style: fieldCss });
-  const pwBox = el('input', { type: 'password', placeholder: 'Unlock password', style: fieldCss });
+  const pwBox = el('input', { type: 'password', placeholder: 'Admin password', autocomplete: 'off', style: fieldCss });
   const preview = el('div', { textContent: text, style: 'max-height:140px;overflow:auto;white-space:pre-wrap;padding:8px;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;font-size:13px' });
   const status = el('div', { style: 'margin-top:12px;font-size:13px;min-height:18px;white-space:pre-wrap' });
   const go = el('button', { type: 'button', textContent: 'Post now', style: 'padding:8px 16px;border-radius:8px;border:1px solid var(--border-2);background:var(--panel-2);color:var(--text);cursor:pointer;font:inherit' });
@@ -1919,7 +1919,7 @@ async function handlePostToSocial(text, triggerBtn, personaName) {
   const box = el('div', { className: 'modal', style: 'padding:16px' },
     el('h3', { textContent: 'Post this', style: 'margin:0 0 8px' }),
     preview, field('Account', acct), emailRows, imgRow,
-    loadPaidPassword() ? el('span') : field('Unlock password to publish', pwBox),
+    field('Admin password to publish (not the paid-models one)', pwBox),
     el('p', { textContent: 'This publishes publicly and can’t be undone from here.', style: 'font-size:12px;color:var(--muted-2);margin:12px 0 0' }),
     status,
     el('div', { style: 'display:flex;gap:8px;justify-content:flex-end;margin-top:12px' }, cancel, go));
@@ -1935,11 +1935,8 @@ async function handlePostToSocial(text, triggerBtn, personaName) {
     const account = socialAccounts.find((x) => x.id === acct.value);
     const isEmail = account.platform === 'email';
     if (isEmail && !to.value.trim()) { say('Enter an email address.', true); return; }
-    let pw = loadPaidPassword();
-    if (!pw) {
-      pw = pwBox.value.trim();
-      if (!pw) { say('Enter the unlock password.', true); return; }
-    }
+    const pw = pwBox.value.trim();
+    if (!pw) { say('Enter the admin password.', true); return; }
     go.disabled = true;
     try {
       let imageUrl;
@@ -1967,7 +1964,6 @@ async function handlePostToSocial(text, triggerBtn, personaName) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      savePaidPassword(pw);
       flashButton(triggerBtn, isEmail ? 'Sent ✓' : 'Posted ✓');
       say(isEmail ? 'Sent ✓ — it went through.' : 'Posted ✓ — it is live.');
       if (!isEmail && data.id && account.platform === 'facebook') {
