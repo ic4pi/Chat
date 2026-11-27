@@ -145,7 +145,9 @@ function businessSection() {
     if (!wProv.value) return;
     try {
       const d = await (await fetch(`/api/models?provider=${encodeURIComponent(wProv.value)}`)).json();
-      for (const m of d.models || []) wList.append(el('option', { value: m.id, label: m.name || m.id }));
+      // OpenRouter and NVIDIA: only the free models are offered.
+      const free = (m) => !['openrouter', 'nvidia'].includes(wProv.value) || m.free !== false;
+      for (const m of (d.models || []).filter(free)) wList.append(el('option', { value: m.id, label: m.name || m.id }));
     } catch { /* typing the id by hand still works */ }
   };
   wProv.addEventListener('change', fillModels); fillModels();
@@ -165,9 +167,9 @@ function businessSection() {
     el('div', { class: 'field' }, el('label', { text: kind === 'comedy' ? 'Upcoming shows (dates, venues, ticket links)' : 'Offers and prices (what we sell)' }), offers),
     el('div', { class: 'field' }, el('label', { text: 'Writer model — what writes this brand\'s posts' }),
       el('div', { class: 'row' }, wProv, wModel), wList,
-      el('p', { class: 'admin-hint', text: kind === 'comedy'
-        ? 'Default: an uncensored model (Venice Uncensored 1.2). Pick your own — including a fine-tuned model — to override it.'
-        : 'Default: a standard model (Venice Gemma, then Llama on Groq). Pick a stronger writer to override it.' })),
+      el('p', { class: 'admin-hint', text: b.uncensored
+        ? 'Default: GLM 4.7 Flash Heretic (uncensored, on Venice), with other uncensored Venice models as backups. Pick your own — including a fine-tuned model — to override it.'
+        : 'Default: free models — Llama on Groq, then OpenRouter\'s current free pick, then NVIDIA\'s. Pick a different writer to override it.' })),
     el('div', { class: 'row' }, save, discuss),
     err,
     brand !== 'semantiq' ? null : (b.notes ? el('details', { open: '' }, el('summary', { text: `The team's current strategy${b.notesAt ? ` — ${when(b.notesAt)}` : ''}` }), el('div', { class: 'lead-msg', text: b.notes })) : el('p', { class: 'admin-hint', text: 'No team strategy yet — press the button above and the team will write one.' })));
