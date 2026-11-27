@@ -21,6 +21,8 @@ const el = (tag, props = {}, ...kids) => {
   for (const kid of kids.flat()) if (kid) n.append(kid);
   return n;
 };
+/** root.replaceChildren(null) writes the literal word "null" on the page, so optional sections are filtered out first. */
+const show = (...parts) => root.replaceChildren(...parts.filter(Boolean));
 const btn = (label, onclick, cls = 'text-btn') => el('button', { class: cls, type: 'button', text: label, onclick });
 
 async function api(op, { method = 'GET', id, body } = {}) {
@@ -355,7 +357,7 @@ function render() {
   const pauseBtn = btn(data.control.paused ? 'Resume the team' : 'Pause everything automatic', () =>
     act(pauseBtn, pauseErr, () => api('control', { method: 'PUT', body: { paused: !data.control.paused, reason: data.control.paused ? '' : 'Paused from the Team page' } })));
 
-  root.replaceChildren(
+  show(
     incomingCard(),
     data.kv ? null : el('div', { class: 'banner', text: 'Storage (KV) is not configured, so leads, the profile and the team strategy cannot be saved.' }),
     data.control.paused ? el('div', { class: 'banner', text: `The team is paused — no autoposts, lead drafts or standing tasks run. ${data.control.reason || ''}` }) : null,

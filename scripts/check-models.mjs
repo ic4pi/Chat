@@ -40,16 +40,15 @@ await check('chat default is never a coder; coder default is a coder', () => {
   assert.notEqual(pickDefault(enriched, 'coder', { providerId: 'openrouter' }), 'qwen/qwen3-coder');
 });
 
-await check('Venice chat default is the smaller Gemma 4 (26B A4B); then Gemma 4, then Venice Uncensored', () => {
+await check('Venice chat default is Venice Uncensored 1.2, never the e2ee model (its chat calls 404)', () => {
   const venice = [
     { id: 'olafangensan-glm-4.7-flash-heretic', free: false, categories: ['creative', 'uncensored', 'general'] },
     { id: 'venice-uncensored-1-2', free: false, categories: ['creative', 'uncensored'] },
     { id: 'e2ee-gemma-4-26b-a4b-uncensored-p', free: false, categories: ['uncensored'] },
     { id: 'gemma-4-uncensored', free: false, categories: ['uncensored', 'general'] },
   ];
-  assert.equal(pickDefault(venice, 'chat', { providerId: 'venice' }), 'e2ee-gemma-4-26b-a4b-uncensored-p');
-  const noGemma = venice.filter((m) => !m.id.includes('gemma'));
-  assert.equal(pickDefault(noGemma, 'chat', { providerId: 'venice' }), 'venice-uncensored-1-2');
+  assert.equal(pickDefault(venice, 'chat', { providerId: 'venice' }), 'venice-uncensored-1-2');
+  assert.equal(pickDefault(venice.filter((m) => m.id !== 'venice-uncensored-1-2'), 'chat', { providerId: 'venice' }), 'gemma-4-uncensored');
 });
 
 await check('retired-model errors recognised; rate limits and auth are not', () => {

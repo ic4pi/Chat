@@ -122,7 +122,7 @@ const PROVIDER_FALLBACKS = {
 // Hints only. The real default comes from the live catalogs (defaultChatModel)
 // and is never a coder model — chat and the agency teams talk, they don't code.
 const DEFAULT_MODELS = {
-  venice: 'e2ee-gemma-4-26b-a4b-uncensored-p',
+  venice: 'venice-uncensored-1-2',
   openrouter: 'nvidia/nemotron-3-super-120b-a12b:free',
   cerebras: 'gpt-oss-120b',
   groq: 'llama-3.3-70b-versatile',
@@ -135,11 +135,9 @@ const DEFAULT_MODELS = {
 const VENICE_UNCENSORED_CHEAP_FIRST = [
   'olafangensan-glm-4.7-flash-heretic', // ~$0.07 / $0.40
   'gemma-4-uncensored',                 // ~$0.16 / $0.50
-  'e2ee-gemma-4-26b-a4b-uncensored-p',  // ~$0.19 / $0.88
   'venice-uncensored-1-2',              // ~$0.20 / $0.90
   'venice-uncensored',                  // Dolphin Mistral 24B Venice Edition
   // e2ee-venice-uncensored-24b-p removed: Venice retired it (Oct 2026).
-  'e2ee-qwen3-6-35b-a3b-uncensored-p',  // ~$0.38 / $1.88
   'venice-uncensored-role-play',        // ~$0.50 / $2.00
 ];
 const VENICE_UNCENSORED_SET = new Set(VENICE_UNCENSORED_CHEAP_FIRST);
