@@ -111,7 +111,7 @@ export default async function handler(req, res) {
   if (op === 'lead') return handleLeadIntake(req, res);
   if (op === 'check') return handleSiteCheck(req, res);
 
-  if (!(await requireAdminAuth(req, res))) return;
+  if (!requireAdminAuth(req, res)) return;
   res.setHeader('Cache-Control', 'no-store');
   const id = typeof req.query?.id === 'string' ? req.query.id : '';
   const brand = normalizeBrandId(typeof req.query?.brand === 'string' ? req.query.brand : '');
