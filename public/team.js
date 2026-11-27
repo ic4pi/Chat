@@ -293,6 +293,18 @@ function jobCard(task) {
     if (!confirm('Delete this job? Its past write-ups stay in your documents.')) return;
     act(delBtn, err, () => saveTasks(allTasks.filter((t) => t.id !== task.id)));
   });
+  // Per-job automation: 'manual' = only when you press Run; anything else runs
+  // by itself on the hourly cron check. The kill switch and daily caps still apply.
+  const autoSel = el('select', { 'aria-label': 'Run this job automatically', title: 'Run this job on a schedule' },
+    ...[['manual', 'Auto: off — only when I press Run'], ['daily', 'Auto: every day'], ['weekly', 'Auto: every week'], ['hourly', 'Auto: every hour']].map(([v, t]) => el('option', { value: v, text: t })));
+  autoSel.value = task.schedule || 'manual';
+  autoSel.addEventListener('change', async () => {
+    autoSel.disabled = true; err.textContent = '';
+    try {
+      await saveTasks(allTasks.map((t) => (t.id === task.id ? { ...t, schedule: autoSel.value } : t)));
+      await load();
+    } catch (e2) { err.textContent = e2.message || String(e2); autoSel.disabled = false; }
+  });
 
   const lr = task.lastResult;
   return el('div', { class: 'lead' },
@@ -301,6 +313,7 @@ function jobCard(task) {
       el('span', { class: `pill ${paused ? 'new' : 'sent'}`, text: task.pausedReason ? 'paused — needs a look' : paused ? 'paused' : 'ready' })),
     el('div', { class: 'lead-meta', text: [
       task.lastRunAt ? `last run ${when(task.lastRunAt)}` : 'never run',
+      task.schedule && task.schedule !== 'manual' ? `runs ${task.schedule} automatically` : null,
       task.failCount ? `${task.failCount} failure${task.failCount === 1 ? '' : 's'} in a row` : '',
     ].filter(Boolean).join(' · ') }),
     el('div', { class: 'lead-msg', text: task.objective }),
@@ -310,14 +323,15 @@ function jobCard(task) {
       el('div', { class: 'lead-msg', text: lr.summary || '(no summary)' }),
       lr.prUrl ? el('div', { class: 'row' }, el('a', { href: lr.prUrl, target: '_blank', rel: 'noopener', class: 'text-btn primary', text: 'Review the pull request →' })) : null,
       (lr.toolsUsed || []).length ? el('div', { class: 'lead-meta', text: lr.toolsUsed.join(' · ') }) : null) : null,
-    el('div', { class: 'row' }, runBtn, pauseBtn, delBtn),
+    el('div', { class: 'row' }, runBtn, pauseBtn, delBtn, autoSel),
     ok, err);
 }
 
 /** Give the team a job: one instruction, optionally split per person, run on demand. */
 function jobsSection() {
   const err = el('div', { class: 'err' });
-  const jobs = allTasks.filter((t) => t.schedule === 'manual');
+  // Automated jobs stay listed too — the Auto dropdown on each card sets the schedule.
+  const jobs = allTasks;
   const brief = el('textarea', { rows: '3', placeholder: 'e.g. Plan this week’s posts for Swear Jar · Audit semantiq.com for SEO problems · Check our site’s security headers and tell me what to fix' });
 
   // Optional: give specific people specific parts. Blank boxes = the team splits it up itself.
@@ -360,7 +374,7 @@ function jobsSection() {
 
   return el('section', { class: 'admin-section' },
     el('h2', { text: 'Give the team a job' }),
-    el('p', { class: 'admin-hint', text: 'One instruction, the whole team. They do live research, do the work, and save a write-up you can read below. Name a repo as owner/name and the dev can open a pull request with real changes — you merge it. If a step needs a tool that isn’t connected, they say MISSING TOOL instead of pretending it worked. Email and social stay draft-and-approve — a job never sends or posts anything.' }),
+    el('p', { class: 'admin-hint', text: 'One instruction, the whole team. They do live research, do the work, and save a write-up you can read below. Name a repo as owner/name and the dev can open a pull request with real changes — you merge it. If a step needs a tool that isn’t connected, they say MISSING TOOL instead of pretending it worked. Email and social stay draft-and-approve — a job never sends or posts anything. Set a job’s Auto dropdown to every day, week or hour and it runs by itself on that schedule — “Pause everything automatic” below stops all of them.' }),
     toolsLine,
     el('div', { class: 'field' }, brief),
     assignDetails,
