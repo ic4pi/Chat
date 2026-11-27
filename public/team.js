@@ -308,6 +308,7 @@ function jobCard(task) {
     task.pausedReason ? el('div', { class: 'err', text: task.pausedReason }) : null,
     lr ? el('details', {}, el('summary', { text: `Last write-up — ${when(lr.at)}` }),
       el('div', { class: 'lead-msg', text: lr.summary || '(no summary)' }),
+      lr.prUrl ? el('div', { class: 'row' }, el('a', { href: lr.prUrl, target: '_blank', rel: 'noopener', class: 'text-btn primary', text: 'Review the pull request →' })) : null,
       (lr.toolsUsed || []).length ? el('div', { class: 'lead-meta', text: lr.toolsUsed.join(' · ') }) : null) : null,
     el('div', { class: 'row' }, runBtn, pauseBtn, delBtn),
     ok, err);
@@ -350,9 +351,17 @@ function jobsSection() {
     });
   }, 'text-btn primary');
 
+  const toolStatus = data.tools
+    ? [['GitHub', data.tools.github, 'reads repos, opens pull requests'], ['Vercel', data.tools.vercel, 'deploy status + logs'], ['Stripe', data.tools.stripe, 'real sales'], ['Search Console', data.tools.searchConsole, 'real rankings']]
+    : [];
+  const toolsLine = toolStatus.length
+    ? el('p', { class: 'admin-hint', text: 'Tools: ' + toolStatus.map(([n, on, what]) => `${on ? '✅' : '➖'} ${n}${on ? '' : ' (not connected)'}`).join(' · ') + (toolStatus.some(([, on]) => !on) ? ' — add the key in Vercel → Settings → Environment Variables to connect one.' : '') })
+    : null;
+
   return el('section', { class: 'admin-section' },
     el('h2', { text: 'Give the team a job' }),
-    el('p', { class: 'admin-hint', text: 'One instruction, the whole team. They do live research, do the work, and save a write-up you can read below. If a step needs a tool that isn’t connected, they say MISSING TOOL instead of pretending it worked. Email and social stay draft-and-approve — a job never sends or posts anything.' }),
+    el('p', { class: 'admin-hint', text: 'One instruction, the whole team. They do live research, do the work, and save a write-up you can read below. Name a repo as owner/name and the dev can open a pull request with real changes — you merge it. If a step needs a tool that isn’t connected, they say MISSING TOOL instead of pretending it worked. Email and social stay draft-and-approve — a job never sends or posts anything.' }),
+    toolsLine,
     el('div', { class: 'field' }, brief),
     assignDetails,
     el('div', { class: 'row' }, go),
