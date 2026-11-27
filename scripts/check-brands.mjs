@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { normalizeSocialAccount } from '../lib/config.js';
 import { buildPostPrompts, SALES_GOAL, autopostModels } from '../lib/autopost.js';
 import { businessBlock } from '../lib/business-profile.js';
-import { attemptsFor } from '../lib/safe-complete.js';
+import { attemptsFor, resolveAttempts } from '../lib/safe-complete.js';
+import { inferFree } from '../lib/model-meta.js';
 import { BRANDS, brandById, normalizeBrandId, brandGoal } from '../lib/brands.js';
 
 assert.deepEqual(BRANDS.map((b) => b.id), ['semantiq', 'swearjar', 'capicapi', 'ic4pi']);
@@ -48,14 +49,13 @@ assert.ok(blk.includes('THE COMPANY THIS BRAND BELONGS TO (Swear Jar)'));
 assert.ok(blk.includes('Swear Jar produces shows.'));
 assert.ok(businessBlock({ profile: 'x', offers: 'y' }).includes('WHAT WE SELL AND AT WHAT PRICE'));
 
-// autopost: standard (non-uncensored) models only, with fallbacks; env overrides go first
+// autopost: free models (Llama on Groq first); Venice never writes for a non-uncensored brand; env overrides go first
 const defaults = autopostModels({});
-assert.equal(defaults[0].model, 'google-gemma-4-26b-a4b-it');
-assert.ok(defaults.length >= 2);
-assert.ok(!defaults.some((e) => /uncensored|e2ee|heretic/i.test(e.model)), 'no uncensored model writes business posts');
+assert.deepEqual(defaults[0], { provider: 'groq', model: 'llama-3.3-70b-versatile' });
+assert.ok(!defaults.some((e) => e.provider === 'venice' || /uncensored|e2ee|heretic/i.test(e.model)), 'no Venice or uncensored model writes a non-uncensored brand');
 assert.deepEqual(autopostModels({ AUTOPOST_MODEL: 'custom-x' })[0], { provider: 'venice', model: 'custom-x' });
 assert.deepEqual(autopostModels({ AUTOPOST_PROVIDER: 'groq', AUTOPOST_MODEL: 'm' })[0], { provider: 'groq', model: 'm' });
-assert.equal(autopostModels({ AUTOPOST_MODEL: 'google-gemma-4-26b-a4b-it' }).filter((e) => e.model === 'google-gemma-4-26b-a4b-it').length, 1);
+assert.equal(autopostModels({ AUTOPOST_MODEL: 'llama-3.3-70b-versatile', AUTOPOST_PROVIDER: 'groq' }).filter((e) => e.model === 'llama-3.3-70b-versatile').length, 1);
 
 // platform rules ride along with every post, after (so above) the persona and master prompt
 const mp = buildPostPrompts(acct, { masterPrompt: 'Anything goes, no limits.', personas: [] }, [], {});
@@ -68,46 +68,59 @@ console.log('brand checks passed');
 {
   const { writePost } = await import('../lib/autopost.js');
   process.env.VENICE_API_KEY = 'v'; process.env.GROQ_API_KEY = 'g';
+  const attempts = [{ provider: 'venice', model: 'm1' }, { provider: 'groq', model: 'm2' }];
   const realFetch = globalThis.fetch; const calls = [];
   const reply = (status, body) => new Response(JSON.stringify(body), { status });
   try {
     globalThis.fetch = async (url, init) => { const m = JSON.parse(init.body).model; calls.push(m);
-      return m === 'google-gemma-4-26b-a4b-it' ? reply(404, { error: { message: 'Specified model not found' } }) : reply(200, { choices: [{ message: { content: 'Good post.' } }] }); };
-    assert.equal(await writePost(acct, config, [], {}), 'Good post.');
-    assert.deepEqual(calls, ['google-gemma-4-26b-a4b-it', 'llama-3.3-70b-versatile']);
+      return m === 'm1' ? reply(404, { error: { message: 'Specified model not found' } }) : reply(200, { choices: [{ message: { content: 'Good post.' } }] }); };
+    assert.equal(await writePost(acct, config, [], {}, { attempts }), 'Good post.');
+    assert.deepEqual(calls, ['m1', 'm2']);
     globalThis.fetch = async () => reply(404, { error: { message: 'Specified model not found' } });
-    await assert.rejects(() => writePost(acct, config, [], {}), /Venice/);
+    await assert.rejects(() => writePost(acct, config, [], {}, { attempts }), /Venice/);
     delete process.env.GROQ_API_KEY; calls.length = 0;
     globalThis.fetch = async (url, init) => { calls.push(JSON.parse(init.body).model); return reply(200, { choices: [{ message: { content: 'Only venice.' } }] }); };
-    assert.equal(await writePost(acct, config, [], {}), 'Only venice.');
+    assert.equal(await writePost(acct, config, [], {}, { attempts }), 'Only venice.');
   } finally { globalThis.fetch = realFetch; }
 }
 
-// per-brand writer: comedy defaults to uncensored, professional brands to a standard model, and a pick on the Team page always goes first
+// per-brand writer: ONLY Capí Capí is uncensored (GLM 4.7 Flash Heretic); every other brand gets free models; a pick on the Team page goes first
 {
-  const comedyDefault = attemptsFor({ kind: 'comedy' }, {});
-  assert.equal(comedyDefault[0].model, 'venice-uncensored-1-2');
-  assert.ok(comedyDefault.every((e) => /uncensored/.test(e.model)), 'comedy falls back to uncensored models, never to a filtered one');
-  const proDefault = attemptsFor({ kind: 'agency' }, {});
-  assert.equal(proDefault[0].model, 'google-gemma-4-26b-a4b-it');
-  assert.ok(!proDefault.some((e) => /uncensored/.test(e.model)));
+  assert.deepEqual(BRANDS.filter((b) => b.uncensored).map((b) => b.id), ['capicapi']);
+  const capi = attemptsFor({ kind: 'comedy', uncensored: true }, {});
+  assert.deepEqual(capi[0], { provider: 'venice', model: 'olafangensan-glm-4.7-flash-heretic' });
+  assert.ok(capi.every((e) => e.provider === 'venice' && /uncensored|heretic/.test(e.model)), 'Capí Capí falls back to uncensored models, never to a filtered one');
+  for (const biz of [{ kind: 'comedy', uncensored: false, brandId: 'swearjar' }, { kind: 'agency' }, { kind: 'dev' }]) {
+    const list = attemptsFor(biz, {});
+    assert.deepEqual(list[0], { provider: 'groq', model: 'llama-3.3-70b-versatile' });
+    assert.ok(!list.some((e) => e.provider === 'venice' || /uncensored|heretic/.test(e.model)));
+  }
   assert.deepEqual(attemptsFor({ kind: 'agency', writerProvider: 'xai', writerModel: 'grok-4' }, {})[0], { provider: 'xai', model: 'grok-4' });
-  assert.deepEqual(attemptsFor({ kind: 'comedy', writerProvider: 'venice', writerModel: 'my-finetune' }, {})[0], { provider: 'venice', model: 'my-finetune' });
+  assert.deepEqual(attemptsFor({ kind: 'comedy', uncensored: true, writerProvider: 'venice', writerModel: 'my-finetune' }, {})[0], { provider: 'venice', model: 'my-finetune' });
   // an environment choice applies only when the brand has not picked one
   assert.equal(attemptsFor({ kind: 'agency' }, { AUTOPOST_MODEL: 'env-model' })[0].model, 'env-model');
   assert.equal(attemptsFor({ kind: 'agency', writerProvider: 'xai', writerModel: 'grok-4' }, { AUTOPOST_MODEL: 'env-model' })[0].model, 'grok-4');
   assert.ok(!attemptsFor({ kind: 'agency', writerProvider: 'xai', writerModel: 'grok-4' }, { AUTOPOST_MODEL: 'env-model' }).some((e) => e.model === 'env-model'));
+  // the uncensored brand never gets the live free picks appended
+  assert.deepEqual(await resolveAttempts({ kind: 'comedy', uncensored: true }, {}), capi);
 
-  // end to end: a comedy brand's post is written by its uncensored model; a brand's own pick is the model actually called
+  // end to end: the exact model called for Capí Capí's default, a fine-tune pick, and a professional brand's xAI pick
   const { writePost } = await import('../lib/autopost.js');
   process.env.VENICE_API_KEY = 'v'; process.env.XAI_API_KEY = 'x';
   const realFetch = globalThis.fetch; const used = [];
   try {
     globalThis.fetch = async (url, init) => { used.push(JSON.parse(init.body).model); return new Response(JSON.stringify({ choices: [{ message: { content: 'A bit.' } }] })); };
-    await writePost(acct, config, [], { kind: 'comedy', brandId: 'capicapi' });
-    await writePost(acct, config, [], { kind: 'comedy', brandId: 'capicapi', writerProvider: 'venice', writerModel: 'my-finetune' });
-    await writePost(acct, config, [], { kind: 'agency', writerProvider: 'xai', writerModel: 'grok-4' });
-    assert.deepEqual(used, ['venice-uncensored-1-2', 'my-finetune', 'grok-4']);
+    const run = (biz) => writePost(acct, config, [], biz, { attempts: attemptsFor(biz, {}) });
+    await run({ kind: 'comedy', uncensored: true, brandId: 'capicapi' });
+    await run({ kind: 'comedy', uncensored: true, brandId: 'capicapi', writerProvider: 'venice', writerModel: 'my-finetune' });
+    await run({ kind: 'agency', writerProvider: 'xai', writerModel: 'grok-4' });
+    assert.deepEqual(used, ['olafangensan-glm-4.7-flash-heretic', 'my-finetune', 'grok-4']);
   } finally { globalThis.fetch = realFetch; }
 }
+
+// NVIDIA's models run on its free developer credits, so they are free in the app; Venice and Groq stay behind the paid gate
+assert.equal(inferFree('nvidia', { id: 'meta/llama-3.3-70b-instruct' }), true);
+assert.equal(inferFree('venice', { id: 'venice-uncensored-1-2' }), false);
+assert.equal(inferFree('groq', { id: 'llama-3.3-70b-versatile' }), false);
+assert.equal(inferFree('openrouter', { id: 'google/gemma-4-31b-it:free' }), true);
 console.log('autopost fallback checks passed');
