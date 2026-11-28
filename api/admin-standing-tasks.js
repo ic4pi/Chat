@@ -4,14 +4,14 @@
 //   GET    /api/admin-standing-tasks                 → list all tasks
 //   PUT    /api/admin-standing-tasks                  → replace the full list
 //   POST   /api/admin-standing-tasks?action=run&id=x  → run one task right now
-import { requireAdminAuth } from '../lib/auth.js';
+import { requireOwnerOrAdmin } from '../lib/accounts.js';
 import { listStandingTasks, saveStandingTasks } from '../lib/standing-tasks.js';
 import { agency, limits } from '../lib/agency-control.js';
 import { runStandingTask } from '../lib/run-standing-task.js';
 import { getBusiness, saveProfile, runTeamDiscussion } from '../lib/business-profile.js';
 
 export default async function handler(req, res) {
-  if (!requireAdminAuth(req, res)) return;
+  if (!(await requireOwnerOrAdmin(req, res))) return;
   res.setHeader('Cache-Control', 'no-store');
 
   // Business profile + the team's strategy notes:
