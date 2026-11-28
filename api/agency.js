@@ -18,7 +18,7 @@
 //
 // Nothing here sends to a prospect except op=send, and that is a deliberate tap on the Team page.
 
-import { requireAdminAuth } from '../lib/auth.js';
+import { requireOwnerOrAdmin } from '../lib/accounts.js';
 import { getBusiness, saveProfile, saveNotes, runTeamDiscussion } from '../lib/business-profile.js';
 import { PROVIDER_IDS } from '../lib/providers.js';
 import { BRANDS, DEFAULT_BRAND, normalizeBrandId, isBrandId } from '../lib/brands.js';
@@ -50,6 +50,7 @@ const PAGE = `<!DOCTYPE html>
   <h1>Team</h1>
   <div class="admin-topbar-actions">
     <a class="text-btn" href="/">Chat →</a>
+    <a class="text-btn" href="/login">Account →</a>
     <a class="text-btn" href="/admin">Admin →</a>
   </div>
 </header>
@@ -112,7 +113,7 @@ export default async function handler(req, res) {
   if (op === 'lead') return handleLeadIntake(req, res);
   if (op === 'check') return handleSiteCheck(req, res);
 
-  if (!requireAdminAuth(req, res)) return;
+  if (!(await requireOwnerOrAdmin(req, res))) return;
   res.setHeader('Cache-Control', 'no-store');
   const id = typeof req.query?.id === 'string' ? req.query.id : '';
   const brand = normalizeBrandId(typeof req.query?.brand === 'string' ? req.query.brand : '');
