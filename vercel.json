@@ -16,6 +16,10 @@
       "destination": "/api/agency?op=page"
     },
     {
+      "source": "/login",
+      "destination": "/api/auth?op=page"
+    },
+    {
       "source": "/agent",
       "destination": "/agent/index.html"
     },
