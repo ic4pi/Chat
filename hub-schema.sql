@@ -417,6 +417,24 @@ create table if not exists device_link_codes (
 );
 alter table device_link_codes enable row level security;
 
+-- ACCOUNTS (email + password login; see lib/accounts.js)
+--
+-- An account is only a named pointer at an owner row: registering ties the
+-- browser's current owner to the account, logging in links any browser to
+-- that owner through owner_devices. The deployment owner is the account
+-- matching the OWNER_EMAIL env var, or the first registered account when
+-- that is unset.
+
+create table if not exists accounts (
+  id         uuid primary key default gen_random_uuid(),
+  email      text not null unique,          -- stored lowercased
+  pass_hash  text not null,                 -- scrypt$N$r$p$salt$hash
+  owner_id   uuid not null references owners(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+create index if not exists accounts_owner_idx on accounts (owner_id);
+alter table accounts enable row level security;
+
 create table if not exists workspace_sessions (
   owner_id    uuid not null references owners(id) on delete cascade,
   session_id  text not null,
